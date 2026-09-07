@@ -1,0 +1,38 @@
+name: ci
+
+# Lint + type-check + tests on every push and PR.
+# Kept separate from the publish workflow so a broken test blocks the image
+# from ever being tagged.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install project + dev deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e '.[dev]'
+
+      - name: Ruff
+        run: ruff check src tests
+
+      - name: Black --check
+        run: black --check src tests
+
+      - name: Pytest
+        run: pytest -q

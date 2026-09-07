@@ -20,14 +20,23 @@ working (fail-open).
 
 ## Status
 
-Phase 1 (scaffold + state model) — this repo currently builds and runs the
-skeleton: config, DB schema + Alembic baseline, adapter interfaces (with
-dry-run implementations), FastAPI app with `/healthz` + `/readyz`, and the
-YAML ↔ DB registry reconciler with unsaved-changes detection.
+**Phase 2 complete.** Working today:
 
-See [docs/architecture.md](docs/architecture.md) for the full design and
-[docs/adding_a_service.md](docs/adding_a_service.md) for how to register a
-service (just a YAML entry).
+* Config, structured logging, DB schema + Alembic baseline
+* YAML ↔ DB registry reconciler with unsaved-changes detection
+* Live **Proxmox VE** and **PBS** adapters (guests, `vzdump`, task polling,
+  snapshots, verify, prune, protect) plus dry-run equivalents
+* A backup pipeline that runs end to end and records every step
+* `orchestrator-cli` for connectivity checks and manual backups
+* FastAPI app: `/healthz`, `/readyz`, registry, infra, and backup endpoints
+
+**Not yet built:** the integrity gate (phase 4). Backups currently run
+**ungated** — every run records `integrity_gate: skipped` and logs a warning
+rather than hiding the gap.
+
+See [docs/architecture.md](docs/architecture.md) for the full design,
+[docs/adding_a_service.md](docs/adding_a_service.md) for registering a service,
+and [docs/api_tokens.md](docs/api_tokens.md) for the API token privileges.
 
 ---
 
@@ -72,7 +81,7 @@ orchestrator                                           # serves on :8080
 
 Then `curl http://127.0.0.1:8080/healthz` and `.../api/registry/services`.
 
-### With Docker
+### With Docker (local build)
 
 ```bash
 cp .env.example .env
@@ -84,12 +93,60 @@ The container HEALTHCHECK hits `/healthz` inside the container; SQLite lives
 on the named `orchestrator_state` volume (deliberately **not** on NFS, which
 would break SQLite's locking).
 
+### On the Pi (pull from GHCR)
+
+Images are built by [GitHub Actions](.github/workflows/publish.yml) for both
+`linux/amd64` and `linux/arm64` and pushed to GHCR. On the Pi, pin a tag and
+pull:
+
+```bash
+export ORCHESTRATOR_IMAGE=ghcr.io/<your-user>/homelab-orchestrator:1.0.0
+docker compose pull
+docker compose up -d
+```
+
+Full deploy / update / rollback flow: [docs/deploying.md](docs/deploying.md).
+
+### Proxmox / PBS API tokens
+
+The orchestrator needs a scoped PVE token and a scoped PBS token. Exact
+privileges, the `pveum` / `proxmox-backup-manager` commands to create them,
+and the privilege-separation gotcha that causes most 403s are documented in
+[docs/api_tokens.md](docs/api_tokens.md).
+
 ### Dry-run
 
 `DRY_RUN=true` (the default in `.env.example`) forces every external adapter
 (power manager, Proxmox, PBS) to a logging no-op. Safe for local dev; safe for
 CI. Individual adapters can be overridden with `POWER_ADAPTER`,
 `PROXMOX_ADAPTER`, `PBS_ADAPTER` for mixed testing.
+
+---
+
+## The CLI
+
+`orchestrator-cli` is a first-class operational tool, not just a test harness —
+it is the break-glass path when the dashboard is unavailable, and it works
+without HTTPS, a browser, or a registered passkey.
+
+```bash
+orchestrator-cli check                  # can I reach Proxmox and PBS?
+orchestrator-cli guests                 # what does Proxmox see?
+orchestrator-cli snapshots              # what is in the PBS datastore?
+orchestrator-cli services               # what is in my registry?
+orchestrator-cli backup <slug>          # run one backup end to end
+```
+
+Every command honours `DRY_RUN`. `check` exits non-zero on failure, so it works
+as a post-deploy smoke test in Ansible or CI.
+
+It runs **in-process**: it builds its own adapters and opens its own DB session
+rather than talking to a running orchestrator. Prefer running it inside the
+container so it uses exactly the config the service uses:
+
+```bash
+docker compose exec orchestrator orchestrator-cli check
+```
 
 ---
 
@@ -105,7 +162,7 @@ Adapters are fully mocked in tests; the DB is a per-test temp SQLite file.
 
 ## What's coming
 
-Phases 2–9 land the live Proxmox + PBS adapter, MQTT client to the power
-manager, health engine + backup gate, maintenance page + Traefik wiring,
-scheduler + retention, dashboard + passkeys, greenlight/revert flow, and the
-mailcow + ntfy notifier. See the design brief for the full plan.
+Phases 3–9 land the MQTT client to the power manager, the health engine +
+backup gate, the maintenance page + Traefik wiring, the scheduler + retention,
+the dashboard + passkeys, the greenlight/revert flow, and the mailcow + ntfy
+notifier. See the design brief for the full plan.

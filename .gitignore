@@ -1,0 +1,42 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.venv/
+venv/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Local runtime / state — never commit
+data/
+*.db
+*.db-journal
+*.sqlite
+*.sqlite-journal
+state-dumps/
+
+# Local config with real values — always keep OUT of the public repo
+.env
+.env.*
+!.env.example
+config/services.yaml
+config/services.*.yaml
+!config/services.example.yaml
+config/*.local.*
+
+# Secrets (SOPS-encrypted files are OK to commit; decrypted are not)
+*.decrypted.*
+secrets/*.yaml
+!secrets/*.enc.yaml
+
+# Editor / OS
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db

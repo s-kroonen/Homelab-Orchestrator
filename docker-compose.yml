@@ -1,0 +1,34 @@
+services:
+  orchestrator:
+    # Default: pull a pinned tag from GHCR (what the Pi does).
+    # Local dev: run `docker compose build` or `docker compose up --build`
+    # to rebuild from the working tree — the `build:` block below is honoured
+    # by both `build` and `up --build` subcommands.
+    image: ${ORCHESTRATOR_IMAGE:-ghcr.io/OWNER/homelab-orchestrator:latest}
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: orchestrator
+    restart: unless-stopped
+    env_file:
+      - .env
+    ports:
+      # Bind to loopback by default; front with Traefik/Pangolin.
+      - "127.0.0.1:8080:8080"
+    volumes:
+      - orchestrator_state:/data
+      # Real services registry (git-ignored) mounted read-only.
+      # The example lives at ./config/services.example.yaml.
+      - ./config/services.yaml:/etc/orchestrator/services.yaml:ro
+      # Optional: mount an NFS-backed dir for periodic state dumps.
+      # - /mnt/state-dumps:/mnt/state-dumps
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8080/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+volumes:
+  orchestrator_state:
+    name: orchestrator_state

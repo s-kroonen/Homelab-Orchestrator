@@ -1,0 +1,187 @@
+# ============================================================================
+# services.example.yaml — SAVED source of truth for the service registry
+# ----------------------------------------------------------------------------
+# Copy this to `config/services.yaml` (git-ignored) and edit for YOUR homelab.
+#
+# On boot, the orchestrator reconciles this file INTO the database:
+#   * the DB registry tables (nodes, backup_policies, services, probes,
+#     proxy_hosts) are overwritten to match what's here;
+#   * runtime tables (state, runs, backups, audit, approvals) and
+#     admins/passkeys are left alone.
+#
+# The dashboard writes edits to the DB (live). Hit "Save" to write DB -> YAML
+# here; hit "Reset to saved" to re-run boot reconcile and discard live edits.
+# If the DB drifts from this file the dashboard shows an unsaved-changes badge.
+#
+# This example uses only placeholder hostnames / VMIDs. Never commit real ones.
+# ============================================================================
+
+version: 1
+
+# ---------------------------------------------------------------------------
+# Proxmox nodes. `power_mgr_target` is opaque to us; the power adapter (MQTT
+# in production) decides how to interpret it.
+# ---------------------------------------------------------------------------
+nodes:
+  - name: always-on-gateway
+    always_on: true
+    power_mgr_target: gateway
+    notes: "Traefik + Pangolin live here. Never powered off."
+
+  - name: compute-a
+    always_on: false
+    power_mgr_target: compute-a
+    notes: "Burst node. Woken on demand."
+
+  - name: storage
+    always_on: false
+    power_mgr_target: storage
+    notes: "Hosts the TrueNAS VM. Must be woken before any backup or NFS read."
+
+# ---------------------------------------------------------------------------
+# Backup policies. Attach one to each service. The scheduler (phase 6) reads
+# `schedule_cron`; retention is applied by the PBS adapter after each run.
+# ---------------------------------------------------------------------------
+backup_policies:
+  - name: daily-frequent
+    schedule_cron: "0 3 * * *"
+    mode: snapshot
+    retention:
+      keep_daily: 7
+      protect_latest_verified: true
+    targets: {}
+
+  - name: monthly-full
+    schedule_cron: "0 4 1 * *"
+    mode: snapshot
+    retention:
+      keep_monthly: 6
+      protect_latest_verified: true
+    targets: {}
+
+# ---------------------------------------------------------------------------
+# Services. Each `service` maps a slug to a Proxmox guest and a list of probes
+# that decide its health. All REQUIRED probes must return HEALTHY for the
+# backup gate to open. Diagnostic-only probes set `required: false`.
+#
+# Add a new check for a service by appending a probe entry — no code change.
+# ---------------------------------------------------------------------------
+services:
+  # --- Example media service (VM) ------------------------------------------
+  - slug: example-media
+    name: Example Media
+    description: "A media streamer. Only backs up when both the HTTP endpoint responds and the docker project is healthy."
+    node: compute-a
+    guest_kind: vm
+    guest_id: 9001
+    enabled: true
+    backup_policy: daily-frequent
+    probes:
+      - name: http-frontend
+        kind: http
+        required: true
+        timeout_s: 5
+        order: 10
+        config:
+          url: "https://media.example.lan/health"
+          method: GET
+          expect_status: [200]
+          verify_tls: true
+      - name: docker-project
+        kind: docker_project
+        required: true
+        timeout_s: 10
+        order: 20
+        config:
+          ssh_host: media.example.lan
+          ssh_user: root
+          project: media-stack
+    proxy_hosts:
+      - hostname: media.example.lan
+        upstream: "http://10.0.0.10:8096"
+        router_provider: traefik
+
+  # --- Example cloud service (VM) with a MariaDB integrity check -----------
+  - slug: example-cloud
+    name: Example Cloud
+    description: "File sync + calendar. Gate includes a MariaDB integrity dump."
+    node: compute-a
+    guest_kind: vm
+    guest_id: 9002
+    enabled: true
+    backup_policy: daily-frequent
+    probes:
+      - name: http-status
+        kind: http
+        required: true
+        timeout_s: 10
+        order: 10
+        config:
+          url: "https://cloud.example.lan/status.php"
+          expect_status: [200]
+          expect_body_contains: '"installed":true'
+      - name: mariadb-integrity
+        kind: db_mariadb
+        required: true
+        timeout_s: 120
+        order: 20
+        config:
+          ssh_host: cloud.example.lan
+          ssh_user: root
+          mysql_defaults_file: /root/.my-orchestrator.cnf
+          databases: ["cloud_prod"]
+      - name: disk-space
+        kind: custom_script
+        required: false
+        timeout_s: 15
+        order: 30
+        config:
+          ssh_host: cloud.example.lan
+          ssh_user: root
+          executable: /usr/local/bin/check-disk-space
+          args: ["/", "--warn", "80"]
+          env: {}
+    proxy_hosts:
+      - hostname: cloud.example.lan
+        upstream: "http://10.0.0.11:80"
+        router_provider: traefik
+
+  # --- Example home automation (LXC container) -----------------------------
+  - slug: example-home
+    name: Example Home Automation
+    description: "MQTT + web UI. Gate includes the systemd unit and a topic-alive check."
+    node: compute-a
+    guest_kind: ct
+    guest_id: 200
+    enabled: true
+    backup_policy: daily-frequent
+    probes:
+      - name: systemd-unit
+        kind: systemd
+        required: true
+        timeout_s: 10
+        order: 10
+        config:
+          ssh_host: home.example.lan
+          ssh_user: root
+          unit: home-assistant.service
+      - name: mqtt-heartbeat
+        kind: mqtt
+        required: true
+        timeout_s: 40
+        order: 20
+        config:
+          topic: home/heartbeat
+          within_seconds: 30
+      - name: http-frontend
+        kind: http
+        required: false
+        timeout_s: 5
+        order: 30
+        config:
+          url: "https://home.example.lan/api/"
+          expect_status: [200, 401]
+    proxy_hosts:
+      - hostname: home.example.lan
+        upstream: "http://10.0.0.20:8123"
+        router_provider: traefik

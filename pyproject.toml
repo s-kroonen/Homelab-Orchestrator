@@ -1,0 +1,86 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "homelab-orchestrator"
+version = "0.1.0"
+description = "Control-plane orchestrator for a low-power Proxmox homelab: on-demand wake, integrity-gated backups, maintenance pages, dashboard."
+readme = "README.md"
+requires-python = ">=3.12"
+license = { file = "LICENSE" }
+authors = [{ name = "homelab-orchestrator contributors" }]
+classifiers = [
+    "Programming Language :: Python :: 3.12",
+    "Framework :: FastAPI",
+    "Operating System :: POSIX :: Linux",
+    "Topic :: System :: Systems Administration",
+]
+
+dependencies = [
+    "click~=8.1",
+    "fastapi~=0.115",
+    "uvicorn[standard]~=0.32",
+    "sqlmodel~=0.0.22",
+    "sqlalchemy~=2.0",
+    "alembic~=1.13",
+    "apscheduler~=3.10",
+    "httpx~=0.27",
+    "aiomqtt~=2.3",
+    "jinja2~=3.1",
+    "python-multipart~=0.0.12",
+    "webauthn~=2.3",
+    "pydantic~=2.9",
+    "pydantic-settings~=2.6",
+    "structlog~=24.4",
+    "ruamel.yaml~=0.18",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest~=8.3",
+    "pytest-asyncio~=0.24",
+    "ruff~=0.7",
+    "black~=24.10",
+    "mypy~=1.13",
+    "types-PyYAML",
+]
+
+[project.scripts]
+orchestrator = "orchestrator.main:cli"
+orchestrator-cli = "orchestrator.cli:cli"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/orchestrator"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "SIM", "TID", "RUF"]
+ignore = ["E501"]  # black handles line length
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["B008"]
+"alembic/versions/*" = ["E", "F", "I", "UP"]
+
+[tool.black]
+line-length = 100
+target-version = ["py312"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+plugins = ["pydantic.mypy"]
+exclude = ["alembic/versions"]
+
+[[tool.mypy.overrides]]
+module = ["aiomqtt.*", "apscheduler.*", "webauthn.*", "ruamel.*"]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+addopts = "-ra -q"
