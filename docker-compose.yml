@@ -4,7 +4,7 @@ services:
     # Local dev: run `docker compose build` or `docker compose up --build`
     # to rebuild from the working tree — the `build:` block below is honoured
     # by both `build` and `up --build` subcommands.
-    image: ${ORCHESTRATOR_IMAGE:-ghcr.io/OWNER/homelab-orchestrator:latest}
+    image: ${ORCHESTRATOR_IMAGE:-ghcr.io/s-kroonen/homelab-orchestrator:latest}
     build:
       context: .
       dockerfile: Dockerfile

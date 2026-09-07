@@ -36,7 +36,9 @@ rather than hiding the gap.
 
 See [docs/architecture.md](docs/architecture.md) for the full design,
 [docs/adding_a_service.md](docs/adding_a_service.md) for registering a service,
-and [docs/api_tokens.md](docs/api_tokens.md) for the API token privileges.
+[docs/api_tokens.md](docs/api_tokens.md) for the API token privileges, and
+[docs/proxmox_connectivity.md](docs/proxmox_connectivity.md) for the single
+entry point / quorum / failover notes.
 
 ---
 
@@ -74,12 +76,19 @@ Verify the round-trip via `pytest tests/test_registry_loader.py`.
 python -m venv .venv && source .venv/bin/activate   # or `.venv\Scripts\activate` on Windows
 pip install -e '.[dev]'
 cp .env.example .env
+cp .env.local.example .env.local                       # local paths; overrides .env
 cp config/services.example.yaml config/services.yaml   # or write your own
 alembic upgrade head
 orchestrator                                           # serves on :8080
 ```
 
-Then `curl http://127.0.0.1:8080/healthz` and `.../api/registry/services`.
+Then `curl http://127.0.0.1:8080/healthz` and `.../api/registry/services`, or
+browse the OpenAPI UI at <http://127.0.0.1:8080/docs>.
+
+**Two env files, later wins.** `.env` holds deployment config (container paths
+like `/data`); `.env.local` is an optional developer override for running
+natively, where those paths don't exist. Both are git-ignored. Full walkthrough
+including Windows: [docs/local_testing.md](docs/local_testing.md).
 
 ### With Docker (local build)
 
@@ -100,7 +109,7 @@ Images are built by [GitHub Actions](.github/workflows/publish.yml) for both
 pull:
 
 ```bash
-export ORCHESTRATOR_IMAGE=ghcr.io/<your-user>/homelab-orchestrator:1.0.0
+export ORCHESTRATOR_IMAGE=ghcr.io/s-kroonen/homelab-orchestrator:1.0.0
 docker compose pull
 docker compose up -d
 ```

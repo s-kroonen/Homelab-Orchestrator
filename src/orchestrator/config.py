@@ -24,8 +24,13 @@ class AdapterMode(StrEnum):
 class Settings(BaseSettings):
     """Top-level settings object. Instantiated once at app startup."""
 
+    # Two env files, later wins. `.env` holds deployment config (typically
+    # container-shaped: /data, /etc/orchestrator). `.env.local` is an optional
+    # developer override for running natively — on Windows or a dev box the
+    # container paths don't exist, and this avoids editing the deploy config to
+    # test locally. Both are git-ignored.
     model_config = SettingsConfigDict(
-        env_file=".env",
+        env_file=(".env", ".env.local"),
         env_file_encoding="utf-8",
         case_sensitive=False,
         extra="ignore",

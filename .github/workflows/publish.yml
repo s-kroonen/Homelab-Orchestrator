@@ -13,7 +13,7 @@ name: publish
 #
 # Pulling on the Pi:
 #     docker login ghcr.io -u <you> -p <PAT with read:packages>   # only for PRIVATE repos
-#     export ORCHESTRATOR_IMAGE=ghcr.io/<owner>/homelab-orchestrator:1.0.0
+#     export ORCHESTRATOR_IMAGE=ghcr.io/s-kroonen/homelab-orchestrator:1.0.0
 #     docker compose pull && docker compose up -d
 
 on:

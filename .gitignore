@@ -24,6 +24,7 @@ state-dumps/
 .env
 .env.*
 !.env.example
+!.env.local.example
 config/services.yaml
 config/services.*.yaml
 !config/services.example.yaml

@@ -39,6 +39,14 @@ web/                FastAPI app: health, maintenance, wake, dashboard
 audit/              append-only audit writes
 ```
 
+## Proxmox connectivity
+
+The orchestrator uses a single `PROXMOX_HOST`, which must be the always-on node.
+Multi-endpoint failover is a planned later phase, and there is a **quorum**
+consideration that affects whether the wake pipeline can start guests at all on
+a mostly-powered-off cluster. Both are covered in
+[proxmox_connectivity.md](proxmox_connectivity.md).
+
 ## Three-state health model
 
 Every scan aggregates its required probes into one of:

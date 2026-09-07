@@ -9,7 +9,7 @@ description = "Control-plane orchestrator for a low-power Proxmox homelab: on-de
 readme = "README.md"
 requires-python = ">=3.12"
 license = { file = "LICENSE" }
-authors = [{ name = "homelab-orchestrator contributors" }]
+authors = [{ name = "S. Kroonen" }]
 classifiers = [
     "Programming Language :: Python :: 3.12",
     "Framework :: FastAPI",
