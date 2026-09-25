@@ -50,6 +50,9 @@ class ProbeKind(StrEnum):
     DB_SQLITE = "db_sqlite"  # PRAGMA integrity_check on a copy
     DB_MARIADB = "db_mariadb"  # mariadb-check + single-transaction dump
     CUSTOM_SCRIPT = "custom_script"  # execute a user-provided script; exit 0 = ok
+    COMMAND = "command"  # run an arbitrary argv via a transport; exit 0 = ok
+    ANSIBLE_PLAYBOOK = "ansible_playbook"  # run a playbook on the control host
+    ANSIBLE_PING = "ansible_ping"  # inventory host is reachable and answering
 
 
 class PipelineKind(StrEnum):

@@ -1,0 +1,55 @@
+# systemd unit for orchestrator-host-runner.
+#
+#   sudo cp orchestrator-host-runner /usr/local/bin/
+#   sudo chmod +x /usr/local/bin/orchestrator-host-runner
+#   sudo cp orchestrator-host-runner.service /etc/systemd/system/
+#   sudo systemctl enable --now orchestrator-host-runner
+#
+# See docs/host_runner.md for the user/group setup this expects.
+
+[Unit]
+Description=Homelab orchestrator host runner (executes approved checks off-container)
+Documentation=https://github.com/s-kroonen/homelab-orchestrator/blob/main/docs/host_runner.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+
+# Runs as a dedicated unprivileged user that owns ONLY the inventory, the
+# playbooks and the SSH key these checks need. Not root: the whole point is to
+# hold a boundary, and a root runner would hand away everything the container
+# compromise was supposed to be denied.
+User=orchestrator-runner
+Group=orchestrator
+
+ExecStart=/usr/local/bin/orchestrator-host-runner --config /etc/orchestrator/host-runner.yaml
+
+Restart=on-failure
+RestartSec=5s
+
+# The socket lives here; systemd creates it with the right ownership.
+RuntimeDirectory=orchestrator
+RuntimeDirectoryMode=0750
+
+# --- hardening -------------------------------------------------------------
+# This process is reachable (indirectly) from a web-facing container, so it is
+# worth constraining even though it is small.
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=read-only
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+
+# ProtectSystem=strict makes everything read-only except what is listed here.
+ReadWritePaths=/run/orchestrator
+
+[Install]
+WantedBy=multi-user.target

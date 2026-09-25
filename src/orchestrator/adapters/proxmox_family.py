@@ -14,6 +14,7 @@ silently unverified control-plane connection is worth being loud about.
 
 from __future__ import annotations
 
+import ssl
 from typing import Any, Literal
 
 import httpx
@@ -21,6 +22,7 @@ import httpx
 from orchestrator.adapters.errors import (
     AdapterAuthError,
     AdapterRequestError,
+    AdapterTlsError,
     AdapterUnreachable,
 )
 from orchestrator.logging_setup import get_logger
@@ -121,16 +123,33 @@ class ProxmoxFamilyClient:
         except httpx.TimeoutException as exc:
             raise AdapterUnreachable(f"{self._flavor} timed out on {method} {path}: {exc}") from exc
         except httpx.TransportError as exc:
-            # Covers connect errors, DNS failures, TLS handshake problems.
+            # A TLS trust failure is NOT a routing problem — the socket
+            # connected. Say so, and name the setting that fixes it.
+            if _is_tls_trust_failure(exc):
+                env_var = "PROXMOX_VERIFY_TLS" if self._flavor == "pve" else "PBS_VERIFY_TLS"
+                raise AdapterTlsError(
+                    f"{self._flavor} TLS certificate was rejected on {method} {path}: "
+                    f"{exc}. The host is reachable — this is a certificate trust "
+                    f"problem. Proxmox and PBS ship self-signed certificates by "
+                    f"default. Either set {env_var}=false, or install the host's CA "
+                    f"into the container's trust store."
+                ) from exc
             raise AdapterUnreachable(
                 f"{self._flavor} unreachable on {method} {path}: {exc}"
             ) from exc
 
         if response.status_code in (401, 403):
+            detail = response.text.strip()[:500]
             raise AdapterAuthError(
                 f"{self._flavor} rejected the API token on {method} {path} "
-                f"({response.status_code}). Check the token id/secret and that the "
-                f"role grants this endpoint."
+                f"({response.status_code})"
+                + (f": {detail}" if detail else "")
+                + ". NOTE: with privilege separation a token's effective privileges "
+                "are the INTERSECTION of the owning user's ACL and the token's own "
+                "ACL — an ACL on only one of the two grants nothing. Check both with "
+                "`proxmox-backup-manager acl list` / `pveum acl list`.",
+                status_code=response.status_code,
+                body=detail,
             )
 
         if response.status_code >= 400:
@@ -153,6 +172,20 @@ class ProxmoxFamilyClient:
             ) from exc
 
         return payload.get("data") if isinstance(payload, dict) else payload
+
+
+def _is_tls_trust_failure(exc: Exception) -> bool:
+    """Walk the exception chain looking for an SSL certificate verification error."""
+    seen = 0
+    cur: BaseException | None = exc
+    while cur is not None and seen < 10:
+        if isinstance(cur, ssl.SSLCertVerificationError | ssl.SSLError):
+            return True
+        if "CERTIFICATE_VERIFY_FAILED" in str(cur) or "certificate verify failed" in str(cur):
+            return True
+        cur = cur.__cause__ or cur.__context__
+        seen += 1
+    return False
 
 
 def _clean(d: dict[str, Any] | None) -> dict[str, Any] | None:

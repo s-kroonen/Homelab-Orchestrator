@@ -29,6 +29,10 @@ config/services.yaml
 config/services.*.yaml
 !config/services.example.yaml
 config/*.local.*
+# Copies taken before `orchestrator-cli init` / `config edit` replace a file.
+# They hold the same secrets and addresses as the originals.
+*.bak-*
+config/*.tmp
 
 # Secrets (SOPS-encrypted files are OK to commit; decrypted are not)
 *.decrypted.*

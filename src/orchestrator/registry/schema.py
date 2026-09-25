@@ -70,6 +70,12 @@ class ServiceSpec(BaseModel):
     guest_kind: GuestKind = GuestKind.NONE
     guest_id: int | None = None
     enabled: bool = True
+    # See Service.backup_excluded — a hard, non-overridable "never back this up".
+    backup_excluded: bool = False
+    backup_excluded_reason: str = ""
+    #: Slugs that must be HEALTHY before this service can be judged. See
+    #: Service.depends_on — the gateway case.
+    depends_on: list[str] = Field(default_factory=list)
     backup_policy: str | None = None  # -> BackupPolicySpec.name
     probes: list[ProbeSpec] = Field(default_factory=list)
     proxy_hosts: list[ProxyHostSpec] = Field(default_factory=list)

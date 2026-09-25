@@ -14,7 +14,8 @@ from orchestrator.adapters.pbs.dry_run import DryRunPbsAdapter
 from orchestrator.adapters.proxmox.dry_run import DryRunProxmoxAdapter
 from orchestrator.config import get_settings
 from orchestrator.db.models import AuditEntry, BackupRecord, PipelineRun
-from orchestrator.domain.enums import PipelineStatus
+from orchestrator.domain.enums import HealthState, PipelineStatus
+from orchestrator.domain.schemas import ServiceVerdict
 from orchestrator.pipelines.backup import BackupError, BackupPipeline
 from orchestrator.registry.loader import reconcile_yaml_into_db
 
@@ -40,8 +41,37 @@ def _snapshot(backup_id: str = "9001", when: int = 1756000000) -> Snapshot:
     )
 
 
-def _pipeline(proxmox: DryRunProxmoxAdapter, pbs: DryRunPbsAdapter) -> BackupPipeline:
-    return BackupPipeline(proxmox=proxmox, pbs=pbs, settings=get_settings())
+class StubHealthEngine:
+    """Returns a fixed verdict without touching the network.
+
+    The pipeline tests below are about backup mechanics, not about the health
+    engine — its own behaviour is covered in test_health_engine.py. Without this
+    they would make real HTTP calls to the example config's fake hostnames and
+    (correctly) be refused by the gate.
+    """
+
+    def __init__(self, state: HealthState = HealthState.HEALTHY, reason: str = "stub") -> None:
+        self.state = state
+        self.reason = reason
+        self.scanned: list[str] = []
+
+    async def scan(self, session: Session, service) -> ServiceVerdict:
+        self.scanned.append(service.slug)
+        return ServiceVerdict(state=self.state, reason=self.reason, probe_results=[])
+
+
+def _pipeline(
+    proxmox: DryRunProxmoxAdapter,
+    pbs: DryRunPbsAdapter,
+    *,
+    health: StubHealthEngine | None = None,
+) -> BackupPipeline:
+    return BackupPipeline(
+        proxmox=proxmox,
+        pbs=pbs,
+        settings=get_settings(),
+        health=health or StubHealthEngine(),  # type: ignore[arg-type]
+    )
 
 
 async def test_successful_backup_records_and_verifies(loaded_session: Session) -> None:
@@ -79,15 +109,14 @@ async def test_steps_are_recorded_in_order(loaded_session: Session) -> None:
     ]
 
 
-async def test_gate_is_recorded_as_skipped_until_phase_4(loaded_session: Session) -> None:
-    """The missing gate must be visible in the run, not silently absent."""
+async def test_gate_passes_and_records_the_verdict(loaded_session: Session) -> None:
     pbs = DryRunPbsAdapter(simulated_snapshots=[_snapshot()])
     run = await _pipeline(DryRunProxmoxAdapter(), pbs).run_for_service(
         loaded_session, "example-media"
     )
     gate = next(s for s in run.steps if s["name"] == "integrity_gate")
-    assert gate["status"] == "skipped"
-    assert gate["detail"]["ungated"] is True
+    assert gate["status"] == "ok"
+    assert gate["detail"]["verdict"] == "healthy"
 
 
 async def test_verify_can_be_skipped(loaded_session: Session) -> None:
@@ -201,3 +230,149 @@ async def test_ct_service_uses_ct_backup_type(loaded_session: Session) -> None:
         select(BackupRecord).where(BackupRecord.service_slug == "example-home")
     ).one()
     assert record.pbs_snapshot_id.startswith("ct/200/")
+
+
+async def test_backup_excluded_service_is_refused(loaded_session: Session) -> None:
+    """The circular-backup guard: a VM hosting PBS's own storage must never be
+    dumped to PBS. Hard refusal, no override."""
+    from orchestrator.db.models import Service
+
+    svc = loaded_session.exec(select(Service).where(Service.slug == "example-media")).one()
+    svc.backup_excluded = True
+    svc.backup_excluded_reason = "hosts the ZFS pool PBS lives on"
+    loaded_session.commit()
+
+    with pytest.raises(BackupError, match="backup_excluded"):
+        await _pipeline(DryRunProxmoxAdapter(), DryRunPbsAdapter()).run_for_service(
+            loaded_session, "example-media"
+        )
+
+    # Nothing was dumped and nothing was recorded.
+    assert loaded_session.exec(select(BackupRecord)).all() == []
+
+
+async def test_exclusion_message_carries_the_reason(loaded_session: Session) -> None:
+    """The operator needs to know WHY, months later, without reading the code."""
+    from orchestrator.db.models import Service
+
+    svc = loaded_session.exec(select(Service).where(Service.slug == "example-media")).one()
+    svc.backup_excluded = True
+    svc.backup_excluded_reason = "circular: hosts the PBS datastore"
+    loaded_session.commit()
+
+    with pytest.raises(BackupError) as exc:
+        await _pipeline(DryRunProxmoxAdapter(), DryRunPbsAdapter()).run_for_service(
+            loaded_session, "example-media"
+        )
+    assert "circular: hosts the PBS datastore" in str(exc.value)
+    assert "no override" in str(exc.value)
+
+
+async def test_exclusion_without_a_reason_still_refuses(loaded_session: Session) -> None:
+    from orchestrator.db.models import Service
+
+    svc = loaded_session.exec(select(Service).where(Service.slug == "example-media")).one()
+    svc.backup_excluded = True
+    loaded_session.commit()
+
+    with pytest.raises(BackupError, match="no reason recorded"):
+        await _pipeline(DryRunProxmoxAdapter(), DryRunPbsAdapter()).run_for_service(
+            loaded_session, "example-media"
+        )
+
+
+# ---------------------------------------------------------------------------
+# The integrity gate. This is the whole point of the project: never overwrite a
+# good backup with a bad one, and never mistake "don't know" for either answer.
+# ---------------------------------------------------------------------------
+
+
+async def test_gate_refuses_a_failed_service(loaded_session: Session) -> None:
+    """FAILED means the service is definitively broken — capturing that state
+    over a known-good backup is the exact disaster this prevents."""
+    pbs = DryRunPbsAdapter(simulated_snapshots=[_snapshot()])
+    health = StubHealthEngine(HealthState.FAILED, "mariadb-integrity: table is corrupt")
+
+    with pytest.raises(BackupError, match="FAILED"):
+        await _pipeline(DryRunProxmoxAdapter(), pbs, health=health).run_for_service(
+            loaded_session, "example-media"
+        )
+
+    # No dump was taken and no record was written.
+    assert loaded_session.exec(select(BackupRecord)).all() == []
+    run = loaded_session.exec(select(PipelineRun)).one()
+    assert run.status is PipelineStatus.FAILED
+    names = [s["name"] for s in run.steps]
+    assert "vzdump_started" not in names  # aborted BEFORE touching Proxmox
+    gate = next(s for s in run.steps if s["name"] == "integrity_gate")
+    assert gate["status"] == "failed"
+
+
+async def test_gate_refuses_an_unknown_service_failing_closed(loaded_session: Session) -> None:
+    """UNKNOWN must also refuse. A check that could not run is not permission."""
+    pbs = DryRunPbsAdapter(simulated_snapshots=[_snapshot()])
+    health = StubHealthEngine(HealthState.UNKNOWN, "ssh: connection refused")
+
+    with pytest.raises(BackupError, match="UNKNOWN"):
+        await _pipeline(DryRunProxmoxAdapter(), pbs, health=health).run_for_service(
+            loaded_session, "example-media"
+        )
+
+    assert loaded_session.exec(select(BackupRecord)).all() == []
+    run = loaded_session.exec(select(PipelineRun)).one()
+    gate = next(s for s in run.steps if s["name"] == "integrity_gate")
+    # Recorded as indeterminate, NOT failed — the distinction drives whether this
+    # service becomes a restore candidate.
+    assert gate["status"] == "indeterminate"
+
+
+async def test_unknown_refusal_says_it_is_not_corruption(loaded_session: Session) -> None:
+    """The operator must not read an UNKNOWN abort as 'my data is corrupt'."""
+    pbs = DryRunPbsAdapter(simulated_snapshots=[_snapshot()])
+    health = StubHealthEngine(HealthState.UNKNOWN, "probe timed out")
+
+    with pytest.raises(BackupError) as exc:
+        await _pipeline(DryRunProxmoxAdapter(), pbs, health=health).run_for_service(
+            loaded_session, "example-media"
+        )
+    msg = str(exc.value)
+    assert "not" in msg and "corruption" in msg
+    assert "untouched" in msg  # reassures that the good backup survives
+
+
+async def test_failed_refusal_flags_a_restore_candidate(loaded_session: Session) -> None:
+    pbs = DryRunPbsAdapter(simulated_snapshots=[_snapshot()])
+    health = StubHealthEngine(HealthState.FAILED, "container exited")
+
+    with pytest.raises(BackupError) as exc:
+        await _pipeline(DryRunProxmoxAdapter(), pbs, health=health).run_for_service(
+            loaded_session, "example-media"
+        )
+    assert "restore candidate" in str(exc.value)
+
+
+async def test_gate_can_be_bypassed_explicitly_and_is_marked(loaded_session: Session) -> None:
+    """An override must be possible but never silent."""
+    pbs = DryRunPbsAdapter(simulated_snapshots=[_snapshot()])
+    health = StubHealthEngine(HealthState.FAILED, "would normally refuse")
+
+    run = await _pipeline(DryRunProxmoxAdapter(), pbs, health=health).run_for_service(
+        loaded_session, "example-media", gate=False
+    )
+
+    assert run.status is PipelineStatus.SUCCEEDED
+    gate = next(s for s in run.steps if s["name"] == "integrity_gate")
+    assert gate["status"] == "bypassed"
+    assert gate["detail"]["ungated"] is True
+    # And the engine was never consulted.
+    assert health.scanned == []
+
+
+async def test_gate_runs_before_the_dump_not_after(loaded_session: Session) -> None:
+    """Order matters: gating after the dump would already have written bad data."""
+    pbs = DryRunPbsAdapter(simulated_snapshots=[_snapshot()])
+    run = await _pipeline(DryRunProxmoxAdapter(), pbs).run_for_service(
+        loaded_session, "example-media"
+    )
+    names = [s["name"] for s in run.steps]
+    assert names.index("integrity_gate") < names.index("vzdump_started")

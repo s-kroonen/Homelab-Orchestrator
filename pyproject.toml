@@ -27,6 +27,7 @@ dependencies = [
     "apscheduler~=3.10",
     "httpx~=0.27",
     "aiomqtt~=2.3",
+    "asyncssh~=2.18",
     "jinja2~=3.1",
     "python-multipart~=0.0.12",
     "webauthn~=2.3",

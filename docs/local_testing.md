@@ -49,7 +49,7 @@ cp config\services.example.yaml config\services.yaml
 mkdir data
 alembic upgrade head
 
-orchestrator-cli services
+orchestrator-cli service list
 orchestrator-cli backup example-media
 ```
 

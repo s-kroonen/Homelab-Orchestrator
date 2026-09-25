@@ -64,9 +64,38 @@ def _sha256_bytes(b: bytes) -> str:
     return hashlib.sha256(b).hexdigest()
 
 
+class RegistryPathError(Exception):
+    """The registry path is unusable — missing, a directory, or unreadable.
+
+    Carries an actionable message rather than a bare OSError, because the most
+    common cause is a Docker bind mount whose host file did not exist (Docker
+    then silently creates a *directory* at the mount point).
+    """
+
+
+def validate_registry_path(path: Path) -> None:
+    """Fail fast with a message that says what to do about it."""
+    if path.is_dir():
+        raise RegistryPathError(
+            f"{path} is a DIRECTORY, not a file. This almost always means a Docker "
+            f"bind mount pointed at a host file that did not exist, so Docker created "
+            f"a directory at the mount point. Fix: stop the stack, remove the empty "
+            f"directory on the HOST (rmdir config/services.yaml), create the real file "
+            f"(cp config/services.example.yaml config/services.yaml), then start again."
+        )
+    if not path.exists():
+        raise RegistryPathError(
+            f"{path} does not exist. Create it from the example: "
+            f"cp config/services.example.yaml config/services.yaml"
+        )
+    if not path.is_file():
+        raise RegistryPathError(f"{path} exists but is not a regular file.")
+
+
 def read_yaml_file(path: Path) -> tuple[RegistryFile, str]:
     """Parse ``services.yaml`` into a validated :class:`RegistryFile` plus its
     content hash. Raises if the file is missing or malformed."""
+    validate_registry_path(path)
     raw = path.read_bytes()
     doc = _yaml.load(io.BytesIO(raw)) or {}
     # ruamel returns its own mapping type — coerce via model_validate.
@@ -131,6 +160,9 @@ def _spec_from_db(session: Session) -> RegistryFile:
                 guest_kind=svc.guest_kind,
                 guest_id=svc.guest_id,
                 enabled=svc.enabled,
+                backup_excluded=svc.backup_excluded,
+                backup_excluded_reason=svc.backup_excluded_reason,
+                depends_on=list(svc.depends_on or []),
                 backup_policy=policy_name,
                 probes=[
                     ProbeSpec(
@@ -210,6 +242,89 @@ def _hash_spec(spec: RegistryFile) -> str:
 # ---------------------------------------------------------------------------
 
 
+def _find_dependency_cycle(graph: dict[str, list[str]]) -> list[str] | None:
+    """Return one dependency cycle as a slug path, or None.
+
+    Cycles must be caught here: the health engine walks dependencies before
+    scanning, so a loop would recurse until the stack blew rather than producing
+    a usable error.
+    """
+    WHITE, GREY, BLACK = 0, 1, 2
+    colour = dict.fromkeys(graph, WHITE)
+
+    def visit(node: str, path: list[str]) -> list[str] | None:
+        colour[node] = GREY
+        for dep in graph.get(node, []):
+            if dep not in colour:
+                continue  # unknown slug — already reported as a missing reference
+            if colour[dep] == GREY:
+                return [*path, node, dep]  # closes the loop
+            if colour[dep] == WHITE:
+                found = visit(dep, [*path, node])
+                if found:
+                    return found
+        colour[node] = BLACK
+        return None
+
+    for node in graph:
+        if colour[node] == WHITE:
+            found = visit(node, [])
+            if found:
+                return found
+    return None
+
+
+def validate_references(parsed: RegistryFile) -> None:
+    """Check every cross-reference inside the file resolves within the file."""
+    node_names = {n.name for n in parsed.nodes}
+    policy_names = {p.name for p in parsed.backup_policies}
+    slugs = {s.slug for s in parsed.services}
+
+    problems: list[str] = []
+    for svc in parsed.services:
+        for dep in svc.depends_on:
+            if dep == svc.slug:
+                problems.append(f"service {svc.slug!r} lists itself in depends_on")
+            elif dep not in slugs:
+                known = ", ".join(sorted(slugs)) or "(none)"
+                problems.append(
+                    f"service {svc.slug!r} depends_on {dep!r}, which this file does "
+                    f"not define. Services defined here: {known}"
+                )
+        if svc.node not in node_names:
+            known = ", ".join(sorted(node_names)) or "(none defined)"
+            problems.append(
+                f"service {svc.slug!r} references node {svc.node!r}, which this "
+                f"file does not define. Nodes defined here: {known}"
+            )
+        if svc.backup_policy and svc.backup_policy not in policy_names:
+            known = ", ".join(sorted(policy_names)) or "(none defined)"
+            problems.append(
+                f"service {svc.slug!r} references backup_policy "
+                f"{svc.backup_policy!r}, which this file does not define. "
+                f"Policies defined here: {known}"
+            )
+
+    cycle = _find_dependency_cycle({s.slug: list(s.depends_on) for s in parsed.services})
+    if cycle:
+        problems.append("depends_on forms a cycle: " + " -> ".join(cycle))
+
+    if problems:
+        joined = "\n  - ".join(problems)
+        raise ValueError(f"services.yaml has unresolved references:\n  - {joined}")
+
+    # Contradictory rather than invalid: exclusion wins, but say so, because the
+    # operator clearly meant one of the two and should know which lost.
+    for svc in parsed.services:
+        if svc.backup_excluded and svc.backup_policy:
+            log.warning(
+                "registry.service.excluded_but_has_policy",
+                service=svc.slug,
+                backup_policy=svc.backup_policy,
+                resolution="backup_excluded wins; that policy will never run for it",
+            )
+
+
 def reconcile_yaml_into_db(session: Session, path: Path) -> RegistryFile:
     """Read ``path`` and overwrite the DB's registry tables to match.
 
@@ -219,7 +334,21 @@ def reconcile_yaml_into_db(session: Session, path: Path) -> RegistryFile:
     parsed, sha = read_yaml_file(path)
     log.info("registry.yaml.load", path=str(path), sha256=sha[:12])
 
-    # --- Nodes ---------------------------------------------------------------
+    # Validate the whole document BEFORE mutating anything. Two reasons:
+    #   * a dangling reference is an authoring error and deserves a message that
+    #     names the service and the missing node, not a downstream
+    #     "FOREIGN KEY constraint failed";
+    #   * checking references against the FILE (not the DB) keeps the error
+    #     independent of the order in which rows happen to be deleted.
+    validate_references(parsed)
+
+    # ORDERING RULE: upsert parents first, then reconcile children, and only
+    # then delete orphaned parents. `service.node_id` is ON DELETE RESTRICT, so
+    # deleting a node while any service still points at it raises
+    # "FOREIGN KEY constraint failed". That happens whenever the node set is
+    # replaced wholesale — e.g. swapping the example registry for a real one.
+
+    # --- Nodes: upsert only (deletions deferred to the end) ------------------
     yaml_node_names = {n.name for n in parsed.nodes}
     existing_nodes = {n.name: n for n in session.exec(select(Node)).all()}
 
@@ -233,13 +362,9 @@ def reconcile_yaml_into_db(session: Session, path: Path) -> RegistryFile:
         node.notes = spec.notes
         node.updated_at = datetime.now(UTC)
 
-    for name, node in existing_nodes.items():
-        if name not in yaml_node_names:
-            session.delete(node)
-
     session.flush()
 
-    # --- BackupPolicies ------------------------------------------------------
+    # --- BackupPolicies: upsert only (deletions deferred) --------------------
     yaml_policy_names = {p.name for p in parsed.backup_policies}
     existing_policies = {p.name: p for p in session.exec(select(BackupPolicy)).all()}
 
@@ -253,10 +378,6 @@ def reconcile_yaml_into_db(session: Session, path: Path) -> RegistryFile:
         pol.retention = spec.retention
         pol.targets = spec.targets
         pol.updated_at = datetime.now(UTC)
-
-    for name, pol in existing_policies.items():
-        if name not in yaml_policy_names:
-            session.delete(pol)
 
     session.flush()
 
@@ -287,6 +408,9 @@ def reconcile_yaml_into_db(session: Session, path: Path) -> RegistryFile:
         svc.guest_kind = spec.guest_kind
         svc.guest_id = spec.guest_id
         svc.enabled = spec.enabled
+        svc.backup_excluded = spec.backup_excluded
+        svc.backup_excluded_reason = spec.backup_excluded_reason
+        svc.depends_on = list(spec.depends_on)
         svc.node_id = node.id
         svc.backup_policy_id = policy.id if policy else None
         svc.updated_at = datetime.now(UTC)
@@ -327,6 +451,19 @@ def reconcile_yaml_into_db(session: Session, path: Path) -> RegistryFile:
         if slug not in yaml_service_slugs:
             session.delete(svc)
 
+    session.flush()
+
+    # --- Deferred parent deletions -------------------------------------------
+    # Safe only now: every service that referenced a removed node/policy has
+    # either been deleted above or repointed during the upsert.
+    for name, pol in existing_policies.items():
+        if name not in yaml_policy_names:
+            session.delete(pol)
+    session.flush()
+
+    for name, node in existing_nodes.items():
+        if name not in yaml_node_names:
+            session.delete(node)
     session.flush()
 
     # Record what we loaded so drift-detection has a baseline.

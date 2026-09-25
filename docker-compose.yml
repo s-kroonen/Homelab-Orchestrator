@@ -17,17 +17,63 @@ services:
       - "127.0.0.1:8080:8080"
     volumes:
       - orchestrator_state:/data
-      # Real services registry (git-ignored) mounted read-only.
-      # The example lives at ./config/services.example.yaml.
-      - ./config/services.yaml:/etc/orchestrator/services.yaml:ro
+      # Mount the config DIRECTORY, not the single file. Two reasons:
+      #   1. A single-file bind mount whose host file does not exist makes Docker
+      #      silently create a DIRECTORY at that path, and the app then fails with
+      #      "Is a directory". Mounting the dir gives a clear "file not found".
+      #   2. The dashboard's Save writes services.yaml back via a .tmp sibling +
+      #      atomic rename, which needs write access to the directory. A ':ro'
+      #      single-file mount makes Save permanently impossible.
+      # Your real services.yaml is git-ignored; the example is services.example.yaml.
+      - ./config:/etc/orchestrator
       # Optional: mount an NFS-backed dir for periodic state dumps.
       # - /mnt/state-dumps:/mnt/state-dumps
+      #
+      # Host runner socket — the ONLY thing needed for ansible/ssh probes.
+      # A socket is a capability, not a file tree: the container can ask the
+      # runner to perform pre-approved checks, and can read neither the
+      # inventory, the playbooks, nor any key. See docs/host_runner.md.
+      # - /run/orchestrator/host-runner.sock:/run/orchestrator/host-runner.sock
+    #
+    # The socket is mode 0660, so this container's uid must be in the HOST's
+    # socket group. Use the NUMERIC gid from `getent group orchestrator` on the
+    # host: group_add resolves names against the CONTAINER's /etc/group, where
+    # `orchestrator` is already this image's own group (gid 1000) — the name
+    # would resolve to the wrong group and every connect would be refused.
+    # group_add:
+    #   - "1001"
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8080/healthz"]
       interval: 30s
       timeout: 5s
       retries: 3
       start_period: 15s
+
+  # One-off setup and config commands, run from the same image:
+  #   mkdir -p config && touch .env                  # once, on a fresh install
+  #   docker compose run --rm setup init             # clean install: writes .env + config/
+  #   docker compose run --rm setup config edit pbs  # change one section of .env
+  #   docker compose run --rm setup scaffold         # pull new guests into services.yaml
+  #   docker compose run --rm setup probe add <slug>
+  # It mounts this directory, because .env is a FILE only here — the orchestrator
+  # container receives it as environment variables and cannot rewrite it.
+  # Profile-gated, so `docker compose up` never starts it.
+  #
+  # Compose refuses to run ANY service while .env is missing. That is kept on
+  # purpose: it stops `docker compose up` recreating the orchestrator with no
+  # config. Hence `touch .env` first — init treats an empty .env as a clean install.
+  setup:
+    image: ${ORCHESTRATOR_IMAGE:-ghcr.io/s-kroonen/homelab-orchestrator:latest}
+    profiles: ["setup"]
+    entrypoint: ["orchestrator-cli"]
+    working_dir: /work
+    volumes:
+      - ./:/work
+      - ./config:/etc/orchestrator
+    # No env_file on purpose: the CLI reads /work/.env itself, and `init` has to
+    # run before that file exists.
+    # Files are written as uid 1000, the image user. If yours differs (id -u):
+    #   docker compose run --rm --user "$(id -u):$(id -g)" setup init
 
 volumes:
   orchestrator_state:

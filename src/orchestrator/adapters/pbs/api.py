@@ -49,6 +49,14 @@ class LivePbsAdapter(PbsAdapter):
             raw=data,
         )
 
+    async def effective_permissions(self) -> dict[str, Any]:
+        data = await self._client.request("GET", "/access/permissions")
+        return data or {}
+
+    async def list_datastores(self) -> list[str]:
+        rows = await self._client.request("GET", "/admin/datastore") or []
+        return sorted(str(row["store"]) for row in rows if row.get("store"))
+
     async def datastore_status(self, name: str) -> DatastoreStatus:
         data = await self._client.request("GET", f"/admin/datastore/{name}/status") or {}
         return DatastoreStatus(
@@ -156,6 +164,18 @@ class LivePbsAdapter(PbsAdapter):
         backup_time: int,
         protected: bool,
     ) -> None:
+        if not self._settings.pbs_protect_enabled:
+            log.warning(
+                "pbs.set_protected.disabled",
+                datastore=datastore,
+                group=f"{backup_type}/{backup_id}",
+                backup_time=backup_time,
+                requested=protected,
+                reason="PBS_PROTECT_ENABLED=false (token lacks Datastore.Modify)",
+                impact="This snapshot is NOT pinned; prune may remove it.",
+            )
+            return
+
         await self._client.request(
             "PUT",
             f"/admin/datastore/{datastore}/protected",

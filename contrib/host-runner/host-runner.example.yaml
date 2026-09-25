@@ -1,0 +1,61 @@
+# ============================================================================
+# orchestrator-host-runner — allowlist config
+# ----------------------------------------------------------------------------
+# Lives on the HOST, never in the container. Copy to
+# /etc/orchestrator/host-runner.yaml and edit.
+#
+# This file is the privilege boundary. The orchestrator container can ask this
+# runner to perform the checks listed below and nothing else — it cannot read
+# your inventory, your playbooks or your keys, and it cannot invent new
+# commands. Keep the lists as narrow as you can stand.
+# ============================================================================
+
+# The socket the container connects to. This is the ONLY thing mounted into
+# the container: a capability, not a file tree.
+socket_path: /run/orchestrator/host-runner.sock
+# The container's user must be in this group to connect. 0660 means nothing
+# else on the host can.
+socket_group: orchestrator
+socket_mode: "0660"
+
+# Where ansible and your material live — all host paths, all invisible to the
+# container.
+ansible_bin: ansible
+ansible_playbook_bin: ansible-playbook
+inventory: /etc/ansible/hosts
+playbook_dir: /etc/ansible/playbooks
+
+# Upper bound on any single check, whatever the caller asks for.
+max_timeout_s: 900
+
+allow:
+  # `ansible -m ping` against an allowed host. Cheap, read-only, and the usual
+  # liveness signal.
+  ping: true
+
+  # Playbooks are allowed by NAME and resolved against playbook_dir above. The
+  # container never supplies a path, so it cannot reach outside that directory
+  # even with a crafted request.
+  playbooks:
+    - check-mariadb.yml
+    - check-redis.yml
+    - check-docker.yml
+
+  # Which inventory hosts/groups may be targeted.
+  # Leave empty for "anything in the inventory" — convenient, but naming them
+  # is strictly better, and costs one line each.
+  hosts: []
+  #  - haos
+  #  - media-vm
+  #  - db-cluster
+
+  # Ad-hoc commands. OFF by default, and worth keeping that way: turning it on
+  # gives the container arbitrary remote execution on every allowed host, which
+  # gives back most of the ground this runner exists to hold.
+  #
+  # If you need something a playbook cannot express, prefer writing the
+  # playbook. If you still want this, narrow `commands` to specific binaries.
+  command: false
+  commands:
+    - systemctl
+    - docker

@@ -45,6 +45,19 @@ def build_adapters(settings: Settings | None = None) -> AdapterBundle:
     power: PowerAdapter
     if settings.resolve_adapter(settings.power_adapter) is AdapterMode.DRY_RUN:
         power = DryRunPowerAdapter()
+    elif not MqttPowerAdapter.IMPLEMENTED:
+        # Phase 3 has not landed. Returning the stub here would raise from
+        # start() and crash-loop the container, taking Proxmox and PBS — which
+        # DO work — down with it. Substitute dry-run and say so loudly.
+        log.warning(
+            "adapters.power.not_implemented",
+            requested=settings.power_adapter,
+            using="DryRunPowerAdapter",
+            impact="Wake and power-off are logged no-ops. Backups against real "
+            "Proxmox/PBS still work; nodes will not actually be powered on.",
+            fix="Lands in phase 3.",
+        )
+        power = DryRunPowerAdapter()
     else:
         power = MqttPowerAdapter(settings)
 

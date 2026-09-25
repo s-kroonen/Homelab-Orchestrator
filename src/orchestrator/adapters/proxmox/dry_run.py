@@ -7,6 +7,9 @@ from datetime import UTC, datetime
 from typing import Any
 
 from orchestrator.adapters.proxmox.base import (
+    BackupStorage,
+    ClusterNode,
+    ClusterStatus,
     Guest,
     ProxmoxAdapter,
     TaskHandle,
@@ -36,6 +39,9 @@ class DryRunProxmoxAdapter(ProxmoxAdapter):
         self.simulated_guests: list[Guest] = simulated_guests or []
         # Test hook: set to an exit status string to make the next task "fail".
         self.next_task_exit_status: str = "OK"
+        #: Tests set these. Unset, the cluster is derived from simulated_guests.
+        self.simulated_cluster: ClusterStatus | None = None
+        self.simulated_backup_storages: list[BackupStorage] = []
 
     async def start(self) -> None:
         log.info("proxmox.dry_run.start")
@@ -51,6 +57,17 @@ class DryRunProxmoxAdapter(ProxmoxAdapter):
         if node is None:
             return list(self.simulated_guests)
         return [g for g in self.simulated_guests if g.node == node]
+
+    async def cluster_status(self) -> ClusterStatus:
+        log.info("proxmox.dry_run.cluster_status")
+        if self.simulated_cluster is not None:
+            return self.simulated_cluster
+        names = sorted({g.node for g in self.simulated_guests})
+        nodes = [ClusterNode(name=n, online=True, local=i == 0) for i, n in enumerate(names)]
+        return ClusterStatus(nodes=nodes, quorate=True if len(nodes) > 1 else None)
+
+    async def list_backup_storages(self) -> list[BackupStorage]:
+        return list(self.simulated_backup_storages)
 
     async def start_guest(self, node: str, vmid: int, kind: GuestKind) -> TaskHandle:
         return self._record_task("proxmox.dry_run.start_guest", node, vmid=vmid, kind=kind.value)

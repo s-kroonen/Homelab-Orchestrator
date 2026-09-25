@@ -70,6 +70,24 @@ class PbsAdapter(ABC):
         """Cheap authenticated call — used as the connectivity check."""
 
     @abstractmethod
+    async def effective_permissions(self) -> dict[str, Any]:
+        """What this token can actually do, per PBS itself.
+
+        An empty mapping means the token has NO permissions — which happens when
+        the ACL was granted to the *user* but not to the token auth-id. That is
+        the single most common PBS misconfiguration and is otherwise only
+        visible as an opaque 403 on the first real call.
+        """
+
+    @abstractmethod
+    async def list_datastores(self) -> list[str]:
+        """Datastore names this token can see.
+
+        PBS filters the list by Datastore.Audit rather than refusing, so an empty
+        list usually means a missing ACL rather than a PBS with no datastores.
+        """
+
+    @abstractmethod
     async def datastore_status(self, name: str) -> DatastoreStatus: ...
 
     @abstractmethod

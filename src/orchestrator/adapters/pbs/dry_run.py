@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from typing import Any
 
 from orchestrator.adapters.pbs.base import (
     DatastoreStatus,
@@ -37,6 +38,7 @@ class DryRunPbsAdapter(PbsAdapter):
         self.simulated_snapshots: list[Snapshot] = simulated_snapshots or []
         self.synthesize_snapshots = synthesize_snapshots
         self.verify_result = True
+        self.simulated_datastores: list[str] = []
 
     async def start(self) -> None:
         log.info("pbs.dry_run.start")
@@ -46,6 +48,13 @@ class DryRunPbsAdapter(PbsAdapter):
 
     async def version(self) -> PbsVersionInfo:
         return PbsVersionInfo(version="dry-run", release="dry-run", raw={"dry_run": True})
+
+    async def effective_permissions(self) -> dict[str, Any]:
+        log.info("pbs.dry_run.effective_permissions")
+        return {"/datastore": {"Datastore.Audit": True}}
+
+    async def list_datastores(self) -> list[str]:
+        return list(self.simulated_datastores)
 
     async def datastore_status(self, name: str) -> DatastoreStatus:
         log.info("pbs.dry_run.datastore_status", datastore=name)

@@ -26,9 +26,13 @@ class DryRunPowerAdapter(PowerAdapter):
         log.info("power.dry_run.wake", node=node_name, reason=reason)
         self._simulated_state[node_name] = PowerState.ON
 
-    async def power_off(self, node_name: str, *, reason: str) -> None:
-        log.info("power.dry_run.power_off", node=node_name, reason=reason)
+    async def power_off(self, node_name: str, *, reason: str, force: bool = False) -> None:
+        log.info("power.dry_run.power_off", node=node_name, reason=reason, force=force)
         self._simulated_state[node_name] = PowerState.OFF
+
+    async def restart(self, node_name: str, *, reason: str, force: bool = False) -> None:
+        log.info("power.dry_run.restart", node=node_name, reason=reason, force=force)
+        self._simulated_state[node_name] = PowerState.BOOTING
 
     async def hold(self, node_name: str, *, reason: str, ttl_s: int) -> str:
         handle = uuid.uuid4().hex[:10]

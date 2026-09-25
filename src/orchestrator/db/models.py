@@ -87,6 +87,28 @@ class Service(SQLModel, table=True):
     guest_kind: GuestKind = Field(default=GuestKind.NONE)
     guest_id: int | None = None
     enabled: bool = Field(default=True)
+
+    # Circular-backup guard (spec section 4). Distinct from `enabled`:
+    #   enabled=False        -> do not manage this service at all
+    #   backup_excluded=True -> manage it (wake, health, dashboard) but NEVER
+    #                           back it up, not even on a manual trigger.
+    # The motivating case is the TrueNAS VM: it hosts the ZFS pool that PBS
+    # itself lives on, so dumping it to PBS writes the backup into the thing
+    # being backed up. There is deliberately no override flag — that is never
+    # a correct operation, so it should not be one keystroke away.
+    backup_excluded: bool = Field(default=False)
+    backup_excluded_reason: str = ""
+
+    # Slugs of services that must be HEALTHY before this one can be judged at
+    # all. The motivating case: the orchestrator is not on the guests' network,
+    # so every probe reaches them through a gateway. If the gateway is down,
+    # every downstream probe fails for a NETWORK reason — without this, one
+    # gateway outage looks like every service breaking simultaneously.
+    #
+    # A failed dependency yields UNKNOWN downstream, never FAILED: we genuinely
+    # could not look, which is not evidence of anything about the service.
+    depends_on: list[str] = Field(default_factory=list, sa_column=Column(JSON))
+
     node_id: int | None = Field(
         default=None,
         sa_column=Column(ForeignKey("node.id", ondelete="RESTRICT")),

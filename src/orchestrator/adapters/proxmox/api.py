@@ -8,6 +8,9 @@ from typing import Any
 
 from orchestrator.adapters.errors import TaskTimeout
 from orchestrator.adapters.proxmox.base import (
+    BackupStorage,
+    ClusterNode,
+    ClusterStatus,
     Guest,
     ProxmoxAdapter,
     TaskHandle,
@@ -78,6 +81,43 @@ class LiveProxmoxAdapter(ProxmoxAdapter):
                 )
             )
         return sorted(guests, key=lambda g: g.vmid)
+
+    async def cluster_status(self) -> ClusterStatus:
+        rows = await self._client.request("GET", "/cluster/status") or []
+        nodes: list[ClusterNode] = []
+        quorate: bool | None = None
+        cluster_name = ""
+        for row in rows:
+            if row.get("type") == "cluster":
+                quorate = bool(row.get("quorate"))
+                cluster_name = str(row.get("name", ""))
+            elif row.get("type") == "node":
+                nodes.append(
+                    ClusterNode(
+                        name=str(row.get("name", "")),
+                        online=bool(row.get("online")),
+                        local=bool(row.get("local")),
+                        ip=str(row.get("ip", "")),
+                    )
+                )
+        return ClusterStatus(
+            nodes=sorted(nodes, key=lambda n: n.name),
+            quorate=quorate,
+            cluster_name=cluster_name,
+        )
+
+    async def list_backup_storages(self) -> list[BackupStorage]:
+        rows = await self._client.request("GET", "/storage", params={"type": "pbs"}) or []
+        storages = [
+            BackupStorage(
+                storage=str(row.get("storage", "")),
+                datastore=str(row.get("datastore", "")),
+                server=str(row.get("server", "")),
+            )
+            for row in rows
+            if row.get("type", "pbs") == "pbs"
+        ]
+        return sorted(storages, key=lambda s: s.storage)
 
     async def start_guest(self, node: str, vmid: int, kind: GuestKind) -> TaskHandle:
         endpoint = self._endpoint_for(kind)

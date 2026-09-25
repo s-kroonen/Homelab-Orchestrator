@@ -1,16 +1,14 @@
 """Backup pipeline.
 
-Phase 2 scope: prove a backup end-to-end through the service —
-    resolve service -> preflight PBS -> vzdump -> poll task -> find snapshot
-    -> record it -> PBS verify -> update record.
+    resolve service -> preflight PBS -> INTEGRITY GATE -> vzdump -> poll task
+    -> locate snapshot -> record it -> PBS verify -> update record
 
-**The health gate is NOT here yet — it lands in phase 4.**  Until then every
-run is marked ``gate_skipped`` in its step log and emits a warning, because an
-ungated backup is precisely the failure mode this project exists to prevent.
-:meth:`BackupPipeline._run_gate` is the seam it will slot into.
+The gate is the reason this project exists. Only a HEALTHY verdict proceeds;
+FAILED and UNKNOWN both abort with the last known-good backup untouched. See
+:meth:`BackupPipeline._run_gate`.
 
-Power orchestration (waking the storage node / PBS before the run, asserting
-holds) is phase 3/6 and is likewise a marked seam.
+Power orchestration (waking the storage node / PBS before a run, asserting
+holds) is phase 3/6 and remains a marked seam.
 """
 
 from __future__ import annotations
@@ -30,9 +28,11 @@ from orchestrator.domain.enums import (
     AuditResult,
     BackupMode,
     GuestKind,
+    HealthState,
     PipelineKind,
     PipelineStatus,
 )
+from orchestrator.health.engine import HealthEngine
 from orchestrator.logging_setup import get_logger, new_correlation_id
 
 log = get_logger(__name__)
@@ -89,10 +89,14 @@ class BackupPipeline:
         proxmox: ProxmoxAdapter,
         pbs: PbsAdapter,
         settings: Settings,
+        health: HealthEngine | None = None,
     ) -> None:
         self._proxmox = proxmox
         self._pbs = pbs
         self._settings = settings
+        # Injected so tests can drive the gate deterministically. Defaults to a
+        # real engine — the gate must be on unless someone explicitly opts out.
+        self._health = health or HealthEngine(settings=settings)
 
     async def run_for_service(
         self,
@@ -101,8 +105,14 @@ class BackupPipeline:
         *,
         actor: str = "system",
         verify: bool = True,
+        gate: bool = True,
     ) -> PipelineRun:
-        """Back up one service. Returns the completed :class:`PipelineRun`."""
+        """Back up one service. Returns the completed :class:`PipelineRun`.
+
+        ``gate=False`` bypasses the integrity gate. It exists for deliberate
+        operator override and is audited as such — it is never the default, and
+        the caller has to ask for it explicitly.
+        """
         correlation_id = new_correlation_id()
         service, node, policy = self._resolve(session, slug)
 
@@ -129,7 +139,7 @@ class BackupPipeline:
 
         try:
             await self._preflight(steps)
-            self._run_gate(steps, service)
+            await self._run_gate(session, steps, service, gate=gate)
             snapshot = await self._dump_and_locate(steps, service, node, policy)
             record = self._record_backup(session, steps, service, policy, run, snapshot)
 
@@ -199,25 +209,77 @@ class BackupPipeline:
             },
         )
 
-    def _run_gate(self, steps: StepRecorder, service: Service) -> None:
-        """PHASE 4 SEAM — the integrity gate goes here.
+    async def _run_gate(
+        self,
+        session: Session,
+        steps: StepRecorder,
+        service: Service,
+        *,
+        gate: bool = True,
+    ) -> None:
+        """The integrity gate. **HEALTHY is the only state that proceeds.**
 
-        When implemented this must run the health engine and refuse to proceed
-        unless the verdict is HEALTHY (FAILED and UNKNOWN both abort). Until
-        then we record the omission loudly rather than pretending it passed.
+        FAILED and UNKNOWN both abort, and they abort for different reasons that
+        the caller downstream needs to distinguish:
+
+        * FAILED  — the service is definitively broken. Backing it up now would
+          capture that broken state over a known-good backup. It is also a
+          restore candidate.
+        * UNKNOWN — we could not establish that it is healthy. Fail closed. A
+          network blip must not be allowed to produce a backup we would later
+          trust, but it must equally not be treated as corruption.
+
+        This asymmetry is the entire point of the three-state model: never
+        overwrite a good backup with a bad one, and never mistake "don't know"
+        for either answer.
         """
-        log.warning(
-            "backup.gate.not_implemented",
-            service=service.slug,
-            hint="Phase 4 adds the health gate; this backup ran UNGATED.",
-        )
+        if not gate:
+            # Explicit operator override. Loud, audited, and never the default.
+            log.warning(
+                "backup.gate.bypassed",
+                service=service.slug,
+                impact="This backup was NOT verified healthy before being taken.",
+            )
+            steps.record(
+                "integrity_gate",
+                "bypassed",
+                detail={"ungated": True, "reason": "caller passed gate=False"},
+            )
+            return
+
+        started = datetime.now(UTC)
+        verdict = await self._health.scan(session, service)
+        detail = {
+            "verdict": verdict.state.value,
+            "reason": verdict.reason,
+            "probe_results": [
+                {"name": r.probe_name, "kind": r.kind.value, "state": r.state.value}
+                for r in verdict.probe_results
+            ],
+        }
+
+        if verdict.state is HealthState.HEALTHY:
+            steps.record("integrity_gate", "ok", started_at=started, detail=detail)
+            return
+
         steps.record(
             "integrity_gate",
-            "skipped",
-            detail={
-                "reason": "health engine lands in phase 4",
-                "ungated": True,
-            },
+            "failed" if verdict.state is HealthState.FAILED else "indeterminate",
+            started_at=started,
+            detail=detail,
+        )
+
+        if verdict.state is HealthState.FAILED:
+            raise BackupError(
+                f"integrity gate refused {service.slug!r}: the service is FAILED — "
+                f"{verdict.reason}. The last known-good backup is untouched. "
+                f"This service is a restore candidate."
+            )
+        raise BackupError(
+            f"integrity gate refused {service.slug!r}: health could not be "
+            f"established (UNKNOWN) — {verdict.reason}. Failing closed: no backup "
+            f"was taken and the last known-good backup is untouched. This is not "
+            f"evidence of corruption, only that the check could not run."
         )
 
     async def _dump_and_locate(
@@ -361,6 +423,16 @@ class BackupPipeline:
             raise BackupError(f"no service registered with slug {slug!r}")
         if not service.enabled:
             raise BackupError(f"service {slug!r} is disabled in the registry")
+        if service.backup_excluded:
+            # Deliberately unconditional — no force flag, no CLI override. The
+            # motivating case (a VM hosting the pool PBS lives on) is never
+            # correct to back up this way, so it must not be one keystroke away.
+            reason = service.backup_excluded_reason or "no reason recorded"
+            raise BackupError(
+                f"service {slug!r} is marked backup_excluded and will not be backed "
+                f"up: {reason}. This is a hard exclusion with no override — if the "
+                f"exclusion is wrong, change backup_excluded in services.yaml."
+            )
 
         node = session.get(Node, service.node_id) if service.node_id else None
         if node is None:

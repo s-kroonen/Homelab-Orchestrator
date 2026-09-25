@@ -1,5 +1,69 @@
 # Adding a service
 
+Two ways: build it with the CLI (recommended — nothing to hand-edit), or write
+the YAML yourself. Both produce the same file; the CLI just validates as it goes.
+
+## With the CLI
+
+```bash
+orchestrator-cli scaffold
+```
+
+The update command, for after `init`. It offers the guests Proxmox reports that
+are not in the file yet (pick with numbers or ranges, `1-5,8,12`), adds new nodes,
+and follows guests that moved node. Existing services keep their name, probes and
+settings: guests are matched by **VMID**, so renaming a VM does not duplicate it.
+Guests that have left the cluster are reported, never deleted. When
+`GATEWAY_SERVICE` is set, new services get `depends_on: [<gateway>]`.
+
+On a clean install there is no file to update yet — run `orchestrator-cli init`,
+which writes `.env` and `services.yaml` together.
+
+```bash
+orchestrator-cli probe add <slug>
+```
+
+Walks you through choosing a probe kind and filling in its fields, including the
+transport where one is needed. When `PROBE_PROXY_BASE_URL` is set, an HTTP probe
+starts from the reverse proxy's local address and the service's proxy hostname,
+so reaching a service through the gateway needs no retyping. Then:
+
+```bash
+orchestrator-cli scan <slug>
+```
+
+shows exactly what the backup gate will decide.
+
+Other commands:
+
+| Command | Does |
+|---------|------|
+| `service list` | every service, with whether its backup would be allowed |
+| `service update <slug>` | change one field; untouched fields are left alone |
+| `service remove <slug>` | drop it from the registry (backup history is kept) |
+| `probe list [slug]` | probes per service, and which ones gate |
+| `probe remove <slug> <name>` | remove one probe |
+| `proxy add/list/remove <slug>` | record Traefik / Pangolin routes |
+
+Everything takes `--non-interactive` plus flags, so the same operations work from
+a script or an Ansible task:
+
+```bash
+orchestrator-cli probe add haos --non-interactive --kind http --name http-ui --set url=https://haos.lan/ --set verify_tls=false
+```
+
+Add `--file PATH` to edit a registry other than the configured one.
+
+### A note on where edits land
+
+These commands edit **`services.yaml`**, never the database. YAML is the saved
+source of truth and the DB is rehydrated from it on every boot, so a change
+written only to the DB would disappear on the next restart.
+
+---
+
+## By hand
+
 Every service is defined by one entry in `config/services.yaml`.  Adding a
 new service is a YAML edit — no code changes.
 

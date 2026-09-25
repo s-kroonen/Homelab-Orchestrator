@@ -107,3 +107,35 @@ async def test_none_params_are_dropped() -> None:
     await client.request("GET", "/snapshots", params={"backup-id": "9001", "backup-type": None})
     assert "backup-id=9001" in seen["query"]
     assert "backup-type" not in seen["query"]
+
+
+async def test_self_signed_cert_reports_tls_error_not_unreachable() -> None:
+    """A cert failure must not be reported as a routing problem.
+
+    The socket connected fine; telling the operator "unreachable" sends them
+    hunting a network fault that does not exist.
+    """
+    import ssl
+
+    from orchestrator.adapters.errors import AdapterTlsError
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError(
+            "[SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed: self-signed certificate"
+        ) from ssl.SSLCertVerificationError("self-signed certificate")
+
+    client = _client_with(httpx.MockTransport(handle))
+    with pytest.raises(AdapterTlsError) as exc:
+        await client.request("GET", "/version")
+
+    msg = str(exc.value)
+    assert "PROXMOX_VERIFY_TLS" in msg  # names the exact setting that fixes it
+    assert "reachable" in msg
+
+
+async def test_tls_error_is_still_indeterminate() -> None:
+    """It must remain a subclass of AdapterUnreachable so the phase-4 gate
+    treats it as UNKNOWN rather than as a definitive failure."""
+    from orchestrator.adapters.errors import AdapterTlsError
+
+    assert issubclass(AdapterTlsError, AdapterUnreachable)

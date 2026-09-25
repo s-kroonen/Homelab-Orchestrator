@@ -60,8 +60,14 @@ before you close the terminal.
 ### The gotcha that causes most 403s
 
 With `--privsep 1` (privilege separation — the secure choice, and the default),
-the **token carries its own ACL**, separate from the user's. Granting the role to
-the user is not enough. You must grant it to the token as well:
+a token's effective privileges are the **INTERSECTION** of two ACLs:
+
+```
+effective = (what the USER may do)  AND  (what the TOKEN may do)
+```
+
+So an ACL on only one side grants **nothing**, however generous the role. You
+need both rows:
 
 ```bash
 pveum acl modify / --user orchestrator@pve --role OrchestratorBackup
@@ -71,9 +77,15 @@ pveum acl modify / --user orchestrator@pve --role OrchestratorBackup
 pveum acl modify / --token "orchestrator@pve!backups" --role OrchestratorBackup
 ```
 
-That second line is the one people forget. Skip it and you get a 401/403 that
-looks exactly like a wrong secret. `orchestrator-cli check` surfaces it as
-`AdapterAuthError`.
+Miss either and you get a 401/403 that looks exactly like a wrong secret.
+`orchestrator-cli check` surfaces it as `AdapterAuthError` with the server's own
+explanation attached.
+
+Verify both rows exist:
+
+```bash
+pveum acl list
+```
 
 ### Narrowing the scope further (optional)
 
@@ -146,14 +158,82 @@ Scope the ACL to the one datastore, not to `/`:
 proxmox-backup-manager acl update /datastore/YOUR_DATASTORE OrchestratorDatastore --auth-id "orchestrator@pbs!datastore"
 ```
 
-The closest built-in role is `DatastorePowerUser`, but it includes
-`Datastore.Backup` and `Datastore.Read`, which the orchestrator does not need.
-A custom role is worth the two extra minutes.
+### If you cannot create custom roles
 
-### PBS has privilege separation too
+Creating a role needs `Permissions.Modify`, which a non-admin PBS account does
+not have. Use the built-in **`DatastorePowerUser`** instead:
 
-Same trap as PVE: the ACL must name the **token** (`user@realm!tokenname`), not
-just the user. The `--auth-id` above does this correctly.
+```bash
+proxmox-backup-manager acl update /datastore/YOUR_DATASTORE DatastorePowerUser --auth-id "orchestrator@pbs!datastore"
+```
+
+It grants more than the orchestrator needs (`Datastore.Backup`,
+`Datastore.Read`) and — importantly — **not `Datastore.Modify`**, so snapshot
+protection will not work. Set this in `.env`:
+
+```
+PBS_PROTECT_ENABLED=false
+```
+
+`set_protected()` then becomes a logged no-op instead of a 403.
+
+**What you give up:** the "protected known-good pin" from the design brief —
+the guarantee that prune can never remove the newest verified backup of a
+service. Without it, retention policy alone decides what survives. That matters
+from **phase 6** (retention); phase 2 never calls protect, so nothing is
+affected today.
+
+To get it back later you need `Datastore.Modify`, via either a custom role
+(needs `Permissions.Modify` on the PBS account) or the built-in
+`DatastoreAdmin`. `DatastoreAdmin` on a single datastore path is a reasonable
+middle ground — it is scoped to that datastore, not the whole server.
+
+If `DatastorePowerUser` also turns out to lack `Datastore.Verify` on your PBS
+version, `orchestrator-cli backup <slug>` will fail at the verify step with
+`AdapterAuthError`; run it with `--no-verify` to confirm the rest of the
+pipeline works while you sort out privileges.
+
+### PBS has privilege separation too — and it is the #1 cause of 403s
+
+Same intersection rule as PVE, and it catches people from **both** directions:
+
+```
+effective = (ACL on orchestrator@pbs)  AND  (ACL on orchestrator@pbs!datastore)
+```
+
+Granting `DatastoreAdmin` to the token alone yields nothing if the user has no
+ACL — and vice versa. Both auth-ids need a row:
+
+```bash
+proxmox-backup-manager acl update /datastore/YOUR_DATASTORE DatastoreAdmin --auth-id "orchestrator@pbs"
+```
+
+```bash
+proxmox-backup-manager acl update /datastore/YOUR_DATASTORE DatastoreAdmin --auth-id "orchestrator@pbs!datastore"
+```
+
+Confirm with `proxmox-backup-manager acl list` — you need rows for the bare user
+**and** the `!tokenname` auth-id. A useful reference point: the `pve-backup`
+credential PVE uses for writing backups has exactly this pair, which is why it
+works.
+
+**The symptom is distinctive:**
+
+| Call | Result |
+|------|--------|
+| `GET /version` | **200** — needs no privileges, so the token looks valid |
+| `GET /access/permissions` | **200 `{}`** — empty: the token has *nothing* |
+| `GET /admin/datastore` | **200 `[]`** — sees no datastores |
+| `GET /admin/datastore/X/status` | **403** `permission check failed` |
+
+Connectivity and authentication are both fine — `/version` needs no privileges,
+which is why the token looks valid right up until the first real call. The
+intersection is simply empty.
+
+`orchestrator-cli check` detects this automatically: on a datastore failure it
+queries `/access/permissions`, and if the result is empty it prints both
+`acl update` commands with your real datastore name and token id filled in. You
+should not have to work this out by hand.
 
 ---
 

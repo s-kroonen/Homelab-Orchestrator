@@ -16,6 +16,8 @@ from sqlmodel import Session
 
 from orchestrator import config as config_module
 from orchestrator.db import session as session_module
+from orchestrator.db.models import Node, Service
+from orchestrator.domain.enums import GuestKind
 
 
 @pytest.fixture(autouse=True)
@@ -55,3 +57,19 @@ def session() -> Iterator[Session]:
     session_module.create_all_for_tests()
     with Session(session_module.get_engine()) as s:
         yield s
+
+
+@pytest.fixture
+def service(session: Session) -> Service:
+    """A minimal registered service, for probe-level tests."""
+    node = Node(name="eve1", always_on=True)
+    session.add(node)
+    session.commit()
+    session.refresh(node)
+    svc = Service(
+        slug="thing", name="Thing", node_id=node.id, guest_kind=GuestKind.VM, guest_id=100
+    )
+    session.add(svc)
+    session.commit()
+    session.refresh(svc)
+    return svc

@@ -23,8 +23,28 @@ class AdapterUnreachable(AdapterError):
     """Transport failed: DNS, connect, TLS, or timeout. Indeterminate."""
 
 
+class AdapterTlsError(AdapterUnreachable):
+    """TLS handshake failed — almost always a self-signed certificate.
+
+    Subclasses :class:`AdapterUnreachable` because the call did not complete, so
+    it stays *indeterminate* at the gate. But it is worth its own type: the
+    socket connected fine, so "unreachable" misdiagnoses it and sends the
+    operator hunting a network problem that does not exist.
+    """
+
+
 class AdapterAuthError(AdapterError):
-    """401/403 — token missing, wrong, or lacking the required privilege."""
+    """401/403 — token missing, wrong, or lacking the required privilege.
+
+    Carries the response body: Proxmox and PBS both name the exact missing
+    privilege and path in it (e.g. "missing Datastore.Audit|Datastore.Backup on
+    /datastore/foo"). Discarding that turns a 10-second fix into a hunt.
+    """
+
+    def __init__(self, message: str, *, status_code: int | None = None, body: str = "") -> None:
+        super().__init__(message)
+        self.status_code = status_code
+        self.body = body
 
 
 class AdapterRequestError(AdapterError):

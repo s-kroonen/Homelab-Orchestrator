@@ -8,6 +8,7 @@ the JSON log stream.
 from __future__ import annotations
 
 import logging
+import os
 import sys
 import uuid
 from contextvars import ContextVar
@@ -53,6 +54,23 @@ def configure_logging(settings: Settings | None = None) -> None:
         level=level,
         force=True,
     )
+
+    # At LOG_LEVEL=DEBUG the HTTP stack emits a line per socket operation, which
+    # buries our own events and makes DEBUG effectively unusable for diagnosing
+    # orchestrator behaviour. Keep these at WARNING unless someone explicitly
+    # asks for wire-level detail via HTTP_WIRE_DEBUG=true.
+    if os.getenv("HTTP_WIRE_DEBUG", "").lower() not in {"1", "true", "yes"}:
+        for noisy in (
+            "httpx",
+            "httpcore",
+            "httpcore.connection",
+            "httpcore.http11",
+            "hpack",
+            "asyncio",
+            "aiomqtt",
+            "apscheduler",
+        ):
+            logging.getLogger(noisy).setLevel(max(level, logging.WARNING))
 
     shared_processors: list[structlog.types.Processor] = [
         structlog.contextvars.merge_contextvars,

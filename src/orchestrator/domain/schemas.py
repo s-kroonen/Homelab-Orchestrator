@@ -24,6 +24,23 @@ class _ProbeBase(BaseModel):
 
 
 class HttpProbeConfig(_ProbeBase):
+    """An HTTP check.
+
+    ``host_header`` exists for the common homelab shape where the orchestrator
+    can only reach a service *through* a reverse proxy, and must do so by the
+    proxy's LOCAL address rather than its public DNS name (public names resolve
+    outward and depend on hairpin NAT and external DNS being healthy — neither of
+    which this check is meant to test).
+
+    That is exactly what ``curl --resolve`` does:
+
+        url:         https://192.168.1.10/health   <- the proxy's local IP
+        host_header: media.example.com             <- what the proxy routes on
+
+    ``sni_hostname`` defaults to ``host_header`` so a real certificate still
+    validates; without it, TLS would be negotiated against the bare IP and fail.
+    """
+
     kind: Literal[ProbeKind.HTTP] = ProbeKind.HTTP
     url: str
     method: Literal["GET", "HEAD"] = "GET"
@@ -31,6 +48,15 @@ class HttpProbeConfig(_ProbeBase):
     expect_body_contains: str | None = None
     headers: dict[str, str] = Field(default_factory=dict)
     verify_tls: bool = True
+
+    #: Sent as the ``Host:`` header so a reverse proxy routes to the right
+    #: backend even though the URL names an IP.
+    host_header: str | None = None
+    #: TLS SNI to present. Defaults to ``host_header`` when that is set.
+    sni_hostname: str | None = None
+
+    def effective_sni(self) -> str | None:
+        return self.sni_hostname or self.host_header
 
 
 class TcpProbeConfig(_ProbeBase):

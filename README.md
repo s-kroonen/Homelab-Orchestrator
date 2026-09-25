@@ -20,23 +20,39 @@ working (fail-open).
 
 ## Status
 
-**Phase 2 complete.** Working today:
+**Phases 1, 2 and 4 complete.** Working today:
 
-* Config, structured logging, DB schema + Alembic baseline
+* Config, structured logging, DB schema + Alembic migrations
 * YAML ↔ DB registry reconciler with unsaved-changes detection
 * Live **Proxmox VE** and **PBS** adapters (guests, `vzdump`, task polling,
   snapshots, verify, prune, protect) plus dry-run equivalents
+* **The integrity gate.** 13 probe kinds over pluggable transports — HTTP/TCP/MQTT
+  from the orchestrator; commands via the **host runner** (which keeps the
+  inventory, playbooks and keys off this container), direct **SSH** with
+  ProxyJump, or locally. Only a HEALTHY verdict backs up; FAILED and UNKNOWN
+  both refuse and leave the last known-good backup untouched.
+* **`depends_on`** — a gateway outage reports as one problem naming the gateway,
+  not as every service behind it breaking at once.
 * A backup pipeline that runs end to end and records every step
-* `orchestrator-cli` for connectivity checks and manual backups
+* `orchestrator-cli` — connectivity checks, health scans, manual backups, and
+  guided builders for the whole config
 * FastAPI app: `/healthz`, `/readyz`, registry, infra, and backup endpoints
 
-**Not yet built:** the integrity gate (phase 4). Backups currently run
-**ungated** — every run records `integrity_gate: skipped` and logs a warning
-rather than hiding the gap.
+**Worth knowing:** a service with no *required* probe reports UNKNOWN and is
+refused. That is deliberate — unverified is not the same as healthy — but it
+means a freshly scaffolded service will not back up until you add a probe.
+
+**Not yet built:** the wake pipeline (phase 3), maintenance page + Traefik
+wiring (phase 5), scheduler + retention (phase 6), dashboard + passkeys
+(phase 7), greenlight/revert (phase 8), notifier + Grafana metrics (phase 9).
 
 See [docs/architecture.md](docs/architecture.md) for the full design,
 [docs/adding_a_service.md](docs/adding_a_service.md) for registering a service,
-[docs/api_tokens.md](docs/api_tokens.md) for the API token privileges, and
+[docs/api_tokens.md](docs/api_tokens.md) for the API token privileges,
+[docs/probing_through_a_gateway.md](docs/probing_through_a_gateway.md) for
+probing services the orchestrator cannot reach directly,
+[docs/host_runner.md](docs/host_runner.md) for running credentialed checks
+off-container, and
 [docs/proxmox_connectivity.md](docs/proxmox_connectivity.md) for the single
 entry point / quorum / failover notes.
 
@@ -93,9 +109,10 @@ including Windows: [docs/local_testing.md](docs/local_testing.md).
 ### With Docker (local build)
 
 ```bash
-cp .env.example .env
-cp config/services.example.yaml config/services.yaml
-docker compose up -d --build
+mkdir -p config && touch .env            # compose will not run anything until .env exists
+docker compose build
+docker compose run --rm setup init       # asks, checks against the cluster, writes .env + config/
+docker compose up -d
 ```
 
 The container HEALTHCHECK hits `/healthz` inside the container; SQLite lives
@@ -142,9 +159,34 @@ without HTTPS, a browser, or a registered passkey.
 orchestrator-cli check                  # can I reach Proxmox and PBS?
 orchestrator-cli guests                 # what does Proxmox see?
 orchestrator-cli snapshots              # what is in the PBS datastore?
-orchestrator-cli services               # what is in my registry?
+orchestrator-cli scan <slug> | --all    # what will the backup gate decide?
 orchestrator-cli backup <slug>          # run one backup end to end
 ```
+
+Setting up and changing the config is three commands, each with one job:
+
+| Command | Writes | Use it for |
+|---------|--------|------------|
+| `init` | `.env` **and** `services.yaml` | a clean install — replaces both |
+| `config show` / `config edit <section>` | `.env` only | changing one part: `proxmox`, `pbs`, `network`, `power`, `web`, `runtime` |
+| `scaffold` | `services.yaml` only | pulling in new guests, moved guests and new nodes |
+
+Every value is checked against the live cluster as it is entered, nothing is
+written until the end, and a file that gets replaced is copied aside first
+(`.env.bak-<time>`, git-ignored). In Docker these run through the `setup`
+service: `docker compose run --rm setup init`. Single entries have their own
+commands:
+
+```bash
+orchestrator-cli service list           # what would be backed up, and what blocks it
+orchestrator-cli probe add <slug>       # guided probe builder
+orchestrator-cli proxy add <slug>       # record a Traefik / Pangolin route
+orchestrator-cli transport check        # is the host runner / ssh plumbing usable?
+```
+
+These edit `services.yaml` in place, preserving comments, and validate before
+writing. All accept `--non-interactive` plus flags for scripting. See
+[docs/adding_a_service.md](docs/adding_a_service.md).
 
 Every command honours `DRY_RUN`. `check` exits non-zero on failure, so it works
 as a post-deploy smoke test in Ansible or CI.

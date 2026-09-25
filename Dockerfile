@@ -27,6 +27,10 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PATH="/opt/venv/bin:$PATH"
 
+# Deliberately minimal: no ansible, no openssh-client, no inventory, no keys.
+# This container serves a web listener, so anything it can read sits in that
+# blast radius. Work needing those credentials runs on the HOST, behind the host
+# runner, and the container only gets a socket. See docs/host_runner.md.
 RUN apt-get update \
  && apt-get install -y --no-install-recommends curl ca-certificates \
  && rm -rf /var/lib/apt/lists/* \

@@ -67,6 +67,74 @@ backup_policies:
 # Add a new check for a service by appending a probe entry — no code change.
 # ---------------------------------------------------------------------------
 services:
+  # --- The gateway: probed DIRECTLY, and a dependency of everything else ---
+  # Where the orchestrator is not on the guests' network (the usual homelab
+  # shape), every other probe reaches its target THROUGH this host. That makes
+  # it two things at once:
+  #
+  #   * a hop      — HTTP goes via its reverse proxy; SSH goes via ProxyJump
+  #   * a blocker  — if it is down, downstream probes fail for a NETWORK reason
+  #
+  # Without `depends_on`, one gateway outage looks like every service breaking
+  # at once. With it, downstream services report UNKNOWN naming the gateway,
+  # and their probes are not even run.
+  #
+  # This service itself is probed directly, because the orchestrator CAN reach
+  # it — that is what makes it usable as the reference point.
+  - slug: example-gateway
+    name: Example Gateway
+    description: "Runs the reverse proxy. Every other probe reaches its target through this host."
+    node: always-on-gateway
+    guest_kind: vm
+    guest_id: 9000
+    enabled: true
+    backup_policy: daily-frequent
+    probes:
+      - name: proxy-listening
+        kind: tcp
+        required: true
+        timeout_s: 5
+        order: 10
+        config:
+          host: 10.0.0.2
+          port: 443
+    proxy_hosts: []
+
+  # --- The storage VM: managed, but NEVER backed up ------------------------
+  # The circular-backup guard. This VM hosts the ZFS pool that PBS itself
+  # lives on, so dumping it to PBS would write the backup into the thing being
+  # backed up. `backup_excluded` is a HARD refusal with no override — a manual
+  # `orchestrator-cli backup` on it fails too.
+  #
+  # Note this is NOT the same as `enabled: false`:
+  #   enabled: false        -> not managed at all (no wake, no health, hidden)
+  #   backup_excluded: true -> fully managed, just never backed up
+  #
+  # Two things this does NOT do for you, both on the Proxmox side:
+  #   * mark the passthrough data disks `backup=0` in the VM's hardware config
+  #   * arrange for the boot disk to be backed up somewhere OTHER than this pool
+  - slug: example-storage
+    name: Example Storage VM
+    description: "Hosts the ZFS pool PBS runs on. Managed for wake/health, never backed up here."
+    node: storage
+    guest_kind: vm
+    guest_id: 9100
+    enabled: true
+    backup_excluded: true
+    backup_excluded_reason: "Hosts the ZFS pool the PBS datastore lives on — backing it up to that same PBS is circular."
+    backup_policy: null
+    probes:
+      - name: http-ui
+        kind: http
+        required: true
+        timeout_s: 10
+        order: 10
+        config:
+          url: "https://storage.example.lan/"
+          expect_status: [200]
+          verify_tls: false
+    proxy_hosts: []
+
   # --- Example media service (VM) ------------------------------------------
   - slug: example-media
     name: Example Media
@@ -76,14 +144,25 @@ services:
     guest_id: 9001
     enabled: true
     backup_policy: daily-frequent
+    # Cannot be judged until the gateway is up — see example-gateway above.
+    depends_on:
+      - example-gateway
     probes:
-      - name: http-frontend
+      # Reaches the service THROUGH the proxy, by the proxy's LOCAL ip.
+      #
+      # Deliberately not the public DNS name: that resolves outward and would
+      # also be testing hairpin NAT, external DNS and the public certificate —
+      # none of which this probe is meant to be about. `host_header` is what the
+      # proxy routes on, and TLS SNI follows it so a real certificate still
+      # validates. Exactly what `curl --resolve` does.
+      - name: http-via-proxy
         kind: http
         required: true
         timeout_s: 5
         order: 10
         config:
-          url: "https://media.example.lan/health"
+          url: "https://10.0.0.2/health"
+          host_header: media.example.com
           method: GET
           expect_status: [200]
           verify_tls: true
@@ -93,9 +172,14 @@ services:
         timeout_s: 10
         order: 20
         config:
-          ssh_host: media.example.lan
-          ssh_user: root
           project: media-stack
+          transport:
+            type: ssh
+            host: 10.0.0.10
+            user: root
+            # Hop through the gateway: the guest has no route from here.
+            # Set jump_host: "" to connect directly to a routable host.
+            jump_host: 10.0.0.2
     proxy_hosts:
       - hostname: media.example.lan
         upstream: "http://10.0.0.10:8096"

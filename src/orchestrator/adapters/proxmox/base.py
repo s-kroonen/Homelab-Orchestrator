@@ -48,6 +48,36 @@ class VersionInfo:
     raw: dict[str, Any] = field(default_factory=dict)
 
 
+@dataclass(frozen=True)
+class ClusterNode:
+    name: str
+    online: bool
+    #: True for the node serving this API endpoint — the one PROXMOX_HOST reaches.
+    local: bool = False
+    ip: str = ""
+
+
+@dataclass(frozen=True)
+class ClusterStatus:
+    nodes: list[ClusterNode]
+    #: None on a standalone node, which has no quorum to lose.
+    quorate: bool | None = None
+    cluster_name: str = ""
+
+    @property
+    def local_node(self) -> ClusterNode | None:
+        return next((n for n in self.nodes if n.local), None)
+
+
+@dataclass(frozen=True)
+class BackupStorage:
+    """A PVE storage entry of type ``pbs`` — the name ``vzdump storage=`` takes."""
+
+    storage: str
+    datastore: str
+    server: str
+
+
 class ProxmoxAdapter(ABC):
     @abstractmethod
     async def start(self) -> None: ...
@@ -61,6 +91,14 @@ class ProxmoxAdapter(ABC):
 
     @abstractmethod
     async def list_guests(self, node: str | None = None) -> list[Guest]: ...
+
+    @abstractmethod
+    async def cluster_status(self) -> ClusterStatus:
+        """Nodes, which one serves this endpoint, and whether the cluster is quorate."""
+
+    @abstractmethod
+    async def list_backup_storages(self) -> list[BackupStorage]:
+        """PVE storage entries that point at a PBS datastore."""
 
     @abstractmethod
     async def start_guest(self, node: str, vmid: int, kind: GuestKind) -> TaskHandle: ...

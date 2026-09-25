@@ -1,0 +1,452 @@
+#!/usr/bin/env python3
+"""orchestrator-host-runner — executes pre-approved checks on the host.
+
+Runs OUTSIDE the container, on the machine that owns the Ansible inventory, the
+playbooks and the SSH keys. The orchestrator container talks to it over a unix
+socket and can only ask for checks this runner's config already allows.
+
+Why this exists
+---------------
+The orchestrator serves a web listener. Anything mounted into that container is
+inside its blast radius, so putting an inventory, a set of playbooks and an SSH
+private key in there means a container compromise hands over the keys to every
+guest. Moving execution here keeps all of that on the host:
+
+    container  ──unix socket──>  runner (host)  ──ansible/ssh──>  guests
+      no keys                     owns keys
+      no inventory                owns inventory
+      no playbooks                owns playbooks
+      cannot run arbitrary        enforces an allowlist
+        commands
+
+A socket is a *capability*, not a file tree: the container can ask for the
+checks you approved and can read none of the material behind them.
+
+Deliberately stdlib-only, so it runs under the host's system Python with no
+venv, no pip install, and nothing to keep up to date. It is also short enough to
+read in full before trusting it — which is rather the point of a component whose
+whole job is holding a privilege boundary.
+
+Usage
+-----
+    orchestrator-host-runner --config /etc/orchestrator/host-runner.yaml
+
+See docs/host_runner.md and host-runner.example.yaml.
+"""
+
+from __future__ import annotations
+
+import argparse
+import asyncio
+import json
+import logging
+import os
+import shlex
+import signal
+import sys
+from pathlib import Path
+from typing import Any
+
+# grp/pwd are Unix-only and are needed only when actually serving. Importing
+# them lazily keeps the allowlist logic — the part worth testing hardest —
+# importable on any platform, including a developer's Windows box.
+
+LOG = logging.getLogger("host-runner")
+
+# Ansible's documented exit codes; the 2-vs-4 split is what lets the
+# orchestrator tell "the check ran and said no" from "we could not look".
+ANSIBLE_TASK_FAILED = 2
+ANSIBLE_UNREACHABLE = 4
+
+PROTOCOL_VERSION = 1
+MAX_REQUEST_BYTES = 64 * 1024
+
+
+# ---------------------------------------------------------------------------
+# config
+# ---------------------------------------------------------------------------
+
+
+class ConfigError(Exception):
+    pass
+
+
+def load_config(path: Path) -> dict[str, Any]:
+    """Read YAML if PyYAML is available (ansible brings it), else JSON."""
+    text = path.read_text(encoding="utf-8")
+    try:
+        import yaml  # noqa: PLC0415  - optional, and only here
+
+        data = yaml.safe_load(text)
+    except ImportError:
+        try:
+            data = json.loads(text)
+        except ValueError as exc:
+            raise ConfigError(
+                f"{path} is not valid JSON, and PyYAML is not installed to read it "
+                f"as YAML: {exc}"
+            ) from exc
+    if not isinstance(data, dict):
+        raise ConfigError(f"{path} must contain a mapping at the top level")
+    return data
+
+
+class Policy:
+    """What this runner is willing to do. Everything else is refused."""
+
+    def __init__(self, cfg: dict[str, Any]) -> None:
+        self.socket_path = Path(cfg.get("socket_path", "/run/orchestrator/host-runner.sock"))
+        self.socket_group: str | None = cfg.get("socket_group")
+        self.socket_mode = int(str(cfg.get("socket_mode", "0660")), 8)
+
+        self.ansible_bin: str = cfg.get("ansible_bin", "ansible")
+        self.ansible_playbook_bin: str = cfg.get("ansible_playbook_bin", "ansible-playbook")
+        self.inventory: str | None = cfg.get("inventory")
+        self.playbook_dir: Path | None = (
+            Path(cfg["playbook_dir"]) if cfg.get("playbook_dir") else None
+        )
+
+        self.max_timeout_s = int(cfg.get("max_timeout_s", 900))
+
+        allow = cfg.get("allow", {}) or {}
+        self.allow_ping: bool = bool(allow.get("ping", True))
+
+        # Playbooks are allowed by NAME, never by path: the container never gets
+        # to choose a filesystem location, so it cannot reach outside
+        # playbook_dir even with a crafted request.
+        self.allowed_playbooks: set[str] = set(allow.get("playbooks", []) or [])
+
+        # Hosts/groups that may be targeted. Empty means "anything in the
+        # inventory" — convenient, but narrowing it is strictly better.
+        self.allowed_hosts: set[str] = set(allow.get("hosts", []) or [])
+
+        # Ad-hoc commands are OFF by default. Turning this on gives the
+        # container arbitrary remote execution on every allowed host, which
+        # throws away most of the benefit of running a runner at all.
+        self.allow_command: bool = bool(allow.get("command", False))
+        self.allowed_commands: set[str] = set(allow.get("commands", []) or [])
+
+    def check_host(self, host: str) -> None:
+        if not host:
+            raise PermissionError("no host given")
+        if self.allowed_hosts and host not in self.allowed_hosts:
+            raise PermissionError(
+                f"host {host!r} is not in this runner's allow.hosts list"
+            )
+
+    def resolve_playbook(self, name: str) -> Path:
+        if name not in self.allowed_playbooks:
+            allowed = ", ".join(sorted(self.allowed_playbooks)) or "(none)"
+            raise PermissionError(
+                f"playbook {name!r} is not allowed. Allowed: {allowed}"
+            )
+        if self.playbook_dir is None:
+            raise ConfigError("playbook_dir is not configured")
+
+        # Resolve and confirm containment. `name` is allowlisted already, so
+        # this is belt-and-braces against a config entry like "../../etc/x".
+        candidate = (self.playbook_dir / name).resolve()
+        root = self.playbook_dir.resolve()
+        if not str(candidate).startswith(str(root) + os.sep):
+            raise PermissionError(f"playbook {name!r} resolves outside playbook_dir")
+        if not candidate.exists():
+            raise ConfigError(f"playbook {name!r} not found at {candidate}")
+        return candidate
+
+    def check_command(self, argv: list[str]) -> None:
+        if not self.allow_command:
+            raise PermissionError(
+                "ad-hoc commands are disabled on this runner (allow.command: false). "
+                "Wrap what you need in a playbook and allowlist it instead."
+            )
+        if self.allowed_commands and argv and argv[0] not in self.allowed_commands:
+            allowed = ", ".join(sorted(self.allowed_commands))
+            raise PermissionError(
+                f"command {argv[0]!r} is not in allow.commands. Allowed: {allowed}"
+            )
+
+    def clamp_timeout(self, requested: Any) -> int:
+        try:
+            value = int(requested)
+        except (TypeError, ValueError):
+            value = 60
+        return max(1, min(value, self.max_timeout_s))
+
+
+# ---------------------------------------------------------------------------
+# execution
+# ---------------------------------------------------------------------------
+
+
+async def _run(argv: list[str], timeout_s: int) -> dict[str, Any]:
+    env = {
+        **os.environ,
+        "ANSIBLE_STDOUT_CALLBACK": "json",
+        "ANSIBLE_LOAD_CALLBACK_PLUGINS": "1",
+        "ANSIBLE_FORCE_COLOR": "0",
+        "ANSIBLE_NOCOLOR": "1",
+    }
+    LOG.info("exec %s", shlex.join(argv))
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *argv,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            env=env,
+        )
+    except FileNotFoundError as exc:
+        return {"error": f"executable not found: {argv[0]} ({exc})", "unreachable": True}
+
+    try:
+        out_b, err_b = await asyncio.wait_for(proc.communicate(), timeout=timeout_s)
+    except asyncio.TimeoutError:
+        proc.kill()
+        await proc.wait()
+        return {
+            "error": f"timed out after {timeout_s}s",
+            "unreachable": True,
+        }
+
+    stdout = out_b.decode("utf-8", "replace")
+    stderr = err_b.decode("utf-8", "replace")
+    rc = proc.returncode if proc.returncode is not None else -1
+    parsed = parse_ansible_json(stdout)
+
+    if rc == ANSIBLE_UNREACHABLE or (parsed and parsed.get("unreachable")):
+        return {
+            "unreachable": True,
+            "error": (parsed or {}).get("msg") or stderr.strip()[:500] or "host unreachable",
+        }
+
+    if parsed is not None:
+        return {
+            "rc": int(parsed.get("rc", 0 if rc == 0 else 1)),
+            "stdout": str(parsed.get("stdout", "")),
+            "stderr": str(parsed.get("stderr", "")) or stderr,
+        }
+
+    return {
+        "rc": 0 if rc == 0 else (1 if rc == ANSIBLE_TASK_FAILED else rc),
+        "stdout": stdout,
+        "stderr": stderr,
+    }
+
+
+def parse_ansible_json(stdout: str) -> dict[str, Any] | None:
+    """Extract one host's task result from ansible's JSON callback output.
+
+    Defensive: the exact nesting varies by ansible version and between ad-hoc
+    and playbook runs, and a check must not break over that.
+    """
+    text = stdout.strip()
+    start = text.find("{")
+    if start == -1:
+        return None
+    try:
+        doc = json.loads(text[start:])
+    except ValueError:
+        return None
+    if not isinstance(doc, dict):
+        return None
+
+    for play in doc.get("plays") or []:
+        for task in play.get("tasks") or []:
+            for result in (task.get("hosts") or {}).values():
+                if isinstance(result, dict):
+                    return result
+    for stats in (doc.get("stats") or {}).values():
+        if isinstance(stats, dict) and stats.get("unreachable"):
+            return {"unreachable": True, "msg": "host unreachable per ansible stats"}
+    return None
+
+
+async def handle_request(policy: Policy, req: dict[str, Any]) -> dict[str, Any]:
+    action = str(req.get("action", ""))
+    timeout_s = policy.clamp_timeout(req.get("timeout_s", 60))
+
+    if action == "hello":
+        # Lets `orchestrator-cli transport check` confirm the socket without
+        # touching any guest.
+        return {
+            "ok": True,
+            "protocol": PROTOCOL_VERSION,
+            "allow": {
+                "ping": policy.allow_ping,
+                "playbooks": sorted(policy.allowed_playbooks),
+                "command": policy.allow_command,
+                "hosts": sorted(policy.allowed_hosts) or ["(any in inventory)"],
+            },
+        }
+
+    if action == "ping":
+        if not policy.allow_ping:
+            raise PermissionError("ping is disabled on this runner")
+        host = str(req.get("host", ""))
+        policy.check_host(host)
+        argv = [policy.ansible_bin, host, "-m", "ping"]
+        if policy.inventory:
+            argv += ["-i", policy.inventory]
+        return await _run(argv, timeout_s)
+
+    if action == "playbook":
+        name = str(req.get("playbook", ""))
+        path = policy.resolve_playbook(name)
+        argv = [policy.ansible_playbook_bin, str(path)]
+        if policy.inventory:
+            argv += ["-i", policy.inventory]
+        limit = req.get("limit")
+        if limit:
+            policy.check_host(str(limit))
+            argv += ["--limit", str(limit)]
+        extra = req.get("extra_vars")
+        if isinstance(extra, dict) and extra:
+            argv += ["--extra-vars", json.dumps(extra)]
+        return await _run(argv, timeout_s)
+
+    if action == "command":
+        host = str(req.get("host", ""))
+        policy.check_host(host)
+        argv_in = req.get("argv") or []
+        if not isinstance(argv_in, list) or not argv_in:
+            raise ValueError("`argv` must be a non-empty list")
+        argv_in = [str(a) for a in argv_in]
+        policy.check_command(argv_in)
+        argv = [policy.ansible_bin, host, "-m", "command", "-a", shlex.join(argv_in)]
+        if policy.inventory:
+            argv += ["-i", policy.inventory]
+        return await _run(argv, timeout_s)
+
+    raise ValueError(f"unknown action {action!r}")
+
+
+# ---------------------------------------------------------------------------
+# server
+# ---------------------------------------------------------------------------
+
+
+async def _serve_client(
+    policy: Policy, reader: asyncio.StreamReader, writer: asyncio.StreamWriter
+) -> None:
+    try:
+        raw = await asyncio.wait_for(reader.readline(), timeout=30)
+        if not raw:
+            return
+        if len(raw) > MAX_REQUEST_BYTES:
+            response = {"error": "request too large"}
+        else:
+            try:
+                req = json.loads(raw.decode("utf-8"))
+            except ValueError as exc:
+                response = {"error": f"malformed request: {exc}"}
+            else:
+                try:
+                    response = await handle_request(policy, req)
+                except PermissionError as exc:
+                    # Refusals are the interesting security events; log them.
+                    LOG.warning("REFUSED: %s", exc)
+                    response = {"error": f"refused: {exc}", "refused": True}
+                except (ConfigError, ValueError) as exc:
+                    LOG.error("bad request: %s", exc)
+                    response = {"error": str(exc)}
+                except Exception as exc:  # noqa: BLE001 - never kill the server
+                    LOG.exception("unexpected failure")
+                    response = {"error": f"runner error: {type(exc).__name__}: {exc}"}
+
+        writer.write((json.dumps(response) + "\n").encode("utf-8"))
+        await writer.drain()
+    except (TimeoutError, asyncio.TimeoutError):
+        LOG.warning("client timed out before sending a request")
+    except ConnectionError:
+        pass
+    finally:
+        writer.close()
+
+
+async def serve(policy: Policy) -> None:
+    sock_path = policy.socket_path
+    sock_path.parent.mkdir(parents=True, exist_ok=True)
+    if sock_path.exists():
+        sock_path.unlink()
+
+    server = await asyncio.start_unix_server(
+        lambda r, w: _serve_client(policy, r, w), path=str(sock_path)
+    )
+
+    # Permissions matter: this socket is the capability. Group-only access, so
+    # the container's uid can reach it and nothing else on the host can.
+    os.chmod(sock_path, policy.socket_mode)
+    if policy.socket_group:
+        import grp
+
+        try:
+            gid = grp.getgrnam(policy.socket_group).gr_gid
+            os.chown(sock_path, os.geteuid(), gid)
+        except (KeyError, PermissionError) as exc:
+            LOG.warning("could not set socket group %s: %s", policy.socket_group, exc)
+
+    import pwd
+
+    who = pwd.getpwuid(os.geteuid()).pw_name
+    LOG.info(
+        "listening on %s as %s (mode %o, group %s)",
+        sock_path,
+        who,
+        policy.socket_mode,
+        policy.socket_group or "(unchanged)",
+    )
+    LOG.info(
+        "allow: ping=%s playbooks=%s command=%s hosts=%s",
+        policy.allow_ping,
+        sorted(policy.allowed_playbooks) or "(none)",
+        policy.allow_command,
+        sorted(policy.allowed_hosts) or "(any in inventory)",
+    )
+    if os.geteuid() == 0:
+        LOG.warning(
+            "running as root — prefer a dedicated unprivileged user that owns "
+            "only the inventory, playbooks and key this runner needs"
+        )
+
+    async with server:
+        await server.serve_forever()
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument(
+        "--config", required=True, type=Path, help="path to host-runner.yaml"
+    )
+    parser.add_argument("--verbose", action="store_true")
+    args = parser.parse_args(argv)
+
+    logging.basicConfig(
+        level=logging.DEBUG if args.verbose else logging.INFO,
+        format="%(asctime)s %(levelname)-7s %(message)s",
+    )
+
+    try:
+        policy = Policy(load_config(args.config))
+    except (ConfigError, OSError) as exc:
+        LOG.error("config: %s", exc)
+        return 2
+
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        try:
+            loop.add_signal_handler(sig, loop.stop)
+        except NotImplementedError:
+            pass
+    try:
+        loop.run_until_complete(serve(policy))
+    except (KeyboardInterrupt, RuntimeError):
+        pass
+    finally:
+        if policy.socket_path.exists():
+            policy.socket_path.unlink(missing_ok=True)
+        LOG.info("stopped")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

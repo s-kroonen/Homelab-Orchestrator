@@ -98,9 +98,59 @@ class Settings(BaseSettings):
     pbs_token_id: str = ""
     pbs_token_secret: SecretStr = SecretStr("")
 
+    # Snapshot protection (the "known-good pin") needs the PBS privilege
+    # Datastore.Modify, which on many installs requires a custom role or the
+    # built-in DatastoreAdmin. Set false when the token lacks it: protect calls
+    # become logged no-ops instead of 403s.
+    # TRADE-OFF: with this off, prune has nothing stopping it from removing the
+    # last verified backup of a service. See docs/api_tokens.md.
+    pbs_protect_enabled: bool = True
+
+    # ---- Probe transports (phase 4) ---------------------------------------
+    # Defaults for SSH probes; a probe's own transport block can override them.
+    # In Docker the key and known_hosts must be MOUNTED into the container —
+    # existing on the host is not enough.
+    ssh_key_path: str = ""
+    ssh_known_hosts_path: str = ""
+    # Verifying host keys is the default because some probe configs reference
+    # credentials on the guest; accepting any key would expose them on the path.
+    ssh_verify_host_key: bool = True
+
+    # Default ProxyJump for SSH probes. The orchestrator is typically not on the
+    # guests' network, so shell probes hop through the gateway. A probe's own
+    # transport block can override or clear it.
+    ssh_jump_host: str = ""
+    ssh_jump_user: str = ""
+    ssh_jump_port: int = 22
+
+    # Host runner: the container asks a process on the HOST to perform checks
+    # that need credentials, instead of holding those credentials itself. Only
+    # this socket is mounted in — no inventory, no playbooks, no keys.
+    # See docs/host_runner.md and contrib/host-runner/.
+    host_runner_socket: str = ""
+
+    # ---- Config builder defaults ------------------------------------------
+    # Used by `init`, `scaffold` and `probe add` as suggestions. They are written
+    # EXPLICITLY into each generated entry and never applied at runtime, so
+    # services.yaml always shows the real route a probe takes.
+    #: The reverse proxy's LOCAL address, e.g. https://10.0.0.2 — HTTP probes point
+    #: here and route with a Host header, like curl --resolve.
+    probe_proxy_base_url: str = ""
+    #: Slug of the gateway service. New services get `depends_on: [<this>]`, so a
+    #: gateway outage reads as UNKNOWN downstream rather than as every service failing.
+    gateway_service: str = ""
+
     # ---- Task timeouts ----------------------------------------------------
     backup_task_timeout_s: int = 7200  # a large VM dump can legitimately take hours
     verify_task_timeout_s: int = 1800
+    # A cold node can legitimately take minutes to POST, boot, and bring its
+    # guests up — this bounds the whole wake pipeline, node-online and health
+    # polling both count against it.
+    wake_timeout_s: int = 600
+    wake_poll_interval_s: float = 5.0
+    # Just the Proxmox "start" task, not the guest finishing its own boot —
+    # that's what wake_timeout_s's health polling is for.
+    wake_guest_start_timeout_s: int = 120
 
     # ---- MQTT / power manager --------------------------------------------
     mqtt_host: str = "mqtt.example.lan"
