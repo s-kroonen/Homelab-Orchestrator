@@ -151,6 +151,12 @@ class Settings(BaseSettings):
     # Just the Proxmox "start" task, not the guest finishing its own boot —
     # that's what wake_timeout_s's health polling is for.
     wake_guest_start_timeout_s: int = 120
+    # After a wake run ends (success or failure), the next hit to /wake or the
+    # maintenance page reuses it rather than starting a fresh one. Without
+    # this, a wake that fails fast gets re-triggered on literally every
+    # incoming request during an outage — every visitor, not just page
+    # reloads, since Traefik's errors middleware routes every one of them here.
+    wake_retry_cooldown_s: int = 30
 
     # ---- MQTT / power manager --------------------------------------------
     mqtt_host: str = "mqtt.example.lan"

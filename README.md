@@ -54,7 +54,10 @@ probing services the orchestrator cannot reach directly,
 [docs/host_runner.md](docs/host_runner.md) for running credentialed checks
 off-container, and
 [docs/proxmox_connectivity.md](docs/proxmox_connectivity.md) for the single
-entry point / quorum / failover notes.
+entry point / quorum / failover notes, and
+[docs/gateway_traefik_migration.md](docs/gateway_traefik_migration.md) for
+moving the gateway from NPM to Traefik (a prerequisite for the
+maintenance page's auto-boot-on-request).
 
 ---
 

@@ -25,7 +25,7 @@ import contextlib
 import time
 from datetime import UTC, datetime
 
-from sqlmodel import Session, select
+from sqlmodel import Session, desc, select
 
 from orchestrator.adapters.errors import AdapterError, AdapterUnreachable
 from orchestrator.adapters.power.base import PowerAdapter
@@ -70,6 +70,47 @@ class WakePipeline:
         self._health = health or HealthEngine(settings=settings)
 
     # -- entry points ---------------------------------------------------------
+
+    def get_or_start(
+        self, session: Session, slug: str, *, actor: str = "system"
+    ) -> tuple[PipelineRun, bool]:
+        """Reuse the latest wake for this service instead of starting a new
+        one, when either is true:
+
+        * it's still RUNNING, or
+        * it just ended (success or failure) and ``wake_retry_cooldown_s``
+          hasn't passed yet.
+
+        Returns ``(run, started_new)``.
+
+        Both the ``POST /wake`` API and the maintenance page call this rather
+        than :meth:`start` directly. The cooldown matters as much as the
+        RUNNING check: without it, a wake that fails fast gets re-triggered by
+        every visitor request that lands on it during an outage — Traefik's
+        errors middleware routes ALL of them here, not just page reloads — so
+        a real failure (say, a non-quorate cluster) would hammer the power
+        manager with a fresh wake command every request instead of surfacing
+        once and cooling down.
+        """
+        service = session.exec(select(Service).where(Service.slug == slug)).one_or_none()
+        if service is not None and service.id is not None:
+            latest = session.exec(
+                select(PipelineRun)
+                .where(PipelineRun.service_id == service.id, PipelineRun.kind == PipelineKind.WAKE)
+                .order_by(desc(PipelineRun.started_at))
+                .limit(1)
+            ).one_or_none()
+            if latest is not None:
+                if latest.status is PipelineStatus.RUNNING:
+                    return latest, False
+                if latest.finished_at is not None:
+                    # SQLite drops tzinfo on round-trip; finished_at was written
+                    # as UTC (see _finish), so compare naive-UTC to naive-UTC.
+                    now = datetime.now(UTC).replace(tzinfo=None)
+                    age_s = (now - latest.finished_at).total_seconds()
+                    if age_s < self._settings.wake_retry_cooldown_s:
+                        return latest, False
+        return self.start(session, slug, actor=actor), True
 
     def start(self, session: Session, slug: str, *, actor: str = "system") -> PipelineRun:
         """Resolve + validate the request and create the RUNNING run row.

@@ -229,6 +229,12 @@ ENV_SECTIONS: tuple[EnvSection, ...] = (
             ),
             EnvKey("WAKE_POLL_INTERVAL_S"),
             EnvKey("WAKE_GUEST_START_TIMEOUT_S", "Just the Proxmox start task, not guest boot."),
+            EnvKey(
+                "WAKE_RETRY_COOLDOWN_S",
+                "After a wake ends, the next hit reuses it rather than retrying — without "
+                "this, a fast failure gets re-triggered by every visitor request during "
+                "an outage, not just page reloads.",
+            ),
         ),
     ),
     EnvSection(

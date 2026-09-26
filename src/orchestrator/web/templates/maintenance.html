@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+{% if refresh_seconds %}<meta http-equiv="refresh" content="{{ refresh_seconds }}">{% endif %}
+<title>{{ service_name }} — {{ headline }}</title>
+<style>
+  :root { color-scheme: light dark; }
+  body {
+    margin: 0; min-height: 100vh; display: flex; align-items: center; justify-content: center;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background: #0b0e14; color: #e6e9ef;
+  }
+  .card { max-width: 30rem; padding: 2rem; text-align: center; }
+  .spinner {
+    width: 2.5rem; height: 2.5rem; margin: 0 auto 1.25rem;
+    border: 3px solid #2a2f3a; border-top-color: #5b8def; border-radius: 50%;
+    animation: spin 0.9s linear infinite;
+  }
+  .spinner.done { border-top-color: #3ecf6d; animation: none; }
+  .spinner.failed { border-top-color: #e5534b; animation: none; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  h1 { font-size: 1.25rem; margin: 0 0 0.5rem; }
+  p.reason { color: #9aa4b2; font-size: 0.9rem; line-height: 1.4; margin: 0 0 1.5rem; }
+  ol.steps { list-style: none; padding: 0; margin: 0 0 1.5rem; text-align: left; font-size: 0.85rem; }
+  ol.steps li { padding: 0.25rem 0; color: #9aa4b2; }
+  ol.steps li.ok::before { content: "✓ "; color: #3ecf6d; }
+  ol.steps li.failed::before, ol.steps li.indeterminate::before { content: "✗ "; color: #e5534b; }
+  a.retry {
+    display: inline-block; margin-top: 0.5rem; padding: 0.5rem 1.25rem;
+    background: #5b8def; color: #0b0e14; border-radius: 0.4rem; text-decoration: none; font-weight: 600;
+  }
+</style>
+</head>
+<body>
+  <div class="card">
+    <div class="spinner {{ spinner_class }}"></div>
+    <h1>{{ headline }}</h1>
+    <p class="reason">{{ reason }}</p>
+    {% if steps %}
+    <ol class="steps">
+      {% for step in steps %}<li class="{{ step.status }}">{{ step.name }}</li>{% endfor %}
+    </ol>
+    {% endif %}
+    {% if show_retry %}<a class="retry" href="{{ retry_url }}">Try again</a>{% endif %}
+  </div>
+</body>
+</html>
