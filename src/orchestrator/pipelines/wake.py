@@ -104,10 +104,15 @@ class WakePipeline:
                 if latest.status is PipelineStatus.RUNNING:
                     return latest, False
                 if latest.finished_at is not None:
-                    # SQLite drops tzinfo on round-trip; finished_at was written
-                    # as UTC (see _finish), so compare naive-UTC to naive-UTC.
+                    # finished_at is written as UTC (see _finish), but SQLite
+                    # drops tzinfo on round-trip while an in-memory object
+                    # (not yet re-fetched from the DB) still carries it.
+                    # Normalize both sides to naive UTC before subtracting.
                     now = datetime.now(UTC).replace(tzinfo=None)
-                    age_s = (now - latest.finished_at).total_seconds()
+                    finished_at = latest.finished_at
+                    if finished_at.tzinfo is not None:
+                        finished_at = finished_at.astimezone(UTC).replace(tzinfo=None)
+                    age_s = (now - finished_at).total_seconds()
                     if age_s < self._settings.wake_retry_cooldown_s:
                         return latest, False
         return self.start(session, slug, actor=actor), True
