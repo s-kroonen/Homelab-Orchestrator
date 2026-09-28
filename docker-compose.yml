@@ -1,10 +1,14 @@
 services:
   orchestrator:
     # Default: pull a pinned tag from GHCR (what the Pi does).
+    # `:main` is what publish.yml actually tags on every push to main; `:latest`
+    # is ONLY tagged when a `vX.Y.Z` release tag is pushed, so it does not exist
+    # until the first release and defaulting to it 404s as "manifest unknown".
+    # Pin a specific `:sha-<short>` or `:vX.Y.Z` tag for anything beyond casual use.
     # Local dev: run `docker compose build` or `docker compose up --build`
     # to rebuild from the working tree — the `build:` block below is honoured
     # by both `build` and `up --build` subcommands.
-    image: ${ORCHESTRATOR_IMAGE:-ghcr.io/s-kroonen/homelab-orchestrator:latest}
+    image: ${ORCHESTRATOR_IMAGE:-ghcr.io/s-kroonen/homelab-orchestrator:main}
     build:
       context: .
       dockerfile: Dockerfile
@@ -63,7 +67,7 @@ services:
   # purpose: it stops `docker compose up` recreating the orchestrator with no
   # config. Hence `touch .env` first — init treats an empty .env as a clean install.
   setup:
-    image: ${ORCHESTRATOR_IMAGE:-ghcr.io/s-kroonen/homelab-orchestrator:latest}
+    image: ${ORCHESTRATOR_IMAGE:-ghcr.io/s-kroonen/homelab-orchestrator:main}
     profiles: ["setup"]
     entrypoint: ["orchestrator-cli"]
     working_dir: /work
