@@ -8,7 +8,11 @@ name: publish
 #                              (e.g. v1.2.3 -> 1.2.3, 1.2, 1, latest)
 #   * manual dispatch      -> tag: manual-<sha>
 #
-# Multi-arch: linux/amd64 (laptops/servers) + linux/arm64 (Raspberry Pi 4/5).
+# Multi-arch: linux/amd64 (laptops/servers), linux/arm64 (Raspberry Pi 4/5 on a
+# 64-bit OS), linux/arm/v7 (32-bit OS, e.g. Raspberry Pi OS). The arm/v7 leg is
+# QEMU-emulated and slower; pydantic-core (Rust) is the main risk for it not
+# having a prebuilt wheel, in which case it falls back to a very slow
+# emulated Rust compile or fails outright.
 # Uses only $GITHUB_TOKEN — no extra secrets to configure.
 #
 # Pulling on the Pi:
@@ -90,12 +94,12 @@ jobs:
             org.opencontainers.image.description=Control-plane service for a low-power Proxmox homelab
             org.opencontainers.image.licenses=MIT
 
-      - name: Build + push (linux/amd64, linux/arm64)
+      - name: Build + push (linux/amd64, linux/arm64, linux/arm/v7)
         uses: docker/build-push-action@v6
         with:
           context: .
           file: Dockerfile
-          platforms: linux/amd64,linux/arm64
+          platforms: linux/amd64,linux/arm64,linux/arm/v7
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
