@@ -23,7 +23,7 @@ from fastapi.templating import Jinja2Templates
 from sqlmodel import select
 
 from orchestrator.db.models import BackupPolicy, BackupRecord, Node, Service, ServiceState
-from orchestrator.domain.enums import GuestKind
+from orchestrator.domain.enums import GuestKind, RouterProvider
 from orchestrator.registry.loader import compute_registry_diff
 from orchestrator.registry.probe_specs import PROBE_SPECS
 from orchestrator.web.auth import get_current_admin
@@ -120,6 +120,32 @@ async def service_detail_page(
             "other_slugs": other_slugs,
             "guest_kinds": [k.value for k in GuestKind],
             "probe_kinds": probe_kinds,
+            "registry_dirty": diff.dirty,
+            "yaml_path": diff.yaml_path,
+        },
+    )
+
+
+@router.get("/proxy-hosts", response_model=None)
+async def proxy_hosts_page(
+    request: Request, session: SessionDep
+) -> HTMLResponse | RedirectResponse:
+    """Proxy-host reference records. The table and forms are driven entirely
+    by ``/api/proxy-hosts`` via ``fetch``; this only supplies the page shell
+    plus the service list for the "linked service" dropdown."""
+    admin = get_current_admin(request, session)
+    if admin is None:
+        return RedirectResponse("/login?next=/proxy-hosts", status_code=303)
+
+    services = session.exec(select(Service).order_by(Service.slug)).all()
+    diff = compute_registry_diff(session)
+    return _templates.TemplateResponse(
+        request,
+        "proxy_hosts.html",
+        {
+            "admin": admin,
+            "services": [{"id": s.id, "slug": s.slug, "name": s.name} for s in services],
+            "providers": [p.value for p in RouterProvider],
             "registry_dirty": diff.dirty,
             "yaml_path": diff.yaml_path,
         },
