@@ -57,7 +57,9 @@ off-container, and
 entry point / quorum / failover notes, and
 [docs/gateway_traefik_migration.md](docs/gateway_traefik_migration.md) for
 moving the gateway from NPM to Traefik (a prerequisite for the
-maintenance page's auto-boot-on-request).
+maintenance page's auto-boot-on-request), and
+[docs/cloud_session_setup.md](docs/cloud_session_setup.md) for the
+environment setup script for a claude.ai/code cloud session on this repo.
 
 ---
 

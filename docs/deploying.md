@@ -86,6 +86,30 @@ echo $GHCR_PAT | docker login ghcr.io -u s-kroonen --password-stdin
 Pin `ORCHESTRATOR_IMAGE` in `.env` (`env_file:` picks it up) so subsequent
 `docker compose pull` always fetches the tag you committed to.
 
+## Manual deploy: build on the Pi from a git checkout
+
+Skip GHCR entirely and build locally — for testing a commit before pushing it,
+or if you'd rather not wait on CI. Same `docker-compose.yml`; it already has a
+`build:` block that both `docker compose build` and `up --build` honour, the
+image tag becomes whatever `ORCHESTRATOR_IMAGE` names locally instead of
+something pulled.
+
+```bash
+# On the Pi:
+git clone https://github.com/s-kroonen/Homelab-Orchestrator.git orchestrator
+cd orchestrator
+mkdir -p config && touch .env
+
+docker compose build          # arm64, on-device — a few minutes on a Pi 4/5
+docker compose run --rm setup init
+docker compose up -d
+```
+
+Updating later is `git pull && docker compose build && docker compose up -d`
+instead of `docker compose pull`. Same rollback shape too: `git checkout
+<tag-or-sha>` before rebuilding. This is the only path a **private** repo needs
+no registry login for, since it never touches GHCR.
+
 ## Cutting a release
 
 Locally:
