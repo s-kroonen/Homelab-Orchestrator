@@ -45,3 +45,6 @@ secrets/*.yaml
 *.swp
 .DS_Store
 Thumbs.db
+
+# Claude Code agent worktree scratch space — never project content
+.claude/worktrees/
