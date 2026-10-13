@@ -40,7 +40,10 @@ orchestrator-cli proxy add <slug> --hostname media.example.com --upstream http:/
 
 `service list` and `probe add`'s HTTP suggestions read `router_provider` from
 this, so update it per service as each one cuts over — not all at once at the
-end.
+end. The dashboard's **Proxy hosts** page edits the same records (then
+**Save to YAML**). They're manual reference records, not synced with Traefik
+— see [proxy_hosts.md](proxy_hosts.md) for what they are and what exposing
+Traefik's API/metrics would enable later.
 
 ---
 
