@@ -84,6 +84,10 @@ ENV_SECTIONS: tuple[EnvSection, ...] = (
             EnvKey("PROXMOX_ADAPTER", "api | dry_run"),
             EnvKey("PBS_ADAPTER", "api | dry_run"),
             EnvKey("NOTIFIER_ADAPTER", "null — the only notifier until phase 9"),
+            EnvKey(
+                "SCHEDULER_ENABLED",
+                "Run backup policies on their schedule_cron. false = manual backups only.",
+            ),
         ),
     ),
     EnvSection(

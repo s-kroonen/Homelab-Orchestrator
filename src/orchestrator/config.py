@@ -43,6 +43,11 @@ class Settings(BaseSettings):
 
     dry_run: bool = True
 
+    # Run BackupPolicy schedules (phase 6). Off = no cron jobs at all; manual
+    # backups via the CLI/API still work. Independent of DRY_RUN: with both on,
+    # scheduled runs fire and exercise the pipeline against log-only adapters.
+    scheduler_enabled: bool = True
+
     # Per-adapter selector; strings so config surfaces the intent, but only
     # ``live`` vs ``dry_run`` is honoured today. Live values from the .env
     # (e.g. "mqtt", "api") are treated as LIVE.

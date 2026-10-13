@@ -52,8 +52,16 @@ working (fail-open).
 refused. That is deliberate — unverified is not the same as healthy — but it
 means a freshly scaffolded service will not back up until you add a probe.
 
-**Not yet built:** scheduler + retention (phase 6), greenlight/revert
-(phase 8), notifier + Grafana metrics (phase 9).
+* **Scheduled backups + retention** — every backup policy with a
+  `schedule_cron` runs on that schedule (APScheduler, `SCHEDULER_ENABLED`),
+  through the same gated pipeline as a manual backup; after each successful
+  run the policy's `keep_*` counts are applied via PBS prune and, with
+  `protect_latest_verified`, the newest verified snapshot is pinned first.
+  Policies are editable on the dashboard's **Backup policies** page and
+  saved to services.yaml with the usual Save button.
+
+**Not yet built:** greenlight/revert (phase 8), notifier + Grafana metrics
+(phase 9).
 
 See [docs/architecture.md](docs/architecture.md) for the full design,
 [docs/adding_a_service.md](docs/adding_a_service.md) for registering a service,
@@ -233,5 +241,5 @@ Adapters are fully mocked in tests; the DB is a per-test temp SQLite file.
 
 ## What's coming
 
-Phases 6, 8 and 9 land the scheduler + retention, the greenlight/revert flow,
-and the mailcow + ntfy notifier. See the design brief for the full plan.
+Phases 8 and 9 land the greenlight/revert flow and the mailcow + ntfy
+notifier. See the design brief for the full plan.
