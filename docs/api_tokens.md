@@ -179,9 +179,10 @@ PBS_PROTECT_ENABLED=false
 
 **What you give up:** the "protected known-good pin" from the design brief —
 the guarantee that prune can never remove the newest verified backup of a
-service. Without it, retention policy alone decides what survives. That matters
-from **phase 6** (retention); phase 2 never calls protect, so nothing is
-affected today.
+service. Without it, retention policy alone decides what survives. This matters
+for scheduled retention (phase 6): with a policy's `protect_latest_verified`
+on, the scheduler pins the newest verified snapshot *before* pruning, and with
+protection disabled that pin is skipped (logged) and prune runs unguarded.
 
 To get it back later you need `Datastore.Modify`, via either a custom role
 (needs `Permissions.Modify` on the PBS account) or the built-in

@@ -6,7 +6,8 @@ Lifespan tasks in order:
     3. (optional) alembic upgrade head
     4. reconcile services.yaml into the DB (YAML-wins boot rule)
     5. build + start adapters
-Shutdown reverses 5.
+    6. start the backup scheduler (if SCHEDULER_ENABLED)
+Shutdown reverses 6 then 5.
 """
 
 from __future__ import annotations
@@ -26,14 +27,17 @@ from orchestrator.config import get_settings
 from orchestrator.db.session import build_engine, session_scope
 from orchestrator.logging_setup import configure_logging, get_logger
 from orchestrator.registry.loader import RegistryPathError, reconcile_yaml_into_db
+from orchestrator.scheduler import BackupScheduler
 from orchestrator.web.routers import (
     activity,
     auth,
     backup,
+    backup_policies,
     dashboard,
     health,
     infra,
     maintenance,
+    proxy_hosts,
     setup,
     ui,
     wake,
@@ -119,10 +123,33 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     app.state.adapters = adapters
 
+    # A scheduler that fails to start is logged, not fatal: the maintenance
+    # responder and manual backups must stay up, and the dashboard shows the
+    # scheduler as not running.
+    scheduler: BackupScheduler | None = None
+    if settings.scheduler_enabled:
+        try:
+            scheduler = BackupScheduler(adapters=adapters, settings=settings)
+            scheduler.start()
+        except Exception as exc:
+            log.error(
+                "scheduler.start.failed",
+                error=str(exc),
+                error_type=type(exc).__name__,
+                traceback=traceback.format_exc(),
+                impact="No scheduled backups will run. Manual backups still work.",
+            )
+            scheduler = None
+    else:
+        log.warning("scheduler.disabled", impact="SCHEDULER_ENABLED=false — no backups run.")
+    app.state.scheduler = scheduler
+
     try:
         yield
     finally:
         log.info("orchestrator.stop")
+        if scheduler is not None:
+            await scheduler.shutdown()
         await adapters.stop_all()
 
 
@@ -155,6 +182,8 @@ def create_app() -> FastAPI:
     app.include_router(dashboard.router)
     app.include_router(infra.router)
     app.include_router(backup.router)
+    app.include_router(backup_policies.router)
+    app.include_router(proxy_hosts.router)
     app.include_router(activity.router)
     # Unauthenticated only while no admin exists AND nothing is configured —
     # see the gating notes at the top of routers/setup.py.

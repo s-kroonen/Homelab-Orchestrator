@@ -1,0 +1,519 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>homelab-orchestrator — {{ service.slug }}</title>
+<style>
+  :root { color-scheme: light dark; }
+  body {
+    margin: 0; min-height: 100vh; padding: 2rem 1rem;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background: #0b0e14; color: #e6e9ef;
+  }
+  .wrap { max-width: 56rem; margin: 0 auto; }
+  header { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 1.5rem; gap: 1rem; flex-wrap: wrap; }
+  header h1 { font-size: 1.1rem; margin: 0; }
+  header .who { color: #9aa4b2; font-size: 0.85rem; }
+  a, a:visited { color: #5b8def; text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  button {
+    padding: 0.4rem 0.9rem; background: #5b8def; color: #0b0e14; border: none;
+    border-radius: 0.4rem; font-weight: 600; cursor: pointer; font-size: 0.85rem;
+  }
+  button.secondary { background: #2a2f3a; color: #e6e9ef; }
+  button.danger { background: transparent; color: #e5534b; border: 1px solid #2a2f3a; }
+  table { width: 100%; border-collapse: collapse; margin-bottom: 1rem; }
+  th, td { text-align: left; padding: 0.5rem 0.6rem; border-bottom: 1px solid #1a1e27; font-size: 0.85rem; vertical-align: top; }
+  th { color: #9aa4b2; font-weight: 500; }
+  section { margin-bottom: 2rem; }
+  section h2 { font-size: 0.95rem; margin: 0 0 0.75rem; }
+  .dirty-badge { background: #3b2e14; color: #e5a63e; padding: 0.2rem 0.6rem; border-radius: 0.4rem; font-size: 0.8rem; }
+  .row { display: flex; gap: 0.5rem; align-items: center; margin-bottom: 0.75rem; flex-wrap: wrap; }
+  input, select, textarea { padding: 0.4rem; background: #171b24; border: 1px solid #2a2f3a; border-radius: 0.4rem; color: #e6e9ef; font: inherit; font-size: 0.85rem; }
+  input[type=checkbox] { padding: 0; }
+  textarea { width: 100%; box-sizing: border-box; }
+  textarea.json { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; min-height: 10rem; }
+  .grid { display: grid; grid-template-columns: 11rem 1fr; gap: 0.6rem 1rem; align-items: center; margin-bottom: 1rem; }
+  .grid > label { color: #9aa4b2; font-size: 0.85rem; }
+  .grid .hint { grid-column: 2; color: #9aa4b2; font-size: 0.75rem; margin-top: -0.4rem; }
+  .checks { display: flex; flex-wrap: wrap; gap: 0.4rem 1rem; }
+  label.inline { color: #9aa4b2; font-size: 0.85rem; display: inline-flex; gap: 0.3rem; align-items: center; }
+  .msg { font-size: 0.85rem; color: #9aa4b2; }
+  .msg.ok { color: #3ecf6d; }
+  .msg.error { color: #e5534b; }
+  code { background: #171b24; padding: 0.1rem 0.3rem; border-radius: 0.3rem; }
+  .panel { border: 1px solid #2a2f3a; border-radius: 0.5rem; padding: 1rem; margin-bottom: 1rem; }
+  .panel h3 { font-size: 0.9rem; margin: 0 0 0.75rem; }
+  .muted { color: #9aa4b2; }
+  .yes { color: #3ecf6d; }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1><a href="/">homelab-orchestrator</a> / {{ service.name }} <code>{{ service.slug }}</code></h1>
+    <span class="who">{{ admin.username }}</span>
+  </header>
+
+  <div class="row">
+    {% if registry_dirty %}<span class="dirty-badge">unsaved changes vs {{ yaml_path }}</span>{% endif %}
+    <button id="save-btn">Save to YAML</button>
+    <button class="secondary" id="reset-btn">Reset to saved</button>
+    <span class="msg" id="registry-msg">Edits here change the live registry; Save writes them to services.yaml.</span>
+  </div>
+
+  <section>
+    <h2>Service</h2>
+    <div class="grid">
+      <label for="f-name">Name</label>
+      <input id="f-name">
+      <label for="f-description">Description</label>
+      <textarea id="f-description" rows="2"></textarea>
+      <label for="f-enabled">Enabled</label>
+      <span><input id="f-enabled" type="checkbox"></span>
+      <label for="f-node">Node</label>
+      <select id="f-node">
+        {% for n in nodes %}<option value="{{ n.id }}">{{ n.name }}</option>{% endfor %}
+      </select>
+      <label for="f-guest-kind">Guest kind</label>
+      <select id="f-guest-kind">
+        {% for k in guest_kinds %}<option value="{{ k }}">{{ k }}</option>{% endfor %}
+      </select>
+      <label for="f-guest-id">Guest id</label>
+      <input id="f-guest-id" type="number" style="width: 8rem">
+      <label for="f-policy">Backup policy</label>
+      <select id="f-policy">
+        <option value="">(none)</option>
+        {% for p in policies %}<option value="{{ p.id }}">{{ p.name }}</option>{% endfor %}
+      </select>
+      <label for="f-backup-excluded">Never back up</label>
+      <span><input id="f-backup-excluded" type="checkbox"></span>
+      <span class="hint">Hard exclusion with no override — e.g. the VM hosting the PBS datastore.</span>
+      <label for="f-backup-reason">Exclusion reason</label>
+      <input id="f-backup-reason" placeholder="required when excluded">
+      <label>Depends on</label>
+      <div class="checks" id="f-depends">
+        {% for s in other_slugs %}
+        <label class="inline"><input type="checkbox" value="{{ s }}"> {{ s }}</label>
+        {% else %}<span class="muted">No other services.</span>{% endfor %}
+      </div>
+      <span class="hint">Must be HEALTHY before this service is judged; a down dependency makes it UNKNOWN, never FAILED.</span>
+    </div>
+    <div class="row">
+      <button id="svc-save-btn">Save service</button>
+      <button class="danger" id="svc-delete-btn">Delete service</button>
+      <span class="msg" id="svc-msg"></span>
+    </div>
+  </section>
+
+  <section>
+    <h2>Probes</h2>
+    <table>
+      <thead>
+        <tr><th>#</th><th>Name</th><th>Kind</th><th>Required</th><th>Timeout</th><th>Config</th><th></th></tr>
+      </thead>
+      <tbody id="probes-body"></tbody>
+    </table>
+    <div class="row">
+      <button id="probe-add-btn">Add probe</button>
+      <span class="msg" id="probes-msg"></span>
+    </div>
+
+    <div class="panel" id="probe-editor" hidden>
+      <h3 id="probe-editor-title">New probe</h3>
+      <div class="grid">
+        <label for="p-name">Name</label>
+        <input id="p-name">
+        <label for="p-kind">Kind</label>
+        <select id="p-kind">
+          {% for k in probe_kinds %}<option value="{{ k.kind }}">{{ k.kind }}</option>{% endfor %}
+        </select>
+        <span class="hint" id="p-kind-summary"></span>
+        <label for="p-required">Required</label>
+        <span><input id="p-required" type="checkbox"> <span class="muted">(required probes gate backups)</span></span>
+        <label for="p-timeout">Timeout (s)</label>
+        <input id="p-timeout" type="number" min="1" style="width: 6rem">
+        <label for="p-order">Order</label>
+        <input id="p-order" type="number" style="width: 6rem">
+      </div>
+
+      <div class="grid" data-kind="http" hidden>
+        <label for="http-url">URL</label>
+        <input id="http-url" placeholder="https://service.lan/health">
+        <label for="http-method">Method</label>
+        <select id="http-method"><option>GET</option><option>HEAD</option></select>
+        <label for="http-status">Expected status</label>
+        <input id="http-status" placeholder="200, 401">
+        <label for="http-body">Body contains</label>
+        <input id="http-body" placeholder="(optional)">
+        <label for="http-verify">Verify TLS</label>
+        <span><input id="http-verify" type="checkbox"></span>
+        <label for="http-host">Host header</label>
+        <input id="http-host" placeholder="(optional) media.example.com">
+        <span class="hint">Set when the URL is a reverse proxy's local IP — like curl --resolve.</span>
+        <label for="http-sni">SNI hostname</label>
+        <input id="http-sni" placeholder="(optional, defaults to host header)">
+      </div>
+
+      <div class="grid" data-kind="tcp" hidden>
+        <label for="tcp-host">Host</label>
+        <input id="tcp-host">
+        <label for="tcp-port">Port</label>
+        <input id="tcp-port" type="number" style="width: 8rem">
+      </div>
+
+      <div class="grid" data-kind="systemd" hidden>
+        <label for="sd-unit">Unit</label>
+        <input id="sd-unit" placeholder="nginx.service">
+        <label for="sd-transport">Transport</label>
+        <select id="sd-transport">
+          <option value="host_agent">host_agent</option>
+          <option value="ssh">ssh</option>
+          <option value="local">local</option>
+        </select>
+        <span class="hint">host_agent = ask the host runner (usually right); ssh = direct from the container; local = inside the container.</span>
+        <label for="sd-host">Target host</label>
+        <input id="sd-host" placeholder="inventory host (host_agent) or hostname/ip (ssh)">
+        <label for="sd-user">SSH user</label>
+        <input id="sd-user" placeholder="root">
+        <label for="sd-port">SSH port</label>
+        <input id="sd-port" type="number" style="width: 6rem" placeholder="22">
+        <label for="sd-jump">Jump host</label>
+        <input id="sd-jump" placeholder="blank = SSH_JUMP_HOST default">
+      </div>
+
+      <div data-kind="json" hidden>
+        <p class="msg">Config as JSON. Command-running kinds need a <code>transport</code> object, e.g.
+          <code>{"transport": {"type": "host_agent", "host": "media"}}</code>.</p>
+        <textarea class="json" id="p-config-json" spellcheck="false"></textarea>
+      </div>
+
+      <div class="row">
+        <button id="probe-save-btn">Save probe</button>
+        <button class="secondary" id="probe-cancel-btn">Cancel</button>
+        <span class="msg" id="probe-editor-msg"></span>
+      </div>
+    </div>
+  </section>
+</div>
+
+<script>
+  const SERVICE = {{ service|tojson }};
+  const PROBE_KINDS = {{ probe_kinds|tojson }};
+  const FORM_KINDS = ["http", "tcp", "systemd"];
+  const svcPath = "/api/registry/services/" + encodeURIComponent(SERVICE.slug);
+  const $ = (id) => document.getElementById(id);
+
+  function setMsg(id, text, kind) {
+    const el = $(id);
+    el.textContent = text;
+    el.className = "msg" + (kind ? " " + kind : "");
+  }
+  async function apiError(resp) {
+    try {
+      const data = await resp.json();
+      if (typeof data.detail === "string") return data.detail;
+      return JSON.stringify(data.detail ?? data);
+    } catch (_) {
+      return `HTTP ${resp.status}`;
+    }
+  }
+  async function sendJson(method, url, body) {
+    const resp = await fetch(url, {
+      method,
+      headers: { "Content-Type": "application/json" },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+    if (!resp.ok) throw new Error(await apiError(resp));
+    return resp.json();
+  }
+
+  // --- registry save/reset (same endpoints as the main dashboard) ---------
+  $("save-btn").addEventListener("click", async () => {
+    const r = await fetch("/api/registry/save", { method: "POST" });
+    setMsg("registry-msg", r.ok ? "Saved." : "Save failed: " + (await apiError(r)), r.ok ? "ok" : "error");
+    if (r.ok) setTimeout(() => location.reload(), 600);
+  });
+  $("reset-btn").addEventListener("click", async () => {
+    if (!confirm("Discard all unsaved registry edits and reload from YAML?")) return;
+    const r = await fetch("/api/registry/reset", { method: "POST" });
+    setMsg("registry-msg", r.ok ? "Reset." : "Reset failed: " + (await apiError(r)), r.ok ? "ok" : "error");
+    // The service may not exist in the saved YAML at all.
+    if (r.ok) setTimeout(() => (location.href = "/"), 600);
+  });
+
+  // --- service form -------------------------------------------------------
+  function fillServiceForm(s) {
+    $("f-name").value = s.name;
+    $("f-description").value = s.description;
+    $("f-enabled").checked = s.enabled;
+    $("f-node").value = s.node_id ?? "";
+    $("f-guest-kind").value = s.guest_kind;
+    $("f-guest-id").value = s.guest_id ?? "";
+    $("f-policy").value = s.backup_policy_id ?? "";
+    $("f-backup-excluded").checked = s.backup_excluded;
+    $("f-backup-reason").value = s.backup_excluded_reason;
+    for (const cb of $("f-depends").querySelectorAll("input[type=checkbox]")) {
+      cb.checked = s.depends_on.includes(cb.value);
+    }
+  }
+
+  $("svc-save-btn").addEventListener("click", async () => {
+    const guestId = $("f-guest-id").value.trim();
+    const policy = $("f-policy").value;
+    const body = {
+      name: $("f-name").value.trim(),
+      description: $("f-description").value,
+      enabled: $("f-enabled").checked,
+      node_id: Number($("f-node").value),
+      guest_kind: $("f-guest-kind").value,
+      guest_id: guestId === "" ? null : Number(guestId),
+      backup_policy_id: policy === "" ? null : Number(policy),
+      backup_excluded: $("f-backup-excluded").checked,
+      backup_excluded_reason: $("f-backup-reason").value.trim(),
+      depends_on: [...$("f-depends").querySelectorAll("input:checked")].map((cb) => cb.value),
+    };
+    try {
+      const updated = await sendJson("PUT", svcPath, body);
+      Object.assign(SERVICE, updated);
+      fillServiceForm(SERVICE);
+      setMsg("svc-msg", "Saved to the live registry. Remember to Save to YAML.", "ok");
+    } catch (err) {
+      setMsg("svc-msg", err.message, "error");
+    }
+  });
+
+  $("svc-delete-btn").addEventListener("click", async () => {
+    const n = SERVICE.probes.length;
+    if (!confirm(`Delete ${SERVICE.slug} and its ${n} probe(s)? Backup history is kept.`)) return;
+    try {
+      await sendJson("DELETE", svcPath);
+      location.href = "/";
+    } catch (err) {
+      setMsg("svc-msg", err.message, "error");
+    }
+  });
+
+  // --- probes table -------------------------------------------------------
+  function configSummary(p) {
+    const c = p.config || {};
+    if (p.kind === "http") return `${c.method || "GET"} ${c.url || "?"}`;
+    if (p.kind === "tcp") return `${c.host || "?"}:${c.port ?? "?"}`;
+    if (p.kind === "systemd") {
+      const t = c.transport || {};
+      return `${c.unit || "?"} via ${t.type || "local"}${t.host ? " " + t.host : ""}`;
+    }
+    const text = JSON.stringify(c);
+    return text.length > 60 ? text.slice(0, 57) + "…" : text;
+  }
+
+  function renderProbes() {
+    const body = $("probes-body");
+    body.innerHTML = "";
+    if (!SERVICE.probes.length) {
+      body.innerHTML = '<tr><td colspan="7" class="muted">No probes — this service can never be judged HEALTHY, so it will never be backed up.</td></tr>';
+      return;
+    }
+    for (const p of SERVICE.probes) {
+      const tr = document.createElement("tr");
+      const cells = [String(p.order), p.name, p.kind, p.required ? "yes" : "no", `${p.timeout_s}s`];
+      for (const text of cells) {
+        const td = document.createElement("td");
+        td.textContent = text;
+        tr.appendChild(td);
+      }
+      const cfg = document.createElement("td");
+      const code = document.createElement("code");
+      code.textContent = configSummary(p);
+      cfg.appendChild(code);
+      tr.appendChild(cfg);
+
+      const actions = document.createElement("td");
+      const edit = document.createElement("button");
+      edit.className = "secondary";
+      edit.textContent = "Edit";
+      edit.addEventListener("click", () => openEditor(p));
+      const del = document.createElement("button");
+      del.className = "danger";
+      del.textContent = "Delete";
+      del.addEventListener("click", async () => {
+        if (!confirm(`Delete probe ${p.name}?`)) return;
+        try {
+          await sendJson("DELETE", "/api/registry/probes/" + p.id);
+          await reloadProbes();
+          setMsg("probes-msg", `Deleted ${p.name}.`, "ok");
+        } catch (err) {
+          setMsg("probes-msg", err.message, "error");
+        }
+      });
+      actions.append(edit, " ", del);
+      tr.appendChild(actions);
+      body.appendChild(tr);
+    }
+  }
+
+  async function reloadProbes() {
+    const resp = await fetch(svcPath + "/probes");
+    if (!resp.ok) throw new Error(await apiError(resp));
+    SERVICE.probes = await resp.json();
+    renderProbes();
+  }
+
+  // --- probe editor -------------------------------------------------------
+  // Structured forms for http/tcp/systemd; raw JSON for the other kinds.
+  // A structured form edits ON TOP of the probe's existing config, so keys it
+  // has no field for (e.g. an http probe's `headers`) survive an edit.
+  let editing = null; // the probe being edited, or null when adding
+
+  function kindInfo(kind) {
+    return PROBE_KINDS.find((k) => k.kind === kind) || { summary: "", default_timeout_s: 15 };
+  }
+
+  function showKindSection(kind) {
+    const section = FORM_KINDS.includes(kind) ? kind : "json";
+    for (const el of document.querySelectorAll("#probe-editor [data-kind]")) {
+      el.hidden = el.dataset.kind !== section;
+    }
+    $("p-kind-summary").textContent = kindInfo(kind).summary;
+  }
+
+  function fillKindFields(kind, c) {
+    if (kind === "http") {
+      $("http-url").value = c.url ?? "";
+      $("http-method").value = c.method ?? "GET";
+      $("http-status").value = (c.expect_status ?? [200]).join(", ");
+      $("http-body").value = c.expect_body_contains ?? "";
+      $("http-verify").checked = c.verify_tls ?? true;
+      $("http-host").value = c.host_header ?? "";
+      $("http-sni").value = c.sni_hostname ?? "";
+    } else if (kind === "tcp") {
+      $("tcp-host").value = c.host ?? "";
+      $("tcp-port").value = c.port ?? "";
+    } else if (kind === "systemd") {
+      const t = c.transport || {};
+      $("sd-unit").value = c.unit ?? "";
+      $("sd-transport").value = t.type ?? "host_agent";
+      $("sd-host").value = t.host ?? "";
+      $("sd-user").value = t.user ?? "";
+      $("sd-port").value = t.port ?? "";
+      $("sd-jump").value = t.jump_host ?? "";
+    } else {
+      $("p-config-json").value = JSON.stringify(c, null, 2);
+    }
+  }
+
+  function setOrDelete(obj, key, value) {
+    if (value === "" || value === null || value === undefined) delete obj[key];
+    else obj[key] = value;
+  }
+
+  function collectConfig(kind, base) {
+    if (!FORM_KINDS.includes(kind)) {
+      const raw = $("p-config-json").value.trim();
+      if (!raw) return {};
+      let parsed;
+      try { parsed = JSON.parse(raw); } catch (e) { throw new Error("config is not valid JSON: " + e.message); }
+      if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+        throw new Error("config must be a JSON object");
+      }
+      return parsed;
+    }
+    const c = { ...base };
+    if (kind === "http") {
+      setOrDelete(c, "url", $("http-url").value.trim());
+      c.method = $("http-method").value;
+      const statuses = $("http-status").value.split(",").map((s) => s.trim()).filter(Boolean);
+      if (statuses.some((s) => !/^\d+$/.test(s))) throw new Error("expected status must be comma-separated numbers");
+      c.expect_status = statuses.length ? statuses.map(Number) : [200];
+      setOrDelete(c, "expect_body_contains", $("http-body").value);
+      c.verify_tls = $("http-verify").checked;
+      setOrDelete(c, "host_header", $("http-host").value.trim());
+      setOrDelete(c, "sni_hostname", $("http-sni").value.trim());
+    } else if (kind === "tcp") {
+      setOrDelete(c, "host", $("tcp-host").value.trim());
+      const port = $("tcp-port").value.trim();
+      setOrDelete(c, "port", port === "" ? null : Number(port));
+    } else if (kind === "systemd") {
+      setOrDelete(c, "unit", $("sd-unit").value.trim());
+      const type = $("sd-transport").value;
+      let t = { ...(c.transport || {}), type };
+      if (type === "local") {
+        t = { type: "local" };
+      } else {
+        setOrDelete(t, "host", $("sd-host").value.trim());
+        setOrDelete(t, "user", $("sd-user").value.trim());
+        const port = $("sd-port").value.trim();
+        setOrDelete(t, "port", port === "" ? null : Number(port));
+        setOrDelete(t, "jump_host", $("sd-jump").value.trim());
+      }
+      c.transport = t;
+    }
+    return c;
+  }
+
+  function openEditor(probe) {
+    editing = probe;
+    $("probe-editor-title").textContent = probe ? `Edit probe ${probe.name}` : "New probe";
+    const kind = probe ? probe.kind : "http";
+    $("p-name").value = probe ? probe.name : "";
+    $("p-kind").value = kind;
+    $("p-required").checked = probe ? probe.required : true;
+    $("p-timeout").value = probe ? probe.timeout_s : kindInfo(kind).default_timeout_s;
+    const nextOrder = SERVICE.probes.reduce((m, p) => Math.max(m, p.order), -1) + 1;
+    $("p-order").value = probe ? probe.order : nextOrder;
+    fillKindFields(kind, probe ? probe.config : {});
+    showKindSection(kind);
+    setMsg("probe-editor-msg", "");
+    $("probe-editor").hidden = false;
+    $("p-name").focus();
+  }
+
+  $("p-kind").addEventListener("change", () => {
+    const kind = $("p-kind").value;
+    // Switching kind: start that kind's fields from the original config only
+    // if the probe already was that kind; otherwise from blank.
+    const base = editing && editing.kind === kind ? editing.config : {};
+    fillKindFields(kind, base);
+    if (!editing) $("p-timeout").value = kindInfo(kind).default_timeout_s;
+    showKindSection(kind);
+  });
+
+  $("probe-add-btn").addEventListener("click", () => openEditor(null));
+  $("probe-cancel-btn").addEventListener("click", () => {
+    $("probe-editor").hidden = true;
+    editing = null;
+  });
+
+  $("probe-save-btn").addEventListener("click", async () => {
+    const kind = $("p-kind").value;
+    try {
+      const base = editing && editing.kind === kind ? editing.config : {};
+      const body = {
+        name: $("p-name").value.trim(),
+        kind,
+        required: $("p-required").checked,
+        timeout_s: Number($("p-timeout").value),
+        order: Number($("p-order").value),
+        config: collectConfig(kind, base),
+      };
+      if (editing) {
+        await sendJson("PUT", "/api/registry/probes/" + editing.id, body);
+      } else {
+        await sendJson("POST", svcPath + "/probes", body);
+      }
+      $("probe-editor").hidden = true;
+      editing = null;
+      await reloadProbes();
+      setMsg("probes-msg", "Probe saved. Remember to Save to YAML.", "ok");
+    } catch (err) {
+      setMsg("probe-editor-msg", err.message, "error");
+    }
+  });
+
+  fillServiceForm(SERVICE);
+  renderProbes();
+</script>
+</body>
+</html>

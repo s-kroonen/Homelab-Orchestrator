@@ -1,0 +1,321 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>homelab-orchestrator — proxy hosts</title>
+<style>
+  :root { color-scheme: light dark; }
+  body {
+    margin: 0; min-height: 100vh; padding: 2rem 1rem;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background: #0b0e14; color: #e6e9ef;
+  }
+  .wrap { max-width: 56rem; margin: 0 auto; }
+  header { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 1.5rem; }
+  header h1 { font-size: 1.1rem; margin: 0; }
+  header .who { color: #9aa4b2; font-size: 0.85rem; }
+  header nav { display: flex; gap: 1rem; font-size: 0.85rem; }
+  header nav a { color: #9aa4b2; text-decoration: none; }
+  header nav a:hover, header nav a.current { color: #5b8def; }
+  button, a.btn {
+    padding: 0.4rem 0.9rem; background: #5b8def; color: #0b0e14; border: none;
+    border-radius: 0.4rem; font-weight: 600; cursor: pointer; font-size: 0.85rem;
+    text-decoration: none; display: inline-block;
+  }
+  button.secondary { background: #2a2f3a; color: #e6e9ef; }
+  button.logout { background: transparent; color: #9aa4b2; border: 1px solid #2a2f3a; }
+  button.danger { background: transparent; color: #e5534b; border: 1px solid #2a2f3a; }
+  button.small { padding: 0.2rem 0.6rem; font-size: 0.75rem; }
+  table { width: 100%; border-collapse: collapse; margin-bottom: 1.5rem; }
+  th, td { text-align: left; padding: 0.5rem 0.6rem; border-bottom: 1px solid #1a1e27; font-size: 0.85rem; vertical-align: top; }
+  th { color: #9aa4b2; font-weight: 500; }
+  td.actions { white-space: nowrap; }
+  .badge { padding: 0.1rem 0.5rem; border-radius: 1rem; font-size: 0.75rem; }
+  .badge.unknown { background: #2a2f3a; color: #9aa4b2; }
+  section { margin-bottom: 2rem; }
+  section h2 { font-size: 0.95rem; margin: 0 0 0.75rem; }
+  .dirty-badge { background: #3b2e14; color: #e5a63e; padding: 0.2rem 0.6rem; border-radius: 0.4rem; font-size: 0.8rem; }
+  .banner { background: #3b2e14; color: #e5a63e; padding: 0.75rem 1rem; border-radius: 0.4rem; font-size: 0.85rem; margin-bottom: 1.5rem; line-height: 1.4; }
+  .banner strong { color: #e5a63e; }
+  .row { display: flex; gap: 0.5rem; align-items: center; margin-bottom: 0.75rem; flex-wrap: wrap; }
+  input, select, textarea { padding: 0.4rem; background: #171b24; border: 1px solid #2a2f3a; border-radius: 0.4rem; color: #e6e9ef; font: inherit; font-size: 0.85rem; }
+  textarea { width: 100%; box-sizing: border-box; min-height: 4rem; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+  form.ph-form { display: grid; grid-template-columns: max-content 1fr; gap: 0.5rem 0.75rem; align-items: center; max-width: 40rem; }
+  form.ph-form label { color: #9aa4b2; font-size: 0.85rem; }
+  form.ph-form .full { grid-column: 1 / -1; }
+  .msg { font-size: 0.85rem; color: #9aa4b2; }
+  .msg.ok { color: #3ecf6d; }
+  .msg.error { color: #e5534b; }
+  .muted { color: #9aa4b2; }
+  code { background: #171b24; padding: 0.1rem 0.3rem; border-radius: 0.3rem; }
+  @media (max-width: 40rem) {
+    header { flex-wrap: wrap; gap: 0.5rem; }
+    form.ph-form { grid-template-columns: 1fr; }
+    table { display: block; overflow-x: auto; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>homelab-orchestrator</h1>
+    <nav>
+      <a href="/">Dashboard</a>
+      <a href="/proxy-hosts" class="current">Proxy hosts</a>
+    </nav>
+    <span class="who">
+      {{ admin.username }}
+      <button class="logout" id="logout-btn">Log out</button>
+    </span>
+  </header>
+
+  <div class="banner" role="note">
+    <strong>Reference records only — not synced with Traefik.</strong>
+    These hostname → upstream mappings are maintained by hand. Adding, editing or
+    deleting one here does not change any route on the gateway, and "last seen" is
+    never updated automatically. Live traffic monitoring is planned for a future
+    update once Traefik's API/metrics are configured.
+  </div>
+
+  <section>
+    <h2>
+      Proxy hosts
+      {% if registry_dirty %}<span class="dirty-badge">unsaved changes vs {{ yaml_path }}</span>{% endif %}
+    </h2>
+    <p class="msg">
+      Edits here change the live DB only. Use <strong>Save to YAML</strong> to write them to
+      <code>services.yaml</code>, or <strong>Reset to saved</strong> to discard them. A host with
+      no linked service cannot be written to YAML (proxy hosts are nested under services
+      there), so it stays DB-only.
+    </p>
+    <div class="row">
+      <button id="save-btn">Save to YAML</button>
+      <button class="secondary" id="reset-btn">Reset to saved</button>
+      <span class="msg" id="registry-msg"></span>
+    </div>
+    <table>
+      <thead>
+        <tr><th>Hostname</th><th>Upstream</th><th>Provider</th><th>Service</th><th>Last seen</th><th></th></tr>
+      </thead>
+      <tbody id="ph-rows"><tr><td colspan="6">Loading…</td></tr></tbody>
+    </table>
+  </section>
+
+  <section>
+    <h2 id="form-title">Add a proxy host</h2>
+    <form class="ph-form" id="ph-form" autocomplete="off">
+      <input type="hidden" id="ph-id">
+      <label for="ph-hostname">Hostname</label>
+      <input id="ph-hostname" required placeholder="app.example.com">
+      <label for="ph-upstream">Upstream</label>
+      <input id="ph-upstream" placeholder="http://10.0.0.12:8080">
+      <label for="ph-provider">Provider</label>
+      <select id="ph-provider">
+        {% for p in providers %}<option value="{{ p }}">{{ p }}</option>{% endfor %}
+      </select>
+      <label for="ph-service">Linked service</label>
+      <select id="ph-service" required>
+        <option value="" disabled selected>— select a service —</option>
+        {% for s in services %}<option value="{{ s.id }}">{{ s.name }} ({{ s.slug }})</option>{% endfor %}
+      </select>
+      <label class="full" for="ph-extra">Extra (JSON object, optional)</label>
+      <textarea class="full" id="ph-extra" placeholder='{"middlewares": ["auth"]}'></textarea>
+      <div class="row full">
+        <button type="submit" id="submit-btn">Add</button>
+        <button type="button" class="secondary" id="cancel-btn" hidden>Cancel edit</button>
+        <span class="msg" id="form-msg"></span>
+      </div>
+    </form>
+  </section>
+</div>
+
+<script>
+  function setMsg(id, text, kind) {
+    const el = document.getElementById(id);
+    el.textContent = text;
+    el.className = "msg" + (kind ? " " + kind : "");
+  }
+
+  async function errorText(resp) {
+    try {
+      const data = await resp.json();
+      if (typeof data.detail === "string") return data.detail;
+      if (Array.isArray(data.detail)) return data.detail.map((d) => d.msg).join("; ");
+    } catch (_) { /* not JSON */ }
+    return `request failed (${resp.status})`;
+  }
+
+  document.getElementById("logout-btn").addEventListener("click", async () => {
+    await fetch("/api/auth/logout", { method: "POST" });
+    location.href = "/login";
+  });
+
+  document.getElementById("save-btn").addEventListener("click", async () => {
+    const r = await fetch("/api/registry/save", { method: "POST" });
+    setMsg("registry-msg", r.ok ? "Saved." : "Save failed.", r.ok ? "ok" : "error");
+    if (r.ok) setTimeout(() => location.reload(), 600);
+  });
+  document.getElementById("reset-btn").addEventListener("click", async () => {
+    const r = await fetch("/api/registry/reset", { method: "POST" });
+    setMsg("registry-msg", r.ok ? "Reset." : "Reset failed.", r.ok ? "ok" : "error");
+    if (r.ok) setTimeout(() => location.reload(), 600);
+  });
+
+  let hosts = [];
+
+  function cell(text, cls) {
+    const td = document.createElement("td");
+    if (cls) td.className = cls;
+    td.textContent = text;
+    return td;
+  }
+
+  async function loadHosts() {
+    const resp = await fetch("/api/proxy-hosts");
+    const body = document.getElementById("ph-rows");
+    if (!resp.ok) {
+      body.innerHTML = "";
+      const tr = document.createElement("tr");
+      const td = cell(await errorText(resp));
+      td.colSpan = 6;
+      tr.appendChild(td);
+      body.appendChild(tr);
+      return;
+    }
+    hosts = await resp.json();
+    body.innerHTML = "";
+    if (!hosts.length) {
+      const tr = document.createElement("tr");
+      const td = cell("No proxy hosts recorded.");
+      td.colSpan = 6;
+      tr.appendChild(td);
+      body.appendChild(tr);
+      return;
+    }
+    for (const h of hosts) {
+      const tr = document.createElement("tr");
+      const hostTd = document.createElement("td");
+      const code = document.createElement("code");
+      code.textContent = h.hostname;
+      hostTd.appendChild(code);
+      tr.appendChild(hostTd);
+      tr.appendChild(cell(h.upstream || "—"));
+      tr.appendChild(cell(h.router_provider));
+
+      const svcTd = document.createElement("td");
+      if (h.service_slug) {
+        svcTd.textContent = `${h.service_name} (${h.service_slug})`;
+      } else {
+        const b = document.createElement("span");
+        b.className = "badge unknown";
+        b.textContent = "unlinked — DB-only";
+        svcTd.appendChild(b);
+      }
+      tr.appendChild(svcTd);
+      tr.appendChild(cell(h.last_seen_at || "never", h.last_seen_at ? "" : "muted"));
+
+      const actions = document.createElement("td");
+      actions.className = "actions";
+      const edit = document.createElement("button");
+      edit.className = "secondary small";
+      edit.textContent = "Edit";
+      edit.addEventListener("click", () => startEdit(h));
+      const del = document.createElement("button");
+      del.className = "danger small";
+      del.textContent = "Delete";
+      del.addEventListener("click", () => removeHost(h));
+      actions.append(edit, " ", del);
+      tr.appendChild(actions);
+      body.appendChild(tr);
+    }
+  }
+
+  function resetForm() {
+    document.getElementById("ph-form").reset();
+    document.getElementById("ph-id").value = "";
+    document.getElementById("form-title").textContent = "Add a proxy host";
+    document.getElementById("submit-btn").textContent = "Add";
+    document.getElementById("cancel-btn").hidden = true;
+  }
+
+  function startEdit(h) {
+    document.getElementById("ph-id").value = h.id;
+    document.getElementById("ph-hostname").value = h.hostname;
+    document.getElementById("ph-upstream").value = h.upstream;
+    document.getElementById("ph-provider").value = h.router_provider;
+    document.getElementById("ph-service").value = h.service_id ?? "";
+    document.getElementById("ph-extra").value =
+      h.extra && Object.keys(h.extra).length ? JSON.stringify(h.extra, null, 2) : "";
+    document.getElementById("form-title").textContent = `Edit ${h.hostname}`;
+    document.getElementById("submit-btn").textContent = "Save changes";
+    document.getElementById("cancel-btn").hidden = false;
+    setMsg("form-msg", "");
+    document.getElementById("ph-hostname").focus();
+  }
+
+  async function removeHost(h) {
+    if (!confirm(`Delete the proxy host record for ${h.hostname}? (This does not touch Traefik.)`)) return;
+    const resp = await fetch(`/api/proxy-hosts/${h.id}`, { method: "DELETE" });
+    if (resp.ok) {
+      setMsg("registry-msg", `Deleted ${h.hostname}. Save to YAML to persist.`, "ok");
+      if (document.getElementById("ph-id").value === String(h.id)) resetForm();
+      await loadHosts();
+    } else {
+      setMsg("registry-msg", await errorText(resp), "error");
+    }
+  }
+
+  document.getElementById("cancel-btn").addEventListener("click", () => {
+    resetForm();
+    setMsg("form-msg", "");
+  });
+
+  document.getElementById("ph-form").addEventListener("submit", async (ev) => {
+    ev.preventDefault();
+    const extraRaw = document.getElementById("ph-extra").value.trim();
+    let extra = {};
+    if (extraRaw) {
+      try {
+        extra = JSON.parse(extraRaw);
+      } catch (err) {
+        setMsg("form-msg", `Extra is not valid JSON: ${err.message}`, "error");
+        return;
+      }
+      if (extra === null || typeof extra !== "object" || Array.isArray(extra)) {
+        setMsg("form-msg", "Extra must be a JSON object, e.g. {\"key\": \"value\"}.", "error");
+        return;
+      }
+    }
+    const serviceVal = document.getElementById("ph-service").value;
+    if (!serviceVal) {
+      setMsg("form-msg", "Select a service — every proxy host must be linked to one.", "error");
+      return;
+    }
+    const payload = {
+      hostname: document.getElementById("ph-hostname").value.trim(),
+      upstream: document.getElementById("ph-upstream").value.trim(),
+      router_provider: document.getElementById("ph-provider").value,
+      service_id: Number(serviceVal),
+      extra,
+    };
+    const id = document.getElementById("ph-id").value;
+    const resp = await fetch(id ? `/api/proxy-hosts/${id}` : "/api/proxy-hosts", {
+      method: id ? "PUT" : "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    if (!resp.ok) {
+      setMsg("form-msg", await errorText(resp), "error");
+      return;
+    }
+    const saved = await resp.json();
+    setMsg("form-msg", `${id ? "Updated" : "Added"} ${saved.hostname}. Save to YAML to persist.`, "ok");
+    resetForm();
+    await loadHosts();
+  });
+
+  loadHosts();
+</script>
+</body>
+</html>
