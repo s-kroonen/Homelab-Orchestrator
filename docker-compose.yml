@@ -1,7 +1,8 @@
 services:
   orchestrator:
     # Default: pull a pinned tag from GHCR (what the Pi does).
-    # `:main` is what publish.yml actually tags on every push to main; `:latest`
+    # `:main` is what publish.yml actually tags on every push to main; `:dev`
+    # tracks the dev branch the same way for pre-main testing; `:latest`
     # is ONLY tagged when a `vX.Y.Z` release tag is pushed, so it does not exist
     # until the first release and defaulting to it 404s as "manifest unknown".
     # Pin a specific `:sha-<short>` or `:vX.Y.Z` tag for anything beyond casual use.

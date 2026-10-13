@@ -4,6 +4,7 @@ name: publish
 #
 # When it runs:
 #   * push to main         -> tags: main, sha-<short>, edge
+#   * push to dev          -> tags: dev, sha-<short>
 #   * push of a semver tag -> tags: <full>, <major>.<minor>, <major>, latest
 #                              (e.g. v1.2.3 -> 1.2.3, 1.2, 1, latest)
 #   * manual dispatch      -> tag: manual-<sha>
@@ -17,12 +18,12 @@ name: publish
 #
 # Pulling on the Pi:
 #     docker login ghcr.io -u <you> -p <PAT with read:packages>   # only for PRIVATE repos
-#     export ORCHESTRATOR_IMAGE=ghcr.io/s-kroonen/homelab-orchestrator:main   # or a vX.Y.Z tag once one exists
+#     export ORCHESTRATOR_IMAGE=ghcr.io/s-kroonen/homelab-orchestrator:main   # or :dev, or a vX.Y.Z tag once one exists
 #     docker compose pull && docker compose up -d
 
 on:
   push:
-    branches: [main]
+    branches: [main, dev]
     tags: ["v*.*.*"]
   workflow_dispatch:
 
