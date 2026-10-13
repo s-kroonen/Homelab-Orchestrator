@@ -36,6 +36,7 @@ from orchestrator.web.routers import (
     health,
     infra,
     maintenance,
+    proxy_hosts,
     ui,
     wake,
 )
@@ -180,6 +181,7 @@ def create_app() -> FastAPI:
     app.include_router(infra.router)
     app.include_router(backup.router)
     app.include_router(backup_policies.router)
+    app.include_router(proxy_hosts.router)
     return app
 
 
