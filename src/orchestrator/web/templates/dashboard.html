@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>homelab-orchestrator — dashboard</title>
+<style>
+  :root { color-scheme: light dark; }
+  body {
+    margin: 0; min-height: 100vh; padding: 2rem 1rem;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background: #0b0e14; color: #e6e9ef;
+  }
+  .wrap { max-width: 56rem; margin: 0 auto; }
+  header { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 1.5rem; }
+  header h1 { font-size: 1.1rem; margin: 0; }
+  header .who { color: #9aa4b2; font-size: 0.85rem; }
+  button, a.btn {
+    padding: 0.4rem 0.9rem; background: #5b8def; color: #0b0e14; border: none;
+    border-radius: 0.4rem; font-weight: 600; cursor: pointer; font-size: 0.85rem;
+    text-decoration: none; display: inline-block;
+  }
+  button.secondary { background: #2a2f3a; color: #e6e9ef; }
+  button.logout { background: transparent; color: #9aa4b2; border: 1px solid #2a2f3a; }
+  table { width: 100%; border-collapse: collapse; margin-bottom: 1.5rem; }
+  th, td { text-align: left; padding: 0.5rem 0.6rem; border-bottom: 1px solid #1a1e27; font-size: 0.85rem; }
+  th { color: #9aa4b2; font-weight: 500; }
+  .badge { padding: 0.1rem 0.5rem; border-radius: 1rem; font-size: 0.75rem; }
+  .badge.healthy { background: #113b23; color: #3ecf6d; }
+  .badge.failed { background: #3b1414; color: #e5534b; }
+  .badge.unknown { background: #2a2f3a; color: #9aa4b2; }
+  .badge.disabled { background: #2a2f3a; color: #6b7280; }
+  section { margin-bottom: 2rem; }
+  section h2 { font-size: 0.95rem; margin: 0 0 0.75rem; }
+  .dirty-badge { background: #3b2e14; color: #e5a63e; padding: 0.2rem 0.6rem; border-radius: 0.4rem; font-size: 0.8rem; }
+  .row { display: flex; gap: 0.5rem; align-items: center; margin-bottom: 0.75rem; flex-wrap: wrap; }
+  input { padding: 0.4rem; background: #171b24; border: 1px solid #2a2f3a; border-radius: 0.4rem; color: #e6e9ef; }
+  .msg { font-size: 0.85rem; color: #9aa4b2; }
+  .msg.ok { color: #3ecf6d; }
+  .msg.error { color: #e5534b; }
+  ul.invites, ul.devices { list-style: none; padding: 0; font-size: 0.85rem; }
+  ul.invites li, ul.devices li { padding: 0.3rem 0; border-bottom: 1px solid #1a1e27; color: #9aa4b2; }
+  code { background: #171b24; padding: 0.1rem 0.3rem; border-radius: 0.3rem; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>homelab-orchestrator</h1>
+    <span class="who">
+      {{ admin.username }}
+      <button class="logout" id="logout-btn">Log out</button>
+    </span>
+  </header>
+
+  <section>
+    <h2>
+      Services
+      {% if registry_dirty %}<span class="dirty-badge">unsaved changes vs {{ yaml_path }}</span>{% endif %}
+    </h2>
+    <div class="row">
+      <button id="save-btn">Save to YAML</button>
+      <button class="secondary" id="reset-btn">Reset to saved</button>
+      <span class="msg" id="registry-msg"></span>
+    </div>
+    <table>
+      <thead>
+        <tr><th>Service</th><th>Node</th><th>Health</th><th>Last backup</th></tr>
+      </thead>
+      <tbody>
+        {% for svc in services %}
+        <tr>
+          <td>{{ svc.name }} <code>{{ svc.slug }}</code></td>
+          <td>{{ svc.node }}</td>
+          <td>
+            {% if not svc.enabled %}<span class="badge disabled">disabled</span>
+            {% elif svc.verdict == "healthy" %}<span class="badge healthy">healthy</span>
+            {% elif svc.verdict == "failed" %}<span class="badge failed">failed</span>
+            {% else %}<span class="badge unknown">unknown</span>{% endif %}
+          </td>
+          <td>
+            {% if svc.last_backup_at %}
+              {{ svc.last_backup_at }}{% if svc.last_backup_verified %} ✓{% endif %}
+            {% else %}—{% endif %}
+          </td>
+        </tr>
+        {% else %}
+        <tr><td colspan="4">No services registered.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </section>
+
+  <section>
+    <h2>My devices</h2>
+    <ul class="devices" id="devices-list"><li>Loading…</li></ul>
+    <div class="row">
+      <input id="device-label" placeholder="device name (optional)">
+      <button id="add-device-btn">Add this device</button>
+      <span class="msg" id="device-msg"></span>
+    </div>
+  </section>
+
+  <section>
+    <h2>Invite another admin</h2>
+    <div class="row">
+      <input id="invite-label" placeholder="label (optional, e.g. a name)">
+      <button id="invite-btn">Create invite link</button>
+    </div>
+    <p class="msg" id="invite-msg"></p>
+    <ul class="invites" id="invites-list"></ul>
+  </section>
+</div>
+
+<script src="/static/webauthn.js"></script>
+<script>
+  function setMsg(id, text, kind) {
+    const el = document.getElementById(id);
+    el.textContent = text;
+    el.className = "msg" + (kind ? " " + kind : "");
+  }
+
+  document.getElementById("logout-btn").addEventListener("click", async () => {
+    await fetch("/api/auth/logout", { method: "POST" });
+    location.href = "/login";
+  });
+
+  document.getElementById("save-btn").addEventListener("click", async () => {
+    const r = await fetch("/api/registry/save", { method: "POST" });
+    setMsg("registry-msg", r.ok ? "Saved." : "Save failed.", r.ok ? "ok" : "error");
+    if (r.ok) setTimeout(() => location.reload(), 600);
+  });
+  document.getElementById("reset-btn").addEventListener("click", async () => {
+    const r = await fetch("/api/registry/reset", { method: "POST" });
+    setMsg("registry-msg", r.ok ? "Reset." : "Reset failed.", r.ok ? "ok" : "error");
+    if (r.ok) setTimeout(() => location.reload(), 600);
+  });
+
+  async function loadDevices() {
+    const resp = await fetch("/api/auth/credentials");
+    const creds = await resp.json();
+    const list = document.getElementById("devices-list");
+    list.innerHTML = creds.length ? "" : "<li>No devices yet.</li>";
+    for (const c of creds) {
+      const li = document.createElement("li");
+      li.textContent = `${c.label} — added ${c.created_at}` + (c.last_used_at ? `, last used ${c.last_used_at}` : "");
+      list.appendChild(li);
+    }
+  }
+  document.getElementById("add-device-btn").addEventListener("click", async () => {
+    try {
+      await addDevicePasskey(document.getElementById("device-label").value.trim());
+      setMsg("device-msg", "Device added.", "ok");
+      await loadDevices();
+    } catch (err) {
+      setMsg("device-msg", err.message, "error");
+    }
+  });
+
+  async function loadInvites() {
+    const resp = await fetch("/api/auth/invites");
+    const invites = await resp.json();
+    const list = document.getElementById("invites-list");
+    list.innerHTML = invites.length ? "" : "<li>No invites yet.</li>";
+    for (const inv of invites) {
+      const li = document.createElement("li");
+      li.textContent = `${inv.label || "(no label)"} — ${inv.status}, requested by ${inv.requested_by} on ${inv.requested_at}`;
+      list.appendChild(li);
+    }
+  }
+  document.getElementById("invite-btn").addEventListener("click", async () => {
+    const label = document.getElementById("invite-label").value.trim();
+    try {
+      const resp = await fetch("/api/auth/invites", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ label }),
+      });
+      const data = await resp.json();
+      setMsg("invite-msg", `Link (valid once, expires ${data.expires_at}): ${data.url}`, "ok");
+      await loadInvites();
+    } catch (err) {
+      setMsg("invite-msg", err.message, "error");
+    }
+  });
+
+  loadDevices();
+  loadInvites();
+</script>
+</body>
+</html>

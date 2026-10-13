@@ -105,6 +105,10 @@ ENV_SECTIONS: tuple[EnvSection, ...] = (
                 'python -c "import secrets;print(secrets.token_urlsafe(64))"',
                 secret=True,
             ),
+            EnvKey(
+                "INVITE_TTL_HOURS",
+                "How long an admin-invite link (dashboard > Invite another admin) stays valid.",
+            ),
         ),
     ),
     EnvSection(
