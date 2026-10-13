@@ -45,7 +45,7 @@ async def dashboard_page(
 
     rows: list[dict[str, Any]] = []
     for svc in services:
-        state = states.get(svc.id)
+        state = states.get(svc.id) if svc.id is not None else None
         last_backup = None
         if state is not None and state.last_backup_id is not None:
             last_backup = session.get(BackupRecord, state.last_backup_id)

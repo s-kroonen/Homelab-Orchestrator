@@ -155,6 +155,7 @@ async def login_complete(
     audit.record(session, actor=admin.username, action="auth.login", target=f"admin:{admin.id}")
     session.commit()
 
+    assert admin.id is not None  # loaded from the DB by a non-null FK
     auth_lib.login_admin(request, admin.id)
     return {"status": "ok", "username": admin.username}
 
@@ -218,6 +219,7 @@ async def register_complete(
     admin = Admin(username=body.username, display_name=body.username)
     session.add(admin)
     session.flush()
+    assert admin.id is not None  # populated by the flush above
 
     transports = body.credential.get("response", {}).get("transports") or []
     cred = WebAuthnCredential(
@@ -316,6 +318,7 @@ async def add_credential_complete(
     except Exception as exc:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, f"verification failed: {exc}") from exc
 
+    assert admin.id is not None  # loaded from the DB by require_admin
     transports = body.credential.get("response", {}).get("transports") or []
     cred = WebAuthnCredential(
         admin_id=admin.id,

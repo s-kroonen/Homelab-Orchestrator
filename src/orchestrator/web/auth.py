@@ -22,12 +22,14 @@ from typing import Annotated, Any
 import webauthn
 from fastapi import Depends, HTTPException, Request, status
 from sqlmodel import Session, select
+from webauthn.authentication.verify_authentication_response import VerifiedAuthentication
 from webauthn.helpers.structs import (
     AuthenticatorSelectionCriteria,
     PublicKeyCredentialDescriptor,
     ResidentKeyRequirement,
     UserVerificationRequirement,
 )
+from webauthn.registration.verify_registration_response import VerifiedRegistration
 
 from orchestrator.config import Settings
 from orchestrator.db.models import Admin, WebAuthnCredential
@@ -124,7 +126,7 @@ def build_registration_options(
 
 def verify_registration(
     settings: Settings, *, credential: dict[str, Any], expected_challenge: bytes
-) -> webauthn.registration.verify_registration_response.VerifiedRegistration:
+) -> VerifiedRegistration:
     return webauthn.verify_registration_response(
         credential=credential,
         expected_challenge=expected_challenge,
@@ -152,7 +154,7 @@ def verify_authentication(
     credential: dict[str, Any],
     expected_challenge: bytes,
     stored_credential: WebAuthnCredential,
-) -> webauthn.authentication.verify_authentication_response.VerifiedAuthentication:
+) -> VerifiedAuthentication:
     return webauthn.verify_authentication_response(
         credential=credential,
         expected_challenge=expected_challenge,

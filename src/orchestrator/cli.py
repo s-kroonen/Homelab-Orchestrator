@@ -97,11 +97,18 @@ def admin_reset(yes: bool) -> None:
             click.echo("Aborted.")
             return
 
+        # Delete + flush credentials before admins: without an ORM-level
+        # relationship() between the two, SQLAlchemy doesn't know they're
+        # linked and may order the DELETEs so the DB's own ON DELETE CASCADE
+        # removes a credential row first, then warns when its own DELETE
+        # for that row matches nothing.
         for a in admins:
             for cred in session.exec(
                 select(WebAuthnCredential).where(WebAuthnCredential.admin_id == a.id)
             ).all():
                 session.delete(cred)
+        session.flush()
+        for a in admins:
             session.delete(a)
         session.commit()
         click.secho("Done. The dashboard will accept a fresh first-admin registration.", fg="green")
