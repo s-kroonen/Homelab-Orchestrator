@@ -99,7 +99,6 @@ def test_create_list_get_update_delete(client: TestClient, service: Service) -> 
     body = created.json()
     assert body["hostname"] == "thing.example.com"  # normalised
     assert body["service_slug"] == "thing"
-    assert body["saved_to_yaml"] is True
     assert body["extra"] == {"middlewares": ["auth"]}
     ph_id = body["id"]
 
@@ -115,15 +114,14 @@ def test_create_list_get_update_delete(client: TestClient, service: Service) -> 
             "hostname": "thing.example.com",
             "upstream": "http://10.0.0.6:8080",
             "router_provider": "pangolin",
-            "service_id": None,
+            "service_id": service.id,
             "extra": {},
         },
     )
     assert updated.status_code == 200, updated.text
     assert updated.json()["upstream"] == "http://10.0.0.6:8080"
     assert updated.json()["router_provider"] == "pangolin"
-    assert updated.json()["service_id"] is None
-    assert updated.json()["saved_to_yaml"] is False
+    assert updated.json()["service_id"] == service.id
 
     deleted = client.delete(f"/api/proxy-hosts/{ph_id}")
     assert deleted.status_code == 200, deleted.text
@@ -137,11 +135,13 @@ def test_create_list_get_update_delete(client: TestClient, service: Service) -> 
     ]
 
 
-def test_update_audit_records_only_changed_fields(client: TestClient) -> None:
-    ph_id = client.post("/api/proxy-hosts", json={"hostname": "a.example.com"}).json()["id"]
+def test_update_audit_records_only_changed_fields(client: TestClient, service: Service) -> None:
+    ph_id = client.post(
+        "/api/proxy-hosts", json={"hostname": "a.example.com", "service_id": service.id}
+    ).json()["id"]
     client.put(
         f"/api/proxy-hosts/{ph_id}",
-        json={"hostname": "a.example.com", "upstream": "http://x:1"},
+        json={"hostname": "a.example.com", "upstream": "http://x:1", "service_id": service.id},
     )
     with Session(get_engine()) as s:
         entry = s.exec(select(AuditEntry).where(AuditEntry.action == "proxy_host.updated")).one()
@@ -179,17 +179,24 @@ def test_unknown_service_id_is_rejected(client: TestClient) -> None:
         assert s.exec(select(ProxyHost)).all() == []
 
 
-def test_unknown_service_id_is_rejected_on_update(client: TestClient) -> None:
-    ph_id = client.post("/api/proxy-hosts", json={"hostname": "x.example.com"}).json()["id"]
+def test_unknown_service_id_is_rejected_on_update(client: TestClient, service: Service) -> None:
+    ph_id = client.post(
+        "/api/proxy-hosts", json={"hostname": "x.example.com", "service_id": service.id}
+    ).json()["id"]
     r = client.put(
         f"/api/proxy-hosts/{ph_id}", json={"hostname": "x.example.com", "service_id": 9999}
     )
     assert r.status_code == 422
 
 
-def test_invalid_router_provider_is_rejected(client: TestClient) -> None:
+def test_invalid_router_provider_is_rejected(client: TestClient, service: Service) -> None:
     r = client.post(
-        "/api/proxy-hosts", json={"hostname": "x.example.com", "router_provider": "haproxy"}
+        "/api/proxy-hosts",
+        json={
+            "hostname": "x.example.com",
+            "service_id": service.id,
+            "router_provider": "haproxy",
+        },
     )
     assert r.status_code == 422
 
@@ -198,25 +205,41 @@ def test_invalid_router_provider_is_rejected(client: TestClient) -> None:
     "hostname",
     ["", "   ", "https://x.example.com", "x.example.com:8443", "x.example.com/path", "-bad.com"],
 )
-def test_malformed_hostname_is_rejected(client: TestClient, hostname: str) -> None:
-    r = client.post("/api/proxy-hosts", json={"hostname": hostname})
+def test_malformed_hostname_is_rejected(
+    client: TestClient, service: Service, hostname: str
+) -> None:
+    r = client.post("/api/proxy-hosts", json={"hostname": hostname, "service_id": service.id})
     assert r.status_code == 422, hostname
 
 
-def test_wildcard_hostname_is_accepted(client: TestClient) -> None:
-    r = client.post("/api/proxy-hosts", json={"hostname": "*.apps.example.com"})
+def test_wildcard_hostname_is_accepted(client: TestClient, service: Service) -> None:
+    r = client.post(
+        "/api/proxy-hosts", json={"hostname": "*.apps.example.com", "service_id": service.id}
+    )
     assert r.status_code == 201, r.text
 
 
-def test_duplicate_hostname_conflicts(client: TestClient) -> None:
-    assert client.post("/api/proxy-hosts", json={"hostname": "x.example.com"}).status_code == 201
-    r = client.post("/api/proxy-hosts", json={"hostname": "X.example.com"})
+def test_duplicate_hostname_conflicts(client: TestClient, service: Service) -> None:
+    assert (
+        client.post(
+            "/api/proxy-hosts", json={"hostname": "x.example.com", "service_id": service.id}
+        ).status_code
+        == 201
+    )
+    r = client.post(
+        "/api/proxy-hosts", json={"hostname": "X.example.com", "service_id": service.id}
+    )
     assert r.status_code == 409
 
 
-def test_missing_record_404s(client: TestClient) -> None:
+def test_missing_record_404s(client: TestClient, service: Service) -> None:
     assert client.get("/api/proxy-hosts/123").status_code == 404
-    assert client.put("/api/proxy-hosts/123", json={"hostname": "x.com"}).status_code == 404
+    assert (
+        client.put(
+            "/api/proxy-hosts/123", json={"hostname": "x.com", "service_id": service.id}
+        ).status_code
+        == 404
+    )
     assert client.delete("/api/proxy-hosts/123").status_code == 404
 
 
@@ -239,7 +262,7 @@ def test_router_401s_without_a_session(app: Any, method: str, path: str) -> None
     with TestClient(app) as anon:
         kwargs: dict[str, Any] = {}
         if method in ("post", "put"):
-            kwargs["json"] = {"hostname": "x.example.com"}
+            kwargs["json"] = {"hostname": "x.example.com", "service_id": 1}
         r = getattr(anon, method)(path, **kwargs)
     assert r.status_code == 401
 

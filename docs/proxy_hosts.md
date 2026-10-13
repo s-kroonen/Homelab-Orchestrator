@@ -33,17 +33,26 @@ behave like any other dashboard registry edit: the "unsaved changes" badge
 appears until you Save or Reset. Every web mutation is audited
 (`proxy_host.created` / `updated` / `deleted`, target `proxy_host:<hostname>`).
 
-**Unlinked hosts are DB-only.** Because the YAML nests proxy hosts under a
-service, a host with no linked service has nowhere to be written: Save to
-YAML skips it, and Reset doesn't remove it either. The page and API flag these
-(`saved_to_yaml: false`, "unlinked — DB-only" badge). Link a service if you
-want the record in `services.yaml`. The same applies to a host whose service
-was deleted — `service_id` becomes `NULL` (`ON DELETE SET NULL`).
+**Every proxy host must link to a service.** The YAML nests proxy hosts under
+a service, so an unlinked host would have nowhere to be written — Save to
+YAML would silently skip it. The create/update API and the dashboard form
+both require `service_id`, matching `orchestrator-cli proxy add <slug>`,
+which always takes one too.
+
+One residual case this doesn't close: deleting the linked *service* sets
+`service_id` to `NULL` at the DB level (`ON DELETE SET NULL`, the same FK
+policy `docs/architecture.md`'s cascade table documents for this column) —
+there was never a safe alternative, since the service genuinely no longer
+exists. Such an orphaned row goes back to being DB-only (Save skips it)
+until you either delete it or edit it to link a different service. The
+dashboard page doesn't currently call this case out specially; if you hit
+it, the row will look like any other and simply vanish from the next YAML
+save unless re-linked.
 
 Validation: hostname is required and must be a bare DNS name (optionally
 `*.`-wildcarded; no scheme, port or path), lower-cased on save and unique
-across all proxy hosts; `service_id`, if given, must exist; `router_provider`
-must be one of the enum values above.
+across all proxy hosts; `service_id` is required and must reference a real
+service; `router_provider` must be one of the enum values above.
 
 ## What making them live would take (not designed yet)
 

@@ -9,10 +9,10 @@ there is no live sync, discovery or traffic monitoring yet (see
 ``proxy_host`` is YAML-owned (``docs/architecture.md``), but this router only
 touches the DB, the same way every other dashboard edit does: the existing
 ``POST /api/registry/save`` / ``/api/registry/reset`` endpoints round-trip
-the live DB to ``services.yaml``. One caveat follows from the YAML schema,
-which nests proxy hosts under their service: a host with no ``service_id``
-has nowhere to go in the YAML, so it lives in the DB only. Responses carry
-``saved_to_yaml`` so the UI can say so instead of silently dropping it.
+the live DB to ``services.yaml``. The YAML schema nests proxy hosts under
+their service, so ``service_id`` is required here too — matching
+``orchestrator-cli proxy add <slug>``, which always takes one. Without this,
+a proxy host with no service would silently never reach the saved YAML.
 """
 
 from __future__ import annotations
@@ -59,7 +59,7 @@ class ProxyHostIn(BaseModel):
     hostname: str
     upstream: str = ""
     router_provider: RouterProvider = RouterProvider.TRAEFIK
-    service_id: int | None = None
+    service_id: int
     extra: dict[str, Any] = Field(default_factory=dict)
 
     @field_validator("hostname")
@@ -73,8 +73,8 @@ class ProxyHostIn(BaseModel):
         return v.strip()
 
 
-def _serialize(ph: ProxyHost, services: dict[int | None, Service]) -> dict[str, Any]:
-    svc = services.get(ph.service_id) if ph.service_id is not None else None
+def _serialize(ph: ProxyHost, services: dict[int, Service]) -> dict[str, Any]:
+    svc = services.get(ph.service_id)
     return {
         "id": ph.id,
         "hostname": ph.hostname,
@@ -85,13 +85,11 @@ def _serialize(ph: ProxyHost, services: dict[int | None, Service]) -> dict[str, 
         "service_name": svc.name if svc else None,
         "extra": ph.extra or {},
         "last_seen_at": ph.last_seen_at.isoformat() if ph.last_seen_at else None,
-        # Save-to-YAML only writes proxy hosts nested under a service.
-        "saved_to_yaml": svc is not None,
     }
 
 
-def _services_by_id(session: Session) -> dict[int | None, Service]:
-    return {s.id: s for s in session.exec(select(Service)).all()}
+def _services_by_id(session: Session) -> dict[int, Service]:
+    return {s.id: s for s in session.exec(select(Service)).all() if s.id is not None}
 
 
 def _get_or_404(session: Session, proxy_host_id: int) -> ProxyHost:
@@ -103,15 +101,13 @@ def _get_or_404(session: Session, proxy_host_id: int) -> ProxyHost:
 
 def _validate_refs(
     session: Session, body: ProxyHostIn, *, exclude_id: int | None = None
-) -> Service | None:
-    svc: Service | None = None
-    if body.service_id is not None:
-        svc = session.get(Service, body.service_id)
-        if svc is None:
-            raise HTTPException(
-                422,  # literal: the Starlette constant's name differs across versions
-                f"service_id {body.service_id} does not reference a registered service",
-            )
+) -> Service:
+    svc = session.get(Service, body.service_id)
+    if svc is None:
+        raise HTTPException(
+            422,  # literal: the Starlette constant's name differs across versions
+            f"service_id {body.service_id} does not reference a registered service",
+        )
     clash = session.exec(select(ProxyHost).where(ProxyHost.hostname == body.hostname)).first()
     if clash is not None and clash.id != exclude_id:
         raise HTTPException(
@@ -155,7 +151,7 @@ async def create_proxy_host(
             "id": ph.id,
             "upstream": ph.upstream,
             "router_provider": ph.router_provider.value,
-            "service": svc.slug if svc else None,
+            "service": svc.slug,
         },
     )
     session.commit()
@@ -197,7 +193,7 @@ async def update_proxy_host(
         actor=admin.username,
         action="proxy_host.updated",
         target=f"proxy_host:{ph.hostname}",
-        details={"id": ph.id, "service": svc.slug if svc else None, "changes": changes},
+        details={"id": ph.id, "service": svc.slug, "changes": changes},
     )
     session.commit()
     session.refresh(ph)

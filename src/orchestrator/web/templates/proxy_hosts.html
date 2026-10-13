@@ -115,8 +115,8 @@
         {% for p in providers %}<option value="{{ p }}">{{ p }}</option>{% endfor %}
       </select>
       <label for="ph-service">Linked service</label>
-      <select id="ph-service">
-        <option value="">(none — DB-only, not saved to YAML)</option>
+      <select id="ph-service" required>
+        <option value="" disabled selected>— select a service —</option>
         {% for s in services %}<option value="{{ s.id }}">{{ s.name }} ({{ s.slug }})</option>{% endfor %}
       </select>
       <label class="full" for="ph-extra">Extra (JSON object, optional)</label>
@@ -288,11 +288,15 @@
       }
     }
     const serviceVal = document.getElementById("ph-service").value;
+    if (!serviceVal) {
+      setMsg("form-msg", "Select a service — every proxy host must be linked to one.", "error");
+      return;
+    }
     const payload = {
       hostname: document.getElementById("ph-hostname").value.trim(),
       upstream: document.getElementById("ph-upstream").value.trim(),
       router_provider: document.getElementById("ph-provider").value,
-      service_id: serviceVal ? Number(serviceVal) : null,
+      service_id: Number(serviceVal),
       extra,
     };
     const id = document.getElementById("ph-id").value;
