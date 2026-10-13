@@ -65,6 +65,14 @@ class Settings(BaseSettings):
     # another admin's passkey) stays valid before it must be re-issued.
     invite_ttl_hours: int = 24
 
+    # Directory holding .env and config/ that the dashboard's /setup page may
+    # write — the web equivalent of `orchestrator-cli init --dir`. None (the
+    # default) disables /setup entirely: the orchestrator container normally
+    # receives .env as environment variables and has no writable copy of it.
+    # Set it via compose `environment:`, NOT in .env — a non-empty .env already
+    # counts as "configured" and closes the page (same rule as `init`).
+    setup_project_dir: Path | None = None
+
     # ---- Persistence ------------------------------------------------------
     database_url: str = "sqlite:///./data/orchestrator.db"
     state_dir: Path = Path("./data")
@@ -180,7 +188,7 @@ class Settings(BaseSettings):
     ntfy_token: SecretStr = SecretStr("")
 
     # ---- Derived helpers --------------------------------------------------
-    @field_validator("state_dir", "services_yaml_path", mode="before")
+    @field_validator("state_dir", "services_yaml_path", "setup_project_dir", mode="before")
     @classmethod
     def _expand_path(cls, v: str | Path | None) -> Path | None:
         if v is None or v == "":

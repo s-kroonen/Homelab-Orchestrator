@@ -34,6 +34,7 @@ from orchestrator.web.routers import (
     health,
     infra,
     maintenance,
+    setup,
     ui,
     wake,
 )
@@ -155,6 +156,9 @@ def create_app() -> FastAPI:
     app.include_router(infra.router)
     app.include_router(backup.router)
     app.include_router(activity.router)
+    # Unauthenticated only while no admin exists AND nothing is configured —
+    # see the gating notes at the top of routers/setup.py.
+    app.include_router(setup.router)
     return app
 
 

@@ -109,6 +109,12 @@ ENV_SECTIONS: tuple[EnvSection, ...] = (
                 "INVITE_TTL_HOURS",
                 "How long an admin-invite link (dashboard > Invite another admin) stays valid.",
             ),
+            EnvKey(
+                "SETUP_PROJECT_DIR",
+                "Fresh installs only: lets the dashboard's /setup page write .env and\n"
+                "config/services.yaml in this directory (mounted into the container).\n"
+                "Set it in docker-compose.yml `environment:`, not here — see docs/deploying.md.",
+            ),
         ),
     ),
     EnvSection(
