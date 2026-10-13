@@ -23,11 +23,12 @@ from fastapi.templating import Jinja2Templates
 from sqlmodel import select
 
 from orchestrator.db.models import BackupPolicy, BackupRecord, Node, Service, ServiceState
-from orchestrator.domain.enums import GuestKind, RouterProvider
+from orchestrator.domain.enums import BackupMode, GuestKind, RouterProvider
 from orchestrator.registry.loader import compute_registry_diff
 from orchestrator.registry.probe_specs import PROBE_SPECS
 from orchestrator.web.auth import get_current_admin
 from orchestrator.web.deps import SessionDep, SettingsDep
+from orchestrator.web.routers.backup_policies import policy_to_dict
 from orchestrator.web.routers.dashboard import service_detail
 
 router = APIRouter(tags=["ui"])
@@ -146,6 +147,37 @@ async def proxy_hosts_page(
             "admin": admin,
             "services": [{"id": s.id, "slug": s.slug, "name": s.name} for s in services],
             "providers": [p.value for p in RouterProvider],
+            "registry_dirty": diff.dirty,
+            "yaml_path": diff.yaml_path,
+        },
+    )
+
+
+@router.get("/backup-policies", response_model=None)
+async def backup_policies_page(
+    request: Request, session: SessionDep, settings: SettingsDep
+) -> HTMLResponse | RedirectResponse:
+    """Phase 6: list/create/edit/delete backup policies. Same data and same
+    mutations as ``/api/backup-policies``; the page's forms call that API."""
+    admin = get_current_admin(request, session)
+    if admin is None:
+        return RedirectResponse("/login?next=/backup-policies", status_code=303)
+
+    scheduler = getattr(request.app.state, "scheduler", None)
+    policies = session.exec(select(BackupPolicy).order_by(BackupPolicy.name)).all()
+    diff = compute_registry_diff(session)
+
+    return _templates.TemplateResponse(
+        request,
+        "backup_policies.html",
+        {
+            "admin": admin,
+            "policies": [policy_to_dict(session, p, scheduler) for p in policies],
+            "services": [s.slug for s in session.exec(select(Service).order_by(Service.slug))],
+            "modes": [m.value for m in BackupMode],
+            "scheduler_enabled": settings.scheduler_enabled,
+            "scheduler_running": bool(scheduler and scheduler.running),
+            "dry_run": settings.dry_run,
             "registry_dirty": diff.dirty,
             "yaml_path": diff.yaml_path,
         },
