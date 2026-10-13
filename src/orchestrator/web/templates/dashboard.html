@@ -34,7 +34,12 @@
   section h2 { font-size: 0.95rem; margin: 0 0 0.75rem; }
   .dirty-badge { background: #3b2e14; color: #e5a63e; padding: 0.2rem 0.6rem; border-radius: 0.4rem; font-size: 0.8rem; }
   .row { display: flex; gap: 0.5rem; align-items: center; margin-bottom: 0.75rem; flex-wrap: wrap; }
-  input { padding: 0.4rem; background: #171b24; border: 1px solid #2a2f3a; border-radius: 0.4rem; color: #e6e9ef; }
+  input, select, textarea { padding: 0.4rem; background: #171b24; border: 1px solid #2a2f3a; border-radius: 0.4rem; color: #e6e9ef; font: inherit; font-size: 0.85rem; }
+  input[type=checkbox] { padding: 0; }
+  td a, td a:visited { color: #5b8def; text-decoration: none; }
+  td a:hover { text-decoration: underline; }
+  button.danger { background: transparent; color: #e5534b; border: 1px solid #2a2f3a; }
+  label.inline { color: #9aa4b2; font-size: 0.85rem; display: inline-flex; gap: 0.3rem; align-items: center; }
   .msg { font-size: 0.85rem; color: #9aa4b2; }
   .msg.ok { color: #3ecf6d; }
   .msg.error { color: #e5534b; }
@@ -70,7 +75,7 @@
       <tbody>
         {% for svc in services %}
         <tr>
-          <td>{{ svc.name }} <code>{{ svc.slug }}</code></td>
+          <td><a href="/services/{{ svc.slug }}">{{ svc.name }}</a> <code>{{ svc.slug }}</code></td>
           <td>{{ svc.node }}</td>
           <td>
             {% if not svc.enabled %}<span class="badge disabled">disabled</span>
@@ -89,6 +94,45 @@
         {% endfor %}
       </tbody>
     </table>
+  </section>
+
+  <section>
+    <h2>New service</h2>
+    {% if nodes %}
+    <div class="row">
+      <input id="new-svc-slug" placeholder="slug (e.g. media)" size="14">
+      <input id="new-svc-name" placeholder="display name" size="16">
+      <select id="new-svc-node">
+        {% for n in nodes %}<option value="{{ n.id }}">{{ n.name }}</option>{% endfor %}
+      </select>
+      <select id="new-svc-guest-kind">
+        {% for k in guest_kinds %}<option value="{{ k }}"{% if k == "vm" %} selected{% endif %}>{{ k }}</option>{% endfor %}
+      </select>
+      <input id="new-svc-guest-id" type="number" placeholder="guest id" style="width: 6rem">
+      <button id="new-svc-btn">Create</button>
+    </div>
+    <p class="msg" id="new-svc-msg">Probes, dependencies and backup settings are set on the service's own page after creating it.</p>
+    {% else %}
+    <p class="msg">Add a node first — every service lives on one.</p>
+    {% endif %}
+  </section>
+
+  <section>
+    <h2>Nodes</h2>
+    <table>
+      <thead>
+        <tr><th>Name</th><th>Always on</th><th>Power target</th><th>Notes</th><th>Services</th><th></th></tr>
+      </thead>
+      <tbody id="nodes-body"><tr><td colspan="6">Loading…</td></tr></tbody>
+    </table>
+    <div class="row">
+      <input id="new-node-name" placeholder="name (e.g. pve1)" size="12">
+      <label class="inline"><input id="new-node-always-on" type="checkbox"> always on</label>
+      <input id="new-node-target" placeholder="power target" size="14">
+      <input id="new-node-notes" placeholder="notes" size="16">
+      <button id="new-node-btn">Add node</button>
+    </div>
+    <p class="msg" id="nodes-msg"></p>
   </section>
 
   <section>
@@ -184,6 +228,138 @@
     }
   });
 
+  async function apiError(resp) {
+    try {
+      const data = await resp.json();
+      if (typeof data.detail === "string") return data.detail;
+      return JSON.stringify(data.detail ?? data);
+    } catch (_) {
+      return `HTTP ${resp.status}`;
+    }
+  }
+  async function sendJson(method, url, body) {
+    const resp = await fetch(url, {
+      method,
+      headers: { "Content-Type": "application/json" },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+    if (!resp.ok) throw new Error(await apiError(resp));
+    return resp.json();
+  }
+
+  const newSvcBtn = document.getElementById("new-svc-btn");
+  if (newSvcBtn) {
+    newSvcBtn.addEventListener("click", async () => {
+      const guestId = document.getElementById("new-svc-guest-id").value.trim();
+      const body = {
+        slug: document.getElementById("new-svc-slug").value.trim(),
+        name: document.getElementById("new-svc-name").value.trim(),
+        node_id: Number(document.getElementById("new-svc-node").value),
+        guest_kind: document.getElementById("new-svc-guest-kind").value,
+        guest_id: guestId === "" ? null : Number(guestId),
+      };
+      try {
+        const svc = await sendJson("POST", "/api/registry/services", body);
+        location.href = "/services/" + encodeURIComponent(svc.slug);
+      } catch (err) {
+        setMsg("new-svc-msg", err.message, "error");
+      }
+    });
+  }
+
+  function cell(content) {
+    const td = document.createElement("td");
+    if (content instanceof Node) td.appendChild(content); else td.textContent = content;
+    return td;
+  }
+  function textInput(value, size) {
+    const el = document.createElement("input");
+    el.value = value ?? "";
+    if (size) el.size = size;
+    return el;
+  }
+  function button(label, cls, onClick) {
+    const b = document.createElement("button");
+    b.textContent = label;
+    if (cls) b.className = cls;
+    b.addEventListener("click", onClick);
+    return b;
+  }
+
+  function renderNodeRow(node, editing) {
+    const tr = document.createElement("tr");
+    const path = "/api/registry/nodes/" + encodeURIComponent(node.name);
+    const actions = document.createElement("td");
+    if (!editing) {
+      tr.append(
+        cell(node.name), cell(node.always_on ? "yes" : "no"), cell(node.power_mgr_target || "—"),
+        cell(node.notes || "—"), cell(String(node.service_count)),
+      );
+      actions.append(
+        button("Edit", "secondary", () => tr.replaceWith(renderNodeRow(node, true))), " ",
+        button("Delete", "danger", async () => {
+          if (!confirm(`Delete node ${node.name}?`)) return;
+          try {
+            await sendJson("DELETE", path);
+            location.reload();
+          } catch (err) { setMsg("nodes-msg", err.message, "error"); }
+        }),
+      );
+      tr.appendChild(actions);
+      return tr;
+    }
+    const name = textInput(node.name, 10);
+    const alwaysOn = document.createElement("input");
+    alwaysOn.type = "checkbox";
+    alwaysOn.checked = node.always_on;
+    const target = textInput(node.power_mgr_target, 12);
+    const notes = textInput(node.notes, 14);
+    tr.append(cell(name), cell(alwaysOn), cell(target), cell(notes), cell(String(node.service_count)));
+    actions.append(
+      button("Save", "", async () => {
+        try {
+          await sendJson("PUT", path, {
+            name: name.value.trim(), always_on: alwaysOn.checked,
+            power_mgr_target: target.value.trim(), notes: notes.value,
+          });
+          location.reload();
+        } catch (err) { setMsg("nodes-msg", err.message, "error"); }
+      }), " ",
+      button("Cancel", "secondary", () => tr.replaceWith(renderNodeRow(node, false))),
+    );
+    tr.appendChild(actions);
+    return tr;
+  }
+
+  async function loadNodes() {
+    const resp = await fetch("/api/registry/nodes");
+    const nodes = await resp.json();
+    const body = document.getElementById("nodes-body");
+    body.innerHTML = "";
+    if (!nodes.length) {
+      body.innerHTML = '<tr><td colspan="6">No nodes yet.</td></tr>';
+      return;
+    }
+    for (const n of nodes) body.appendChild(renderNodeRow(n, false));
+  }
+
+  document.getElementById("new-node-btn").addEventListener("click", async () => {
+    try {
+      await sendJson("POST", "/api/registry/nodes", {
+        name: document.getElementById("new-node-name").value.trim(),
+        always_on: document.getElementById("new-node-always-on").checked,
+        power_mgr_target: document.getElementById("new-node-target").value.trim(),
+        notes: document.getElementById("new-node-notes").value,
+      });
+      // Full reload: the "new service" node picker and the unsaved-changes
+      // badge are both server-rendered.
+      location.reload();
+    } catch (err) {
+      setMsg("nodes-msg", err.message, "error");
+    }
+  });
+
+  loadNodes();
   loadDevices();
   loadInvites();
 </script>
