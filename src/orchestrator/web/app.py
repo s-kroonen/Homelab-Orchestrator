@@ -29,6 +29,7 @@ from orchestrator.logging_setup import configure_logging, get_logger
 from orchestrator.registry.loader import RegistryPathError, reconcile_yaml_into_db
 from orchestrator.scheduler import BackupScheduler
 from orchestrator.web.routers import (
+    activity,
     auth,
     backup,
     backup_policies,
@@ -37,6 +38,7 @@ from orchestrator.web.routers import (
     infra,
     maintenance,
     proxy_hosts,
+    setup,
     ui,
     wake,
 )
@@ -182,6 +184,10 @@ def create_app() -> FastAPI:
     app.include_router(backup.router)
     app.include_router(backup_policies.router)
     app.include_router(proxy_hosts.router)
+    app.include_router(activity.router)
+    # Unauthenticated only while no admin exists AND nothing is configured —
+    # see the gating notes at the top of routers/setup.py.
+    app.include_router(setup.router)
     return app
 
 

@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>homelab-orchestrator — setup</title>
+<style>
+  :root { color-scheme: light dark; }
+  body {
+    margin: 0; min-height: 100vh; padding: 2rem 1rem;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background: #0b0e14; color: #e6e9ef;
+  }
+  .wrap { max-width: 44rem; margin: 0 auto; }
+  header { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 1rem; }
+  header h1 { font-size: 1.1rem; margin: 0; }
+  header .who { color: #9aa4b2; font-size: 0.85rem; }
+  p.intro { color: #9aa4b2; font-size: 0.85rem; line-height: 1.5; }
+  fieldset { border: 1px solid #2a2f3a; border-radius: 0.5rem; margin: 0 0 1.25rem; padding: 0.75rem 1rem 1rem; }
+  legend { font-size: 0.95rem; font-weight: 600; padding: 0 0.4rem; }
+  fieldset > p { color: #9aa4b2; font-size: 0.8rem; margin: 0 0 0.75rem; }
+  label.field { display: block; margin-bottom: 0.7rem; font-size: 0.85rem; }
+  label.field span.name { display: block; margin-bottom: 0.2rem; }
+  label.field span.req { color: #e5534b; }
+  label.check { display: flex; gap: 0.5rem; align-items: center; margin-bottom: 0.7rem; font-size: 0.85rem; }
+  small { display: block; color: #9aa4b2; font-size: 0.75rem; margin-top: 0.15rem; }
+  input[type=text], input[type=password], input[type=number], select {
+    width: 100%; box-sizing: border-box; padding: 0.4rem; background: #171b24;
+    border: 1px solid #2a2f3a; border-radius: 0.4rem; color: #e6e9ef;
+  }
+  button {
+    padding: 0.5rem 1.1rem; background: #5b8def; color: #0b0e14; border: none;
+    border-radius: 0.4rem; font-weight: 600; cursor: pointer; font-size: 0.9rem;
+  }
+  button:disabled { background: #2a2f3a; color: #9aa4b2; cursor: wait; }
+  .msg { font-size: 0.85rem; color: #9aa4b2; }
+  .msg.ok { color: #3ecf6d; }
+  .msg.error { color: #e5534b; }
+  code { background: #171b24; padding: 0.1rem 0.3rem; border-radius: 0.3rem; }
+  pre {
+    background: #171b24; border: 1px solid #2a2f3a; border-radius: 0.4rem; padding: 0.75rem;
+    font-size: 0.75rem; color: #9aa4b2; white-space: pre-wrap; overflow-wrap: anywhere;
+  }
+  #result ul { font-size: 0.85rem; color: #9aa4b2; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>homelab-orchestrator — first-run setup</h1>
+    <span class="who">{{ actor }}</span>
+  </header>
+  <p class="intro">
+    The web form of <code>orchestrator-cli init --non-interactive</code>: the same
+    checks against your Proxmox and PBS, then <code>{{ env_path }}</code> and
+    <code>{{ yaml_path }}</code> are written. Nothing is written unless every check
+    passes. This page disappears once those files exist — later changes are
+    <code>config edit</code> and <code>scaffold</code>.
+    Need to pick guests one by one or map power-manager targets? Use the interactive
+    <code>docker compose run --rm setup init</code> instead.
+  </p>
+
+  <form id="setup-form" autocomplete="off">
+    {% for title, intro, fields in sections %}
+    <fieldset>
+      <legend>{{ title }}</legend>
+      {% if intro %}<p>{{ intro }}</p>{% endif %}
+      {% for f in fields %}
+        {% if f.kind == "bool" %}
+        <label class="check">
+          <input type="checkbox" name="{{ f.key }}" data-kind="bool" {% if values.get(f.key) == "true" %}checked{% endif %}>
+          <span>{{ f.label }}{% if f.help %}<small>{{ f.help }}</small>{% endif %}</span>
+        </label>
+        {% else %}
+        <label class="field">
+          <span class="name">{{ f.label }}{% if f.required %} <span class="req">*</span>{% endif %} <code>{{ f.key }}</code></span>
+          {% if f.kind == "choice" %}
+          <select name="{{ f.key }}">
+            {% for c in f.choices %}<option {% if values.get(f.key) == c %}selected{% endif %}>{{ c }}</option>{% endfor %}
+          </select>
+          {% else %}
+          <input type="{{ 'password' if f.kind == 'secret' else ('number' if f.kind == 'int' else 'text') }}"
+                 name="{{ f.key }}" value="{{ values.get(f.key, '') }}" {% if f.required %}required{% endif %}>
+          {% endif %}
+          {% if f.help %}<small>{{ f.help }}</small>{% endif %}
+        </label>
+        {% endif %}
+      {% endfor %}
+    </fieldset>
+    {% endfor %}
+
+    <fieldset>
+      <legend>Services</legend>
+      <p>Which Proxmox guests to register. Anything left out can be added later with <code>scaffold</code>.</p>
+      <label class="field"><span class="name">Always-on node names, comma separated</span>
+        <input type="text" data-flag="always_on" placeholder="blank = the node PROXMOX_HOST reaches">
+      </label>
+      <label class="field"><span class="name">Guests to add: slugs, VMIDs or <code>all</code></span>
+        <input type="text" data-flag="include" value="all">
+      </label>
+      <label class="field"><span class="name">Guests to leave out</span>
+        <input type="text" data-flag="exclude">
+      </label>
+      <label class="field"><span class="name">Gateway service slug</span>
+        <input type="text" data-flag="gateway" placeholder="blank = none">
+        <small>Must be one of the added guests. Others get <code>depends_on: [gateway]</code>.</small>
+      </label>
+      <label class="field"><span class="name">Backup policy attached to every added service</span>
+        <input type="text" data-flag="policy" value="daily-frequent">
+      </label>
+      <label class="check">
+        <input type="checkbox" data-flag="verify" checked>
+        <span>Check every value against the live cluster
+          <small>Unticked = <code>--no-verify</code>: values are written unchecked and no guests are added.</small></span>
+      </label>
+    </fieldset>
+
+    <button type="submit" id="submit-btn">Check and write configuration</button>
+    <span class="msg" id="setup-msg"></span>
+  </form>
+
+  <div id="result"></div>
+  <pre id="setup-log" hidden></pre>
+</div>
+
+<script>
+  function setMsg(text, kind) {
+    const el = document.getElementById("setup-msg");
+    el.textContent = text;
+    el.className = "msg" + (kind ? " " + kind : "");
+  }
+
+  function collect(form) {
+    const body = { values: {} };
+    for (const el of form.querySelectorAll("[name]")) {
+      body.values[el.name] = el.dataset.kind === "bool" ? (el.checked ? "true" : "false") : el.value;
+    }
+    for (const el of form.querySelectorAll("[data-flag]")) {
+      body[el.dataset.flag] = el.type === "checkbox" ? el.checked : el.value;
+    }
+    return body;
+  }
+
+  document.getElementById("setup-form").addEventListener("submit", async (ev) => {
+    ev.preventDefault();
+    const btn = document.getElementById("submit-btn");
+    const log = document.getElementById("setup-log");
+    const result = document.getElementById("result");
+    btn.disabled = true;
+    result.innerHTML = "";
+    setMsg("Checking against the cluster…");
+    try {
+      const resp = await fetch("/api/setup", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(collect(ev.target)),
+      });
+      const data = await resp.json();
+      log.textContent = data.log || "";
+      log.hidden = !data.log;
+      if (!resp.ok) {
+        setMsg(typeof data.detail === "string" ? data.detail : "Setup failed.", "error");
+        return;
+      }
+      setMsg("Written.", "ok");
+      ev.target.hidden = true;
+      const h = document.createElement("h2");
+      h.textContent = "Configuration written";
+      const ul = document.createElement("ul");
+      const items = [
+        `${data.env_path} and ${data.yaml_path}`,
+        `${data.services.length} service(s) on node(s): ${data.nodes.join(", ") || "none"}`,
+        ...data.problems.map((p) => `Carried on past: ${p}`),
+        "Restart to apply: docker compose up -d (this process still runs on its old settings).",
+        "Then open /login to register the first admin passkey, and add probes with `setup probe add <slug>`.",
+      ];
+      for (const text of items) {
+        const li = document.createElement("li");
+        li.textContent = text;
+        ul.appendChild(li);
+      }
+      result.append(h, ul);
+    } catch (err) {
+      setMsg(err.message, "error");
+    } finally {
+      btn.disabled = false;
+    }
+  });
+</script>
+</body>
+</html>

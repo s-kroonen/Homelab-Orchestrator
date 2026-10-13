@@ -972,8 +972,66 @@ def _merge_previous(previous: dict[str, str]) -> dict[str, str]:
 
 
 # ---------------------------------------------------------------------------
-# init
+# init — the core is plain functions so the dashboard's /setup page
+# (web/routers/setup.py) runs exactly the same checks and writes
 # ---------------------------------------------------------------------------
+
+
+def install_paths(project_dir: Path) -> tuple[Path, Path]:
+    """Where a clean install writes: (.env, config/services.yaml)."""
+    return project_dir / ".env", project_dir / "config" / "services.yaml"
+
+
+def existing_config(project_dir: Path) -> list[Path]:
+    """The files a clean install would REPLACE — empty means "not configured yet".
+
+    An empty file is what `touch .env` leaves — compose will not start the setup
+    service until .env exists — so it is a clean install, not something to replace.
+    """
+    return [
+        p
+        for p in install_paths(project_dir)
+        if p.is_file() and p.read_text(encoding="utf-8").strip()
+    ]
+
+
+def plan_install(
+    w: Wizard,
+    yaml_path: Path,
+    *,
+    include: str | None,
+    exclude: str | None,
+    gateway: str | None,
+    policy_name: str,
+) -> RegistryEditor:
+    """Walk every section, build the registry, validate both files. Writes nothing.
+
+    With ``w.verify`` each answer is checked against the live cluster (via
+    ``w.discovery``); non-interactively a failed check raises
+    :class:`click.ClickException` and a missing required value
+    :class:`click.UsageError`, so a caller with no terminal gets the reason.
+    """
+    for run_section in SECTIONS.values():
+        run_section(w)
+
+    editor = _build_registry(w, yaml_path, include, exclude, gateway, policy_name)
+
+    # Validate both files completely before either is touched.
+    try:
+        editor.validate()
+        render_generated(w.values)
+    except (RegistryEditError, EnvFileError) as exc:
+        raise click.ClickException(f"nothing was written: {exc}") from exc
+    return editor
+
+
+def write_install(w: Wizard, editor: RegistryEditor, env_path: Path, yaml_path: Path) -> list[Path]:
+    """Write .env and services.yaml; returns the backups of anything replaced."""
+    env_backup = write_env(env_path, w.values)
+    yaml_backup = backup_file(yaml_path)
+    editor.save()
+    return [b for b in (env_backup, yaml_backup) if b is not None]
+
 
 _DIR_OPTION = click.option(
     "--dir",
@@ -1041,18 +1099,13 @@ def init(
     """
     set_non_interactive(non_interactive)
     interactive = interactive_default()
-    env_path = project_dir / ".env"
-    yaml_path = project_dir / "config" / "services.yaml"
+    env_path, yaml_path = install_paths(project_dir)
 
     click.secho("homelab-orchestrator setup", bold=True)
     click.echo(f"  .env          : {env_path}")
     click.echo(f"  services.yaml : {yaml_path}")
 
-    # An empty file is what `touch .env` leaves — compose will not start the setup
-    # service until .env exists — so it is a clean install, not something to replace.
-    existing = [
-        p for p in (env_path, yaml_path) if p.is_file() and p.read_text(encoding="utf-8").strip()
-    ]
+    existing = existing_config(project_dir)
     if existing and not force:
         click.secho("\n  These already exist and will be REPLACED:", fg="yellow")
         for p in existing:
@@ -1102,17 +1155,9 @@ def init(
             "  Ctrl+C at any point leaves every file untouched.",
             fg="cyan",
         )
-    for run_section in SECTIONS.values():
-        run_section(w)
-
-    editor = _build_registry(w, yaml_path, include, exclude, gateway, policy_name)
-
-    # Validate both files completely before either is touched.
-    try:
-        editor.validate()
-        render_generated(w.values)
-    except (RegistryEditError, EnvFileError) as exc:
-        raise click.ClickException(f"nothing was written: {exc}") from exc
+    editor = plan_install(
+        w, yaml_path, include=include, exclude=exclude, gateway=gateway, policy_name=policy_name
+    )
 
     _heading("Summary")
     for node in editor.doc.get("nodes") or []:
@@ -1130,14 +1175,11 @@ def init(
         click.echo("Nothing written.")
         return
 
-    env_backup = write_env(env_path, w.values)
-    yaml_backup = backup_file(yaml_path)
-    editor.save()
+    backups = write_install(w, editor, env_path, yaml_path)
 
     click.secho(f"\nWrote {env_path} and {yaml_path}", fg="green", bold=True)
-    for backup in (env_backup, yaml_backup):
-        if backup is not None:
-            click.echo(f"  previous version kept as {backup}")
+    for backup in backups:
+        click.echo(f"  previous version kept as {backup}")
     report_gate_readiness(editor)
     click.echo(
         "\nNext:\n"

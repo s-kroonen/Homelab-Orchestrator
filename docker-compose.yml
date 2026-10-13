@@ -30,6 +30,10 @@ services:
       #      single-file mount makes Save permanently impossible.
       # Your real services.yaml is git-ignored; the example is services.example.yaml.
       - ./config:/etc/orchestrator
+      # Optional, fresh installs only: the dashboard's /setup page (web form of
+      # `setup init`) needs the project dir AND `environment: SETUP_PROJECT_DIR:
+      # /work` on this service. Remove both once setup is done — docs/deploying.md.
+      # - ./:/work
       # Optional: mount an NFS-backed dir for periodic state dumps.
       # - /mnt/state-dumps:/mnt/state-dumps
       #

@@ -54,6 +54,36 @@ the tag you chose. It also flags the two mistakes that are easy to miss: a
 `PROXMOX_HOST` on a node that powers off, and a PBS token whose ACL exists on
 only one of user and token.
 
+### Alternative: first-run setup from the browser
+
+The dashboard has a `/setup` page that is the web form of
+`init --non-interactive`: one form with the same fields, the same checks against
+Proxmox and PBS (the same code — `cli_setup.plan_install`), the same `.env` and
+`config/services.yaml` writes. It does not do the interactive wizard's
+pick-guests-from-a-list or per-node power-manager mapping; for those, use
+`setup init` above. Guests are chosen by slug/VMID/`all`, as `--include` takes them.
+
+It is **off by default**, because the orchestrator container normally cannot
+write `.env`. To use it on a fresh install, temporarily give the orchestrator
+service the project directory and point `SETUP_PROJECT_DIR` at it — in
+`docker-compose.yml`, NOT in `.env` (a non-empty `.env` already counts as
+configured):
+
+```yaml
+  orchestrator:
+    environment:
+      SETUP_PROJECT_DIR: /work
+    volumes:
+      - ./:/work
+```
+
+Then `docker compose up -d` and open `/setup`. Who may use it follows the
+passkey bootstrap rule: while no admin exists, anyone who can reach the page
+may (as anyone may register the first admin — keep the port on loopback, as the
+compose file does); once an admin exists, only a logged-in admin. The page
+returns 404 for good as soon as `.env` or `services.yaml` has content. Afterwards
+remove the two lines above and `docker compose up -d` to apply the new `.env`.
+
 ### Changing the config later
 
 | To change | Run |

@@ -49,8 +49,16 @@
   ul.invites, ul.devices { list-style: none; padding: 0; font-size: 0.85rem; }
   ul.invites li, ul.devices li { padding: 0.3rem 0; border-bottom: 1px solid #1a1e27; color: #9aa4b2; }
   code { background: #171b24; padding: 0.1rem 0.3rem; border-radius: 0.3rem; }
-  nav { font-size: 0.85rem; }
-  nav a { color: #5b8def; text-decoration: none; }
+  nav { display: flex; gap: 1rem; margin-bottom: 1.5rem; font-size: 0.85rem; }
+  nav a { color: #9aa4b2; text-decoration: none; }
+  nav a.current { color: #e6e9ef; border-bottom: 2px solid #5b8def; }
+  details summary { cursor: pointer; list-style: none; }
+  details summary::-webkit-details-marker { display: none; }
+  /* Same step list as maintenance.html — one ✓/✗ vocabulary across pages. */
+  ol.steps { list-style: none; padding: 0; margin: 0.4rem 0 0; text-align: left; font-size: 0.8rem; }
+  ol.steps li { padding: 0.15rem 0; color: #9aa4b2; }
+  ol.steps li.ok::before { content: "✓ "; color: #3ecf6d; }
+  ol.steps li.failed::before, ol.steps li.indeterminate::before { content: "✗ "; color: #e5534b; }
 </style>
 </head>
 <body>
@@ -61,6 +69,7 @@
       <a href="/" class="current">Dashboard</a>
       <a href="/backup-policies">Backup policies</a>
       <a href="/proxy-hosts">Proxy hosts</a>
+      <a href="/activity">Activity</a>
     </nav>
     <span class="who">
       {{ admin.username }}
@@ -88,10 +97,21 @@
           <td><a href="/services/{{ svc.slug }}">{{ svc.name }}</a> <code>{{ svc.slug }}</code></td>
           <td>{{ svc.node }}</td>
           <td>
-            {% if not svc.enabled %}<span class="badge disabled">disabled</span>
-            {% elif svc.verdict == "healthy" %}<span class="badge healthy">healthy</span>
-            {% elif svc.verdict == "failed" %}<span class="badge failed">failed</span>
-            {% else %}<span class="badge unknown">unknown</span>{% endif %}
+            {% if not svc.enabled %}{% set badge %}<span class="badge disabled">disabled</span>{% endset %}
+            {% elif svc.verdict == "healthy" %}{% set badge %}<span class="badge healthy">healthy</span>{% endset %}
+            {% elif svc.verdict == "failed" %}{% set badge %}<span class="badge failed">failed</span>{% endset %}
+            {% else %}{% set badge %}<span class="badge unknown">unknown</span>{% endset %}{% endif %}
+            {% if svc.enabled and svc.probes %}
+            <details class="probes">
+              <summary title="last checked {{ svc.verdict_at or 'never' }}">{{ badge }} <span class="msg">▸ probes</span></summary>
+              <ol class="steps">
+                {% for p in svc.probes %}
+                <li class="{{ p.css }}">{{ p.name }} <span class="msg">({{ p.kind }}{% if p.latency_ms is not none %}, {{ p.latency_ms }} ms{% endif %}){% if p.message %} — {{ p.message }}{% endif %}</span></li>
+                {% endfor %}
+              </ol>
+            </details>
+            {% else %}{{ badge }}{% endif %}
+            <a class="msg" href="/activity?service={{ svc.slug }}">history</a>
           </td>
           <td>
             {% if svc.last_backup_at %}
