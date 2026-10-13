@@ -14,8 +14,11 @@ from __future__ import annotations
 import traceback
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI
+from starlette.middleware.sessions import SessionMiddleware
+from starlette.staticfiles import StaticFiles
 
 from orchestrator import __version__
 from orchestrator.adapters.factory import build_adapters
@@ -23,7 +26,7 @@ from orchestrator.config import get_settings
 from orchestrator.db.session import build_engine, session_scope
 from orchestrator.logging_setup import configure_logging, get_logger
 from orchestrator.registry.loader import RegistryPathError, reconcile_yaml_into_db
-from orchestrator.web.routers import backup, dashboard, health, infra, maintenance, wake
+from orchestrator.web.routers import auth, backup, dashboard, health, infra, maintenance, ui, wake
 
 
 def _maybe_run_migrations() -> None:
@@ -113,14 +116,31 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 
 def create_app() -> FastAPI:
+    settings = get_settings()
     app = FastAPI(
         title="homelab-orchestrator",
         version=__version__,
         lifespan=lifespan,
     )
+    # Signed-cookie session for the dashboard's passkey login (web/auth.py).
+    # https_only=False: Traefik terminates TLS and speaks plain HTTP to this
+    # container internally (see docs/dashboard_auth.md) — the cookie itself
+    # never crosses the network in the clear on a correctly configured
+    # deployment, but Starlette can't see past its own TLS-terminated hop.
+    app.add_middleware(
+        SessionMiddleware,
+        secret_key=settings.session_secret.get_secret_value(),
+        same_site="lax",
+        https_only=False,
+    )
+    app.mount(
+        "/static", StaticFiles(directory=str(Path(__file__).parent / "static")), name="static"
+    )
     app.include_router(health.router)
     app.include_router(maintenance.router)
     app.include_router(wake.router)
+    app.include_router(auth.router)
+    app.include_router(ui.router)
     app.include_router(dashboard.router)
     app.include_router(infra.router)
     app.include_router(backup.router)

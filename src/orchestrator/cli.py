@@ -10,6 +10,7 @@
                 scan SLUG | --all         what will the backup gate decide?
     Operate     backup SLUG               run one backup end to end
                 wake SLUG                 wake the node, start the guest, wait until healthy
+    Recover     admin reset               break-glass: wipe admins/passkeys, reopen signup
 
 Every command that acts on infrastructure honours ``DRY_RUN``. Setup discovery
 only reads, so it contacts the real cluster either way.
@@ -30,7 +31,7 @@ from orchestrator.cli_config import probe, proxy
 from orchestrator.cli_config import service as service_group
 from orchestrator.cli_setup import config_group, init, scaffold
 from orchestrator.config import get_settings
-from orchestrator.db.models import Service
+from orchestrator.db.models import Admin, Service, WebAuthnCredential
 from orchestrator.db.session import build_engine, get_engine
 from orchestrator.health.engine import HealthEngine
 from orchestrator.logging_setup import configure_logging
@@ -62,6 +63,55 @@ def _fmt_bytes(n: int | None) -> str:
 @click.group()
 def cli() -> None:
     """homelab-orchestrator operator CLI."""
+
+
+@click.group()
+def admin_group() -> None:
+    """Dashboard admin accounts (passkeys)."""
+
+
+@admin_group.command("reset")
+@click.option("--yes", is_flag=True, help="Skip the interactive confirmation.")
+def admin_reset(yes: bool) -> None:
+    """Break-glass: remove every admin + passkey, then re-open first-admin signup.
+
+    Use this when every registered device/passkey is lost and nobody can log
+    in to the dashboard. The CLI itself works without any of this — it's the
+    break-glass path precisely for when the dashboard is unreachable. After
+    this runs, the next visitor to /login can register a fresh first admin
+    with no invite link needed, same as a brand-new install.
+    """
+    _bootstrap()
+    with Session(get_engine()) as session:
+        admins = session.exec(select(Admin)).all()
+        if not admins:
+            click.echo("No admins registered — nothing to reset.")
+            return
+
+        click.secho(
+            f"This permanently removes {len(admins)} admin(s) and all their passkeys:", fg="yellow"
+        )
+        for a in admins:
+            click.echo(f"  - {a.username}")
+        if not yes and not click.confirm("Continue?", default=False):
+            click.echo("Aborted.")
+            return
+
+        # Delete + flush credentials before admins: without an ORM-level
+        # relationship() between the two, SQLAlchemy doesn't know they're
+        # linked and may order the DELETEs so the DB's own ON DELETE CASCADE
+        # removes a credential row first, then warns when its own DELETE
+        # for that row matches nothing.
+        for a in admins:
+            for cred in session.exec(
+                select(WebAuthnCredential).where(WebAuthnCredential.admin_id == a.id)
+            ).all():
+                session.delete(cred)
+        session.flush()
+        for a in admins:
+            session.delete(a)
+        session.commit()
+        click.secho("Done. The dashboard will accept a fresh first-admin registration.", fg="green")
 
 
 @cli.command()
@@ -574,6 +624,7 @@ cli.add_command(probe)
 cli.add_command(proxy)
 cli.add_command(service_group, name="service")
 cli.add_command(transport)
+cli.add_command(admin_group, name="admin")
 
 
 if __name__ == "__main__":

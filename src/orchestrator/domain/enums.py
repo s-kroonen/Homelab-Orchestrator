@@ -90,6 +90,7 @@ class ApprovalKind(StrEnum):
     GREENLIGHT = "greenlight"  # bless an unattended restore-to-new-vmid
     POWER_OFF = "power_off"
     CONFIG_CHANGE = "config_change"
+    ADMIN_INVITE = "admin_invite"  # a link an existing admin can hand out to add another
 
 
 class RouterProvider(StrEnum):

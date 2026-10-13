@@ -61,6 +61,10 @@ class Settings(BaseSettings):
 
     session_secret: SecretStr = SecretStr("dev-only-change-me")
 
+    # How long an admin-invite link (generated from the dashboard, used to add
+    # another admin's passkey) stays valid before it must be re-issued.
+    invite_ttl_hours: int = 24
+
     # ---- Persistence ------------------------------------------------------
     database_url: str = "sqlite:///./data/orchestrator.db"
     state_dir: Path = Path("./data")

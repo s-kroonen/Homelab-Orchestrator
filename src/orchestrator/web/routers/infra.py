@@ -9,12 +9,13 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 
 from orchestrator.adapters.errors import AdapterError, AdapterUnreachable
+from orchestrator.web.auth import require_admin
 from orchestrator.web.deps import AdaptersDep, SettingsDep
 
-router = APIRouter(prefix="/api/infra", tags=["infra"])
+router = APIRouter(prefix="/api/infra", tags=["infra"], dependencies=[Depends(require_admin)])
 
 
 async def _probe(label: str, coro: Any) -> dict[str, Any]:

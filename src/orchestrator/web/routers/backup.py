@@ -9,15 +9,16 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlmodel import desc, select
 
 from orchestrator.adapters.errors import AdapterError
 from orchestrator.db.models import BackupRecord, PipelineRun
 from orchestrator.pipelines.backup import BackupError, BackupPipeline
+from orchestrator.web.auth import require_admin
 from orchestrator.web.deps import AdaptersDep, SessionDep, SettingsDep
 
-router = APIRouter(prefix="/api", tags=["backup"])
+router = APIRouter(prefix="/api", tags=["backup"], dependencies=[Depends(require_admin)])
 
 
 def _run_to_dict(run: PipelineRun) -> dict[str, Any]:

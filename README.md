@@ -20,7 +20,7 @@ working (fail-open).
 
 ## Status
 
-**Phases 1, 2 and 4 complete.** Working today:
+**Phases 1, 2, 3, 4, 5 and 7 complete.** Working today:
 
 * Config, structured logging, DB schema + Alembic migrations
 * YAML ↔ DB registry reconciler with unsaved-changes detection
@@ -34,21 +34,32 @@ working (fail-open).
 * **`depends_on`** — a gateway outage reports as one problem naming the gateway,
   not as every service behind it breaking at once.
 * A backup pipeline that runs end to end and records every step
+* **The wake pipeline** — power-on via the existing power manager, poll until
+  the node is online, start the guest, poll health until HEALTHY or timeout
+* **The maintenance page** — `GET /maintenance/{slug}`, wired to Traefik's
+  `errors` middleware, renders a live-progress "starting up" page for an
+  arbitrary unauthenticated visitor and fires the wake pipeline
+* **The dashboard + passkey login** — service list with health/backup status,
+  Save/Reset-to-YAML, WebAuthn passkey auth (no passwords), admin invite
+  links, multi-device support, and a CLI break-glass recovery path; see
+  [docs/dashboard_auth.md](docs/dashboard_auth.md)
 * `orchestrator-cli` — connectivity checks, health scans, manual backups, and
   guided builders for the whole config
-* FastAPI app: `/healthz`, `/readyz`, registry, infra, and backup endpoints
+* FastAPI app: `/healthz`, `/readyz`, `/wake`, `/maintenance`, the dashboard,
+  registry, infra, and backup endpoints (the latter four behind login)
 
 **Worth knowing:** a service with no *required* probe reports UNKNOWN and is
 refused. That is deliberate — unverified is not the same as healthy — but it
 means a freshly scaffolded service will not back up until you add a probe.
 
-**Not yet built:** the wake pipeline (phase 3), maintenance page + Traefik
-wiring (phase 5), scheduler + retention (phase 6), dashboard + passkeys
-(phase 7), greenlight/revert (phase 8), notifier + Grafana metrics (phase 9).
+**Not yet built:** scheduler + retention (phase 6), greenlight/revert
+(phase 8), notifier + Grafana metrics (phase 9).
 
 See [docs/architecture.md](docs/architecture.md) for the full design,
 [docs/adding_a_service.md](docs/adding_a_service.md) for registering a service,
 [docs/api_tokens.md](docs/api_tokens.md) for the API token privileges,
+[docs/dashboard_auth.md](docs/dashboard_auth.md) for the passkey/invite/session
+mechanics behind the dashboard,
 [docs/probing_through_a_gateway.md](docs/probing_through_a_gateway.md) for
 probing services the orchestrator cannot reach directly,
 [docs/host_runner.md](docs/host_runner.md) for running credentialed checks
@@ -103,8 +114,12 @@ alembic upgrade head
 orchestrator                                           # serves on :8080
 ```
 
-Then `curl http://127.0.0.1:8080/healthz` and `.../api/registry/services`, or
-browse the OpenAPI UI at <http://127.0.0.1:8080/docs>.
+Then `curl http://127.0.0.1:8080/healthz`, or browse the OpenAPI UI at
+<http://127.0.0.1:8080/docs>. The dashboard itself is at
+<http://127.0.0.1:8080/> — the first visit registers a first-admin passkey,
+no invite needed (see [docs/dashboard_auth.md](docs/dashboard_auth.md)); every
+`/api/registry/*`, `/api/backup/*`, and `/api/infra/*` endpoint needs that
+login too.
 
 **Two env files, later wins.** `.env` holds deployment config (container paths
 like `/data`); `.env.local` is an optional developer override for running
@@ -218,7 +233,5 @@ Adapters are fully mocked in tests; the DB is a per-test temp SQLite file.
 
 ## What's coming
 
-Phases 3–9 land the MQTT client to the power manager, the health engine +
-backup gate, the maintenance page + Traefik wiring, the scheduler + retention,
-the dashboard + passkeys, the greenlight/revert flow, and the mailcow + ntfy
-notifier. See the design brief for the full plan.
+Phases 6, 8 and 9 land the scheduler + retention, the greenlight/revert flow,
+and the mailcow + ntfy notifier. See the design brief for the full plan.

@@ -1,15 +1,13 @@
-"""Dashboard + registry API — seam for phase 7.
+"""Dashboard + registry API.
 
-Phase 1 exposes ONLY the read-only surface needed to prove the YAML/DB
-round-trip works: list services, show the unsaved-changes badge state, and
-trigger Save / Reset. Everything requires auth in phase 7 — for now the
-routes are unauthenticated placeholders, and the DRY_RUN default keeps this
-harmless on a fresh checkout.
+List services, show the unsaved-changes badge state, and trigger Save /
+Reset. Phase 7 gates all of this behind a logged-in admin session — see
+``web/auth.py``.
 """
 
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from sqlmodel import select
 
 from orchestrator.config import get_settings
@@ -19,9 +17,10 @@ from orchestrator.registry.loader import (
     reload_registry_from_yaml,
     save_registry_to_yaml,
 )
+from orchestrator.web.auth import require_admin
 from orchestrator.web.deps import SessionDep, SettingsDep
 
-router = APIRouter(prefix="/api", tags=["dashboard"])
+router = APIRouter(prefix="/api", tags=["dashboard"], dependencies=[Depends(require_admin)])
 
 
 @router.get("/registry/status")
