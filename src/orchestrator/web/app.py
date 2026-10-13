@@ -26,7 +26,17 @@ from orchestrator.config import get_settings
 from orchestrator.db.session import build_engine, session_scope
 from orchestrator.logging_setup import configure_logging, get_logger
 from orchestrator.registry.loader import RegistryPathError, reconcile_yaml_into_db
-from orchestrator.web.routers import auth, backup, dashboard, health, infra, maintenance, ui, wake
+from orchestrator.web.routers import (
+    activity,
+    auth,
+    backup,
+    dashboard,
+    health,
+    infra,
+    maintenance,
+    ui,
+    wake,
+)
 
 
 def _maybe_run_migrations() -> None:
@@ -144,6 +154,7 @@ def create_app() -> FastAPI:
     app.include_router(dashboard.router)
     app.include_router(infra.router)
     app.include_router(backup.router)
+    app.include_router(activity.router)
     return app
 
 

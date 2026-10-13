@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>homelab-orchestrator — activity</title>
+<style>
+  :root { color-scheme: light dark; }
+  body {
+    margin: 0; min-height: 100vh; padding: 2rem 1rem;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background: #0b0e14; color: #e6e9ef;
+  }
+  .wrap { max-width: 56rem; margin: 0 auto; }
+  header { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 1.5rem; }
+  header h1 { font-size: 1.1rem; margin: 0; }
+  header .who { color: #9aa4b2; font-size: 0.85rem; }
+  button {
+    padding: 0.4rem 0.9rem; background: #5b8def; color: #0b0e14; border: none;
+    border-radius: 0.4rem; font-weight: 600; cursor: pointer; font-size: 0.85rem;
+  }
+  button.logout { background: transparent; color: #9aa4b2; border: 1px solid #2a2f3a; }
+  nav { display: flex; gap: 1rem; margin-bottom: 1.5rem; font-size: 0.85rem; }
+  nav a { color: #9aa4b2; text-decoration: none; }
+  nav a.current { color: #e6e9ef; border-bottom: 2px solid #5b8def; }
+  .row { display: flex; gap: 0.5rem; align-items: center; margin-bottom: 0.75rem; flex-wrap: wrap; }
+  select { padding: 0.4rem; background: #171b24; border: 1px solid #2a2f3a; border-radius: 0.4rem; color: #e6e9ef; }
+  .msg { font-size: 0.85rem; color: #9aa4b2; }
+  code { background: #171b24; padding: 0.1rem 0.3rem; border-radius: 0.3rem; }
+  .badge { padding: 0.1rem 0.5rem; border-radius: 1rem; font-size: 0.75rem; }
+  .badge.healthy { background: #113b23; color: #3ecf6d; }
+  .badge.failed { background: #3b1414; color: #e5534b; }
+  .badge.unknown { background: #2a2f3a; color: #9aa4b2; }
+  ul.feed { list-style: none; padding: 0; margin: 0; }
+  ul.feed > li { padding: 0.6rem 0; border-bottom: 1px solid #1a1e27; font-size: 0.85rem; }
+  .event-line { display: flex; gap: 0.6rem; align-items: baseline; flex-wrap: wrap; }
+  .when { color: #9aa4b2; font-size: 0.8rem; min-width: 11rem; }
+  .what { font-weight: 600; }
+  details summary { cursor: pointer; list-style: none; }
+  details summary::-webkit-details-marker { display: none; }
+  details[open] summary .what::after { content: " ▾"; color: #9aa4b2; }
+  details:not([open]) summary .what::after { content: " ▸"; color: #9aa4b2; }
+  .body { margin: 0.4rem 0 0 11.6rem; }
+  .error { color: #e5534b; font-size: 0.8rem; }
+  /* Same step list as maintenance.html — one ✓/✗ vocabulary across pages. */
+  ol.steps { list-style: none; padding: 0; margin: 0 0 0.5rem; text-align: left; font-size: 0.85rem; }
+  ol.steps li { padding: 0.25rem 0; color: #9aa4b2; }
+  ol.steps li.ok::before { content: "✓ "; color: #3ecf6d; }
+  ol.steps li.failed::before, ol.steps li.indeterminate::before { content: "✗ "; color: #e5534b; }
+  ol.steps .detail { color: #6b7280; font-size: 0.75rem; }
+  @media (max-width: 40rem) { .body { margin-left: 0; } .when { min-width: 0; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>homelab-orchestrator</h1>
+    <span class="who">
+      {{ admin.username }}
+      <button class="logout" id="logout-btn">Log out</button>
+    </span>
+  </header>
+  <nav>
+    <a href="/">Services</a>
+    <a href="/activity" class="current">Activity</a>
+  </nav>
+
+  <form class="row" method="get" action="/activity">
+    <label class="msg" for="service">Service</label>
+    <select id="service" name="service" onchange="this.form.submit()">
+      <option value="">all services and admin actions</option>
+      {% for slug in slugs %}
+      <option value="{{ slug }}" {% if slug == service %}selected{% endif %}>{{ slug }}</option>
+      {% endfor %}
+    </select>
+    <noscript><button type="submit">Filter</button></noscript>
+    <span class="msg">newest first, last {{ events|length }} event(s)</span>
+  </form>
+
+  {% macro outcome(value) -%}
+    {%- if value in ("succeeded", "ok") -%}<span class="badge healthy">{{ value }}</span>
+    {%- elif value in ("failed", "error", "denied") -%}<span class="badge failed">{{ value }}</span>
+    {%- else -%}<span class="badge unknown">{{ value }}</span>{%- endif -%}
+  {%- endmacro %}
+
+  <ul class="feed">
+    {% for ev in events %}
+    <li>
+      {% if ev.type == "run" %}
+      <details>
+        <summary class="event-line">
+          <span class="when">{{ ev.at }}</span>
+          <span class="what">{{ ev.kind }}{% if ev.service %} <code>{{ ev.service }}</code>{% endif %}</span>
+          {{ outcome(ev.status) }}
+          <span class="msg">by {{ ev.actor or "unknown" }} · run #{{ ev.id }}</span>
+        </summary>
+        <div class="body">
+          {% if ev.error %}<p class="error">{{ ev.error }}</p>{% endif %}
+          {% if ev.steps %}
+          <ol class="steps">
+            {% for step in ev.steps %}
+            <li class="{{ step.status }}">{{ step.name }}{% if step.status not in ("ok", "failed", "indeterminate") %} <span class="detail">({{ step.status }})</span>{% endif %}
+              {% if step.detail %}<span class="detail">{% for k, v in step.detail.items() %}{{ k }}={{ v }}{% if not loop.last %}, {% endif %}{% endfor %}</span>{% endif %}
+            </li>
+            {% endfor %}
+          </ol>
+          {% else %}<p class="msg">No steps recorded yet.</p>{% endif %}
+          <p class="msg">
+            {% if ev.finished_at %}finished {{ ev.finished_at }}{% else %}still running{% endif %}
+            · correlation <code>{{ ev.correlation_id }}</code>
+            {% if ev.audit %}· audit: {% for a in ev.audit %}{{ a.action }} ({{ a.result }}){% if not loop.last %}, {% endif %}{% endfor %}{% endif %}
+          </p>
+        </div>
+      </details>
+      {% else %}
+      <div class="event-line">
+        <span class="when">{{ ev.at }}</span>
+        <span class="what" style="font-weight:500">{{ ev.action }}{% if ev.target %} <code>{{ ev.target }}</code>{% endif %}</span>
+        {{ outcome(ev.result) }}
+        <span class="msg">by {{ ev.actor }}</span>
+      </div>
+      {% endif %}
+    </li>
+    {% else %}
+    <li class="msg">Nothing has happened yet{% if service %} for {{ service }}{% endif %}.</li>
+    {% endfor %}
+  </ul>
+</div>
+
+<script>
+  document.getElementById("logout-btn").addEventListener("click", async () => {
+    await fetch("/api/auth/logout", { method: "POST" });
+    location.href = "/login";
+  });
+</script>
+</body>
+</html>

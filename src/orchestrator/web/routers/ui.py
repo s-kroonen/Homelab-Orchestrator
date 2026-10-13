@@ -17,7 +17,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from sqlmodel import select
@@ -26,9 +26,27 @@ from orchestrator.db.models import BackupRecord, Node, Service, ServiceState
 from orchestrator.registry.loader import compute_registry_diff
 from orchestrator.web.auth import get_current_admin
 from orchestrator.web.deps import SessionDep, SettingsDep
+from orchestrator.web.routers.activity import build_feed
 
 router = APIRouter(tags=["ui"])
 _templates = Jinja2Templates(directory=str(Path(__file__).parent.parent / "templates"))
+
+
+#: Probe state -> the ``ol.steps`` class maintenance.html already styles
+#: (ok = check mark, failed/indeterminate = cross).
+_STATE_CLASS = {"healthy": "ok", "failed": "failed", "unknown": "indeterminate"}
+
+
+def _probe_row(result: dict[str, Any]) -> dict[str, Any]:
+    state = str(result.get("state", "unknown"))
+    return {
+        "name": result.get("probe_name", "?"),
+        "kind": result.get("kind", ""),
+        "state": state,
+        "css": _STATE_CLASS.get(state, ""),
+        "message": result.get("message") or "",
+        "latency_ms": result.get("latency_ms"),
+    }
 
 
 @router.get("/", response_model=None)
@@ -61,6 +79,8 @@ async def dashboard_page(
                 ),
                 "last_backup_at": last_backup.created_at.isoformat() if last_backup else None,
                 "last_backup_verified": last_backup.verified if last_backup else None,
+                # The "why" behind the badge: each probe's own state + message.
+                "probes": [_probe_row(p) for p in (state.last_probe_results if state else [])],
             }
         )
 
@@ -74,5 +94,29 @@ async def dashboard_page(
             "services": rows,
             "registry_dirty": diff.dirty,
             "yaml_path": diff.yaml_path,
+        },
+    )
+
+
+@router.get("/activity", response_model=None)
+async def activity_page(
+    request: Request,
+    session: SessionDep,
+    service: str | None = Query(None),
+) -> HTMLResponse | RedirectResponse:
+    """History of wakes, backups and admin actions — see ``routers/activity.py``."""
+    admin = get_current_admin(request, session)
+    if admin is None:
+        return RedirectResponse("/login?next=/activity", status_code=303)
+
+    service = service or None  # the filter form submits "" for "all services"
+    return _templates.TemplateResponse(
+        request,
+        "activity.html",
+        {
+            "admin": admin,
+            "events": build_feed(session, service=service),
+            "service": service,
+            "slugs": session.exec(select(Service.slug).order_by(Service.slug)).all(),
         },
     )
