@@ -66,6 +66,13 @@ ENV_SECTIONS: tuple[EnvSection, ...] = (
                 "Tags: https://github.com/s-kroonen/homelab-orchestrator/pkgs/container/"
                 "homelab-orchestrator",
             ),
+            EnvKey(
+                "ORCHESTRATOR_BIND_ADDR",
+                "Host interface docker-compose.yml publishes :8080 on. Default 127.0.0.1\n"
+                "(loopback only — front it with Traefik/Pangolin on THIS host). Set this to\n"
+                "this host's LAN IP (or 0.0.0.0 for all interfaces) if Traefik/Pangolin runs\n"
+                "on a DIFFERENT host and needs to reach this one directly.",
+            ),
         ),
     ),
     EnvSection(
@@ -292,6 +299,7 @@ ENV_SECTIONS: tuple[EnvSection, ...] = (
 #: /data and /etc/orchestrator, so that is what a deployment .env says.
 DEPLOY_DEFAULTS: dict[str, str] = {
     "ORCHESTRATOR_IMAGE": "ghcr.io/s-kroonen/homelab-orchestrator:latest",
+    "ORCHESTRATOR_BIND_ADDR": "127.0.0.1",
     "ORCHESTRATOR_ENV": "production",
     "LOG_FORMAT": "json",
     "DRY_RUN": "true",

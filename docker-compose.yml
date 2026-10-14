@@ -18,8 +18,16 @@ services:
     env_file:
       - .env
     ports:
-      # Bind to loopback by default; front with Traefik/Pangolin.
-      - "127.0.0.1:8080:8080"
+      # Loopback by default (safest for a fresh clone). To expose this on the
+      # LAN — e.g. a Traefik instance on a DIFFERENT host that needs to reach
+      # this one — set ORCHESTRATOR_BIND_ADDR in .env to this host's LAN IP
+      # (or 0.0.0.0 for all interfaces). Compose reads .env for both this
+      # substitution and the container's own env vars, so no second file is
+      # needed. Don't use docker-compose.override.yml for this: Compose
+      # CONCATENATES list-type keys like `ports` across files rather than
+      # replacing them, so a same-port override here collides with this one
+      # instead of replacing it ("address already in use").
+      - "${ORCHESTRATOR_BIND_ADDR:-127.0.0.1}:8080:8080"
     volumes:
       - orchestrator_state:/data
       # Mount the config DIRECTORY, not the single file. Two reasons:
