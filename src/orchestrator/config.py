@@ -123,6 +123,23 @@ class Settings(BaseSettings):
     # last verified backup of a service. See docs/api_tokens.md.
     pbs_protect_enabled: bool = True
 
+    # ---- Traefik ------------------------------------------------------------
+    # Read-only drift detection: do the ``proxy_host`` records in the DB have a
+    # matching live router in Traefik? Empty = disabled, no polling attempted —
+    # this is entirely optional, same as PBS/Proxmox degrading when unset.
+    # Requires Traefik started with --api=true; see docs/proxy_hosts.md.
+    # Example: http://traefik.example.lan:8080
+    traefik_api_url: str = ""
+    traefik_api_verify_tls: bool = True
+    # Traefik's API has no auth of its own — it's normally protected by network
+    # ACLs or a middleware. Set BOTH to enable HTTP basic auth in front of it;
+    # either alone is ignored. There is no bearer-token variant: Traefik has no
+    # built-in way to check one, so adding that option would just invite a
+    # false sense of security.
+    traefik_api_username: str = ""
+    traefik_api_password: SecretStr = SecretStr("")
+    traefik_api_timeout_s: float = 5.0
+
     # ---- Probe transports (phase 4) ---------------------------------------
     # Defaults for SSH probes; a probe's own transport block can override them.
     # In Docker the key and known_hosts must be MOUNTED into the container —

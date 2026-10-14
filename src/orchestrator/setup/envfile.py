@@ -201,6 +201,31 @@ ENV_SECTIONS: tuple[EnvSection, ...] = (
         ),
     ),
     EnvSection(
+        "traefik",
+        "Traefik drift detection",
+        (
+            EnvKey(
+                "TRAEFIK_API_URL",
+                "Empty = disabled (default): no drift checking attempted, proxy hosts\n"
+                "show live_status=unknown. Set to enable: requires Traefik started with\n"
+                "--api=true. Point at an INTERNAL-ONLY entrypoint — never\n"
+                "--api.insecure=true on a public one, the API has no auth by itself.\n"
+                "Example: http://traefik.example.lan:8080. See docs/proxy_hosts.md.",
+            ),
+            EnvKey("TRAEFIK_API_VERIFY_TLS", "false for a self-signed certificate."),
+            EnvKey(
+                "TRAEFIK_API_USERNAME",
+                "Optional HTTP basic auth in front of the API (e.g. a Traefik\n"
+                "BasicAuth middleware). Both username and password must be set to\n"
+                "take effect; either alone is ignored.",
+            ),
+            EnvKey("TRAEFIK_API_PASSWORD", secret=True),
+            EnvKey(
+                "TRAEFIK_API_TIMEOUT_S", "Short on purpose — this runs on dashboard page loads."
+            ),
+        ),
+    ),
+    EnvSection(
         "network",
         "Reaching guests (probes)",
         (
@@ -338,6 +363,7 @@ EXAMPLE_VALUES: dict[str, str] = {
     "PBS_DATASTORE": "example-datastore",
     "PBS_TOKEN_ID": "orchestrator@pbs!datastore",
     "PBS_TOKEN_SECRET": "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx",
+    "TRAEFIK_API_URL": "http://traefik.example.lan:8080",
     "MQTT_HOST": "mqtt.example.lan",
     "MQTT_USERNAME": "orchestrator",
     "MQTT_PASSWORD": "change-me",

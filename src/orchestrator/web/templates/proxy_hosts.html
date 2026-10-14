@@ -32,6 +32,8 @@
   th { color: #9aa4b2; font-weight: 500; }
   td.actions { white-space: nowrap; }
   .badge { padding: 0.1rem 0.5rem; border-radius: 1rem; font-size: 0.75rem; }
+  .badge.healthy { background: #113b23; color: #3ecf6d; }
+  .badge.failed { background: #3b1414; color: #e5534b; }
   .badge.unknown { background: #2a2f3a; color: #9aa4b2; }
   section { margin-bottom: 2rem; }
   section h2 { font-size: 0.95rem; margin: 0 0 0.75rem; }
@@ -91,6 +93,14 @@
       no linked service cannot be written to YAML (proxy hosts are nested under services
       there), so it stays DB-only.
     </p>
+    <p class="msg">
+      <strong>Traefik</strong> column: <span class="badge healthy">matched</span> a live Traefik
+      router covers this hostname right now; <span class="badge failed">missing</span> Traefik is
+      reachable but has no matching router (typo, drift, or never added); <span class="badge
+      unknown">unknown</span> either <code>TRAEFIK_API_URL</code> is not configured, or the last
+      poll failed — this is NOT the same as "missing". This is read-only drift detection; nothing
+      here ever writes to Traefik. See <code>docs/proxy_hosts.md</code>.
+    </p>
     <div class="row">
       <button id="save-btn">Save to YAML</button>
       <button class="secondary" id="reset-btn">Reset to saved</button>
@@ -98,9 +108,9 @@
     </div>
     <table>
       <thead>
-        <tr><th>Hostname</th><th>Upstream</th><th>Provider</th><th>Service</th><th>Last seen</th><th></th></tr>
+        <tr><th>Hostname</th><th>Upstream</th><th>Provider</th><th>Service</th><th>Traefik</th><th>Last seen</th><th></th></tr>
       </thead>
-      <tbody id="ph-rows"><tr><td colspan="6">Loading…</td></tr></tbody>
+      <tbody id="ph-rows"><tr><td colspan="7">Loading…</td></tr></tbody>
     </table>
   </section>
 
@@ -180,7 +190,7 @@
       body.innerHTML = "";
       const tr = document.createElement("tr");
       const td = cell(await errorText(resp));
-      td.colSpan = 6;
+      td.colSpan = 7;
       tr.appendChild(td);
       body.appendChild(tr);
       return;
@@ -190,7 +200,7 @@
     if (!hosts.length) {
       const tr = document.createElement("tr");
       const td = cell("No proxy hosts recorded.");
-      td.colSpan = 6;
+      td.colSpan = 7;
       tr.appendChild(td);
       body.appendChild(tr);
       return;
@@ -215,6 +225,18 @@
         svcTd.appendChild(b);
       }
       tr.appendChild(svcTd);
+
+      const statusTd = document.createElement("td");
+      const statusCls = { matched: "healthy", missing: "failed", unknown: "unknown" }[h.live_status]
+        || "unknown";
+      const statusLabel = { matched: "matched", missing: "missing", unknown: "unknown" }[h.live_status]
+        || "unknown";
+      const statusBadge = document.createElement("span");
+      statusBadge.className = "badge " + statusCls;
+      statusBadge.textContent = statusLabel;
+      statusTd.appendChild(statusBadge);
+      tr.appendChild(statusTd);
+
       tr.appendChild(cell(h.last_seen_at || "never", h.last_seen_at ? "" : "muted"));
 
       const actions = document.createElement("td");
