@@ -184,7 +184,7 @@ class HealthEngine:
 
         results: list[ProbeResult] = []
         for row in rows:
-            results.append(await self._run_one(row))
+            results.append(await self.run_probe(row))
 
         verdict = self.aggregate(rows, results)
         cache[service.slug] = verdict
@@ -259,7 +259,16 @@ class HealthEngine:
 
         return None
 
-    async def _run_one(self, row: ProbeRow) -> ProbeResult:
+    async def run_probe(self, row: ProbeRow) -> ProbeResult:
+        """Run exactly one probe and return its raw :class:`ProbeResult`.
+
+        Public on purpose: this is what :meth:`scan` calls per-probe
+        internally, and also the primitive behind "test this probe now" in
+        the CLI (``orchestrator-cli probe-test``) and the dashboard's
+        service page — both bypass aggregation/persistence entirely and
+        just want to see exactly what one probe does, right now, for
+        debugging a probe that's reporting UNKNOWN or FAILED.
+        """
         probe_cls = get_probe_class(row.kind)
         if probe_cls is None:
             return ProbeResult(

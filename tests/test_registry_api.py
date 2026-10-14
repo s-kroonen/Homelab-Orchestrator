@@ -12,6 +12,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 from typing import Any
 
+import httpx
 import pytest
 import webauthn
 from fastapi.testclient import TestClient
@@ -397,6 +398,59 @@ def test_probe_create_update_delete(client: TestClient) -> None:
     assert client.delete(f"/api/registry/probes/{probe['id']}").status_code == 404
     actions = _audit_actions()
     assert {"probe.created", "probe.updated", "probe.deleted"} <= set(actions)
+
+
+def test_test_probe_runs_it_now_and_returns_the_raw_result(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``POST /api/registry/probes/{id}/test`` — the single-probe debug
+    endpoint. Runs for real (through the same HttpProbe as a scheduled scan)
+    and returns state/message/details, without touching ServiceState."""
+    node = _make_node(client)
+    _make_service(client, node["id"])
+    probe = client.post(
+        "/api/registry/services/media/probes",
+        json={"name": "web", "kind": "http", "config": HTTP_CONFIG},
+    ).json()
+
+    class FailingClient:
+        def __init__(self, *a: Any, **k: Any) -> None: ...
+
+        async def __aenter__(self) -> FailingClient:
+            return self
+
+        async def __aexit__(self, *a: Any) -> None:
+            return None
+
+        async def request(self, *a: Any, **k: Any) -> httpx.Response:
+            raise httpx.ConnectError("connection refused")
+
+    monkeypatch.setattr(httpx, "AsyncClient", FailingClient)
+
+    r = client.post(f"/api/registry/probes/{probe['id']}/test")
+    assert r.status_code == 200, r.text
+    result = r.json()
+    assert result["probe_name"] == "web"
+    assert result["kind"] == "http"
+    assert result["state"] == "unknown"
+    assert "connection refused" in result["message"]
+    assert result["details"]["indeterminate"] is True
+
+    # Diagnostic only — it must never persist a verdict for the service.
+    from orchestrator.db.models import ServiceState
+
+    with Session(get_engine()) as s:
+        assert s.exec(select(ServiceState)).first() is None
+
+
+def test_test_probe_404s_for_a_missing_probe(client: TestClient) -> None:
+    assert client.post("/api/registry/probes/999999/test").status_code == 404
+
+
+def test_test_probe_401s_without_a_session(app: Any) -> None:
+    with TestClient(app) as anon:
+        r = anon.post("/api/registry/probes/1/test")
+    assert r.status_code == 401
 
 
 @pytest.mark.parametrize(

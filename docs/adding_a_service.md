@@ -32,7 +32,19 @@ so reaching a service through the gateway needs no retyping. Then:
 orchestrator-cli scan <slug>
 ```
 
-shows exactly what the backup gate will decide.
+shows exactly what the backup gate will decide. If one probe in there is
+UNKNOWN or FAILED and the reason isn't obvious from `scan`'s one-line
+summary, run just that probe on its own and see the raw result — the exact
+URL requested, the status code, the connection error, everything:
+
+```bash
+orchestrator-cli probe-test <slug> <probe-name>
+```
+
+This bypasses the aggregate verdict and writes nothing to the service's
+state — it only runs the one probe and prints what happened. The same view
+is available from the dashboard: open the service's page and click **Test**
+next to any probe in the list.
 
 Other commands:
 
@@ -43,6 +55,7 @@ Other commands:
 | `service remove <slug>` | drop it from the registry (backup history is kept) |
 | `probe list [slug]` | probes per service, and which ones gate |
 | `probe remove <slug> <name>` | remove one probe |
+| `probe-test <slug> <name>` | run one probe now and print its raw result (state, message, details) |
 | `proxy add/list/remove <slug>` | record Traefik / Pangolin routes |
 
 Everything takes `--non-interactive` plus flags, so the same operations work from
