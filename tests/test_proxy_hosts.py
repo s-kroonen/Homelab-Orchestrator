@@ -19,8 +19,9 @@ from sqlmodel import Session, select
 
 from orchestrator import config as config_module
 from orchestrator.db import session as session_module
-from orchestrator.db.models import AuditEntry, ProxyHost, Service
+from orchestrator.db.models import AuditEntry, Node, Probe, ProxyHost, Service
 from orchestrator.db.session import get_engine
+from orchestrator.domain.enums import GuestKind
 from orchestrator.registry.loader import read_yaml_file
 from orchestrator.web import auth as auth_lib
 from orchestrator.web.app import create_app
@@ -568,3 +569,194 @@ def test_resync_discover_then_create_round_trips_to_matched(
     assert second["updated_count"] == 1
     assert second["updated"][0]["hostname"] == "fresh.example.com"
     assert second["updated"][0]["upstream_changed"] is False
+
+
+# ---------------------------------------------------------------------------
+# Auto-managed Traefik HTTP probe (ensure_traefik_probe / sync_traefik_probe)
+# ---------------------------------------------------------------------------
+
+
+def _enable_proxy_base_url(monkeypatch: pytest.MonkeyPatch, url: str = "https://10.0.0.2") -> None:
+    monkeypatch.setenv("PROBE_PROXY_BASE_URL", url)
+    config_module.reset_settings_cache()
+
+
+def _second_service() -> Service:
+    """A second registered service, for re-link tests. Inserted directly —
+    there's no creation API for services in this router's test surface."""
+    with Session(get_engine()) as s:
+        node = Node(name="eve2", always_on=True)
+        s.add(node)
+        s.commit()
+        s.refresh(node)
+        svc = Service(
+            slug="other", name="Other", node_id=node.id, guest_kind=GuestKind.VM, guest_id=200
+        )
+        s.add(svc)
+        s.commit()
+        s.refresh(svc)
+        return svc
+
+
+def _probes_for(service_id: int) -> list[Probe]:
+    with Session(get_engine()) as s:
+        return list(s.exec(select(Probe).where(Probe.service_id == service_id)).all())
+
+
+def test_create_proxy_host_creates_a_non_required_http_probe(
+    client: TestClient, service: Service, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _enable_proxy_base_url(monkeypatch)
+    r = client.post(
+        "/api/proxy-hosts",
+        json={"hostname": "media.example.com", "service_id": service.id},
+    )
+    assert r.status_code == 201, r.text
+
+    probes = _probes_for(service.id)
+    assert len(probes) == 1
+    probe = probes[0]
+    assert probe.name == "traefik:media.example.com"
+    assert probe.kind.value == "http"
+    assert probe.required is False
+    assert probe.config["url"] == "https://10.0.0.2/"
+    assert probe.config["host_header"] == "media.example.com"
+    assert probe.config["expect_status"] == [200]
+
+    assert "probe.created" in _audit_actions_all()
+
+
+def test_proxy_base_url_unset_never_creates_a_probe(client: TestClient, service: Service) -> None:
+    r = client.post(
+        "/api/proxy-hosts", json={"hostname": "media.example.com", "service_id": service.id}
+    )
+    assert r.status_code == 201, r.text
+    assert _probes_for(service.id) == []
+
+
+def test_update_hostname_updates_host_header_without_duplicating_probe(
+    client: TestClient, service: Service, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _enable_proxy_base_url(monkeypatch)
+    ph_id = client.post(
+        "/api/proxy-hosts", json={"hostname": "old.example.com", "service_id": service.id}
+    ).json()["id"]
+    assert len(_probes_for(service.id)) == 1
+
+    client.put(
+        f"/api/proxy-hosts/{ph_id}",
+        json={"hostname": "new.example.com", "service_id": service.id},
+    )
+
+    probes = _probes_for(service.id)
+    assert len(probes) == 1
+    assert probes[0].name == "traefik:new.example.com"
+    assert probes[0].config["host_header"] == "new.example.com"
+    assert "probe.updated" in _audit_actions_all() or "probe.deleted" in _audit_actions_all()
+
+
+def test_relinking_to_a_different_service_moves_the_probe(
+    client: TestClient, service: Service, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _enable_proxy_base_url(monkeypatch)
+    other = _second_service()
+    ph_id = client.post(
+        "/api/proxy-hosts", json={"hostname": "media.example.com", "service_id": service.id}
+    ).json()["id"]
+    assert len(_probes_for(service.id)) == 1
+    assert len(_probes_for(other.id)) == 0
+
+    client.put(
+        f"/api/proxy-hosts/{ph_id}",
+        json={"hostname": "media.example.com", "service_id": other.id},
+    )
+
+    assert _probes_for(service.id) == []
+    moved = _probes_for(other.id)
+    assert len(moved) == 1
+    assert moved[0].name == "traefik:media.example.com"
+
+    actions = _audit_actions_all()
+    assert "probe.deleted" in actions
+    assert "probe.created" in actions
+
+
+def test_delete_proxy_host_removes_its_probe(
+    client: TestClient, service: Service, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _enable_proxy_base_url(monkeypatch)
+    ph_id = client.post(
+        "/api/proxy-hosts", json={"hostname": "media.example.com", "service_id": service.id}
+    ).json()["id"]
+    assert len(_probes_for(service.id)) == 1
+
+    client.delete(f"/api/proxy-hosts/{ph_id}")
+
+    assert _probes_for(service.id) == []
+    assert "probe.deleted" in _audit_actions_all()
+
+
+def test_resync_backfills_probes_for_preexisting_linked_hosts(
+    client: TestClient, service: Service, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Simulates a ProxyHost that was linked before PROBE_PROXY_BASE_URL was
+    ever configured — no probe exists yet. Enabling it and clicking Resync
+    (even with Traefik unreachable... no, Resync REQUIRES Traefik; here it's
+    reachable but with no matching router) must still backfill the probe."""
+    ph_id = client.post(
+        "/api/proxy-hosts", json={"hostname": "media.example.com", "service_id": service.id}
+    ).json()["id"]
+    assert _probes_for(service.id) == []  # not yet configured
+
+    _enable_proxy_base_url(monkeypatch)
+    monkeypatch.setenv("TRAEFIK_API_URL", "http://traefik.test:8080")
+    config_module.reset_settings_cache()
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/http/routers":
+            return httpx.Response(200, json=[])
+        if request.url.path == "/api/http/services":
+            return httpx.Response(200, json=[])
+        return httpx.Response(404, json={})
+
+    _patch_traefik_transport(monkeypatch, handle)
+
+    r = client.post("/api/proxy-hosts/resync")
+    assert r.status_code == 200, r.text
+
+    probes = _probes_for(service.id)
+    assert len(probes) == 1
+    assert probes[0].name == "traefik:media.example.com"
+    assert probes[0].required is False
+    assert "probe.created" in _audit_actions_all()
+    _ = ph_id  # unused beyond setup
+
+
+def test_auto_probe_appears_on_service_detail_as_non_required(
+    client: TestClient, service: Service, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _enable_proxy_base_url(monkeypatch)
+    client.post(
+        "/api/proxy-hosts",
+        json={"hostname": "media.example.com", "service_id": service.id, "upstream": "http://u"},
+    )
+    client.post(
+        f"/api/registry/services/{service.slug}/probes",
+        json={
+            "name": "manual-check",
+            "kind": "tcp",
+            "required": True,
+            "config": {"host": "h", "port": 1},
+        },
+    )
+
+    detail = client.get(f"/api/registry/services/{service.slug}").json()
+    probes_by_name = {p["name"]: p for p in detail["probes"]}
+    assert set(probes_by_name) == {"traefik:media.example.com", "manual-check"}
+    assert probes_by_name["traefik:media.example.com"]["required"] is False
+    assert probes_by_name["manual-check"]["required"] is True
+
+
+def _audit_actions_all() -> list[str]:
+    with Session(get_engine()) as s:
+        return [r.action for r in s.exec(select(AuditEntry)).all()]
