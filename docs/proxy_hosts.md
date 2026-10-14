@@ -156,3 +156,60 @@ quicker to turn on and sufficient for this:
 
 Pangolin and NPM would need their own equivalents; nothing above applies to
 them.
+
+## Resync from Traefik (manual, admin-triggered write)
+
+Drift detection above is read-only and automatic (it runs on every page
+load). **Resync** is the opposite in both respects: it is the one thing in
+this file that writes data sourced from Traefik into the database, and it
+only ever runs when an admin clicks the **Resync from Traefik** button on
+`/proxy-hosts` (`POST /api/proxy-hosts/resync`). Nothing changes on a
+schedule, on page load, or as a side effect of any other request.
+
+### What it does
+
+1. Calls Traefik's `/api/http/routers` **and** `/api/http/services` APIs
+   (the second to resolve each router's Traefik *service* reference — not
+   our own `Service` model, an unfortunate name collision — to the backend
+   URL(s) it is currently load-balancing to).
+2. For every existing `ProxyHost` whose `hostname` matches a live router:
+   - `upstream` is **overwritten** with the backend URL Traefik reports.
+     **This intentionally replaces a manually-set `upstream` value** — the
+     administrator wants Resync to reflect Traefik's current truth for any
+     host it already knows about, trading away manual overrides on matched
+     hosts for that guarantee.
+   - `last_seen_at` is set to the resync time, whether or not `upstream`
+     actually changed.
+   - `router_provider` and `extra` are **never** touched by Resync.
+3. For every live router hostname with **no** matching `ProxyHost.hostname`,
+   nothing is written to the database. `ProxyHost.service_id` is required
+   (see above) and Traefik has no concept of our `Service` entity, so
+   Resync can never safely invent one. Instead the hostname, its resolved
+   upstream and its Traefik router name are returned in the response's
+   `discovered` list — a staging area that exists only for the duration of
+   that one response, never persisted.
+4. The dashboard renders `discovered` as its own table, each row with a
+   service picker. Clicking **Add** on a row calls the *existing*
+   `POST /api/proxy-hosts` — the same endpoint the manual "Add a proxy
+   host" form uses — pre-filled with that row's hostname/upstream plus
+   whichever service was picked. There is no second creation endpoint.
+5. Every resync run is audit-logged (`proxy_host.resynced`) with
+   `updated_count`, `discovered_count`, and the matching hostname lists —
+   same `orchestrator.audit.log.record` mechanism as every other mutation
+   in this file.
+
+If `TRAEFIK_API_URL` is unset, or Traefik could not be reached, Resync
+returns `503 Service Unavailable` with a clear error message — unlike the
+read-only drift check, which silently degrades to `unknown`, this is a
+manual action the clicking admin is watching, so a real error is more useful
+than a fake success.
+
+### Why `upstream` only, and why it can be overwritten
+
+`router_provider` isn't touched because Traefik's API has no equivalent
+concept — it would be invented, not read. `extra` isn't touched because it
+holds operator-authored metadata (e.g. middleware lists) that Traefik's API
+doesn't expose at all. `upstream`, by contrast, is exactly the piece Traefik
+*can* tell us authoritatively — so Resync treats it as the field Traefik
+owns once a host is matched, and a manually-typed `upstream` on a matched
+host should be expected to be replaced the next time someone clicks Resync.
