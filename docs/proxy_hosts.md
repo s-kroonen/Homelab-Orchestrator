@@ -220,3 +220,73 @@ doesn't expose at all. `upstream`, by contrast, is exactly the piece Traefik
 *can* tell us authoritatively — so Resync treats it as the field Traefik
 owns once a host is matched, and a manually-typed `upstream` on a matched
 host should be expected to be replaced the next time someone clicks Resync.
+
+## Feeding Traefik's view into the service's own HEALTH verdict
+
+Everything above is visible on `/proxy-hosts`, but until now it was
+invisible to a service's own HEALTH page: a route that Traefik had quietly
+dropped never showed up as a probe result on the service it fronts.
+
+Linking a `ProxyHost` to a `Service` now automatically gives that service a
+diagnostic `http` probe that checks the public route *through the gateway*,
+named `traefik:<hostname>` — e.g. a `ProxyHost` for `media.example.com`
+linked to the `example-media` service gets a probe named
+`traefik:media.example.com` with:
+
+```yaml
+config:
+  url: "<PROBE_PROXY_BASE_URL>/"    # the gateway's LOCAL address
+  host_header: media.example.com    # what the proxy routes on
+  expect_status: [200]
+  verify_tls: false
+```
+
+This is exactly the `url` + `host_header` shape every hand-written proxied
+HTTP probe in `services.yaml` already uses (see
+[probing_through_a_gateway.md](probing_through_a_gateway.md)) — no new probe
+kind, just one created for you from data the orchestrator already has.
+`verify_tls` defaults to `false` because this probe hits the gateway's bare
+local IP, which commonly carries a self-signed certificate or one that only
+validates for the public hostname; a diagnostic probe should not FAIL on a
+cert mismatch unrelated to whether the route actually works.
+
+**It never gates anything by default.** The probe is always created with
+`required=false` — a service can have several `ProxyHost` records (two
+hostnames fronting the same app, say) and none of them individually has to
+be reachable for the service to be judged HEALTHY. If you want one specific
+route's reachability to actually block backups / mark the service FAILED,
+flip `required` to `true` on that one probe from the probe-edit UI on the
+service's detail page, the same way you would for any other probe. There is
+no separate "severity" concept — `required` is the only knob, reused.
+
+A dead gateway still reads as UNKNOWN downstream, not FAILED, the same way
+it already does for every other probe that routes through it — see
+[probing_through_a_gateway.md](probing_through_a_gateway.md)'s `depends_on`
+section. This probe gets that behavior for free as long as the service also
+declares `depends_on: [<gateway service>]`; nothing here is gateway-aware on
+its own.
+
+### Lifecycle
+
+The probe tracks the `ProxyHost` it was created from:
+
+- **Create** a linked `ProxyHost` → the probe is created.
+- **Rename** the hostname → the probe is renamed/updated in place
+  (`host_header` changes); it is never duplicated.
+- **Re-link** to a different service → the probe moves: removed from the old
+  service, (re)created on the new one.
+- **Unlink** (`service_id` cleared) → the probe is removed; there is no
+  service left to attach it to.
+- **Delete** the `ProxyHost` → its probe is removed.
+- **Resync from Traefik** also backfills: every currently-linked
+  `ProxyHost` — including ones linked before this feature existed — gets its
+  probe ensured as part of the existing per-host loop, whether or not
+  Traefik currently has a matching router for it.
+
+Every create/update/removal is audited with the same `probe.created` /
+`probe.updated` / `probe.deleted` actions the manual probe-CRUD endpoints
+already use, targeting `service:<slug>`.
+
+The whole feature is opt-in: it does nothing (no probe is ever created,
+updated or removed) when `PROBE_PROXY_BASE_URL` is unset, same as every
+other optional integration in this app.

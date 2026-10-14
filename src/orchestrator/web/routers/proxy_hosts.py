@@ -31,6 +31,7 @@ from sqlmodel import Session, select
 from orchestrator.audit import log as audit
 from orchestrator.db.models import ProxyHost, Service
 from orchestrator.domain.enums import RouterProvider
+from orchestrator.registry.traefik_probes import ProbeSyncEvent, sync_traefik_probe
 from orchestrator.registry.traefik_status import (
     RouterInfo,
     drift_status,
@@ -112,6 +113,41 @@ def _services_by_id(session: Session) -> dict[int, Service]:
     return {s.id: s for s in session.exec(select(Service)).all() if s.id is not None}
 
 
+def _audit_probe_sync_events(
+    session: Session,
+    admin: CurrentAdmin,
+    events: list[ProbeSyncEvent],
+    services: dict[int, Service] | None = None,
+) -> None:
+    """Audit each auto-managed Traefik probe create/update/delete.
+
+    Same ``orchestrator.audit.log.record`` mechanism, and the same
+    ``probe.created`` / ``probe.updated`` / ``probe.deleted`` action names,
+    as the hand-written probe CRUD in ``web/routers/dashboard.py`` — this is
+    not a new action vocabulary, just a different trigger for it.
+    """
+    if not events:
+        return
+    services = services if services is not None else _services_by_id(session)
+    for event in events:
+        svc = services.get(event.service_id)
+        slug = svc.slug if svc else str(event.service_id)
+        details: dict[str, Any] = {
+            "probe_id": event.probe_id,
+            "name": event.name,
+            "source": "traefik",
+        }
+        if event.config is not None:
+            details["config"] = event.config
+        audit.record(
+            session,
+            actor=admin.username,
+            action=f"probe.{event.action}",
+            target=f"service:{slug}",
+            details=details,
+        )
+
+
 def _get_or_404(session: Session, proxy_host_id: int) -> ProxyHost:
     ph = session.get(ProxyHost, proxy_host_id)
     if ph is None:
@@ -180,6 +216,10 @@ async def create_proxy_host(
             "service": svc.slug,
         },
     )
+    probe_events = sync_traefik_probe(
+        session, settings, hostname=ph.hostname, service_id=ph.service_id
+    )
+    _audit_probe_sync_events(session, admin, probe_events)
     session.commit()
     session.refresh(ph)
     live_hostnames = await fetch_router_hostnames(settings)
@@ -229,7 +269,16 @@ async def resync_proxy_hosts(
 
     now = datetime.now(UTC)
     updated: list[dict[str, Any]] = []
+    probe_events: list[ProbeSyncEvent] = []
     for ph in hosts:
+        # Backfill: every currently-linked ProxyHost gets its diagnostic
+        # probe ensured here too, not just the ones Traefik currently
+        # matches — this is what closes the gap for rows that already had a
+        # service_id before this feature existed. A no-op when the probe
+        # already matches, or when the host isn't linked to a service.
+        probe_events.extend(
+            sync_traefik_probe(session, settings, hostname=ph.hostname, service_id=ph.service_id)
+        )
         match = hostname_to_router.get(ph.hostname)
         if match is None:
             continue
@@ -274,8 +323,10 @@ async def resync_proxy_hosts(
             "discovered_count": len(discovered),
             "updated_hostnames": [u["hostname"] for u in updated],
             "discovered_hostnames": [d["hostname"] for d in discovered],
+            "probes_synced_count": len(probe_events),
         },
     )
+    _audit_probe_sync_events(session, admin, probe_events)
     session.commit()
 
     return {
@@ -329,6 +380,15 @@ async def update_proxy_host(
         target=f"proxy_host:{ph.hostname}",
         details={"id": ph.id, "service": svc.slug, "changes": changes},
     )
+    probe_events = sync_traefik_probe(
+        session,
+        settings,
+        hostname=ph.hostname,
+        service_id=ph.service_id,
+        old_hostname=before["hostname"],
+        old_service_id=before["service_id"],
+    )
+    _audit_probe_sync_events(session, admin, probe_events)
     session.commit()
     session.refresh(ph)
     live_hostnames = await fetch_router_hostnames(settings)
@@ -337,7 +397,7 @@ async def update_proxy_host(
 
 @router.delete("/{proxy_host_id}")
 async def delete_proxy_host(
-    proxy_host_id: int, session: SessionDep, admin: CurrentAdmin
+    proxy_host_id: int, session: SessionDep, admin: CurrentAdmin, settings: SettingsDep
 ) -> dict[str, Any]:
     ph = _get_or_404(session, proxy_host_id)
     hostname = ph.hostname
@@ -347,6 +407,15 @@ async def delete_proxy_host(
         "router_provider": ph.router_provider.value,
         "service_id": ph.service_id,
     }
+    probe_events = sync_traefik_probe(
+        session,
+        settings,
+        hostname=None,
+        service_id=None,
+        old_hostname=ph.hostname,
+        old_service_id=ph.service_id,
+    )
+    _audit_probe_sync_events(session, admin, probe_events)
     session.delete(ph)
     audit.record(
         session,
