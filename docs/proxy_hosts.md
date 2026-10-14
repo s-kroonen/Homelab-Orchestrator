@@ -10,10 +10,10 @@ under each service's `proxy_hosts:` list.
 These records are **maintained by hand**. Creating, editing or deleting a
 proxy host here changes nothing on the gateway, and `last_seen_at` is never
 set automatically. The orchestrator can optionally *read* Traefik's router
-list to flag drift (below) — that is the only thing in this repo that talks
-to Traefik, Pangolin or NPM, and it is read-only: there is no route
-discovery, metrics or access-log reader, and nothing here ever writes to the
-gateway.
+list to flag drift (below), and optionally poll Traefik's Prometheus metrics
+to show per-service/per-host traffic (see
+[traffic_metrics.md](traffic_metrics.md)) — both entirely read-only. Nothing
+in this repo ever writes to Traefik, Pangolin or NPM.
 
 They exist so both the operator and the orchestrator have one place to look
 up "which hostname reaches which service, through what":
@@ -130,21 +130,23 @@ here" and "actually routing in Traefik" — read-only, no SSH, no shared
 filesystem, nothing pushed. It does **not**:
 
 - write, create, or modify anything in Traefik;
-- track traffic, request counts or latency (that's Prometheus metrics,
-  still a possible future addition, see below);
 - reconcile automatically — an operator still edits `ProxyHost` records by
   hand and decides what to do about a `missing` one.
+
+Traffic, request counts and latency now ARE tracked, via Traefik's
+Prometheus metrics endpoint — see [traffic_metrics.md](traffic_metrics.md).
+That is a separate, independent read path (`/metrics`, not `/api/http/*`)
+with its own poller; it does not change anything described above.
 
 A later phase may add real config push once SSH access or shared storage
 exists between the orchestrator and the Traefik host — not designed yet, and
 not assumed to be coming.
 
 Other options considered and not built here because Traefik's own API is
-quicker to turn on and sufficient for this:
+quicker to turn on and sufficient for this (Prometheus metrics, the other
+option originally listed here, now IS built — see
+[traffic_metrics.md](traffic_metrics.md)):
 
-- **Prometheus metrics** (`metrics.prometheus` in static config): per-router
-  and per-service request counts, status codes and latency — the basis for
-  traffic/"last seen" monitoring rather than just route existence.
 - **Access logs** (`accessLog`, JSON format): per-request host, router,
   backend and status; readable by the host runner or a log shipper when
   metrics are too coarse.

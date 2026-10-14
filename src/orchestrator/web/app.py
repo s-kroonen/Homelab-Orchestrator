@@ -7,7 +7,8 @@ Lifespan tasks in order:
     4. reconcile services.yaml into the DB (YAML-wins boot rule)
     5. build + start adapters
     6. start the backup scheduler (if SCHEDULER_ENABLED)
-Shutdown reverses 6 then 5.
+    7. start the traffic collector (if TRAEFIK_API_URL is set)
+Shutdown reverses 7 then 6 then 5.
 """
 
 from __future__ import annotations
@@ -28,6 +29,7 @@ from orchestrator.db.session import build_engine, session_scope
 from orchestrator.logging_setup import configure_logging, get_logger
 from orchestrator.registry.loader import RegistryPathError, reconcile_yaml_into_db
 from orchestrator.scheduler import BackupScheduler
+from orchestrator.scheduler.traffic_collector import TrafficCollector
 from orchestrator.web.routers import (
     activity,
     auth,
@@ -144,10 +146,30 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         log.warning("scheduler.disabled", impact="SCHEDULER_ENABLED=false — no backups run.")
     app.state.scheduler = scheduler
 
+    # Same resilience rule as the backup scheduler: a failure to start must
+    # not take the app down, and this feature is optional in the first place
+    # (TRAEFIK_API_URL unset -> TrafficCollector.start() is a no-op).
+    traffic_collector: TrafficCollector | None = None
+    try:
+        traffic_collector = TrafficCollector(settings=settings)
+        traffic_collector.start()
+    except Exception as exc:
+        log.error(
+            "traffic_collector.start.failed",
+            error=str(exc),
+            error_type=type(exc).__name__,
+            traceback=traceback.format_exc(),
+            impact="No traffic metrics will be collected. /traffic will show no data.",
+        )
+        traffic_collector = None
+    app.state.traffic_collector = traffic_collector
+
     try:
         yield
     finally:
         log.info("orchestrator.stop")
+        if traffic_collector is not None:
+            await traffic_collector.shutdown()
         if scheduler is not None:
             await scheduler.shutdown()
         await adapters.stop_all()

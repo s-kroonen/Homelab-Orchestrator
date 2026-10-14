@@ -31,6 +31,7 @@ from orchestrator.web.deps import SessionDep, SettingsDep
 from orchestrator.web.routers.activity import build_feed
 from orchestrator.web.routers.backup_policies import policy_to_dict
 from orchestrator.web.routers.dashboard import service_detail
+from orchestrator.web.routers.traffic import build_traffic_view
 
 router = APIRouter(tags=["ui"])
 _templates = Jinja2Templates(directory=str(Path(__file__).parent.parent / "templates"))
@@ -219,6 +220,32 @@ async def backup_policies_page(
             "dry_run": settings.dry_run,
             "registry_dirty": diff.dirty,
             "yaml_path": diff.yaml_path,
+        },
+    )
+
+
+@router.get("/traffic", response_model=None)
+async def traffic_page(
+    request: Request, session: SessionDep, settings: SettingsDep
+) -> HTMLResponse | RedirectResponse:
+    """Per-service / per-host traffic, derived from the samples
+    ``orchestrator.scheduler.traffic_collector`` polls out of Traefik's
+    Prometheus ``/metrics`` endpoint. See ``docs/traffic_metrics.md``."""
+    admin = get_current_admin(request, session)
+    if admin is None:
+        return RedirectResponse("/login?next=/traffic", status_code=303)
+
+    traefik_enabled = bool(settings.traefik_api_url.strip())
+    view = build_traffic_view(session, traefik_enabled=traefik_enabled)
+
+    return _templates.TemplateResponse(
+        request,
+        "traffic.html",
+        {
+            "admin": admin,
+            "view": view,
+            "poll_interval_s": settings.traefik_metrics_poll_interval_s,
+            "retention_days": settings.traefik_metrics_retention_days,
         },
     )
 

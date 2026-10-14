@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>homelab-orchestrator — traffic</title>
+<style>
+  :root { color-scheme: light dark; }
+  body {
+    margin: 0; min-height: 100vh; padding: 2rem 1rem;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background: #0b0e14; color: #e6e9ef;
+  }
+  .wrap { max-width: 56rem; margin: 0 auto; }
+  header { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 1.5rem; flex-wrap: wrap; gap: 0.5rem; }
+  header h1 { font-size: 1.1rem; margin: 0; }
+  header .who { color: #9aa4b2; font-size: 0.85rem; }
+  header nav { display: flex; gap: 1rem; font-size: 0.85rem; }
+  header nav a { color: #9aa4b2; text-decoration: none; }
+  header nav a:hover, header nav a.current { color: #5b8def; }
+  button.logout { padding: 0.4rem 0.9rem; background: transparent; color: #9aa4b2; border: 1px solid #2a2f3a; border-radius: 0.4rem; cursor: pointer; font-size: 0.85rem; }
+  section { margin-bottom: 2rem; }
+  section h2 { font-size: 0.95rem; margin: 0 0 0.75rem; }
+  table { width: 100%; border-collapse: collapse; margin-bottom: 0.5rem; }
+  th, td { text-align: left; padding: 0.5rem 0.6rem; border-bottom: 1px solid #1a1e27; font-size: 0.85rem; vertical-align: middle; }
+  th { color: #9aa4b2; font-weight: 500; }
+  .msg { font-size: 0.85rem; color: #9aa4b2; }
+  .muted { color: #9aa4b2; }
+  code { background: #171b24; padding: 0.1rem 0.3rem; border-radius: 0.3rem; }
+  .banner { background: #3b2e14; color: #e5a63e; padding: 0.75rem 1rem; border-radius: 0.4rem; font-size: 0.85rem; margin-bottom: 1.5rem; line-height: 1.4; }
+  .banner strong { color: #e5a63e; }
+  .banner a { color: #e5a63e; }
+  .hero { display: flex; align-items: baseline; gap: 0.75rem; background: #12161f; border: 1px solid #1a1e27; border-radius: 0.6rem; padding: 1.25rem 1.5rem; margin-bottom: 1.5rem; flex-wrap: wrap; }
+  .hero .figure { font-size: 2.2rem; font-weight: 700; color: #5b8def; line-height: 1; }
+  .hero .unit { font-size: 0.95rem; color: #9aa4b2; }
+  .hero .detail { color: #9aa4b2; font-size: 0.85rem; margin-left: auto; }
+  details.group { margin-bottom: 1rem; border: 1px solid #1a1e27; border-radius: 0.4rem; padding: 0.6rem 0.8rem; }
+  details.group summary { cursor: pointer; font-size: 0.9rem; }
+  details.group[open] summary::before { content: "▾ "; color: #9aa4b2; }
+  details.group:not([open]) summary::before { content: "▸ "; color: #9aa4b2; }
+  details.group .group-name { font-weight: 600; }
+  details.group table { margin-top: 0.5rem; }
+  .sparkline { display: block; }
+  .codebar { display: flex; height: 0.5rem; width: 8rem; border-radius: 0.25rem; overflow: hidden; background: #1a1e27; }
+  .codebar span { height: 100%; }
+  .codebar .c2xx { background: #3ecf6d; }
+  .codebar .c3xx { background: #5b8def; }
+  .codebar .c4xx { background: #e5a63e; }
+  .codebar .c5xx { background: #e5534b; }
+  .codebar .cother { background: #6b7280; }
+  .code-counts { font-size: 0.75rem; color: #9aa4b2; }
+  .badge { padding: 0.1rem 0.5rem; border-radius: 1rem; font-size: 0.75rem; }
+  .badge.unknown { background: #2a2f3a; color: #9aa4b2; }
+  .badge.healthy { background: #113b23; color: #3ecf6d; }
+  @media (max-width: 40rem) {
+    header { flex-wrap: wrap; gap: 0.5rem; }
+    table { display: block; overflow-x: auto; }
+    .hero .detail { margin-left: 0; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>homelab-orchestrator</h1>
+    <nav>
+      <a href="/">Dashboard</a>
+      <a href="/backup-policies">Backup policies</a>
+      <a href="/proxy-hosts">Proxy hosts</a>
+      <a href="/traffic" class="current">Traffic</a>
+      <a href="/activity">Activity</a>
+    </nav>
+    <span class="who">
+      {{ admin.username }}
+      <button class="logout" id="logout-btn">Log out</button>
+    </span>
+  </header>
+
+  {% if not view.enabled %}
+  <div class="banner">
+    <strong>Traffic metrics are not configured.</strong> Set <code>TRAEFIK_API_URL</code>
+    (and start Traefik with <code>--metrics.prometheus=true</code>) to see per-service and
+    per-host traffic here. See <a href="https://github.com/s-kroonen/homelab-orchestrator/blob/dev/docs/traffic_metrics.md">docs/traffic_metrics.md</a>.
+  </div>
+  {% elif not view.has_samples %}
+  <div class="banner">
+    <strong>No traffic samples yet.</strong> The collector polls Traefik every
+    {{ poll_interval_s }}s; a rate needs at least two polls, so this fills in shortly
+    after startup. Samples older than {{ retention_days }} days are pruned automatically.
+  </div>
+  {% else %}
+  <div class="hero">
+    {% if view.overall.requests_per_min is not none %}
+    <span class="figure">{{ view.overall.requests_per_min }}</span>
+    <span class="unit">requests/min — overall, across every routed service</span>
+    {% else %}
+    <span class="figure muted" style="font-size:1.2rem;">—</span>
+    <span class="unit">no rate yet (need a second poll per host)</span>
+    {% endif %}
+    <span class="detail">{{ view.overall.hosts_with_rate }}/{{ view.overall.total_hosts }} hosts reporting a rate</span>
+  </div>
+  {% endif %}
+
+  {% if view.enabled %}
+  <section>
+    <h2>Traffic by service / host</h2>
+    {% for grp in view.groups %}
+    <details class="group" open>
+      <summary><span class="group-name">{{ grp.name }}</span> <span class="msg">({{ grp.hosts|length }})</span></summary>
+      <table>
+        <thead>
+          <tr><th>Host</th><th>Service</th><th>req/min</th><th>trend</th><th>status codes (last interval)</th></tr>
+        </thead>
+        <tbody>
+          {% for h in grp.hosts %}
+          <tr>
+            <td><code>{{ h.hostname }}</code></td>
+            <td>
+              {% if h.service_slug %}<a href="/services/{{ h.service_slug }}">{{ h.service_name }}</a>{% else %}<span class="muted">unlinked</span>{% endif %}
+            </td>
+            <td>
+              {% if h.rate_per_min is not none %}{{ h.rate_per_min }}
+              {% elif h.restarted %}<span class="badge unknown" title="Traefik's counters reset since the previous poll">restarted</span>
+              {% elif h.sample_count == 0 %}<span class="muted">no samples</span>
+              {% else %}<span class="muted">—</span>{% endif %}
+            </td>
+            <td>{% if h.sparkline %}{{ h.sparkline|safe }}{% else %}<span class="muted">—</span>{% endif %}</td>
+            <td>
+              {% if h.code_breakdown %}
+              {% set cb = h.code_breakdown %}
+              {% set total = cb['2xx'] + cb['3xx'] + cb['4xx'] + cb['5xx'] + cb['other'] %}
+              {% if total > 0 %}
+              <div class="codebar" title="2xx {{ cb['2xx'] }} · 3xx {{ cb['3xx'] }} · 4xx {{ cb['4xx'] }} · 5xx {{ cb['5xx'] }} · other {{ cb['other'] }}">
+                {% if cb['2xx'] %}<span class="c2xx" style="width: {{ (cb['2xx'] / total * 100)|round(1) }}%"></span>{% endif %}
+                {% if cb['3xx'] %}<span class="c3xx" style="width: {{ (cb['3xx'] / total * 100)|round(1) }}%"></span>{% endif %}
+                {% if cb['4xx'] %}<span class="c4xx" style="width: {{ (cb['4xx'] / total * 100)|round(1) }}%"></span>{% endif %}
+                {% if cb['5xx'] %}<span class="c5xx" style="width: {{ (cb['5xx'] / total * 100)|round(1) }}%"></span>{% endif %}
+                {% if cb['other'] %}<span class="cother" style="width: {{ (cb['other'] / total * 100)|round(1) }}%"></span>{% endif %}
+              </div>
+              <div class="code-counts">2xx {{ cb['2xx'] }} · 4xx {{ cb['4xx'] }} · 5xx {{ cb['5xx'] }}</div>
+              {% else %}<span class="muted">no requests this interval</span>{% endif %}
+              {% else %}<span class="muted">—</span>{% endif %}
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </details>
+    {% else %}
+    <p class="msg">No proxy hosts yet — add one on the <a href="/proxy-hosts">Proxy hosts</a> page.</p>
+    {% endfor %}
+  </section>
+  {% endif %}
+</div>
+
+<script>
+  document.getElementById("logout-btn").addEventListener("click", async () => {
+    await fetch("/api/auth/logout", { method: "POST" });
+    location.href = "/login";
+  });
+</script>
+</body>
+</html>

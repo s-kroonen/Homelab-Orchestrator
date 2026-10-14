@@ -20,6 +20,18 @@ Failures (DNS, connect, TLS, timeout, non-2xx, bad JSON) are caught here and
 turned into the ``UNKNOWN`` sentinel rather than raised — a Traefik outage or
 misconfiguration must never crash a dashboard page load or an unrelated
 request.
+
+:func:`fetch_router_metrics` adds one more read-only GET, against
+``{TRAEFIK_API_URL}/metrics`` (Traefik started with
+``--metrics.prometheus=true``). Unlike every other endpoint here, that one
+answers in Prometheus's plain-text exposition format, not JSON — hence
+:func:`parse_router_metrics`, a small forgiving line parser rather than a
+``prometheus_client`` dependency (that package is for *exposing* metrics,
+not reading someone else's). It only understands the three metric families
+the traffic dashboard needs; every other family Traefik exposes is ignored.
+A single poll is just "requests since Traefik's process started" — turning
+that into a trend is ``orchestrator.scheduler.traffic_collector``'s job, by
+polling repeatedly and storing what it sees.
 """
 
 from __future__ import annotations
@@ -226,6 +238,136 @@ async def fetch_router_details(settings: Settings) -> list[RouterInfo] | None:
         )
         details.append(RouterInfo(name=name, hostnames=hostnames, upstream=upstream))
     return details
+
+
+async def _traefik_get_text(client: httpx.AsyncClient, url: str) -> str | None:
+    """Like :func:`_traefik_get` but for a plain-text body (``/metrics``)."""
+    try:
+        response = await client.get(url)
+        response.raise_for_status()
+        return response.text
+    except httpx.TimeoutException as exc:
+        log.warning("traefik.poll_timeout", url=url, error=str(exc))
+        return None
+    except httpx.HTTPError as exc:
+        log.warning("traefik.poll_failed", url=url, error=str(exc))
+        return None
+
+
+@dataclass(frozen=True)
+class RouterMetricSample:
+    """One poll's worth of Prometheus counters for a single Traefik router.
+
+    ``requests_total`` and ``by_code`` are the counter's raw cumulative value
+    (summed across every ``code``/``method``/``protocol`` label combination
+    for that router) — NOT a delta. ``by_code`` maps the HTTP status code
+    string (e.g. ``"200"``) to its own cumulative count.
+    """
+
+    router: str
+    requests_total: int
+    duration_sum_s: float
+    duration_count: int
+    by_code: dict[str, int]
+
+
+# Only these three metric families are understood — Traefik's /metrics
+# exposes many more (TLS certs, entrypoint-level counters, Go runtime
+# stats, ...) that this dashboard has no use for and deliberately ignores.
+_ROUTER_REQUESTS_TOTAL = "traefik_router_requests_total"
+_ROUTER_DURATION_SUM = "traefik_router_request_duration_seconds_sum"
+_ROUTER_DURATION_COUNT = "traefik_router_request_duration_seconds_count"
+_KNOWN_METRIC_FAMILIES = frozenset(
+    {_ROUTER_REQUESTS_TOTAL, _ROUTER_DURATION_SUM, _ROUTER_DURATION_COUNT}
+)
+
+# ``metric_name{label="value",...} 123.45`` or the no-labels form
+# ``metric_name 123.45``. A trailing Prometheus timestamp (a second number)
+# is tolerated by \S+ matching only the first token after the labels.
+_METRIC_LINE_RE = re.compile(
+    r"^(?P<name>[A-Za-z_:][A-Za-z0-9_:]*)(?:\{(?P<labels>[^}]*)\})?\s+(?P<value>\S+)"
+)
+_LABEL_RE = re.compile(r'(\w+)\s*=\s*"((?:[^"\\]|\\.)*)"')
+
+
+def parse_router_metrics(text: str) -> dict[str, RouterMetricSample]:
+    """Parse the ``traefik_router_*`` families out of a Prometheus ``/metrics`` body.
+
+    Forgiving by design: a line that doesn't match the expected shape, has a
+    non-numeric value, or lacks a ``router`` label is skipped (and logged),
+    never raised — one malformed line must not lose every other router's
+    data. Every other metric family in the body is ignored outright.
+    """
+    acc: dict[str, dict[str, Any]] = {}
+
+    def entry(router: str) -> dict[str, Any]:
+        return acc.setdefault(
+            router,
+            {"requests_total": 0, "duration_sum_s": 0.0, "duration_count": 0, "by_code": {}},
+        )
+
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        match = _METRIC_LINE_RE.match(line)
+        if not match:
+            continue
+        name = match.group("name")
+        if name not in _KNOWN_METRIC_FAMILIES:
+            continue
+        labels = dict(_LABEL_RE.findall(match.group("labels") or ""))
+        router = labels.get("router")
+        if not router:
+            continue
+        try:
+            value = float(match.group("value"))
+        except ValueError:
+            log.warning("traefik.metrics_bad_value", line=line)
+            continue
+
+        row = entry(router)
+        if name == _ROUTER_REQUESTS_TOTAL:
+            count = int(value)
+            code = labels.get("code") or "unknown"
+            row["requests_total"] += count
+            row["by_code"][code] = row["by_code"].get(code, 0) + count
+        elif name == _ROUTER_DURATION_SUM:
+            row["duration_sum_s"] += value
+        elif name == _ROUTER_DURATION_COUNT:
+            row["duration_count"] += int(value)
+
+    return {
+        router: RouterMetricSample(
+            router=router,
+            requests_total=row["requests_total"],
+            duration_sum_s=row["duration_sum_s"],
+            duration_count=row["duration_count"],
+            by_code=row["by_code"],
+        )
+        for router, row in acc.items()
+    }
+
+
+async def fetch_router_metrics(settings: Settings) -> dict[str, RouterMetricSample] | None:
+    """Poll ``{TRAEFIK_API_URL}/metrics`` and parse it into one sample per router.
+
+    Returns ``None`` (never raises) when ``TRAEFIK_API_URL`` is unset, the
+    request fails, or Traefik was not started with
+    ``--metrics.prometheus=true`` (a 404 degrades the same as any other
+    failure here). An empty-but-reachable body yields ``{}``, not ``None`` —
+    that is a real answer ("no routers are serving traffic"), not a failure.
+    """
+    base_url = settings.traefik_api_url.strip()
+    if not base_url:
+        return None
+
+    url = base_url.rstrip("/") + "/metrics"
+    async with _traefik_client(settings) as client:
+        text = await _traefik_get_text(client, url)
+    if text is None:
+        return None
+    return parse_router_metrics(text)
 
 
 def drift_status(hostname: str, live_hostnames: set[str] | None) -> DriftStatus:

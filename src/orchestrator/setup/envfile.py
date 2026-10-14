@@ -223,6 +223,16 @@ ENV_SECTIONS: tuple[EnvSection, ...] = (
             EnvKey(
                 "TRAEFIK_API_TIMEOUT_S", "Short on purpose — this runs on dashboard page loads."
             ),
+            EnvKey(
+                "TRAEFIK_METRICS_POLL_INTERVAL_S",
+                "How often the in-app traffic collector polls {TRAEFIK_API_URL}/metrics\n"
+                "(Prometheus text format — requires Traefik started with\n"
+                "--metrics.prometheus=true). See docs/traffic_metrics.md.",
+            ),
+            EnvKey(
+                "TRAEFIK_METRICS_RETENTION_DAYS",
+                "How long traffic samples are kept before being pruned.",
+            ),
         ),
     ),
     EnvSection(
