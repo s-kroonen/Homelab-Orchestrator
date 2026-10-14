@@ -15,8 +15,9 @@
   header { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 1.5rem; gap: 1rem; flex-wrap: wrap; }
   header h1 { font-size: 1.1rem; margin: 0; }
   header .who { color: #9aa4b2; font-size: 0.85rem; }
-  nav { font-size: 0.85rem; }
-  nav a { color: #5b8def; text-decoration: none; }
+  nav { display: flex; gap: 1rem; font-size: 0.85rem; }
+  nav a { color: #9aa4b2; text-decoration: none; }
+  nav a:hover, nav a.current { color: #5b8def; }
   button {
     padding: 0.4rem 0.9rem; background: #5b8def; color: #0b0e14; border: none;
     border-radius: 0.4rem; font-weight: 600; cursor: pointer; font-size: 0.85rem;
@@ -56,7 +57,12 @@
 <div class="wrap">
   <header>
     <h1>homelab-orchestrator</h1>
-    <nav><a href="/">Services</a> · <a href="/backup-policies">Backup policies</a></nav>
+    <nav>
+      <a href="/">Dashboard</a>
+      <a href="/backup-policies" class="current">Backup policies</a>
+      <a href="/proxy-hosts">Proxy hosts</a>
+      <a href="/activity">Activity</a>
+    </nav>
     <span class="who">
       {{ admin.username }}
       <button class="logout" id="logout-btn">Log out</button>

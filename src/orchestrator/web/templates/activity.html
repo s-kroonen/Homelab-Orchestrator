@@ -55,15 +55,17 @@
 <div class="wrap">
   <header>
     <h1>homelab-orchestrator</h1>
+    <nav>
+      <a href="/">Dashboard</a>
+      <a href="/backup-policies">Backup policies</a>
+      <a href="/proxy-hosts">Proxy hosts</a>
+      <a href="/activity" class="current">Activity</a>
+    </nav>
     <span class="who">
       {{ admin.username }}
       <button class="logout" id="logout-btn">Log out</button>
     </span>
   </header>
-  <nav>
-    <a href="/">Services</a>
-    <a href="/activity" class="current">Activity</a>
-  </nav>
 
   <form class="row" method="get" action="/activity">
     <label class="msg" for="service">Service</label>
