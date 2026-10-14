@@ -244,3 +244,27 @@ def test_policies_page_renders_policies_and_is_linked_from_dashboard(
     assert "keep_daily=7" in page.text
     assert "pins latest verified" in page.text
     assert 'href="/backup-policies"' in dashboard.text
+
+
+def test_policies_page_offers_select_group_buttons(
+    app: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The target-services checklist gets a "select group" button per group,
+    and each checkbox carries its service's group as a data attribute — the
+    bulk-select JS reads that, the submitted form still posts a flat
+    services: [...] list to the existing API."""
+    with Session(get_engine()) as s:
+        alpha = s.exec(select(Service).where(Service.slug == "alpha")).one()
+        alpha.group = "streaming"
+        s.add(alpha)
+        s.commit()
+
+    with TestClient(app) as client:
+        _login(client, monkeypatch)
+        page = client.get("/backup-policies")
+
+    assert page.status_code == 200
+    assert 'data-select-group="streaming"' in page.text
+    assert 'data-group="streaming"' in page.text
+    # beta has no group — still listed, with an empty data-group, never hidden.
+    assert 'value="beta" data-group=""' in page.text

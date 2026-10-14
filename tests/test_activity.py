@@ -75,7 +75,9 @@ def _seed() -> None:
         s.add(node)
         s.commit()
         s.refresh(node)
-        media = Service(slug="media", name="Media", node_id=node.id, guest_kind=GuestKind.VM)
+        media = Service(
+            slug="media", name="Media", node_id=node.id, guest_kind=GuestKind.VM, group="infra"
+        )
         wiki = Service(slug="wiki", name="Wiki", node_id=node.id, guest_kind=GuestKind.CT)
         s.add_all([media, wiki])
         s.commit()
@@ -228,6 +230,19 @@ def test_feed_filters_by_service(app: Any, monkeypatch: pytest.MonkeyPatch) -> N
     assert nobody == []
 
 
+def test_feed_filters_by_group(app: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    with TestClient(app) as client:
+        _register(client, monkeypatch)
+        _seed()
+        infra = client.get("/api/activity", params={"group": "infra"}).json()
+        nobody = client.get("/api/activity", params={"group": "no-such-group"}).json()
+
+    # Only media's wake — media is the only service tagged "infra"; the admin
+    # action and wiki's backup both drop out.
+    assert [(e["type"], e["kind"]) for e in infra] == [("run", "wake")]
+    assert nobody == []
+
+
 def test_feed_respects_limit(app: Any, monkeypatch: pytest.MonkeyPatch) -> None:
     with TestClient(app) as client:
         _register(client, monkeypatch)
@@ -261,6 +276,21 @@ def test_activity_page_renders_runs_with_steps(app: Any, monkeypatch: pytest.Mon
 
     assert "integrity_gate" in filtered.text
     assert "node_online" not in filtered.text
+
+
+def test_activity_page_offers_and_applies_group_filter(
+    app: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    with TestClient(app) as client:
+        _register(client, monkeypatch)
+        _seed()
+        r = client.get("/activity")
+        filtered = client.get("/activity", params={"group": "infra"})
+
+    assert 'name="group"' in r.text
+    assert '<option value="infra"' in r.text
+    assert "node_online" in filtered.text
+    assert "integrity_gate" not in filtered.text
 
 
 def test_dashboard_explains_an_unhealthy_badge(app: Any, monkeypatch: pytest.MonkeyPatch) -> None:

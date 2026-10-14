@@ -39,7 +39,7 @@ Other commands:
 | Command | Does |
 |---------|------|
 | `service list` | every service, with whether its backup would be allowed |
-| `service update <slug>` | change one field; untouched fields are left alone |
+| `service update <slug>` | change one field (including `--group`); untouched fields are left alone |
 | `service remove <slug>` | drop it from the registry (backup history is kept) |
 | `probe list [slug]` | probes per service, and which ones gate |
 | `probe remove <slug> <name>` | remove one probe |
@@ -74,6 +74,7 @@ services:
   - slug: my-thing            # unique, kebab-case; used in URLs
     name: My Thing            # human-readable
     description: ""
+    group: ""                 # optional, purely organisational — see below
     node: compute-a           # must exist in the top-level `nodes:` list
     guest_kind: vm            # vm | ct | none
     guest_id: 9010            # Proxmox VMID / CTID
@@ -108,6 +109,25 @@ probes are diagnostic-only and don't affect the health verdict / gate), a
 | `db_sqlite`      | `sqlite3 PRAGMA integrity_check` against a copy.            | `ssh_host`, `db_path`                                   |
 | `db_mariadb`     | `mariadb-check` + `mariadb-dump --single-transaction`.      | `ssh_host`, `mysql_defaults_file`, `databases`          |
 | `custom_script`  | Run an executable; exit 0 = pass, non-zero = fail.          | `ssh_host` (optional), `executable`, `args`, `env`      |
+
+## Groups
+
+`group` is a free-form string the operator sets per service, purely
+organisational: it has no effect on backups, proxy routing or health.
+
+* `""` (the default) means ungrouped — shown last on the dashboard, under
+  "Ungrouped", never hidden.
+* The dashboard groups the service table into collapsible sections by it.
+* On `/backup-policies`, a "select group" button checks/unchecks every
+  service in that group at once in the target-services checklist — the
+  submitted request is still the same flat `services: [...]` list the API
+  already accepts.
+* `/activity` and the dashboard both gain a `?group=` filter alongside the
+  existing per-service one.
+
+Set it from the CLI with `orchestrator-cli service update <slug> --group
+<name>` (`--group ''` clears it), or from the service's own page in the
+dashboard.
 
 ## Aggregation rule (the gate)
 

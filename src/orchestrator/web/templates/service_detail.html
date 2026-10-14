@@ -80,6 +80,11 @@
       <input id="f-name">
       <label for="f-description">Description</label>
       <textarea id="f-description" rows="2"></textarea>
+      <label for="f-group">Group</label>
+      <input id="f-group" list="f-group-options" placeholder="(optional, organisational only)">
+      <datalist id="f-group-options">
+        {% for g in existing_groups %}<option value="{{ g }}">{% endfor %}
+      </datalist>
       <label for="f-enabled">Enabled</label>
       <span><input id="f-enabled" type="checkbox"></span>
       <label for="f-node">Node</label>
@@ -257,6 +262,7 @@
   function fillServiceForm(s) {
     $("f-name").value = s.name;
     $("f-description").value = s.description;
+    $("f-group").value = s.group || "";
     $("f-enabled").checked = s.enabled;
     $("f-node").value = s.node_id ?? "";
     $("f-guest-kind").value = s.guest_kind;
@@ -275,6 +281,7 @@
     const body = {
       name: $("f-name").value.trim(),
       description: $("f-description").value,
+      group: $("f-group").value.trim(),
       enabled: $("f-enabled").checked,
       node_id: Number($("f-node").value),
       guest_kind: $("f-guest-kind").value,

@@ -131,6 +131,14 @@ def test_new_services_get_probe_and_proxy_lists(registry: Path) -> None:
     assert svc["proxy_hosts"] == []
 
 
+def test_upsert_service_sets_group(registry: Path) -> None:
+    editor = RegistryEditor(registry)
+    editor.upsert_service("newthing", {"name": "New", "node": "eve1", "group": "media"})
+    assert editor.require_service("newthing")["group"] == "media"
+    editor.upsert_service("newthing", {"group": "renamed"})
+    assert editor.require_service("newthing")["group"] == "renamed"
+
+
 def test_remove_service(registry: Path) -> None:
     editor = RegistryEditor(registry)
     assert editor.remove_service("haos") is True
