@@ -64,16 +64,25 @@ def _audit_to_dict(entry: AuditEntry) -> dict[str, Any]:
 
 
 def build_feed(
-    session: Session, *, service: str | None = None, limit: int = MAX_EVENTS
+    session: Session,
+    *,
+    service: str | None = None,
+    group: str | None = None,
+    limit: int = MAX_EVENTS,
 ) -> list[dict[str, Any]]:
     """Newest-first list of events, each ``{"type": "run" | "audit", ...}``.
 
     ``service`` narrows to one slug: runs by ``service_id``, audit rows by
     their ``service:<slug>`` target. Audit rows with no service target (logins,
     invites) therefore drop out of a filtered feed, which is the point of it.
+
+    ``group`` narrows the same way but to every service carrying that group
+    tag (purely organisational — see ``Service.group``); combining both filters
+    narrows to their intersection.
     """
     limit = max(1, min(limit, MAX_EVENTS))
-    slugs = {s.id: s.slug for s in session.exec(select(Service)).all()}
+    all_services = session.exec(select(Service)).all()
+    slugs = {s.id: s.slug for s in all_services}
 
     run_stmt = select(PipelineRun).order_by(desc(PipelineRun.started_at)).limit(limit)
     audit_stmt = select(AuditEntry).order_by(desc(AuditEntry.created_at)).limit(limit)
@@ -83,6 +92,13 @@ def build_feed(
         # and return every run without a service instead.
         run_stmt = run_stmt.where(PipelineRun.service_id == (service_id or -1))
         audit_stmt = audit_stmt.where(AuditEntry.target == f"service:{service}")
+    if group is not None:
+        group_service_ids = [s.id for s in all_services if s.group == group]
+        group_targets = [f"service:{s.slug}" for s in all_services if s.group == group]
+        # An unknown/empty group must match NO runs, same reasoning as above —
+        # `in_([])` compiles to a tautological-false clause, which is correct.
+        run_stmt = run_stmt.where(col(PipelineRun.service_id).in_(group_service_ids))
+        audit_stmt = audit_stmt.where(col(AuditEntry.target).in_(group_targets))
     runs = session.exec(run_stmt).all()
 
     # Every audit row belonging to a run in the window, even an older one — a
@@ -135,6 +151,7 @@ def build_feed(
 async def activity(
     session: SessionDep,
     service: str | None = Query(None, description="Only events for this service slug"),
+    group: str | None = Query(None, description="Only events for services tagged with this group"),
     limit: int = Query(MAX_EVENTS, ge=1, le=MAX_EVENTS),
 ) -> list[dict[str, Any]]:
-    return build_feed(session, service=service, limit=limit)
+    return build_feed(session, service=service, group=group, limit=limit)

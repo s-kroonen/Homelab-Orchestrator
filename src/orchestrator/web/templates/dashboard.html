@@ -54,6 +54,12 @@
   nav a.current { color: #e6e9ef; border-bottom: 2px solid #5b8def; }
   details summary { cursor: pointer; list-style: none; }
   details summary::-webkit-details-marker { display: none; }
+  details.group { margin-bottom: 1rem; }
+  details.group summary { padding: 0.4rem 0; font-size: 0.9rem; }
+  details.group summary::before { content: "▸ "; color: #9aa4b2; }
+  details.group[open] summary::before { content: "▾ "; color: #9aa4b2; }
+  details.group .group-name { font-weight: 600; }
+  details.group table { margin-top: 0.5rem; }
   /* Same step list as maintenance.html — one ✓/✗ vocabulary across pages. */
   ol.steps { list-style: none; padding: 0; margin: 0.4rem 0 0; text-align: left; font-size: 0.8rem; }
   ol.steps li { padding: 0.15rem 0; color: #9aa4b2; }
@@ -87,43 +93,48 @@
       <button class="secondary" id="reset-btn">Reset to saved</button>
       <span class="msg" id="registry-msg"></span>
     </div>
-    <table>
-      <thead>
-        <tr><th>Service</th><th>Node</th><th>Health</th><th>Last backup</th></tr>
-      </thead>
-      <tbody>
-        {% for svc in services %}
-        <tr>
-          <td><a href="/services/{{ svc.slug }}">{{ svc.name }}</a> <code>{{ svc.slug }}</code></td>
-          <td>{{ svc.node }}</td>
-          <td>
-            {% if not svc.enabled %}{% set badge %}<span class="badge disabled">disabled</span>{% endset %}
-            {% elif svc.verdict == "healthy" %}{% set badge %}<span class="badge healthy">healthy</span>{% endset %}
-            {% elif svc.verdict == "failed" %}{% set badge %}<span class="badge failed">failed</span>{% endset %}
-            {% else %}{% set badge %}<span class="badge unknown">unknown</span>{% endset %}{% endif %}
-            {% if svc.enabled and svc.probes %}
-            <details class="probes">
-              <summary title="last checked {{ svc.verdict_at or 'never' }}">{{ badge }} <span class="msg">▸ probes</span></summary>
-              <ol class="steps">
-                {% for p in svc.probes %}
-                <li class="{{ p.css }}">{{ p.name }} <span class="msg">({{ p.kind }}{% if p.latency_ms is not none %}, {{ p.latency_ms }} ms{% endif %}){% if p.message %} — {{ p.message }}{% endif %}</span></li>
-                {% endfor %}
-              </ol>
-            </details>
-            {% else %}{{ badge }}{% endif %}
-            <a class="msg" href="/activity?service={{ svc.slug }}">history</a>
-          </td>
-          <td>
-            {% if svc.last_backup_at %}
-              {{ svc.last_backup_at }}{% if svc.last_backup_verified %} ✓{% endif %}
-            {% else %}—{% endif %}
-          </td>
-        </tr>
-        {% else %}
-        <tr><td colspan="4">No services registered.</td></tr>
-        {% endfor %}
-      </tbody>
-    </table>
+    {% for grp in service_groups %}
+    <details class="group" open>
+      <summary><span class="group-name">{{ grp.name }}</span> <span class="msg">({{ grp.services|length }})</span>{% if grp.name != "Ungrouped" %} <a class="msg" href="/activity?group={{ grp.name }}">history</a>{% endif %}</summary>
+      <table>
+        <thead>
+          <tr><th>Service</th><th>Node</th><th>Health</th><th>Last backup</th></tr>
+        </thead>
+        <tbody>
+          {% for svc in grp.services %}
+          <tr>
+            <td><a href="/services/{{ svc.slug }}">{{ svc.name }}</a> <code>{{ svc.slug }}</code></td>
+            <td>{{ svc.node }}</td>
+            <td>
+              {% if not svc.enabled %}{% set badge %}<span class="badge disabled">disabled</span>{% endset %}
+              {% elif svc.verdict == "healthy" %}{% set badge %}<span class="badge healthy">healthy</span>{% endset %}
+              {% elif svc.verdict == "failed" %}{% set badge %}<span class="badge failed">failed</span>{% endset %}
+              {% else %}{% set badge %}<span class="badge unknown">unknown</span>{% endset %}{% endif %}
+              {% if svc.enabled and svc.probes %}
+              <details class="probes">
+                <summary title="last checked {{ svc.verdict_at or 'never' }}">{{ badge }} <span class="msg">▸ probes</span></summary>
+                <ol class="steps">
+                  {% for p in svc.probes %}
+                  <li class="{{ p.css }}">{{ p.name }} <span class="msg">({{ p.kind }}{% if p.latency_ms is not none %}, {{ p.latency_ms }} ms{% endif %}){% if p.message %} — {{ p.message }}{% endif %}</span></li>
+                  {% endfor %}
+                </ol>
+              </details>
+              {% else %}{{ badge }}{% endif %}
+              <a class="msg" href="/activity?service={{ svc.slug }}">history</a>
+            </td>
+            <td>
+              {% if svc.last_backup_at %}
+                {{ svc.last_backup_at }}{% if svc.last_backup_verified %} ✓{% endif %}
+              {% else %}—{% endif %}
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </details>
+    {% else %}
+    <p class="msg">No services registered.</p>
+    {% endfor %}
   </section>
 
   <section>
@@ -139,6 +150,7 @@
         {% for k in guest_kinds %}<option value="{{ k }}"{% if k == "vm" %} selected{% endif %}>{{ k }}</option>{% endfor %}
       </select>
       <input id="new-svc-guest-id" type="number" placeholder="guest id" style="width: 6rem">
+      <input id="new-svc-group" placeholder="group (optional)" size="12">
       <button id="new-svc-btn">Create</button>
     </div>
     <p class="msg" id="new-svc-msg">Probes, dependencies and backup settings are set on the service's own page after creating it.</p>
@@ -287,6 +299,7 @@
         node_id: Number(document.getElementById("new-svc-node").value),
         guest_kind: document.getElementById("new-svc-guest-kind").value,
         guest_id: guestId === "" ? null : Number(guestId),
+        group: document.getElementById("new-svc-group").value.trim(),
       };
       try {
         const svc = await sendJson("POST", "/api/registry/services", body);

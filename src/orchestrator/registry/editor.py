@@ -221,6 +221,7 @@ class RegistryEditor:
         for key in (
             "name",
             "description",
+            "group",
             "node",
             "guest_kind",
             "guest_id",

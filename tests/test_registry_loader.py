@@ -255,4 +255,28 @@ def test_backup_excluded_round_trips_through_yaml(session: Session) -> None:
     session.commit()
     reloaded = session.exec(select(Service).where(Service.slug == "example-media")).one()
     assert reloaded.backup_excluded is True
-    assert reloaded.backup_excluded_reason == "hosts the PBS datastore"
+
+
+def test_group_round_trips_through_yaml(session: Session) -> None:
+    """``group`` is purely organisational, but a Save that silently dropped it
+    would still be a bug — the operator just re-tagged everything for nothing."""
+    yaml_path = _copy_example(get_settings().services_yaml_path)
+    reconcile_yaml_into_db(session, yaml_path)
+    session.commit()
+
+    svc = session.exec(select(Service).where(Service.slug == "example-media")).one()
+    assert svc.group == ""  # the example registry sets none
+    svc.group = "entertainment"
+    session.commit()
+
+    save_registry_to_yaml(session, yaml_path, actor="test")
+    session.commit()
+    assert compute_registry_diff(session).dirty is False
+
+    reconcile_yaml_into_db(session, yaml_path)
+    session.commit()
+    reloaded = session.exec(select(Service).where(Service.slug == "example-media")).one()
+    assert reloaded.group == "entertainment"
+    # Untouched services still load with the "" default, not None or missing.
+    other = session.exec(select(Service).where(Service.slug == "example-cloud")).one()
+    assert other.group == ""

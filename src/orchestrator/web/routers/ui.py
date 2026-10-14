@@ -41,6 +41,18 @@ _templates = Jinja2Templates(directory=str(Path(__file__).parent.parent / "templ
 _STATE_CLASS = {"healthy": "ok", "failed": "failed", "unknown": "indeterminate"}
 
 
+def _group_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Bucket service rows by their ``group`` field for the dashboard's
+    collapsible sections. Named groups sort alphabetically; ungrouped services
+    (``group == ""``) always come last, under "Ungrouped" — never hidden."""
+    buckets: dict[str, list[dict[str, Any]]] = {}
+    for row in rows:
+        buckets.setdefault(row.get("group") or "", []).append(row)
+    named = sorted(name for name in buckets if name)
+    ordered = named + ([""] if "" in buckets else [])
+    return [{"name": name or "Ungrouped", "services": buckets[name]} for name in ordered]
+
+
 def _probe_row(result: dict[str, Any]) -> dict[str, Any]:
     state = str(result.get("state", "unknown"))
     return {
@@ -76,6 +88,7 @@ async def dashboard_page(
                 "slug": svc.slug,
                 "name": svc.name,
                 "enabled": svc.enabled,
+                "group": svc.group,
                 "node": nodes.get(svc.node_id, "?"),
                 "verdict": state.last_verdict.value if state else "unknown",
                 "verdict_at": (
@@ -97,6 +110,7 @@ async def dashboard_page(
         {
             "admin": admin,
             "services": rows,
+            "service_groups": _group_rows(rows),
             "nodes": [{"id": n.id, "name": n.name} for n in all_nodes],
             "guest_kinds": [k.value for k in GuestKind],
             "registry_dirty": diff.dirty,
@@ -124,6 +138,7 @@ async def service_detail_page(
     other_slugs = [
         s for s in session.exec(select(Service.slug).order_by(Service.slug)).all() if s != slug
     ]
+    existing_groups = sorted({g for g in session.exec(select(Service.group)).all() if g})
     probe_kinds = [
         {"kind": k.value, "summary": spec.summary, "default_timeout_s": spec.default_timeout_s}
         for k, spec in PROBE_SPECS.items()
@@ -139,6 +154,7 @@ async def service_detail_page(
             "nodes": [{"id": n.id, "name": n.name} for n in nodes],
             "policies": [{"id": p.id, "name": p.name} for p in policies],
             "other_slugs": other_slugs,
+            "existing_groups": existing_groups,
             "guest_kinds": [k.value for k in GuestKind],
             "probe_kinds": probe_kinds,
             "registry_dirty": diff.dirty,
@@ -186,6 +202,8 @@ async def backup_policies_page(
     scheduler = getattr(request.app.state, "scheduler", None)
     policies = session.exec(select(BackupPolicy).order_by(BackupPolicy.name)).all()
     diff = compute_registry_diff(session)
+    services = session.exec(select(Service).order_by(Service.slug)).all()
+    groups = sorted({s.group for s in services if s.group})
 
     return _templates.TemplateResponse(
         request,
@@ -193,7 +211,8 @@ async def backup_policies_page(
         {
             "admin": admin,
             "policies": [policy_to_dict(session, p, scheduler) for p in policies],
-            "services": [s.slug for s in session.exec(select(Service).order_by(Service.slug))],
+            "services": [{"slug": s.slug, "group": s.group} for s in services],
+            "groups": groups,
             "modes": [m.value for m in BackupMode],
             "scheduler_enabled": settings.scheduler_enabled,
             "scheduler_running": bool(scheduler and scheduler.running),
@@ -209,6 +228,7 @@ async def activity_page(
     request: Request,
     session: SessionDep,
     service: str | None = Query(None),
+    group: str | None = Query(None),
 ) -> HTMLResponse | RedirectResponse:
     """History of wakes, backups and admin actions — see ``routers/activity.py``."""
     admin = get_current_admin(request, session)
@@ -216,13 +236,16 @@ async def activity_page(
         return RedirectResponse("/login?next=/activity", status_code=303)
 
     service = service or None  # the filter form submits "" for "all services"
+    group = group or None
     return _templates.TemplateResponse(
         request,
         "activity.html",
         {
             "admin": admin,
-            "events": build_feed(session, service=service),
+            "events": build_feed(session, service=service, group=group),
             "service": service,
+            "group": group,
             "slugs": session.exec(select(Service.slug).order_by(Service.slug)).all(),
+            "groups": sorted({g for g in session.exec(select(Service.group)).all() if g}),
         },
     )

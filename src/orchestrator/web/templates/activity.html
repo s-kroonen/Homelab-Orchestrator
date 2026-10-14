@@ -75,6 +75,15 @@
       <option value="{{ slug }}" {% if slug == service %}selected{% endif %}>{{ slug }}</option>
       {% endfor %}
     </select>
+    {% if groups %}
+    <label class="msg" for="group">Group</label>
+    <select id="group" name="group" onchange="this.form.submit()">
+      <option value="">all groups</option>
+      {% for g in groups %}
+      <option value="{{ g }}" {% if g == group %}selected{% endif %}>{{ g }}</option>
+      {% endfor %}
+    </select>
+    {% endif %}
     <noscript><button type="submit">Filter</button></noscript>
     <span class="msg">newest first, last {{ events|length }} event(s)</span>
   </form>
@@ -124,7 +133,7 @@
       {% endif %}
     </li>
     {% else %}
-    <li class="msg">Nothing has happened yet{% if service %} for {{ service }}{% endif %}.</li>
+    <li class="msg">Nothing has happened yet{% if service %} for {{ service }}{% elif group %} for group {{ group }}{% endif %}.</li>
     {% endfor %}
   </ul>
 </div>

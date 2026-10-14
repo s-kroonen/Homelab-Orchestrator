@@ -156,6 +156,7 @@ def _spec_from_db(session: Session) -> RegistryFile:
                 slug=svc.slug,
                 name=svc.name,
                 description=svc.description,
+                group=svc.group,
                 node=node_name,
                 guest_kind=svc.guest_kind,
                 guest_id=svc.guest_id,
@@ -405,6 +406,7 @@ def reconcile_yaml_into_db(session: Session, path: Path) -> RegistryFile:
             session.add(svc)
         svc.name = spec.name
         svc.description = spec.description
+        svc.group = spec.group
         svc.guest_kind = spec.guest_kind
         svc.guest_id = spec.guest_id
         svc.enabled = spec.enabled

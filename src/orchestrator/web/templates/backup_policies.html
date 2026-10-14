@@ -148,9 +148,18 @@
       </fieldset>
       <fieldset>
         <legend>Target services</legend>
+        {% if groups %}
+        <div class="row" id="group-select-row">
+          <span class="muted">Select group:</span>
+          {% for g in groups %}
+          <button type="button" class="secondary small" data-select-group="{{ g }}">{{ g }}</button>
+          {% endfor %}
+          <button type="button" class="secondary small" data-select-group="">ungrouped</button>
+        </div>
+        {% endif %}
         <div class="services">
-          {% for slug in services %}
-          <label class="inline"><input type="checkbox" name="svc" value="{{ slug }}"> {{ slug }}</label>
+          {% for svc in services %}
+          <label class="inline"><input type="checkbox" name="svc" value="{{ svc.slug }}" data-group="{{ svc.group }}"> {{ svc.slug }}{% if svc.group %} <span class="muted">({{ svc.group }})</span>{% endif %}</label>
           {% else %}<span class="muted">No services registered.</span>{% endfor %}
         </div>
       </fieldset>
@@ -270,6 +279,20 @@
       document.getElementById("policy-form").scrollIntoView({ behavior: "smooth" });
     });
   }
+  // "select group" buttons: pure client-side convenience. Toggling checks every
+  // checkbox for that group on if any are currently unchecked, else clears the
+  // whole group — the submitted payload is still the same flat services: [...]
+  // array the API already expects, nothing new server-side.
+  for (const btn of document.querySelectorAll("[data-select-group]")) {
+    btn.addEventListener("click", () => {
+      const grp = btn.dataset.selectGroup;
+      const boxes = [...document.querySelectorAll(`input[name=svc][data-group="${grp}"]`)];
+      if (!boxes.length) return;
+      const allChecked = boxes.every((cb) => cb.checked);
+      for (const cb of boxes) cb.checked = !allChecked;
+    });
+  }
+
   for (const btn of document.querySelectorAll("[data-delete]")) {
     btn.addEventListener("click", async () => {
       const name = btn.dataset.delete;

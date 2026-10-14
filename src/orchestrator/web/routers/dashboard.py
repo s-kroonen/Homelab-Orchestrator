@@ -87,6 +87,7 @@ class ServiceCreate(_Body):
     slug: str
     name: str
     description: str = ""
+    group: str = ""
     node_id: int
     guest_kind: str = GuestKind.NONE.value
     guest_id: int | None = None
@@ -103,6 +104,7 @@ class ServiceUpdate(_Body):
 
     name: str | None = None
     description: str | None = None
+    group: str | None = None
     node_id: int | None = None
     guest_kind: str | None = None
     guest_id: int | None = None
@@ -197,6 +199,7 @@ def service_detail(session: Session, svc: Service) -> dict[str, Any]:
         "slug": svc.slug,
         "name": svc.name,
         "description": svc.description,
+        "group": svc.group,
         "enabled": svc.enabled,
         "guest_kind": svc.guest_kind.value,
         "guest_id": svc.guest_id,
@@ -419,6 +422,7 @@ async def list_services(session: SessionDep) -> list[dict[str, object]]:
             "slug": s.slug,
             "name": s.name,
             "enabled": s.enabled,
+            "group": s.group,
             "node": nodes.get(s.node_id),
             "guest_kind": s.guest_kind.value,
             "guest_id": s.guest_id,
@@ -455,6 +459,7 @@ async def create_service(
         slug=slug,
         name=name,
         description=body.description,
+        group=body.group,
         node_id=body.node_id,
         guest_kind=guest_kind,
         guest_id=body.guest_id,
@@ -491,6 +496,8 @@ async def update_service(
         changes["name"] = _require_text(changes["name"] or "", "name")
     if "description" in changes and changes["description"] is None:
         changes["description"] = ""
+    if "group" in changes and changes["group"] is None:
+        changes["group"] = ""
     if "backup_excluded_reason" in changes and changes["backup_excluded_reason"] is None:
         changes["backup_excluded_reason"] = ""
     for flag in ("enabled", "backup_excluded"):

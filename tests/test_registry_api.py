@@ -217,6 +217,26 @@ def test_service_create_get_update_delete(client: TestClient) -> None:
     assert actions[-1] == "service.deleted"
 
 
+def test_service_group_create_update_and_default(client: TestClient) -> None:
+    """``group`` defaults to "" (ungrouped), is settable at create, and is a
+    plain editable field like description — not validated against anything."""
+    node = _make_node(client)
+    created = _make_service(client, node["id"])
+    assert created["group"] == ""
+
+    grouped = _make_service(client, node["id"], slug="media2", group="media")
+    assert grouped["group"] == "media"
+
+    r = client.put("/api/registry/services/media2", json={"group": "entertainment"})
+    assert r.status_code == 200, r.text
+    assert r.json()["group"] == "entertainment"
+
+    # None clears it back to "", same convention as description.
+    r = client.put("/api/registry/services/media2", json={"group": None})
+    assert r.status_code == 200, r.text
+    assert r.json()["group"] == ""
+
+
 def test_service_audit_records_the_admin(client: TestClient) -> None:
     node = _make_node(client)
     _make_service(client, node["id"])
@@ -497,3 +517,48 @@ def test_dashboard_links_to_detail_and_offers_create_forms(client: TestClient) -
     assert 'href="/services/media"' in r.text
     assert 'id="new-svc-btn"' in r.text
     assert 'id="new-node-btn"' in r.text
+
+
+def test_service_group_round_trips_through_save_and_reset(client: TestClient) -> None:
+    node = _make_node(client)
+    _make_service(client, node["id"], group="media")
+    _make_service(client, node["id"], slug="other", group="")
+
+    assert client.post("/api/registry/save").status_code == 200
+    assert client.get("/api/registry/status").json()["dirty"] is False
+
+    # A live edit after the save is discarded by Reset, same as any other field.
+    client.put("/api/registry/services/media", json={"group": "renamed"})
+    assert client.post("/api/registry/reset").status_code == 200
+    detail = client.get("/api/registry/services/media").json()
+    assert detail["group"] == "media"
+    assert client.get("/api/registry/services/other").json()["group"] == ""
+
+
+def test_dashboard_groups_services_into_collapsible_sections(client: TestClient) -> None:
+    node = _make_node(client)
+    _make_service(client, node["id"], slug="media", group="entertainment")
+    _make_service(client, node["id"], slug="cloud", group="entertainment")
+    _make_service(client, node["id"], slug="gateway", group="")
+
+    r = client.get("/")
+    assert r.status_code == 200
+    # One <details class="group"> section per group, named groups before
+    # "Ungrouped", and every service still appears somewhere (never hidden).
+    assert '<span class="group-name">entertainment</span>' in r.text
+    assert '<span class="group-name">Ungrouped</span>' in r.text
+    entertainment_pos = r.text.index("entertainment</span>")
+    ungrouped_pos = r.text.index("Ungrouped</span>")
+    assert entertainment_pos < ungrouped_pos
+    assert 'href="/services/media"' in r.text
+    assert 'href="/services/gateway"' in r.text
+    assert 'href="/activity?group=entertainment"' in r.text
+
+
+def test_service_detail_page_has_group_field(client: TestClient) -> None:
+    node = _make_node(client)
+    _make_service(client, node["id"], group="media")
+    r = client.get("/services/media")
+    assert r.status_code == 200
+    assert 'id="f-group"' in r.text
+    assert '"group": "media"' in r.text

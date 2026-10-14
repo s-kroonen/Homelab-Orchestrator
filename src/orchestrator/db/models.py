@@ -99,6 +99,12 @@ class Service(SQLModel, table=True):
     backup_excluded: bool = Field(default=False)
     backup_excluded_reason: str = ""
 
+    # Free-form organisational tag — purely cosmetic. "" means ungrouped, not a
+    # distinct "Ungrouped" group. Lets the dashboard collapse the service table
+    # and offer bulk target selection once a registry grows past a handful of
+    # services; it has no effect on backups, proxy routing or health.
+    group: str = ""
+
     # Slugs of services that must be HEALTHY before this one can be judged at
     # all. The motivating case: the orchestrator is not on the guests' network,
     # so every probe reaches them through a gateway. If the gateway is down,

@@ -595,6 +595,11 @@ def service_list(path_override: str | None) -> None:
 )
 @click.option("--name", default=None)
 @click.option("--description", default=None)
+@click.option(
+    "--group",
+    default=None,
+    help="Purely organisational tag the dashboard groups services by. Pass '' to clear.",
+)
 @click.option("--file", "path_override", default=None)
 def service_update(
     slug: str,
@@ -605,6 +610,7 @@ def service_update(
     depends_on: str | None,
     name: str | None,
     description: str | None,
+    group: str | None,
     path_override: str | None,
 ) -> None:
     """Update fields on SLUG. Only the flags you pass are touched."""
@@ -632,6 +638,8 @@ def service_update(
         fields["name"] = name
     if description is not None:
         fields["description"] = description
+    if group is not None:
+        fields["group"] = group
 
     if not fields:
         raise click.UsageError("nothing to change — pass at least one option")

@@ -66,6 +66,8 @@ class ServiceSpec(BaseModel):
     slug: str
     name: str
     description: str = ""
+    #: Purely organisational — see Service.group. "" means ungrouped.
+    group: str = ""
     node: str  # -> NodeSpec.name
     guest_kind: GuestKind = GuestKind.NONE
     guest_id: int | None = None
