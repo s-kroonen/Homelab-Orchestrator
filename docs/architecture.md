@@ -79,6 +79,7 @@ non-clean (fail closed) so a network blip cannot cascade a failed backup.
 | `pending_approval`   | **DB**    | No                            |
 | `state_snapshot_marker` | **DB** | No                            |
 | `setting`            | **DB**    | No (uses two well-known keys for YAML load/save markers) |
+| `traffic_sample`     | **DB**    | No (telemetry — polled from Traefik, see docs/traffic_metrics.md) |
 
 ## FK cascade policies
 
@@ -90,6 +91,7 @@ Chosen so YAML edits stay safe and history stays intact:
 * `proxy_host.service_id` → `SET NULL` (a route observed for a removed service is still worth keeping until scan re-verifies it's gone).
 * `backup_record.service_id` → `SET NULL` + denormalised `service_slug` (backup history survives the service being removed from YAML).
 * `pipeline_run.service_id` → `SET NULL` (same reasoning).
+* `traffic_sample.proxy_host_id` → `CASCADE` (traffic history for a removed proxy host is not worth keeping as an orphan — unlike `backup_record`/`pipeline_run`, there is no slug to denormalise against).
 
 ## Boot sequence
 

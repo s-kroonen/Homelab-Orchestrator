@@ -170,6 +170,45 @@ class ProxyHost(SQLModel, table=True):
 
 
 # ---------------------------------------------------------------------------
+# Runtime telemetry — DB-only, never touched by YAML reconcile.
+# ---------------------------------------------------------------------------
+
+
+class TrafficSample(SQLModel, table=True):
+    """One poll's raw Traefik counter snapshot for one router, attributed to
+    the :class:`ProxyHost` whose hostname that router currently serves.
+
+    DB-only, never rehydrated from YAML — this is runtime telemetry, not
+    registry config. Stores RAW cumulative counter values (not deltas): a
+    reader computes a rate as ``(b.requests_total - a.requests_total) /
+    (b.sampled_at - a.sampled_at)`` over whatever window it wants, which is
+    robust to a missed poll (a longer window, not wrong data) and lets the
+    whole trend be reconstructed from the stored rows alone. A decrease
+    between consecutive samples means Traefik restarted (its counters reset
+    to 0) — readers must treat that as "no delta available", never as
+    negative traffic.
+
+    Only routers that resolve to an existing ``ProxyHost`` (by hostname) are
+    ever stored — see ``orchestrator.scheduler.traffic_collector`` — so
+    every row can always be attributed to a ``Service`` via its proxy host.
+    ``proxy_host_id`` is therefore required, unlike ``ProxyHost.service_id``.
+    """
+
+    __tablename__ = "traffic_sample"
+
+    id: int | None = Field(default=None, primary_key=True)
+    proxy_host_id: int = Field(
+        sa_column=Column(ForeignKey("proxy_host.id", ondelete="CASCADE"), nullable=False),
+    )
+    sampled_at: datetime = Field(default_factory=_utcnow, index=True)
+    requests_total: int = 0
+    duration_sum_s: float = 0.0
+    duration_count: int = 0
+    # Cumulative per-status-code counters at this poll, e.g. {"200": 1180, "404": 12}.
+    by_code: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))
+
+
+# ---------------------------------------------------------------------------
 # Admins + passkeys — DB-only. NOT rehydrated from YAML, otherwise reloading
 # services.yaml would lock the operator out.
 # ---------------------------------------------------------------------------

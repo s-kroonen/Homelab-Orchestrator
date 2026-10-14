@@ -140,6 +140,13 @@ class Settings(BaseSettings):
     traefik_api_password: SecretStr = SecretStr("")
     traefik_api_timeout_s: float = 5.0
 
+    # Traffic metrics (Prometheus text format at ``{traefik_api_url}/metrics``,
+    # requires Traefik started with --metrics.prometheus=true). Gated by the
+    # same ``traefik_api_url`` being non-empty — no separate on/off flag, same
+    # as everything else Traefik-related. See docs/traffic_metrics.md.
+    traefik_metrics_poll_interval_s: int = 60
+    traefik_metrics_retention_days: int = 14
+
     # ---- Probe transports (phase 4) ---------------------------------------
     # Defaults for SSH probes; a probe's own transport block can override them.
     # In Docker the key and known_hosts must be MOUNTED into the container —
