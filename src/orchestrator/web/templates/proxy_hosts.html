@@ -104,13 +104,30 @@
     <div class="row">
       <button id="save-btn">Save to YAML</button>
       <button class="secondary" id="reset-btn">Reset to saved</button>
+      <button class="secondary" id="resync-btn">Resync from Traefik</button>
       <span class="msg" id="registry-msg"></span>
     </div>
+    <p class="msg" id="resync-msg"></p>
     <table>
       <thead>
         <tr><th>Hostname</th><th>Upstream</th><th>Provider</th><th>Service</th><th>Traefik</th><th>Last seen</th><th></th></tr>
       </thead>
       <tbody id="ph-rows"><tr><td colspan="7">Loading…</td></tr></tbody>
+    </table>
+  </section>
+
+  <section id="discovered-section" hidden>
+    <h2>Discovered on Traefik</h2>
+    <p class="msg">
+      Live Traefik routers with no matching <code>ProxyHost</code> record. Nothing here is
+      saved until you pick a service and click <strong>Add</strong> — that calls the same
+      create endpoint as the form below, pre-filled from what Traefik reported.
+    </p>
+    <table>
+      <thead>
+        <tr><th>Hostname</th><th>Upstream (from Traefik)</th><th>Router</th><th>Service</th><th></th></tr>
+      </thead>
+      <tbody id="discovered-rows"></tbody>
     </table>
   </section>
 
@@ -174,7 +191,95 @@
     if (r.ok) setTimeout(() => location.reload(), 600);
   });
 
+  function renderDiscovered(discovered) {
+    const section = document.getElementById("discovered-section");
+    const body = document.getElementById("discovered-rows");
+    body.innerHTML = "";
+    if (!discovered || !discovered.length) {
+      section.hidden = true;
+      return;
+    }
+    section.hidden = false;
+    for (const d of discovered) {
+      const tr = document.createElement("tr");
+      const hostTd = document.createElement("td");
+      const code = document.createElement("code");
+      code.textContent = d.hostname;
+      hostTd.appendChild(code);
+      tr.appendChild(hostTd);
+      tr.appendChild(cell(d.upstream || "—"));
+      tr.appendChild(cell(d.router));
+
+      const svcTd = document.createElement("td");
+      const select = document.createElement("select");
+      const placeholder = document.createElement("option");
+      placeholder.value = "";
+      placeholder.disabled = true;
+      placeholder.selected = true;
+      placeholder.textContent = "— select a service —";
+      select.appendChild(placeholder);
+      for (const s of services) {
+        const opt = document.createElement("option");
+        opt.value = s.id;
+        opt.textContent = `${s.name} (${s.slug})`;
+        select.appendChild(opt);
+      }
+      svcTd.appendChild(select);
+      tr.appendChild(svcTd);
+
+      const actionTd = document.createElement("td");
+      const addBtn = document.createElement("button");
+      addBtn.className = "small";
+      addBtn.textContent = "Add";
+      addBtn.addEventListener("click", async () => {
+        if (!select.value) {
+          setMsg("resync-msg", "Select a service for " + d.hostname + " first.", "error");
+          return;
+        }
+        const resp = await fetch("/api/proxy-hosts", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            hostname: d.hostname,
+            upstream: d.upstream || "",
+            service_id: Number(select.value),
+          }),
+        });
+        if (!resp.ok) {
+          setMsg("resync-msg", await errorText(resp), "error");
+          return;
+        }
+        setMsg("resync-msg", `Added ${d.hostname}.`, "ok");
+        tr.remove();
+        if (!body.children.length) section.hidden = true;
+        await loadHosts();
+      });
+      actionTd.appendChild(addBtn);
+      tr.appendChild(actionTd);
+      body.appendChild(tr);
+    }
+  }
+
+  document.getElementById("resync-btn").addEventListener("click", async () => {
+    setMsg("resync-msg", "Resyncing…");
+    const r = await fetch("/api/proxy-hosts/resync", { method: "POST" });
+    if (!r.ok) {
+      setMsg("resync-msg", await errorText(r), "error");
+      renderDiscovered([]);
+      return;
+    }
+    const body = await r.json();
+    setMsg(
+      "resync-msg",
+      `Updated ${body.updated_count}, discovered ${body.discovered_count}.`,
+      "ok"
+    );
+    renderDiscovered(body.discovered);
+    await loadHosts();
+  });
+
   let hosts = [];
+  const services = {{ services|tojson }};
 
   function cell(text, cls) {
     const td = document.createElement("td");

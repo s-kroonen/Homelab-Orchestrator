@@ -282,6 +282,10 @@ def test_page_renders_for_logged_in_admin(client: TestClient, service: Service) 
     assert "storm" in r.text
     assert "not synced with Traefik" in r.text
     assert "Thing (thing)" in r.text  # service dropdown populated
+    assert "Resync from Traefik" in r.text
+    assert (
+        "Thing" in r.text and '"slug": "thing"' in r.text
+    )  # services passed to JS for discovery rows
 
 
 def test_dashboard_links_to_proxy_hosts_page(client: TestClient) -> None:
@@ -368,3 +372,199 @@ def test_live_status_unknown_when_traefik_unreachable(
     client.post("/api/proxy-hosts", json={"hostname": "a.example.com", "service_id": service.id})
     listed = client.get("/api/proxy-hosts").json()
     assert listed[0]["live_status"] == "unknown"
+
+
+# ---------------------------------------------------------------------------
+# Resync (POST /api/proxy-hosts/resync)
+# ---------------------------------------------------------------------------
+
+
+def _traefik_responder(
+    routers: list[dict[str, Any]], services: list[dict[str, Any]] | None = None
+) -> Any:
+    """Build a MockTransport handler serving both Traefik endpoints resync uses."""
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/http/routers":
+            return httpx.Response(200, json=routers)
+        if request.url.path == "/api/http/services":
+            return httpx.Response(200, json=services if services is not None else [])
+        return httpx.Response(404, json={})
+
+    return handle
+
+
+def test_resync_requires_traefik_configured(client: TestClient, service: Service) -> None:
+    r = client.post("/api/proxy-hosts/resync")
+    assert r.status_code == 503
+    assert "traefik" in r.json()["detail"].lower()
+
+
+def test_resync_401s_without_a_session(app: Any) -> None:
+    with TestClient(app) as anon:
+        r = anon.post("/api/proxy-hosts/resync")
+    assert r.status_code == 401
+
+
+def test_resync_unreachable_returns_clear_error(
+    client: TestClient, service: Service, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("TRAEFIK_API_URL", "http://traefik.test:8080")
+    config_module.reset_settings_cache()
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("connection refused")
+
+    _patch_traefik_transport(monkeypatch, handle)
+
+    r = client.post("/api/proxy-hosts/resync")
+    assert r.status_code == 503
+    assert "traefik" in r.json()["detail"].lower()
+
+
+def test_resync_updates_matched_host_upstream_and_last_seen(
+    client: TestClient, service: Service, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("TRAEFIK_API_URL", "http://traefik.test:8080")
+    config_module.reset_settings_cache()
+
+    created = client.post(
+        "/api/proxy-hosts",
+        json={
+            "hostname": "a.example.com",
+            "upstream": "http://stale:9999",
+            "service_id": service.id,
+        },
+    ).json()
+    assert created["last_seen_at"] is None
+
+    _patch_traefik_transport(
+        monkeypatch,
+        _traefik_responder(
+            routers=[
+                {
+                    "name": "r1@docker",
+                    "rule": "Host(`a.example.com`)",
+                    "service": "svc1@docker",
+                    "status": "enabled",
+                }
+            ],
+            services=[
+                {
+                    "name": "svc1@docker",
+                    "loadBalancer": {"servers": [{"url": "http://10.0.0.5:8080"}]},
+                }
+            ],
+        ),
+    )
+
+    r = client.post("/api/proxy-hosts/resync")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["updated_count"] == 1
+    assert body["discovered_count"] == 0
+    assert body["updated"][0]["hostname"] == "a.example.com"
+    assert body["updated"][0]["upstream"] == "http://10.0.0.5:8080"
+    assert body["updated"][0]["upstream_changed"] is True
+
+    refreshed = client.get(f"/api/proxy-hosts/{created['id']}").json()
+    assert refreshed["upstream"] == "http://10.0.0.5:8080"
+    assert refreshed["last_seen_at"] is not None
+
+    with Session(get_engine()) as s:
+        entry = s.exec(select(AuditEntry).where(AuditEntry.action == "proxy_host.resynced")).one()
+    assert entry.actor == "storm"
+    assert entry.details["updated_count"] == 1
+    assert entry.details["discovered_count"] == 0
+
+
+def test_resync_discovered_host_is_not_persisted(
+    client: TestClient, service: Service, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("TRAEFIK_API_URL", "http://traefik.test:8080")
+    config_module.reset_settings_cache()
+
+    _patch_traefik_transport(
+        monkeypatch,
+        _traefik_responder(
+            routers=[
+                {
+                    "name": "r1@docker",
+                    "rule": "Host(`new.example.com`)",
+                    "service": "svc1@docker",
+                    "status": "enabled",
+                }
+            ],
+            services=[
+                {
+                    "name": "svc1@docker",
+                    "loadBalancer": {"servers": [{"url": "http://10.0.0.9:80"}]},
+                }
+            ],
+        ),
+    )
+
+    r = client.post("/api/proxy-hosts/resync")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["updated_count"] == 0
+    assert body["discovered_count"] == 1
+    assert body["discovered"][0] == {
+        "hostname": "new.example.com",
+        "upstream": "http://10.0.0.9:80",
+        "router": "r1@docker",
+    }
+
+    with Session(get_engine()) as s:
+        assert s.exec(select(ProxyHost)).all() == []
+
+
+def test_resync_discover_then_create_round_trips_to_matched(
+    client: TestClient, service: Service, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Discover a hostname, create it through the existing create endpoint
+    using the discovery data, and confirm the next resync treats it as
+    matched rather than discovering it a second time."""
+    monkeypatch.setenv("TRAEFIK_API_URL", "http://traefik.test:8080")
+    config_module.reset_settings_cache()
+
+    _patch_traefik_transport(
+        monkeypatch,
+        _traefik_responder(
+            routers=[
+                {
+                    "name": "r1@docker",
+                    "rule": "Host(`fresh.example.com`)",
+                    "service": "svc1@docker",
+                    "status": "enabled",
+                }
+            ],
+            services=[
+                {
+                    "name": "svc1@docker",
+                    "loadBalancer": {"servers": [{"url": "http://10.0.0.7:3000"}]},
+                }
+            ],
+        ),
+    )
+
+    first = client.post("/api/proxy-hosts/resync").json()
+    assert first["discovered_count"] == 1
+    discovery = first["discovered"][0]
+    assert discovery["hostname"] == "fresh.example.com"
+
+    created = client.post(
+        "/api/proxy-hosts",
+        json={
+            "hostname": discovery["hostname"],
+            "upstream": discovery["upstream"],
+            "service_id": service.id,
+        },
+    )
+    assert created.status_code == 201, created.text
+
+    second = client.post("/api/proxy-hosts/resync").json()
+    assert second["discovered_count"] == 0
+    assert second["updated_count"] == 1
+    assert second["updated"][0]["hostname"] == "fresh.example.com"
+    assert second["updated"][0]["upstream_changed"] is False

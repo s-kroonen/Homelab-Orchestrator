@@ -2,9 +2,12 @@
 
 ``ProxyHost`` rows are *reference records*: a hostname -> upstream mapping the
 operator maintains by hand so the orchestrator (and the operator) can see
-which public route fronts which service. Nothing here talks to Traefik —
-there is no live sync, discovery or traffic monitoring yet (see
-``docs/proxy_hosts.md``).
+which public route fronts which service. Most of this router never talks to
+Traefik at all. The two exceptions are read-only: the ``live_status`` field
+computed into every response (see ``orchestrator.registry.traefik_status``),
+and ``POST /resync`` below, a manual, admin-triggered action that pulls
+Traefik's current router/backend state into the DB — never automatic, never
+scheduled (see ``docs/proxy_hosts.md``).
 
 ``proxy_host`` is YAML-owned (``docs/architecture.md``), but this router only
 touches the DB, the same way every other dashboard edit does: the existing
@@ -18,6 +21,7 @@ a proxy host with no service would silently never reach the saved YAML.
 from __future__ import annotations
 
 import re
+from datetime import UTC, datetime
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -27,7 +31,12 @@ from sqlmodel import Session, select
 from orchestrator.audit import log as audit
 from orchestrator.db.models import ProxyHost, Service
 from orchestrator.domain.enums import RouterProvider
-from orchestrator.registry.traefik_status import drift_status, fetch_router_hostnames
+from orchestrator.registry.traefik_status import (
+    RouterInfo,
+    drift_status,
+    fetch_router_details,
+    fetch_router_hostnames,
+)
 from orchestrator.web.auth import CurrentAdmin, require_admin
 from orchestrator.web.deps import SessionDep, SettingsDep
 
@@ -170,6 +179,106 @@ async def create_proxy_host(
     session.refresh(ph)
     live_hostnames = await fetch_router_hostnames(settings)
     return _serialize(ph, _services_by_id(session), live_hostnames)
+
+
+@router.post("/resync")
+async def resync_proxy_hosts(
+    session: SessionDep, admin: CurrentAdmin, settings: SettingsDep
+) -> dict[str, Any]:
+    """Pull Traefik's current router/backend state into the DB.
+
+    This is the one place in this router that *writes* data sourced from
+    Traefik, and it only ever runs when an admin clicks the button — never
+    on a schedule or as a side effect of another request. See
+    ``docs/proxy_hosts.md`` for exactly what it changes and why.
+
+    For each ``ProxyHost`` whose hostname matches a live Traefik router,
+    ``upstream`` is overwritten with the backend URL Traefik is actually
+    routing to and ``last_seen_at`` is bumped — this intentionally
+    overwrites a manually-set ``upstream``. ``router_provider`` and
+    ``extra`` are never touched.
+
+    A live hostname with no matching ``ProxyHost`` is never written to the
+    DB (``service_id`` is required and Traefik has no concept of our
+    ``Service`` model to supply one) — it is returned in ``discovered`` so
+    the dashboard can offer it to the admin, who picks a service and submits
+    it through the existing ``POST /api/proxy-hosts``.
+    """
+    routers = await fetch_router_details(settings)
+    if routers is None:
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            "Traefik is not configured (TRAEFIK_API_URL unset) or could not be "
+            "reached — see docs/proxy_hosts.md#drift-detection-against-traefik-read-only.",
+        )
+
+    # First router to claim a hostname wins ties (two routers rarely share a
+    # Host() rule in practice; this just needs to be deterministic).
+    hostname_to_router: dict[str, RouterInfo] = {}
+    for info in routers:
+        for hostname in info.hostnames:
+            hostname_to_router.setdefault(hostname, info)
+
+    hosts = session.exec(select(ProxyHost)).all()
+    existing_hostnames = {ph.hostname for ph in hosts}
+
+    now = datetime.now(UTC)
+    updated: list[dict[str, Any]] = []
+    for ph in hosts:
+        match = hostname_to_router.get(ph.hostname)
+        if match is None:
+            continue
+        upstream_changed = bool(match.upstream) and match.upstream != ph.upstream
+        if upstream_changed:
+            ph.upstream = match.upstream  # type: ignore[assignment]
+        ph.last_seen_at = now
+        session.add(ph)
+        updated.append(
+            {
+                "id": ph.id,
+                "hostname": ph.hostname,
+                "upstream": ph.upstream,
+                "router": match.name,
+                "upstream_changed": upstream_changed,
+            }
+        )
+
+    discovered: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for info in routers:
+        for hostname in info.hostnames:
+            if hostname in existing_hostnames or hostname in seen:
+                continue
+            seen.add(hostname)
+            discovered.append(
+                {
+                    "hostname": hostname,
+                    "upstream": info.upstream or "",
+                    "router": info.name,
+                }
+            )
+    discovered.sort(key=lambda d: d["hostname"])
+
+    audit.record(
+        session,
+        actor=admin.username,
+        action="proxy_host.resynced",
+        target="proxy_host:*",
+        details={
+            "updated_count": len(updated),
+            "discovered_count": len(discovered),
+            "updated_hostnames": [u["hostname"] for u in updated],
+            "discovered_hostnames": [d["hostname"] for d in discovered],
+        },
+    )
+    session.commit()
+
+    return {
+        "updated": updated,
+        "discovered": discovered,
+        "updated_count": len(updated),
+        "discovered_count": len(discovered),
+    }
 
 
 @router.put("/{proxy_host_id}")
