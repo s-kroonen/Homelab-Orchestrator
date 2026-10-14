@@ -103,9 +103,8 @@
             {% if not p.retention %}<span class="muted">keep everything</span>{% endif %}
           </td>
           <td>
-            {% for slug in p.targets.get("services", []) %}<code>{{ slug }}</code> {% endfor %}
-            {% for slug in p.attached_services %}{% if slug not in p.targets.get("services", []) %}<code title="via backup_policy in services.yaml">{{ slug }}</code><span class="muted">*</span> {% endif %}{% endfor %}
-            {% if not p.targets.get("services") and not p.attached_services %}<span class="muted">none</span>{% endif %}
+            {% for slug in p.services %}<code>{{ slug }}</code> {% endfor %}
+            {% if not p.services %}<span class="muted">none</span>{% endif %}
           </td>
           <td>
             <button class="secondary small" data-edit="{{ p.name }}">Edit</button>
@@ -118,7 +117,6 @@
       </tbody>
     </table>
     </div>
-    <p class="msg">* attached via the service's <code>backup_policy</code> in services.yaml — the scheduler backs these up too.</p>
   </section>
 
   <section>
@@ -208,8 +206,8 @@
       document.getElementById("f-" + k).value = v;
     }
     document.getElementById("f-protect").checked = !!(p && p.retention.protect_latest_verified);
-    const targets = new Set(p && p.targets.services ? p.targets.services : []);
-    for (const cb of document.querySelectorAll("input[name=svc]")) cb.checked = targets.has(cb.value);
+    const attached = new Set(p && p.services ? p.services : []);
+    for (const cb of document.querySelectorAll("input[name=svc]")) cb.checked = attached.has(cb.value);
     document.getElementById("form-title").textContent = p ? "Edit policy " + p.name : "New policy";
     document.getElementById("submit-btn").textContent = p ? "Save changes" : "Create policy";
     document.getElementById("cancel-btn").hidden = !p;
@@ -228,7 +226,7 @@
       schedule_cron: document.getElementById("f-cron").value.trim(),
       mode: document.getElementById("f-mode").value,
       retention,
-      targets: services.length ? { services } : {},
+      services,
     };
   }
 

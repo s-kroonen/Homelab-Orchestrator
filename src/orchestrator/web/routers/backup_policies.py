@@ -45,7 +45,13 @@ class PolicyCreate(BaseModel):
     schedule_cron: str = ""
     mode: str = BackupMode.SNAPSHOT.value
     retention: Any = None
-    targets: Any = None
+    # Desired service membership. There is exactly one place a service's
+    # policy attachment lives — Service.backup_policy_id, the same field the
+    # CLI edits (registry/editor.py) and services.yaml round-trips as the
+    # service's own `backup_policy:` key — so this list is applied directly
+    # to that field rather than stored on the policy itself. See
+    # _sync_service_membership.
+    services: Any = None
 
 
 class PolicyUpdate(BaseModel):
@@ -54,7 +60,7 @@ class PolicyUpdate(BaseModel):
     schedule_cron: str | None = None
     mode: str | None = None
     retention: Any = None
-    targets: Any = None
+    services: Any = None
 
 
 # ---------------------------------------------------------------------------
@@ -100,26 +106,18 @@ def _validate_retention(retention: Any) -> dict[str, Any]:
         raise _bad(str(exc)) from exc
 
 
-def _validate_targets(session: Session, targets: Any) -> dict[str, Any]:
-    if targets is None:
-        return {}
-    if not isinstance(targets, dict):
-        raise _bad('targets must be an object like {"services": ["slug"]}')
-    unknown = set(targets) - {"services"}
-    if unknown:
-        raise _bad(f"unknown targets key(s) {sorted(unknown)}; only 'services' is supported")
-    if "services" not in targets:
-        return {}
-    slugs = targets["services"]
-    if not isinstance(slugs, list) or not all(isinstance(s, str) for s in slugs):
-        raise _bad("targets.services must be a list of service slugs")
-    if len(set(slugs)) != len(slugs):
-        raise _bad("targets.services lists a service more than once")
+def _validate_services(session: Session, services: Any) -> list[str]:
+    if services is None:
+        return []
+    if not isinstance(services, list) or not all(isinstance(s, str) for s in services):
+        raise _bad("services must be a list of service slugs")
+    if len(set(services)) != len(services):
+        raise _bad("services lists a service more than once")
     known = set(session.exec(select(Service.slug)).all())
-    missing = [s for s in slugs if s not in known]
+    missing = [s for s in services if s not in known]
     if missing:
-        raise _bad(f"targets.services references unknown service(s): {missing}")
-    return {"services": slugs}
+        raise _bad(f"services references unknown service(s): {missing}")
+    return services
 
 
 # ---------------------------------------------------------------------------
@@ -170,25 +168,29 @@ def schedule_info(policy: BackupPolicy, scheduler: BackupScheduler | None) -> di
     return info
 
 
-def policy_to_dict(
-    session: Session, policy: BackupPolicy, scheduler: BackupScheduler | None
-) -> dict[str, Any]:
-    attached = (
+def _attached_services(session: Session, policy: BackupPolicy) -> list[str]:
+    if policy.id is None:
+        return []
+    return list(
         session.exec(
             select(Service.slug).where(Service.backup_policy_id == policy.id).order_by(Service.slug)
         ).all()
-        if policy.id is not None
-        else []
     )
+
+
+def policy_to_dict(
+    session: Session, policy: BackupPolicy, scheduler: BackupScheduler | None
+) -> dict[str, Any]:
     return {
         "name": policy.name,
         "schedule_cron": policy.schedule_cron,
         "mode": policy.mode.value,
         "retention": policy.retention,
-        "targets": policy.targets,
-        # Services that name this policy via `backup_policy:` in services.yaml.
-        # The scheduler backs these up too; they are edited on the service.
-        "attached_services": list(attached),
+        # The single source of a service's policy membership is
+        # Service.backup_policy_id (== services.yaml's per-service
+        # `backup_policy:` key, same field the CLI edits). Dashboard writes
+        # go straight through _sync_service_membership below.
+        "services": _attached_services(session, policy),
         "created_at": policy.created_at.isoformat() if policy.created_at else None,
         "updated_at": policy.updated_at.isoformat() if policy.updated_at else None,
         **schedule_info(policy, scheduler),
@@ -200,8 +202,42 @@ def _snapshot(policy: BackupPolicy) -> dict[str, Any]:
         "schedule_cron": policy.schedule_cron,
         "mode": policy.mode.value,
         "retention": policy.retention,
-        "targets": policy.targets,
     }
+
+
+def _sync_service_membership(
+    session: Session, policy: BackupPolicy, desired: list[str]
+) -> dict[str, list[str]]:
+    """Make ``Service.backup_policy_id`` match ``desired`` exactly for this policy.
+
+    ``policy.targets`` (a legacy, separately-editable explicit list) is always
+    cleared here: a dashboard-managed policy's membership lives in exactly one
+    place, same as the CLI. ``targets`` stays in the schema/YAML format so a
+    hand-edited services.yaml can still use it — ``resolve_targets`` in
+    scheduler/__init__.py keeps unioning both for that case — but the
+    dashboard never writes a non-empty value into it again.
+    """
+    assert policy.id is not None
+    current = set(_attached_services(session, policy))
+    desired_set = set(desired)
+    to_attach = desired_set - current
+    to_detach = current - desired_set
+    if to_attach or to_detach:
+        touched = {
+            s.slug: s
+            for s in session.exec(
+                select(Service).where(Service.slug.in_(to_attach | to_detach))
+            ).all()
+        }
+        for slug in to_attach:
+            touched[slug].backup_policy_id = policy.id
+            session.add(touched[slug])
+        for slug in to_detach:
+            touched[slug].backup_policy_id = None
+            session.add(touched[slug])
+    policy.targets = {}
+    session.add(policy)
+    return {"attached": sorted(to_attach), "detached": sorted(to_detach)}
 
 
 # ---------------------------------------------------------------------------
@@ -231,20 +267,22 @@ async def create_policy(
     name = _validate_name(body.name)
     if session.exec(select(BackupPolicy).where(BackupPolicy.name == name)).one_or_none():
         raise HTTPException(status_code=409, detail=f"a backup policy named {name!r} exists")
+    services = _validate_services(session, body.services)
     policy = BackupPolicy(
         name=name,
         schedule_cron=_validate_cron(body.schedule_cron),
         mode=_validate_mode(body.mode),
         retention=_validate_retention(body.retention),
-        targets=_validate_targets(session, body.targets),
     )
     session.add(policy)
+    session.flush()  # assigns policy.id, needed to attach services below
+    membership = _sync_service_membership(session, policy, services)
     audit.record(
         session,
         actor=admin.username,
         action="backup_policy.created",
         target=f"policy:{name}",
-        details=_snapshot(policy),
+        details={**_snapshot(policy), **membership},
     )
     session.commit()
     session.refresh(policy)
@@ -269,8 +307,11 @@ async def update_policy(
         policy.mode = _validate_mode(body.mode or "")
     if "retention" in fields:
         policy.retention = _validate_retention(body.retention)
-    if "targets" in fields:
-        policy.targets = _validate_targets(session, body.targets)
+    membership = {}
+    if "services" in fields:
+        membership = _sync_service_membership(
+            session, policy, _validate_services(session, body.services)
+        )
     policy.updated_at = datetime.now(UTC)
     session.add(policy)
     audit.record(
@@ -278,7 +319,7 @@ async def update_policy(
         actor=admin.username,
         action="backup_policy.updated",
         target=f"policy:{name}",
-        details={"before": before, "after": _snapshot(policy)},
+        details={"before": before, "after": _snapshot(policy), **membership},
     )
     session.commit()
     session.refresh(policy)
