@@ -56,7 +56,7 @@ NIGHTLY = {
     "schedule_cron": "0 3 * * *",
     "mode": "snapshot",
     "retention": {"keep_daily": 7, "keep_monthly": 6, "protect_latest_verified": True},
-    "targets": {"services": ["alpha"]},
+    "services": ["alpha"],
 }
 
 
@@ -89,7 +89,7 @@ def test_crud_round_trip_audits_and_schedules(app: Any, monkeypatch: pytest.Monk
         assert r.status_code == 201, r.text
         body = r.json()
         assert body["retention"] == NIGHTLY["retention"]
-        assert body["targets"] == {"services": ["alpha"]}
+        assert body["services"] == ["alpha"]
         assert body["scheduler_running"] is True
         assert body["scheduled"] is True
         assert body["next_run"]
@@ -99,11 +99,11 @@ def test_crud_round_trip_audits_and_schedules(app: Any, monkeypatch: pytest.Monk
 
         r = client.put(
             "/api/backup-policies/nightly",
-            json={"schedule_cron": "", "targets": {"services": ["alpha", "beta"]}},
+            json={"schedule_cron": "", "services": ["alpha", "beta"]},
         )
         assert r.status_code == 200, r.text
         body = r.json()
-        assert body["targets"]["services"] == ["alpha", "beta"]
+        assert sorted(body["services"]) == ["alpha", "beta"]
         assert body["retention"] == NIGHTLY["retention"]  # untouched field kept
         assert body["scheduled"] is False and body["next_run"] is None
         assert client.app.state.scheduler.next_run_time("nightly") is None  # type: ignore[attr-defined]
@@ -131,9 +131,9 @@ def test_crud_round_trip_audits_and_schedules(app: Any, monkeypatch: pytest.Monk
         ({"mode": "yolo"}, "mode"),
         ({"retention": {"keep_daily": -1}}, "keep_daily"),
         ({"retention": {"keep_weekly": 2}}, "keep_weekly"),
-        ({"targets": {"services": ["ghost"]}}, "ghost"),
-        ({"targets": {"services": "alpha"}}, "list"),
-        ({"targets": {"hosts": []}}, "hosts"),
+        ({"services": ["ghost"]}, "ghost"),
+        ({"services": "alpha"}, "list"),
+        ({"services": ["alpha", "alpha"]}, "more than once"),
     ],
 )
 def test_create_rejects_bad_input_with_400(
@@ -173,10 +173,13 @@ def test_delete_detaches_services_that_reference_it(
             beta.backup_policy_id = pol.id
             s.add(beta)
             s.commit()
-        assert client.get("/api/backup-policies/nightly").json()["attached_services"] == ["beta"]
+        assert sorted(client.get("/api/backup-policies/nightly").json()["services"]) == [
+            "alpha",
+            "beta",
+        ]
 
         r = client.delete("/api/backup-policies/nightly")
-    assert r.json()["detached_services"] == ["beta"]
+    assert sorted(r.json()["detached_services"]) == ["alpha", "beta"]
     with Session(get_engine()) as s:
         assert s.exec(select(Service).where(Service.slug == "beta")).one().backup_policy_id is None
 
@@ -197,7 +200,10 @@ def test_policy_edits_round_trip_to_yaml_via_registry_save(
     assert policy["name"] == "nightly"
     assert policy["schedule_cron"] == "0 3 * * *"
     assert policy["retention"] == NIGHTLY["retention"]
-    assert policy["targets"] == NIGHTLY["targets"]
+    # Single source of truth: membership lives on the service, not on the
+    # policy's own (legacy) targets list, which dashboard writes always clear.
+    (alpha,) = (s for s in saved["services"] if s["slug"] == "alpha")
+    assert alpha["backup_policy"] == "nightly"
 
 
 def test_scheduler_disabled_still_shows_would_be_next_run(
