@@ -58,6 +58,18 @@ class Node(SQLModel, table=True):
     always_on: bool = Field(default=False)
     power_mgr_target: str = ""
     notes: str = ""
+
+    # Top-level safety rail for the TrafficCollector-driven "wake on hit"
+    # path (see ProxyHost.wake_on_hit) — NOT a blanket wake permission. The
+    # manual dashboard button, the CLI wake command and POST /wake/{slug}
+    # (including Traefik's errors middleware calling it, once that is
+    # wired up) are unaffected by this flag and stay unconditional; this
+    # only gates the automatic poll-triggered trigger. Defaults True: it is
+    # a rail on top of the per-proxy-host opt-in (which itself defaults
+    # False), not an independent opt-in, so leaving it at its default must
+    # not silently disable a wake-on-hit an operator deliberately turned on
+    # at the proxy-host level.
+    wake_on_hit_enabled: bool = Field(default=True)
     created_at: datetime = Field(default_factory=_utcnow)
     updated_at: datetime = Field(default_factory=_utcnow)
 
@@ -98,6 +110,17 @@ class Service(SQLModel, table=True):
     # a correct operation, so it should not be one keystroke away.
     backup_excluded: bool = Field(default=False)
     backup_excluded_reason: str = ""
+
+    # Second safety rail for the TrafficCollector-driven "wake on hit" path
+    # — see ProxyHost.wake_on_hit and Node.wake_on_hit_enabled for the full
+    # three-way gate. Same reasoning as Node.wake_on_hit_enabled: this is a
+    # rail on top of the per-proxy-host opt-in, not an opt-in itself, so it
+    # defaults True so that turning on wake_on_hit for a proxy host is
+    # enough by itself (the common case) without also having to flip a
+    # second switch on the service. An operator who wants this service
+    # specifically exempted (even though its proxy host opts in) flips this
+    # one off.
+    wake_on_hit_enabled: bool = Field(default=True)
 
     # Free-form organisational tag — purely cosmetic. "" means ungrouped, not a
     # distinct "Ungrouped" group. Lets the dashboard collapse the service table
@@ -167,6 +190,15 @@ class ProxyHost(SQLModel, table=True):
     router_provider: RouterProvider = Field(default=RouterProvider.TRAEFIK)
     extra: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))
     last_seen_at: datetime | None = None
+
+    # Per-route opt-in for the TrafficCollector-driven "wake on hit" stand-in
+    # (see orchestrator.scheduler.traffic_collector and docs/traffic_metrics.md
+    # for the full three-way gate with Service.wake_on_hit_enabled and
+    # Node.wake_on_hit_enabled). Defaults False — nobody currently has this
+    # behaviour (it did not exist before), so upgrading must never start
+    # auto-waking a service that was previously left alone. An operator
+    # opts a hostname in explicitly, per route.
+    wake_on_hit: bool = Field(default=False)
 
 
 # ---------------------------------------------------------------------------

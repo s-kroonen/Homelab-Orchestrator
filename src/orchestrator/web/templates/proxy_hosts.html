@@ -111,9 +111,9 @@
     <p class="msg" id="resync-msg"></p>
     <table>
       <thead>
-        <tr><th>Hostname</th><th>Upstream</th><th>Provider</th><th>Service</th><th>Traefik</th><th>Last seen</th><th></th></tr>
+        <tr><th>Hostname</th><th>Upstream</th><th>Provider</th><th>Service</th><th>Traefik</th><th>Last seen</th><th>Wake on hit</th><th></th></tr>
       </thead>
-      <tbody id="ph-rows"><tr><td colspan="7">Loading…</td></tr></tbody>
+      <tbody id="ph-rows"><tr><td colspan="8">Loading…</td></tr></tbody>
     </table>
   </section>
 
@@ -149,6 +149,14 @@
         <option value="" disabled selected>— select a service —</option>
         {% for s in services %}<option value="{{ s.id }}">{{ s.name }} ({{ s.slug }})</option>{% endfor %}
       </select>
+      <label for="ph-wake-on-hit">Wake on hit</label>
+      <span><input id="ph-wake-on-hit" type="checkbox"></span>
+      <span class="full msg muted">
+        Stand-in for a real Traefik-side trigger (future work — see docs/traffic_metrics.md):
+        the traffic-metrics poller treats a hit on this hostname as a wake trigger for its
+        linked service, gated by that service's and its node's own "wake on hit" toggles too.
+        Up to one poll interval (<code>TRAEFIK_METRICS_POLL_INTERVAL_S</code>) of delay. Off by default.
+      </span>
       <label class="full" for="ph-extra">Extra (JSON object, optional)</label>
       <textarea class="full" id="ph-extra" placeholder='{"middlewares": ["auth"]}'></textarea>
       <div class="row full">
@@ -296,7 +304,7 @@
       body.innerHTML = "";
       const tr = document.createElement("tr");
       const td = cell(await errorText(resp));
-      td.colSpan = 7;
+      td.colSpan = 8;
       tr.appendChild(td);
       body.appendChild(tr);
       return;
@@ -306,7 +314,7 @@
     if (!hosts.length) {
       const tr = document.createElement("tr");
       const td = cell("No proxy hosts recorded.");
-      td.colSpan = 7;
+      td.colSpan = 8;
       tr.appendChild(td);
       body.appendChild(tr);
       return;
@@ -344,6 +352,7 @@
       tr.appendChild(statusTd);
 
       tr.appendChild(cell(h.last_seen_at || "never", h.last_seen_at ? "" : "muted"));
+      tr.appendChild(cell(h.wake_on_hit ? "yes" : "no", h.wake_on_hit ? "" : "muted"));
 
       const actions = document.createElement("td");
       actions.className = "actions";
@@ -375,6 +384,7 @@
     document.getElementById("ph-upstream").value = h.upstream;
     document.getElementById("ph-provider").value = h.router_provider;
     document.getElementById("ph-service").value = h.service_id ?? "";
+    document.getElementById("ph-wake-on-hit").checked = !!h.wake_on_hit;
     document.getElementById("ph-extra").value =
       h.extra && Object.keys(h.extra).length ? JSON.stringify(h.extra, null, 2) : "";
     document.getElementById("form-title").textContent = `Edit ${h.hostname}`;
@@ -428,6 +438,7 @@
       router_provider: document.getElementById("ph-provider").value,
       service_id: Number(serviceVal),
       extra,
+      wake_on_hit: document.getElementById("ph-wake-on-hit").checked,
     };
     const id = document.getElementById("ph-id").value;
     const resp = await fetch(id ? `/api/proxy-hosts/${id}` : "/api/proxy-hosts", {

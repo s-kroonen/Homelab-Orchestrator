@@ -24,6 +24,9 @@ class NodeSpec(BaseModel):
     always_on: bool = False
     power_mgr_target: str = ""
     notes: str = ""
+    #: See Node.wake_on_hit_enabled — a safety rail for the TrafficCollector
+    #: "wake on hit" path, not a general wake toggle.
+    wake_on_hit_enabled: bool = True
 
 
 class BackupPolicySpec(BaseModel):
@@ -58,6 +61,9 @@ class ProxyHostSpec(BaseModel):
     upstream: str = ""
     router_provider: str = "traefik"
     extra: dict[str, Any] = Field(default_factory=dict)
+    #: See ProxyHost.wake_on_hit — per-route opt-in for the TrafficCollector
+    #: "wake on hit" stand-in. Defaults False (opt-in).
+    wake_on_hit: bool = False
 
 
 class ServiceSpec(BaseModel):
@@ -75,6 +81,9 @@ class ServiceSpec(BaseModel):
     # See Service.backup_excluded — a hard, non-overridable "never back this up".
     backup_excluded: bool = False
     backup_excluded_reason: str = ""
+    #: See Service.wake_on_hit_enabled — a safety rail for the
+    #: TrafficCollector "wake on hit" path, not a general wake toggle.
+    wake_on_hit_enabled: bool = True
     #: Slugs that must be HEALTHY before this service can be judged. See
     #: Service.depends_on — the gateway case.
     depends_on: list[str] = Field(default_factory=list)

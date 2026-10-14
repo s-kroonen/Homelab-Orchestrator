@@ -71,6 +71,9 @@ class ProxyHostIn(BaseModel):
     router_provider: RouterProvider = RouterProvider.TRAEFIK
     service_id: int
     extra: dict[str, Any] = Field(default_factory=dict)
+    #: See ProxyHost.wake_on_hit — per-route opt-in for the
+    #: TrafficCollector-driven "wake on hit" stand-in. Defaults False.
+    wake_on_hit: bool = False
 
     @field_validator("hostname")
     @classmethod
@@ -96,6 +99,7 @@ def _serialize(
         "service_slug": svc.slug if svc else None,
         "service_name": svc.name if svc else None,
         "extra": ph.extra or {},
+        "wake_on_hit": ph.wake_on_hit,
         "last_seen_at": ph.last_seen_at.isoformat() if ph.last_seen_at else None,
         # Computed fresh on each request, never persisted — see
         # orchestrator.registry.traefik_status. "unknown" means Traefik polling
@@ -160,6 +164,7 @@ async def create_proxy_host(
         router_provider=body.router_provider,
         service_id=body.service_id,
         extra=body.extra,
+        wake_on_hit=body.wake_on_hit,
     )
     session.add(ph)
     session.flush()
@@ -298,18 +303,21 @@ async def update_proxy_host(
         "router_provider": ph.router_provider.value,
         "service_id": ph.service_id,
         "extra": ph.extra or {},
+        "wake_on_hit": ph.wake_on_hit,
     }
     ph.hostname = body.hostname
     ph.upstream = body.upstream
     ph.router_provider = body.router_provider
     ph.service_id = body.service_id
     ph.extra = body.extra
+    ph.wake_on_hit = body.wake_on_hit
     after = {
         "hostname": ph.hostname,
         "upstream": ph.upstream,
         "router_provider": ph.router_provider.value,
         "service_id": ph.service_id,
         "extra": ph.extra,
+        "wake_on_hit": ph.wake_on_hit,
     }
     changes = {k: {"from": before[k], "to": after[k]} for k in after if before[k] != after[k]}
 

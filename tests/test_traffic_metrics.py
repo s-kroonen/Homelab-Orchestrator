@@ -19,12 +19,14 @@ from fastapi.testclient import TestClient
 from sqlmodel import Session, select
 
 from orchestrator import config as config_module
+from orchestrator.adapters.factory import build_adapters
 from orchestrator.config import get_settings
 from orchestrator.db import session as session_module
-from orchestrator.db.models import ProxyHost, Service, TrafficSample
+from orchestrator.db.models import AuditEntry, Node, ProxyHost, Service, ServiceState, TrafficSample
 from orchestrator.db.session import get_engine
+from orchestrator.domain.enums import HealthState
 from orchestrator.registry.traefik_status import RouterMetricSample, parse_router_metrics
-from orchestrator.scheduler.traffic_collector import TrafficCollector
+from orchestrator.scheduler.traffic_collector import WAKE_ON_HIT_ACTOR, TrafficCollector
 from orchestrator.web import auth as auth_lib
 from orchestrator.web.app import create_app
 from orchestrator.web.routers.traffic import build_traffic_view
@@ -271,6 +273,245 @@ def test_collector_prunes_samples_older_than_retention(
 
     with Session(get_engine()) as s:
         assert s.exec(select(TrafficSample)).all() == []
+
+
+# ---------------------------------------------------------------------------
+# Wake-on-hit — the TrafficCollector-driven stand-in for a real Traefik-side
+# trigger (see the module docstring and docs/traffic_metrics.md).
+# ---------------------------------------------------------------------------
+
+
+def _dynamic_responder(router_hostname: str, counter: list[int]) -> Any:
+    """Like ``_traefik_responder``, but reads ``counter[0]`` on every call —
+    so one ``_patch_traefik_transport`` covers several polls with different
+    totals. (``_patch_traefik_transport`` captures ``httpx.AsyncClient`` as
+    its subclass's base at call time, so patching it again mid-test would
+    subclass the ALREADY-patched client instead of the real one — hence one
+    patch per test, with the total varied through this counter instead.)
+    """
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/http/routers":
+            return httpx.Response(
+                200,
+                json=[
+                    {
+                        "name": "r1@docker",
+                        "rule": f"Host(`{router_hostname}`)",
+                        "status": "enabled",
+                    }
+                ],
+            )
+        if request.url.path == "/api/http/services":
+            return httpx.Response(200, json=[])
+        if request.url.path == "/metrics":
+            return httpx.Response(
+                200,
+                text=(
+                    f'traefik_router_requests_total{{code="200",router="r1@docker"}} '
+                    f"{counter[0]}\n"
+                ),
+                headers={"content-type": "text/plain"},
+            )
+        return httpx.Response(404, json={})
+
+    return handle
+
+
+def _wake_runs(slug: str = "thing") -> list[AuditEntry]:
+    with Session(get_engine()) as s:
+        return s.exec(
+            select(AuditEntry)
+            .where(AuditEntry.target == f"service:{slug}", AuditEntry.action == "wake.start")
+            .order_by(AuditEntry.id)
+        ).all()
+
+
+def _collector(monkeypatch: pytest.MonkeyPatch) -> TrafficCollector:
+    monkeypatch.setenv("TRAEFIK_API_URL", "http://traefik.test:8080")
+    config_module.reset_settings_cache()
+    settings = get_settings()
+    return TrafficCollector(settings=settings, adapters=build_adapters(settings))
+
+
+@pytest.mark.parametrize(
+    ("host_wake", "service_wake", "node_wake", "expect_fire"),
+    [
+        (True, True, True, True),
+        (False, True, True, False),
+        (True, False, True, False),
+        (True, True, False, False),
+        (False, False, True, False),
+        (False, True, False, False),
+        (True, False, False, False),
+        (False, False, False, False),
+    ],
+)
+def test_wake_on_hit_three_way_gate(
+    client: TestClient,
+    service: Service,
+    monkeypatch: pytest.MonkeyPatch,
+    host_wake: bool,
+    service_wake: bool,
+    node_wake: bool,
+    expect_fire: bool,
+) -> None:
+    """A wake-on-hit fires only when ProxyHost.wake_on_hit AND
+    Service.wake_on_hit_enabled AND Node.wake_on_hit_enabled are all True —
+    every other combination of the three must never fire one."""
+    with Session(get_engine()) as s:
+        svc = s.exec(select(Service).where(Service.id == service.id)).one()
+        node = s.get(Node, svc.node_id)
+        svc.wake_on_hit_enabled = service_wake
+        node.wake_on_hit_enabled = node_wake
+        s.add(svc)
+        s.add(node)
+        # FAILED — unambiguously "down" for wake-on-hit purposes.
+        s.add(ServiceState(service_id=svc.id, last_verdict=HealthState.FAILED))
+        s.commit()
+        ph = _make_proxy_host(s, svc, "a.example.com")
+        ph.wake_on_hit = host_wake
+        s.add(ph)
+        s.commit()
+
+    collector = _collector(monkeypatch)
+    counter = [100]
+    _patch_traefik_transport(monkeypatch, _dynamic_responder("a.example.com", counter))
+
+    import asyncio
+
+    # First poll establishes the baseline sample (nothing to compare against
+    # yet, so nothing should fire regardless of the gate).
+    asyncio.run(collector.poll_once())
+    assert _wake_runs() == []
+
+    # Second poll shows a real increase — now the gate actually matters.
+    counter[0] = 150
+    asyncio.run(collector.poll_once())
+    runs = _wake_runs()
+    assert bool(runs) is expect_fire
+    if expect_fire:
+        assert runs[0].actor == WAKE_ON_HIT_ACTOR
+
+
+def test_wake_on_hit_skips_when_traffic_has_not_increased(
+    client: TestClient, service: Service, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    with Session(get_engine()) as s:
+        s.add(ServiceState(service_id=service.id, last_verdict=HealthState.FAILED))
+        ph = _make_proxy_host(s, service, "a.example.com")
+        ph.wake_on_hit = True
+        s.add(ph)
+        s.commit()
+
+    collector = _collector(monkeypatch)
+    counter = [100]
+    _patch_traefik_transport(monkeypatch, _dynamic_responder("a.example.com", counter))
+    import asyncio
+
+    asyncio.run(collector.poll_once())
+    assert _wake_runs() == []
+
+    # Same counter again — Traefik saw no new requests for this host.
+    asyncio.run(collector.poll_once())
+    assert _wake_runs() == []
+
+
+def test_wake_on_hit_skips_when_service_already_healthy(
+    client: TestClient, service: Service, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    with Session(get_engine()) as s:
+        s.add(ServiceState(service_id=service.id, last_verdict=HealthState.HEALTHY))
+        ph = _make_proxy_host(s, service, "a.example.com")
+        ph.wake_on_hit = True
+        s.add(ph)
+        s.commit()
+
+    collector = _collector(monkeypatch)
+    counter = [100]
+    _patch_traefik_transport(monkeypatch, _dynamic_responder("a.example.com", counter))
+    import asyncio
+
+    asyncio.run(collector.poll_once())
+    counter[0] = 150
+    asyncio.run(collector.poll_once())
+    assert _wake_runs() == []
+
+
+def test_wake_on_hit_treats_never_scanned_as_down(
+    client: TestClient, service: Service, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """No ServiceState row at all (never probed) is treated as down — there
+    is no evidence the service is up, and get_or_start's cooldown stops this
+    from being retried on every subsequent hit."""
+    with Session(get_engine()) as s:
+        ph = _make_proxy_host(s, service, "a.example.com")
+        ph.wake_on_hit = True
+        s.add(ph)
+        s.commit()
+
+    collector = _collector(monkeypatch)
+    counter = [100]
+    _patch_traefik_transport(monkeypatch, _dynamic_responder("a.example.com", counter))
+    import asyncio
+
+    asyncio.run(collector.poll_once())
+    counter[0] = 150
+    asyncio.run(collector.poll_once())
+    assert len(_wake_runs()) == 1
+
+
+def test_wake_on_hit_does_not_spam_repeated_hits(
+    client: TestClient, service: Service, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Repeated hits during an outage must not spam repeated wake attempts —
+    the same cooldown/dedup WakePipeline.get_or_start already provides for
+    the manual/API path."""
+    with Session(get_engine()) as s:
+        s.add(ServiceState(service_id=service.id, last_verdict=HealthState.FAILED))
+        ph = _make_proxy_host(s, service, "a.example.com")
+        ph.wake_on_hit = True
+        s.add(ph)
+        s.commit()
+
+    collector = _collector(monkeypatch)
+    counter = [100]
+    _patch_traefik_transport(monkeypatch, _dynamic_responder("a.example.com", counter))
+    import asyncio
+
+    for total in (100, 150, 200, 250):
+        counter[0] = total
+        asyncio.run(collector.poll_once())
+
+    # Only the first increase (100 -> 150) should have started a run; every
+    # later hit reuses it via the RUNNING check in get_or_start.
+    assert len(_wake_runs()) == 1
+
+
+def test_wake_on_hit_inert_without_adapters(
+    client: TestClient, service: Service, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A collector built without an AdapterBundle (every pre-existing
+    caller) still collects samples — the wake-on-hit half is simply off."""
+    monkeypatch.setenv("TRAEFIK_API_URL", "http://traefik.test:8080")
+    config_module.reset_settings_cache()
+    with Session(get_engine()) as s:
+        s.add(ServiceState(service_id=service.id, last_verdict=HealthState.FAILED))
+        ph = _make_proxy_host(s, service, "a.example.com")
+        ph.wake_on_hit = True
+        s.add(ph)
+        s.commit()
+
+    collector = TrafficCollector(settings=get_settings())
+    counter = [100]
+    _patch_traefik_transport(monkeypatch, _dynamic_responder("a.example.com", counter))
+    import asyncio
+
+    asyncio.run(collector.poll_once())
+    counter[0] = 150
+    inserted = asyncio.run(collector.poll_once())
+    assert inserted == 1
+    assert _wake_runs() == []
 
 
 # ---------------------------------------------------------------------------
