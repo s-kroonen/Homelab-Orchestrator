@@ -79,11 +79,22 @@ def probe_name_for_hostname(hostname: str) -> str:
     return f"traefik:{hostname}"
 
 
+#: This probe answers "is Traefik routing this host to a live backend at
+#: all", not "does the app's homepage render". The bare root path almost
+#: never returns a plain 200 for a real app — a login redirect, an auth
+#: wall, a 404 at "/" with the real content elsewhere are all completely
+#: normal and all prove the route works. Only a genuine gateway/server
+#: error (5xx — Traefik's own "no backend"/"bad gateway" responses, or the
+#: app itself erroring) means the route is actually broken, so every 2xx,
+#: 3xx and 4xx counts as reachable.
+_EXPECT_STATUS = list(range(200, 500))
+
+
 def _probe_config(settings: Settings, hostname: str) -> dict[str, Any]:
     return {
         "url": settings.probe_proxy_base_url.rstrip("/") + "/",
         "host_header": hostname,
-        "expect_status": [200],
+        "expect_status": _EXPECT_STATUS,
         # This is a diagnostic-only probe (required=False) hitting the
         # gateway's bare LOCAL ip, which often carries a self-signed cert or
         # one that only validates for the public hostname via SNI — and SNI

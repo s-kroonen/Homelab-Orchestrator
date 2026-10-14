@@ -32,6 +32,7 @@ from orchestrator.config import get_settings
 from orchestrator.db.models import BackupPolicy, Node, Probe, Service
 from orchestrator.domain.enums import GuestKind, ProbeKind
 from orchestrator.domain.schemas import HttpProbeConfig, TcpProbeConfig
+from orchestrator.health.engine import HealthEngine
 from orchestrator.registry.loader import (
     _find_dependency_cycle,
     compute_registry_diff,
@@ -667,6 +668,22 @@ async def delete_node(name: str, session: SessionDep, admin: CurrentAdmin) -> di
 async def list_probes(slug: str, session: SessionDep) -> list[dict[str, Any]]:
     svc = _get_service(session, slug)
     return [_probe_dict(p) for p in _service_probes(session, svc)]
+
+
+@router.post("/registry/probes/{probe_id}/test")
+async def test_probe(probe_id: int, session: SessionDep, settings: SettingsDep) -> dict[str, Any]:
+    """Run this one probe right now and return its raw result.
+
+    Bypasses the service's aggregate verdict and persists nothing to
+    ServiceState — same primitive ``scan``/the CLI's ``probe-test`` use
+    (``HealthEngine.run_probe``), exposed here so a probe reporting
+    UNKNOWN or FAILED can be debugged from the dashboard: the exact
+    request made, the status code, the raw connection error.
+    """
+    probe, _svc = _get_probe(session, probe_id)
+    engine = HealthEngine(settings=settings)
+    result = await engine.run_probe(probe)
+    return result.model_dump()
 
 
 @router.post("/registry/services/{slug}/probes", status_code=status.HTTP_201_CREATED)

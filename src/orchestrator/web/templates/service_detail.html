@@ -353,6 +353,34 @@
       tr.appendChild(cfg);
 
       const actions = document.createElement("td");
+      const resultRow = document.createElement("tr");
+      const resultCell = document.createElement("td");
+      resultCell.colSpan = 7;
+      resultRow.appendChild(resultCell);
+      resultRow.hidden = true;
+
+      const test = document.createElement("button");
+      test.className = "secondary";
+      test.textContent = "Test";
+      test.addEventListener("click", async () => {
+        test.disabled = true;
+        test.textContent = "Testing…";
+        try {
+          const result = await sendJson("POST", "/api/registry/probes/" + p.id + "/test");
+          renderProbeTestResult(resultCell, result);
+          resultRow.hidden = false;
+        } catch (err) {
+          resultCell.innerHTML = "";
+          const msg = document.createElement("span");
+          msg.className = "msg error";
+          msg.textContent = err.message;
+          resultCell.appendChild(msg);
+          resultRow.hidden = false;
+        } finally {
+          test.disabled = false;
+          test.textContent = "Test";
+        }
+      });
       const edit = document.createElement("button");
       edit.className = "secondary";
       edit.textContent = "Edit";
@@ -370,9 +398,33 @@
           setMsg("probes-msg", err.message, "error");
         }
       });
-      actions.append(edit, " ", del);
+      actions.append(test, " ", edit, " ", del);
       tr.appendChild(actions);
       body.appendChild(tr);
+      body.appendChild(resultRow);
+    }
+  }
+
+  // Raw single-probe test result (see POST /api/registry/probes/{id}/test) —
+  // the state + message + full details dict, not just a badge. This is a
+  // debugging view: it shows exactly what the probe did just now, separate
+  // from the service's own last-scanned state shown elsewhere on this page.
+  function renderProbeTestResult(cell, result) {
+    cell.innerHTML = "";
+    const stateClass = { healthy: "ok", failed: "error", unknown: "" }[result.state] || "";
+    const summary = document.createElement("div");
+    summary.className = "msg" + (stateClass ? " " + stateClass : "");
+    const latency = result.latency_ms != null ? ` (${result.latency_ms}ms)` : "";
+    summary.textContent = `${result.state.toUpperCase()}${latency}${result.message ? " — " + result.message : ""}`;
+    cell.appendChild(summary);
+    if (result.details && Object.keys(result.details).length) {
+      const pre = document.createElement("pre");
+      pre.style.margin = "0.4rem 0 0";
+      pre.style.whiteSpace = "pre-wrap";
+      const code = document.createElement("code");
+      code.textContent = JSON.stringify(result.details, null, 2);
+      pre.appendChild(code);
+      cell.appendChild(pre);
     }
   }
 

@@ -237,7 +237,7 @@ linked to the `example-media` service gets a probe named
 config:
   url: "<PROBE_PROXY_BASE_URL>/"    # the gateway's LOCAL address
   host_header: media.example.com    # what the proxy routes on
-  expect_status: [200]
+  expect_status: [200, 201, ..., 499]  # any 2xx/3xx/4xx — see below
   verify_tls: false
 ```
 
@@ -245,6 +245,22 @@ This is exactly the `url` + `host_header` shape every hand-written proxied
 HTTP probe in `services.yaml` already uses (see
 [probing_through_a_gateway.md](probing_through_a_gateway.md)) — no new probe
 kind, just one created for you from data the orchestrator already has.
+
+`expect_status` accepts every 2xx/3xx/4xx (200-499), not just `200`. This
+probe answers "is Traefik routing this host to a live backend at all", not
+"does the app's homepage render" — it always hits the bare root path `/`,
+which for a real app very often redirects, sits behind a login wall, or
+404s while the real content lives elsewhere. All of that still proves the
+route works. Only a genuine 5xx (Traefik's own "no backend"/"bad gateway"
+responses, or the app itself erroring) counts as the route being broken.
+If you want this probe to validate something more specific, edit it by hand
+same as any other probe — but note that a manual edit is **not** preserved:
+the next Resync (or any create/update touching that `ProxyHost`) recomputes
+this probe's config from scratch and overwrites it. If you need a
+permanently customized check for a proxied route, give it a different name
+than `traefik:<hostname>` so this sync never touches it, and leave the
+auto-managed one as the route-reachability signal it's meant to be.
+
 `verify_tls` defaults to `false` because this probe hits the gateway's bare
 local IP, which commonly carries a self-signed certificate or one that only
 validates for the public hostname; a diagnostic probe should not FAIL on a

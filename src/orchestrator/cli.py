@@ -8,6 +8,7 @@
                 transport check           is the host runner / ssh plumbing usable?
                 guests | snapshots        what do Proxmox and PBS see?
                 scan SLUG | --all         what will the backup gate decide?
+                probe-test SLUG NAME      run one probe now, show its raw result
     Operate     backup SLUG               run one backup end to end
                 wake SLUG                 wake the node, start the guest, wait until healthy
     Recover     admin reset               break-glass: wipe admins/passkeys, reopen signup
@@ -32,6 +33,7 @@ from orchestrator.cli_config import service as service_group
 from orchestrator.cli_setup import config_group, init, scaffold
 from orchestrator.config import get_settings
 from orchestrator.db.models import Admin, Service, WebAuthnCredential
+from orchestrator.db.models import Probe as ProbeRow
 from orchestrator.db.session import build_engine, get_engine
 from orchestrator.health.engine import HealthEngine
 from orchestrator.logging_setup import configure_logging
@@ -449,6 +451,54 @@ def scan(slug: str | None, scan_all: bool) -> None:
         click.secho(f"{unhealthy} service(s) would be REFUSED by the backup gate.", fg="yellow")
         raise SystemExit(1)
     click.secho("All scanned services are HEALTHY.", fg="green", bold=True)
+
+
+@cli.command("probe-test")
+@click.argument("slug")
+@click.argument("probe_name")
+def probe_test(slug: str, probe_name: str) -> None:
+    """Run ONE probe right now and print its raw result.
+
+    Unlike ``scan``, this bypasses the aggregate verdict and persists
+    nothing to ServiceState — it exists for debugging a probe that is
+    reporting UNKNOWN or FAILED and you want to see exactly what happened
+    (the request made, the status code, the raw error), not just the badge.
+    """
+    _bootstrap()
+    settings = get_settings()
+
+    async def _go() -> Any:
+        engine = HealthEngine(settings=settings)
+        with Session(get_engine()) as session:
+            if settings.services_yaml_path.exists():
+                reconcile_yaml_into_db(session, settings.services_yaml_path)
+                session.commit()
+
+            svc = session.exec(select(Service).where(Service.slug == slug)).one_or_none()
+            if svc is None:
+                raise click.ClickException(f"no service {slug!r}")
+            row = session.exec(
+                select(ProbeRow).where(ProbeRow.service_id == svc.id, ProbeRow.name == probe_name)
+            ).one_or_none()
+            if row is None:
+                raise click.ClickException(f"no probe {probe_name!r} on service {slug!r}")
+            return await engine.run_probe(row)
+
+    result = _run(_go())
+    colour = {"healthy": "green", "failed": "red", "unknown": "yellow"}[result.state.value]
+    click.secho(
+        f"{result.probe_name} [{result.kind.value}] -> {result.state.value.upper()}",
+        fg=colour,
+        bold=True,
+    )
+    if result.latency_ms is not None:
+        click.echo(f"  latency: {result.latency_ms}ms")
+    if result.message:
+        click.echo(f"  message: {result.message}")
+    if result.details:
+        click.echo("  details:")
+        for key, value in result.details.items():
+            click.echo(f"    {key}: {value}")
 
 
 # ---------------------------------------------------------------------------
