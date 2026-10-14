@@ -29,7 +29,7 @@ from sqlmodel import Session, col, select
 
 from orchestrator.audit import log as audit
 from orchestrator.config import get_settings
-from orchestrator.db.models import BackupPolicy, Node, Probe, Service
+from orchestrator.db.models import BackupPolicy, HealthScanSample, Node, Probe, Service
 from orchestrator.domain.enums import GuestKind, ProbeKind
 from orchestrator.domain.schemas import HttpProbeConfig, TcpProbeConfig
 from orchestrator.health.engine import HealthEngine
@@ -440,6 +440,37 @@ async def list_services(session: SessionDep) -> list[dict[str, object]]:
 @router.get("/registry/services/{slug}")
 async def get_service(slug: str, session: SessionDep) -> dict[str, Any]:
     return service_detail(session, _get_service(session, slug))
+
+
+@router.get("/registry/services/{slug}/health-history")
+async def get_service_health_history(
+    slug: str, session: SessionDep, limit: int = 20
+) -> list[dict[str, Any]]:
+    """The last ``limit`` periodic :class:`HealthScanSample` rows for this
+    service, OLDEST first (so the compact tick-strip on the service page
+    reads left-to-right as "earlier -> now", the natural reading direction
+    for a trend). Written by :class:`orchestrator.scheduler.health_scanner
+    .HealthScanner` — this is deliberately just enough for that strip, not a
+    new charting subsystem; the full per-probe detail for the CURRENT verdict
+    is already on ``ServiceState`` (see ``get_service``/``service_detail``).
+    """
+    svc = _get_service(session, slug)
+    limit = max(1, min(limit, 200))
+    rows = session.exec(
+        select(HealthScanSample)
+        .where(HealthScanSample.service_id == svc.id)
+        .order_by(col(HealthScanSample.sampled_at).desc())
+        .limit(limit)
+    ).all()
+    rows = list(reversed(rows))  # newest-fetched, oldest-returned
+    return [
+        {
+            "sampled_at": r.sampled_at.isoformat(),
+            "state": r.state.value,
+            "reason": r.reason,
+        }
+        for r in rows
+    ]
 
 
 @router.post("/registry/services", status_code=status.HTTP_201_CREATED)

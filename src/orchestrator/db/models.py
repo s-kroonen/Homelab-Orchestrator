@@ -240,6 +240,34 @@ class TrafficSample(SQLModel, table=True):
     by_code: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))
 
 
+class HealthScanSample(SQLModel, table=True):
+    """One periodic scan cycle's verdict for one service — the history
+    :class:`ServiceState` does not keep (it only ever holds the LATEST verdict).
+
+    Deliberately compact: just enough for a trend view (a strip of recent
+    ticks on the service page), not a forensic record. The full probe-by-probe
+    detail for the latest scan already lives on ``ServiceState.last_probe_results``,
+    and a specific probe can be re-run on demand via the ``probe-test`` tool
+    (CLI + dashboard) — duplicating that detail here, per sample, per probe,
+    forever, is exactly the "takes up a lot of space" outcome this table is
+    meant to avoid. See ``orchestrator.scheduler.health_scanner``.
+
+    ``reason`` is the same short string :class:`ServiceVerdict.reason` already
+    produces, truncated defensively — it is meant to read as "why", not to
+    hold an essay.
+    """
+
+    __tablename__ = "health_scan_sample"
+
+    id: int | None = Field(default=None, primary_key=True)
+    service_id: int = Field(
+        sa_column=Column(ForeignKey("service.id", ondelete="CASCADE"), nullable=False, index=True),
+    )
+    sampled_at: datetime = Field(default_factory=_utcnow, index=True)
+    state: HealthState = Field(default=HealthState.UNKNOWN)
+    reason: str = ""
+
+
 # ---------------------------------------------------------------------------
 # Admins + passkeys — DB-only. NOT rehydrated from YAML, otherwise reloading
 # services.yaml would lock the operator out.

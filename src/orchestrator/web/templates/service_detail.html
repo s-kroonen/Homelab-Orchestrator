@@ -51,6 +51,18 @@
   .muted { color: #9aa4b2; }
   .yes { color: #3ecf6d; }
   [hidden] { display: none !important; }
+  ol.steps { list-style: none; padding: 0; margin: 0.4rem 0; }
+  ol.health-strip { display: flex; gap: 0.25rem; flex-wrap: wrap; }
+  ol.health-strip li {
+    width: 1.5rem; height: 1.5rem; display: flex; align-items: center; justify-content: center;
+    border-radius: 0.3rem; background: #171b24; font-size: 0.9rem; cursor: default;
+  }
+  /* Same vocabulary and classes as the probe-result steps elsewhere
+     (dashboard.html, maintenance.html, activity.html): ok = ✓ green,
+     failed/indeterminate = ✗ red. Unknown health maps to "indeterminate". */
+  ol.health-strip li.ok::before { content: "✓"; color: #3ecf6d; }
+  ol.health-strip li.failed::before, ol.health-strip li.indeterminate::before { content: "✗"; color: #e5534b; }
+  ol.health-strip li.muted-tick { color: #9aa4b2; width: auto; background: none; }
 </style>
 </head>
 <body>
@@ -124,6 +136,12 @@
       <button class="danger" id="svc-delete-btn">Delete service</button>
       <span class="msg" id="svc-msg"></span>
     </div>
+  </section>
+
+  <section>
+    <h2>Health history</h2>
+    <p class="msg">Last 20 periodic scans (oldest → newest), one tick per cycle. Hover a tick for when and why.</p>
+    <ol class="steps health-strip" id="health-strip"><li class="muted-tick">loading…</li></ol>
   </section>
 
   <section>
@@ -586,8 +604,50 @@
     }
   });
 
+  // --- health history (compact ticks from the periodic HealthScanner) -----
+  const HEALTH_CLASS = { healthy: "ok", failed: "failed", unknown: "indeterminate" };
+  async function loadHealthHistory() {
+    const strip = $("health-strip");
+    try {
+      const rows = await (await fetch(svcPath + "/health-history?limit=20")).json();
+      if (!rows.length) {
+        strip.innerHTML = '<li class="muted-tick">no scans yet</li>';
+        return;
+      }
+      strip.innerHTML = "";
+      for (const row of rows) {
+        const li = document.createElement("li");
+        li.className = HEALTH_CLASS[row.state] || "indeterminate";
+        li.title = `${row.sampled_at} — ${row.state}: ${row.reason}`;
+        strip.appendChild(li);
+      }
+    } catch (_) {
+      strip.innerHTML = '<li class="muted-tick">could not load history</li>';
+    }
+  }
+
   fillServiceForm(SERVICE);
   renderProbes();
+  loadHealthHistory();
+
+  // This page's "Health history" strip and the dashboard badges it links
+  // back to only display state the periodic HealthScanner already
+  // collected — nothing on them mutates via the reload. 60s, independent of
+  // the scanner's own (much longer, default 600s) cycle. Guarded: this page
+  // is a live edit form (service fields, the probe editor panel) with
+  // nothing auto-saved, so a blind reload could silently discard an
+  // in-progress edit — skip the reload whenever the admin is focused in a
+  // form field or the probe editor panel is open.
+  function shouldSkipAutoReload() {
+    const active = document.activeElement;
+    if (active && /^(INPUT|TEXTAREA|SELECT)$/.test(active.tagName)) return true;
+    if (!$("probe-editor").hidden) return true;
+    return false;
+  }
+  setInterval(() => {
+    if (shouldSkipAutoReload()) return;
+    location.reload();
+  }, 60000);
 </script>
 </body>
 </html>

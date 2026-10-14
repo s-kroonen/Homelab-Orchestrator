@@ -416,6 +416,24 @@
   loadNodes();
   loadDevices();
   loadInvites();
+
+  // This page only displays health/backup state the periodic HealthScanner
+  // already collected (see routers/dashboard.py) — nothing on it mutates via
+  // the reload itself. 60s, independent of the scanner's own (much longer,
+  // default 600s) cycle: re-rendering whatever is already in the DB is cheap.
+  // Guarded: skip a reload while the admin is mid-typing in one of the
+  // "new service"/"new node"/invite/device forms, or has a probe details
+  // panel open to read it, so the periodic refresh never yanks away
+  // in-progress input or a panel someone just opened.
+  function shouldSkipAutoReload() {
+    const active = document.activeElement;
+    if (active && /^(INPUT|TEXTAREA|SELECT)$/.test(active.tagName)) return true;
+    if (document.querySelector("details.probes[open]")) return true;
+    return false;
+  }
+  setInterval(() => {
+    if (!shouldSkipAutoReload()) location.reload();
+  }, 60000);
 </script>
 </body>
 </html>

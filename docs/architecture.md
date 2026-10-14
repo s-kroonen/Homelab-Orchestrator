@@ -34,7 +34,8 @@ domain/             enums + Pydantic DTOs shared across modules
 health/             probe engine (phase 4)
 pipelines/          wake (phase 3), backup (phase 2/6), restore (phase 8)
 registry/           YAML <-> DB reconcile + save/reset
-scheduler/          APScheduler wiring (phase 6)
+scheduler/          APScheduler wiring: backups (phase 6), Traefik traffic
+                    polling, periodic health scanning (HealthScanner)
 web/                FastAPI app: health, maintenance, wake, dashboard
 audit/              append-only audit writes
 ```
@@ -60,6 +61,68 @@ Every scan aggregates its required probes into one of:
 **Never overwrite a good backup with a bad one.** UNKNOWN is treated as
 non-clean (fail closed) so a network blip cannot cascade a failed backup.
 
+### Periodic scanning and the shared-cache consistency guarantee
+
+`HealthEngine.scan` persists its verdict to `service_state` (one row per
+service — only the LATEST verdict, no history) as a side effect every time
+it is called. Before `HealthScanner` existed, the only callers were the
+CLI's manual `scan` command, `WakePipeline`, and `BackupPipeline`'s gate
+check — none on any schedule, and each starting its own fresh dependency
+cache. That had a real consequence beyond staleness: if service A and
+service B both `depends_on: [gateway]` but were scanned at different real
+moments (A during its own backup's gate check, B a minute later during a
+wake), each top-level call re-probed "gateway" LIVE at its own moment, and a
+flaky/slow network path could answer differently each time — so A, B and the
+gateway's own row could end up disagreeing with each other about whether the
+gateway was even healthy, even though nothing was actually wrong with the
+aggregation rule.
+
+`orchestrator.scheduler.health_scanner.HealthScanner` runs one scan cycle
+every `HEALTH_SCAN_INTERVAL_S` (default 600s / 10 min, `HEALTH_SCAN_ENABLED`
+to turn it off). Within one cycle it scans every enabled service, passing
+the **same** `_cache: dict[str, ServiceVerdict]` into every one of those
+top-level `engine.scan(...)` calls — the identical cache
+`HealthEngine._check_dependencies` already uses internally to avoid
+re-probing a dependency already scanned earlier in the same call tree, now
+shared across the whole cycle's top-level services too. A gateway behind N
+services is therefore probed **exactly once per cycle**, and every
+dependent — plus the gateway's own row — agrees by construction, because
+they were all judged off the exact same verdict for that cycle. This does
+not make verdicts instantaneous (one can still be up to one cycle old), only
+internally consistent within a cycle, which is what eliminates the
+gateway-vs-dependent mismatch an operator could otherwise observe.
+
+Each cycle also writes one `health_scan_sample` row per slug that ended up
+in that cycle's cache — which naturally includes every enabled top-level
+service *and* any dependency pulled in along the way, even a disabled
+service that something still `depends_on` (the dependency chain does not
+care about `enabled`, so leaving it out of the history would be
+inconsistent with what was actually probed). This is the trend history
+`service_state` does not keep: a compact per-service strip ("was this
+healthy an hour ago?"), deliberately narrow-columned (`sampled_at`, `state`,
+a truncated `reason`) and short-retention (`HEALTH_HISTORY_RETENTION_DAYS`,
+default 7 days, pruned every cycle) — this is a monitoring trend view, not
+an audit trail; `audit_entry`/`pipeline_run` already serve that purpose for
+backups and wakes, and the full per-probe detail for the *current* verdict
+already lives on `service_state.last_probe_results` (re-run on demand via
+the `probe-test` tool).
+
+The dashboard and service pages poll themselves every 60s
+(`setInterval(() => location.reload(), 60000)`, same pattern as the
+existing `/traffic` auto-refresh) so an open tab shows fresh health without
+a manual reload — independent of, and much shorter than, the scanner's own
+cycle, since re-rendering state already in the DB is cheap. The service
+page's refresh is guarded to skip while the admin is mid-edit (focused in a
+form field, or the probe-add panel is open), so the periodic refresh never
+discards in-progress input.
+
+Manual, on-demand scanning (the CLI's `scan`/`probe-test`) still exists
+alongside the periodic path and is unaffected by it — see
+[adding_a_service.md](adding_a_service.md). The two serve different
+purposes: manual is "debug this one thing right now" (its own fresh cache,
+one service at a time), periodic is "keep the whole fleet's state fresh and
+mutually consistent in the background."
+
 ## YAML-owned vs DB-owned tables
 
 | Table                | Ownership | Reconciled from YAML on boot? |
@@ -80,6 +143,7 @@ non-clean (fail closed) so a network blip cannot cascade a failed backup.
 | `state_snapshot_marker` | **DB** | No                            |
 | `setting`            | **DB**    | No (uses two well-known keys for YAML load/save markers) |
 | `traffic_sample`     | **DB**    | No (telemetry — polled from Traefik, see docs/traffic_metrics.md) |
+| `health_scan_sample` | **DB**    | No (telemetry — periodic health-scan history, see "Periodic scanning" above) |
 
 ## FK cascade policies
 
@@ -92,6 +156,7 @@ Chosen so YAML edits stay safe and history stays intact:
 * `backup_record.service_id` → `SET NULL` + denormalised `service_slug` (backup history survives the service being removed from YAML).
 * `pipeline_run.service_id` → `SET NULL` (same reasoning).
 * `traffic_sample.proxy_host_id` → `CASCADE` (traffic history for a removed proxy host is not worth keeping as an orphan — unlike `backup_record`/`pipeline_run`, there is no slug to denormalise against).
+* `health_scan_sample.service_id` → `CASCADE` (same reasoning — a removed service's health-scan history is not worth keeping as an orphan).
 
 ## Boot sequence
 

@@ -145,6 +145,29 @@ ENV_SECTIONS: tuple[EnvSection, ...] = (
         ),
     ),
     EnvSection(
+        "health",
+        "Health scanning (periodic)",
+        (
+            EnvKey(
+                "HEALTH_SCAN_ENABLED",
+                "Periodically scan every enabled service in the background, sharing one\n"
+                "cache across the whole cycle so a dependency (e.g. a gateway) is probed\n"
+                "once and every dependent sees the SAME verdict for it. false = ServiceState\n"
+                "only updates as a side effect of a wake or backup gate check.",
+            ),
+            EnvKey(
+                "HEALTH_SCAN_INTERVAL_S",
+                "How often the periodic scan cycle runs.",
+            ),
+            EnvKey(
+                "HEALTH_HISTORY_RETENTION_DAYS",
+                "How long HealthScanSample rows (the trend history) are kept before being\n"
+                "pruned. Deliberately short — this is a monitoring trend view, not an audit\n"
+                "trail (AuditEntry/PipelineRun already cover that for backups/wakes).",
+            ),
+        ),
+    ),
+    EnvSection(
         "proxmox",
         "Proxmox VE",
         (

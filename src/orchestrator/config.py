@@ -90,6 +90,21 @@ class Settings(BaseSettings):
     # ---- Service registry -------------------------------------------------
     services_yaml_path: Path = Path("./config/services.yaml")
 
+    # ---- Health scanning (periodic) ----------------------------------------
+    # Without this, ServiceState is only ever updated as a SIDE EFFECT of a
+    # wake or a backup's gate check (see HealthScanner's module docstring) —
+    # which means two services sharing a dependency can show mutually
+    # inconsistent verdicts for it, because each one re-probed it live at a
+    # different moment. This runs one scan cycle on its own schedule instead.
+    health_scan_enabled: bool = True
+    # 10 minutes: frequent enough that the dashboard is never stale for long,
+    # infrequent enough not to hammer a low-power homelab's hosts.
+    health_scan_interval_s: int = 600
+    # Deliberately short — this is a monitoring trend view, not an audit
+    # trail (AuditEntry/PipelineRun already serve that purpose for backups
+    # and wakes), so it is kept small on purpose.
+    health_history_retention_days: int = 7
+
     # ---- Proxmox ----------------------------------------------------------
     proxmox_host: str = "proxmox.example.lan"
     proxmox_port: int = 8006

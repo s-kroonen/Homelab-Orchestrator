@@ -46,6 +46,20 @@ state — it only runs the one probe and prints what happened. The same view
 is available from the dashboard: open the service's page and click **Test**
 next to any probe in the list.
 
+`scan` and `probe-test` are both **manual, on-demand** — "debug this one
+thing right now." They are not the only way `service_state` gets updated:
+a background scheduler (`HealthScanner`, on by default — see
+[architecture.md](architecture.md#periodic-scanning-and-the-shared-cache-consistency-guarantee))
+scans every enabled service every `HEALTH_SCAN_INTERVAL_S` (default 10
+minutes) so the dashboard stays current without anyone running `scan` by
+hand, and — unlike any single manual `scan` call — does it with one shared
+dependency cache per cycle, so a gateway behind several services is probed
+once and every dependent agrees about it. Use `scan`/`probe-test` to debug
+a specific service or probe right now; the periodic scanner is what keeps
+the whole fleet's state fresh and mutually consistent in the background.
+The service page's "Health history" strip shows the periodic scanner's
+recent verdicts for that service.
+
 Other commands:
 
 | Command | Does |

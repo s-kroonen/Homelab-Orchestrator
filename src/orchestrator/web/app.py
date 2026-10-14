@@ -8,7 +8,8 @@ Lifespan tasks in order:
     5. build + start adapters
     6. start the backup scheduler (if SCHEDULER_ENABLED)
     7. start the traffic collector (if TRAEFIK_API_URL is set)
-Shutdown reverses 7 then 6 then 5.
+    8. start the health scanner (if HEALTH_SCAN_ENABLED)
+Shutdown reverses 8 then 7 then 6 then 5.
 """
 
 from __future__ import annotations
@@ -29,6 +30,7 @@ from orchestrator.db.session import build_engine, session_scope
 from orchestrator.logging_setup import configure_logging, get_logger
 from orchestrator.registry.loader import RegistryPathError, reconcile_yaml_into_db
 from orchestrator.scheduler import BackupScheduler
+from orchestrator.scheduler.health_scanner import HealthScanner
 from orchestrator.scheduler.traffic_collector import TrafficCollector
 from orchestrator.web.routers import (
     activity,
@@ -164,10 +166,31 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         traffic_collector = None
     app.state.traffic_collector = traffic_collector
 
+    # Same resilience rule as the other two schedulers: a failure to start
+    # must not take the app down, and HEALTH_SCAN_ENABLED=false makes this
+    # one an intentional no-op too.
+    health_scanner: HealthScanner | None = None
+    try:
+        health_scanner = HealthScanner(settings=settings)
+        health_scanner.start()
+    except Exception as exc:
+        log.error(
+            "health_scanner.start.failed",
+            error=str(exc),
+            error_type=type(exc).__name__,
+            traceback=traceback.format_exc(),
+            impact="ServiceState will only update as a side effect of a wake "
+            "or a backup's gate check — not on a schedule.",
+        )
+        health_scanner = None
+    app.state.health_scanner = health_scanner
+
     try:
         yield
     finally:
         log.info("orchestrator.stop")
+        if health_scanner is not None:
+            await health_scanner.shutdown()
         if traffic_collector is not None:
             await traffic_collector.shutdown()
         if scheduler is not None:
