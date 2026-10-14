@@ -112,6 +112,7 @@ class ServiceUpdate(_Body):
     backup_excluded: bool | None = None
     backup_excluded_reason: str | None = None
     backup_policy_id: int | None = None
+    wake_on_hit_enabled: bool | None = None
     depends_on: list[str] | None = None
 
 
@@ -120,6 +121,7 @@ class NodeCreate(_Body):
     always_on: bool = False
     power_mgr_target: str = ""
     notes: str = ""
+    wake_on_hit_enabled: bool = True
 
 
 class NodeUpdate(_Body):
@@ -127,6 +129,7 @@ class NodeUpdate(_Body):
     always_on: bool | None = None
     power_mgr_target: str | None = None
     notes: str | None = None
+    wake_on_hit_enabled: bool | None = None
 
 
 class ProbeCreate(_Body):
@@ -161,6 +164,7 @@ def _node_dict(node: Node) -> dict[str, Any]:
         "always_on": node.always_on,
         "power_mgr_target": node.power_mgr_target,
         "notes": node.notes,
+        "wake_on_hit_enabled": node.wake_on_hit_enabled,
     }
 
 
@@ -205,6 +209,7 @@ def service_detail(session: Session, svc: Service) -> dict[str, Any]:
         "guest_id": svc.guest_id,
         "backup_excluded": svc.backup_excluded,
         "backup_excluded_reason": svc.backup_excluded_reason,
+        "wake_on_hit_enabled": svc.wake_on_hit_enabled,
         "backup_policy_id": svc.backup_policy_id,
         "backup_policy": policy.name if policy else None,
         "depends_on": list(svc.depends_on or []),
@@ -500,7 +505,7 @@ async def update_service(
         changes["group"] = ""
     if "backup_excluded_reason" in changes and changes["backup_excluded_reason"] is None:
         changes["backup_excluded_reason"] = ""
-    for flag in ("enabled", "backup_excluded"):
+    for flag in ("enabled", "backup_excluded", "wake_on_hit_enabled"):
         if flag in changes and changes[flag] is None:
             raise _bad_request(f"{flag} must be true or false")
     if "guest_kind" in changes:
@@ -583,6 +588,7 @@ async def create_node(body: NodeCreate, session: SessionDep, admin: CurrentAdmin
         always_on=body.always_on,
         power_mgr_target=body.power_mgr_target,
         notes=body.notes,
+        wake_on_hit_enabled=body.wake_on_hit_enabled,
     )
     session.add(node)
     session.flush()
@@ -612,8 +618,9 @@ async def update_node(
         if clash is not None and clash.id != node.id:
             raise _conflict(f"node {new_name!r} already exists")
         changes["name"] = new_name
-    if "always_on" in changes and changes["always_on"] is None:
-        raise _bad_request("always_on must be true or false")
+    for flag in ("always_on", "wake_on_hit_enabled"):
+        if flag in changes and changes[flag] is None:
+            raise _bad_request(f"{flag} must be true or false")
     for text_field in ("power_mgr_target", "notes"):
         if text_field in changes and changes[text_field] is None:
             changes[text_field] = ""

@@ -151,7 +151,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # (TRAEFIK_API_URL unset -> TrafficCollector.start() is a no-op).
     traffic_collector: TrafficCollector | None = None
     try:
-        traffic_collector = TrafficCollector(settings=settings)
+        traffic_collector = TrafficCollector(settings=settings, adapters=adapters)
         traffic_collector.start()
     except Exception as exc:
         log.error(

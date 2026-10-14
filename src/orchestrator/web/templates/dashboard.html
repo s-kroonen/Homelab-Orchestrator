@@ -164,15 +164,16 @@
     <h2>Nodes</h2>
     <table>
       <thead>
-        <tr><th>Name</th><th>Always on</th><th>Power target</th><th>Notes</th><th>Services</th><th></th></tr>
+        <tr><th>Name</th><th>Always on</th><th>Power target</th><th>Notes</th><th>Wake on hit</th><th>Services</th><th></th></tr>
       </thead>
-      <tbody id="nodes-body"><tr><td colspan="6">Loading…</td></tr></tbody>
+      <tbody id="nodes-body"><tr><td colspan="7">Loading…</td></tr></tbody>
     </table>
     <div class="row">
       <input id="new-node-name" placeholder="name (e.g. pve1)" size="12">
       <label class="inline"><input id="new-node-always-on" type="checkbox"> always on</label>
       <input id="new-node-target" placeholder="power target" size="14">
       <input id="new-node-notes" placeholder="notes" size="16">
+      <label class="inline"><input id="new-node-wake-on-hit" type="checkbox" checked> wake on hit</label>
       <button id="new-node-btn">Add node</button>
     </div>
     <p class="msg" id="nodes-msg"></p>
@@ -337,7 +338,8 @@
     if (!editing) {
       tr.append(
         cell(node.name), cell(node.always_on ? "yes" : "no"), cell(node.power_mgr_target || "—"),
-        cell(node.notes || "—"), cell(String(node.service_count)),
+        cell(node.notes || "—"), cell(node.wake_on_hit_enabled ? "yes" : "no"),
+        cell(String(node.service_count)),
       );
       actions.append(
         button("Edit", "secondary", () => tr.replaceWith(renderNodeRow(node, true))), " ",
@@ -358,13 +360,20 @@
     alwaysOn.checked = node.always_on;
     const target = textInput(node.power_mgr_target, 12);
     const notes = textInput(node.notes, 14);
-    tr.append(cell(name), cell(alwaysOn), cell(target), cell(notes), cell(String(node.service_count)));
+    const wakeOnHit = document.createElement("input");
+    wakeOnHit.type = "checkbox";
+    wakeOnHit.checked = node.wake_on_hit_enabled;
+    tr.append(
+      cell(name), cell(alwaysOn), cell(target), cell(notes), cell(wakeOnHit),
+      cell(String(node.service_count)),
+    );
     actions.append(
       button("Save", "", async () => {
         try {
           await sendJson("PUT", path, {
             name: name.value.trim(), always_on: alwaysOn.checked,
             power_mgr_target: target.value.trim(), notes: notes.value,
+            wake_on_hit_enabled: wakeOnHit.checked,
           });
           location.reload();
         } catch (err) { setMsg("nodes-msg", err.message, "error"); }
@@ -381,7 +390,7 @@
     const body = document.getElementById("nodes-body");
     body.innerHTML = "";
     if (!nodes.length) {
-      body.innerHTML = '<tr><td colspan="6">No nodes yet.</td></tr>';
+      body.innerHTML = '<tr><td colspan="7">No nodes yet.</td></tr>';
       return;
     }
     for (const n of nodes) body.appendChild(renderNodeRow(n, false));
@@ -394,6 +403,7 @@
         always_on: document.getElementById("new-node-always-on").checked,
         power_mgr_target: document.getElementById("new-node-target").value.trim(),
         notes: document.getElementById("new-node-notes").value,
+        wake_on_hit_enabled: document.getElementById("new-node-wake-on-hit").checked,
       });
       // Full reload: the "new service" node picker and the unsaved-changes
       // badge are both server-rendered.

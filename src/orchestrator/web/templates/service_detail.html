@@ -88,6 +88,9 @@
       </datalist>
       <label for="f-enabled">Enabled</label>
       <span><input id="f-enabled" type="checkbox"></span>
+      <label for="f-wake-on-hit">Wake on hit</label>
+      <span><input id="f-wake-on-hit" type="checkbox"></span>
+      <span class="hint">Safety rail for the TrafficCollector-driven auto-wake (see docs/traffic_metrics.md). Does not affect the manual wake button, the CLI or the wake API.</span>
       <label for="f-node">Node</label>
       <select id="f-node">
         {% for n in nodes %}<option value="{{ n.id }}">{{ n.name }}</option>{% endfor %}
@@ -265,6 +268,7 @@
     $("f-description").value = s.description;
     $("f-group").value = s.group || "";
     $("f-enabled").checked = s.enabled;
+    $("f-wake-on-hit").checked = s.wake_on_hit_enabled;
     $("f-node").value = s.node_id ?? "";
     $("f-guest-kind").value = s.guest_kind;
     $("f-guest-id").value = s.guest_id ?? "";
@@ -284,6 +288,7 @@
       description: $("f-description").value,
       group: $("f-group").value.trim(),
       enabled: $("f-enabled").checked,
+      wake_on_hit_enabled: $("f-wake-on-hit").checked,
       node_id: Number($("f-node").value),
       guest_kind: $("f-guest-kind").value,
       guest_id: guestId === "" ? null : Number(guestId),

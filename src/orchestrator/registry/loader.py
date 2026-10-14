@@ -163,6 +163,7 @@ def _spec_from_db(session: Session) -> RegistryFile:
                 enabled=svc.enabled,
                 backup_excluded=svc.backup_excluded,
                 backup_excluded_reason=svc.backup_excluded_reason,
+                wake_on_hit_enabled=svc.wake_on_hit_enabled,
                 depends_on=list(svc.depends_on or []),
                 backup_policy=policy_name,
                 probes=[
@@ -182,6 +183,7 @@ def _spec_from_db(session: Session) -> RegistryFile:
                         upstream=ph.upstream,
                         router_provider=ph.router_provider.value,
                         extra=ph.extra,
+                        wake_on_hit=ph.wake_on_hit,
                     )
                     for ph in proxy_hosts
                 ],
@@ -196,6 +198,7 @@ def _spec_from_db(session: Session) -> RegistryFile:
                 always_on=n.always_on,
                 power_mgr_target=n.power_mgr_target,
                 notes=n.notes,
+                wake_on_hit_enabled=n.wake_on_hit_enabled,
             )
             for n in nodes
         ],
@@ -361,6 +364,7 @@ def reconcile_yaml_into_db(session: Session, path: Path) -> RegistryFile:
         node.always_on = spec.always_on
         node.power_mgr_target = spec.power_mgr_target
         node.notes = spec.notes
+        node.wake_on_hit_enabled = spec.wake_on_hit_enabled
         node.updated_at = datetime.now(UTC)
 
     session.flush()
@@ -412,6 +416,7 @@ def reconcile_yaml_into_db(session: Session, path: Path) -> RegistryFile:
         svc.enabled = spec.enabled
         svc.backup_excluded = spec.backup_excluded
         svc.backup_excluded_reason = spec.backup_excluded_reason
+        svc.wake_on_hit_enabled = spec.wake_on_hit_enabled
         svc.depends_on = list(spec.depends_on)
         svc.node_id = node.id
         svc.backup_policy_id = policy.id if policy else None
@@ -446,6 +451,7 @@ def reconcile_yaml_into_db(session: Session, path: Path) -> RegistryFile:
                     upstream=phspec.upstream,
                     router_provider=RouterProvider(phspec.router_provider),
                     extra=phspec.extra,
+                    wake_on_hit=phspec.wake_on_hit,
                 )
             )
 

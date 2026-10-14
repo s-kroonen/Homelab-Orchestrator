@@ -153,6 +153,42 @@ def test_update_audit_records_only_changed_fields(client: TestClient, service: S
     assert set(entry.details["changes"]) == {"upstream"}
 
 
+def test_wake_on_hit_defaults_false_and_round_trips_through_crud(
+    client: TestClient, service: Service
+) -> None:
+    """Defaults False — opt-in, so an upgrade never starts auto-waking a
+    service nobody asked for (see docs/traffic_metrics.md)."""
+    created = client.post(
+        "/api/proxy-hosts", json={"hostname": "a.example.com", "service_id": service.id}
+    )
+    assert created.status_code == 201, created.text
+    assert created.json()["wake_on_hit"] is False
+    ph_id = created.json()["id"]
+
+    updated = client.put(
+        f"/api/proxy-hosts/{ph_id}",
+        json={"hostname": "a.example.com", "service_id": service.id, "wake_on_hit": True},
+    )
+    assert updated.status_code == 200, updated.text
+    assert updated.json()["wake_on_hit"] is True
+
+    assert client.get(f"/api/proxy-hosts/{ph_id}").json()["wake_on_hit"] is True
+    assert client.get("/api/proxy-hosts").json()[0]["wake_on_hit"] is True
+
+
+def test_wake_on_hit_round_trips_through_save_to_yaml(
+    client: TestClient, service: Service, tmp_path: Any
+) -> None:
+    client.post(
+        "/api/proxy-hosts",
+        json={"hostname": "thing.example.com", "service_id": service.id, "wake_on_hit": True},
+    )
+    r = client.post("/api/registry/save")
+    assert r.status_code == 200, r.text
+    parsed, _ = read_yaml_file(tmp_path / "services.yaml")
+    assert parsed.services[0].proxy_hosts[0].wake_on_hit is True
+
+
 def test_linked_host_round_trips_through_save_to_yaml(
     client: TestClient, service: Service, tmp_path: Any
 ) -> None:

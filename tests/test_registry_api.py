@@ -149,6 +149,21 @@ def test_node_create_update_delete(client: TestClient) -> None:
     assert _audit_actions()[-3:] == ["node.created", "node.updated", "node.deleted"]
 
 
+def test_node_wake_on_hit_enabled_defaults_true_and_is_editable(client: TestClient) -> None:
+    """Default True — it is a safety rail on top of the per-proxy-host
+    opt-in (which defaults False), not an independent opt-in, so leaving it
+    untouched must never block a wake-on-hit someone turned on elsewhere."""
+    node = _make_node(client, "pve1")
+    assert node["wake_on_hit_enabled"] is True
+
+    r = client.put("/api/registry/nodes/pve1", json={"wake_on_hit_enabled": False})
+    assert r.status_code == 200, r.text
+    assert r.json()["wake_on_hit_enabled"] is False
+    # Untouched by a partial update that doesn't mention it.
+    r = client.put("/api/registry/nodes/pve1", json={"notes": "x"})
+    assert r.json()["wake_on_hit_enabled"] is False
+
+
 def test_node_duplicate_name_is_rejected(client: TestClient) -> None:
     _make_node(client, "pve1")
     _make_node(client, "pve2")
@@ -215,6 +230,16 @@ def test_service_create_get_update_delete(client: TestClient) -> None:
     assert "service.created" in actions
     assert "service.updated" in actions
     assert actions[-1] == "service.deleted"
+
+
+def test_service_wake_on_hit_enabled_defaults_true_and_is_editable(client: TestClient) -> None:
+    node = _make_node(client)
+    created = _make_service(client, node["id"])
+    assert created["wake_on_hit_enabled"] is True
+
+    r = client.put("/api/registry/services/media", json={"wake_on_hit_enabled": False})
+    assert r.status_code == 200, r.text
+    assert r.json()["wake_on_hit_enabled"] is False
 
 
 def test_service_group_create_update_and_default(client: TestClient) -> None:

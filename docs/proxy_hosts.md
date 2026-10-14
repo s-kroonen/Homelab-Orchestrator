@@ -15,6 +15,11 @@ to show per-service/per-host traffic (see
 [traffic_metrics.md](traffic_metrics.md)) — both entirely read-only. Nothing
 in this repo ever writes to Traefik, Pangolin or NPM.
 
+That traffic poll can also, per-hostname, trigger a wake for a down
+service — a stand-in until write access to Traefik's config exists to wire
+up a real Traefik-side trigger. See
+[traffic_metrics.md#wake-on-hit-a-stand-in-for-a-real-traefik-side-trigger](traffic_metrics.md#wake-on-hit-a-stand-in-for-a-real-traefik-side-trigger).
+
 They exist so both the operator and the orchestrator have one place to look
 up "which hostname reaches which service, through what":
 
