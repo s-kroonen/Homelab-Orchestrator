@@ -158,6 +158,13 @@
     await fetch("/api/auth/logout", { method: "POST" });
     location.href = "/login";
   });
+
+  // This page only ever displays data the TrafficCollector already polled
+  // and stored (see routers/traffic.py) — nothing on it mutates state, so a
+  // plain reload is enough to pick up new samples. 30s: half the collector's
+  // default 60s poll interval, so a visitor usually sees a fresh point every
+  // other refresh without hammering the server.
+  setInterval(() => location.reload(), 30000);
 </script>
 </body>
 </html>
