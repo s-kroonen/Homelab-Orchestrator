@@ -27,8 +27,9 @@ from sqlmodel import Session, select
 from orchestrator.audit import log as audit
 from orchestrator.db.models import ProxyHost, Service
 from orchestrator.domain.enums import RouterProvider
+from orchestrator.registry.traefik_status import drift_status, fetch_router_hostnames
 from orchestrator.web.auth import CurrentAdmin, require_admin
-from orchestrator.web.deps import SessionDep
+from orchestrator.web.deps import SessionDep, SettingsDep
 
 router = APIRouter(
     prefix="/api/proxy-hosts", tags=["proxy-hosts"], dependencies=[Depends(require_admin)]
@@ -73,7 +74,9 @@ class ProxyHostIn(BaseModel):
         return v.strip()
 
 
-def _serialize(ph: ProxyHost, services: dict[int, Service]) -> dict[str, Any]:
+def _serialize(
+    ph: ProxyHost, services: dict[int, Service], live_hostnames: set[str] | None
+) -> dict[str, Any]:
     svc = services.get(ph.service_id)
     return {
         "id": ph.id,
@@ -85,6 +88,10 @@ def _serialize(ph: ProxyHost, services: dict[int, Service]) -> dict[str, Any]:
         "service_name": svc.name if svc else None,
         "extra": ph.extra or {},
         "last_seen_at": ph.last_seen_at.isoformat() if ph.last_seen_at else None,
+        # Computed fresh on each request, never persisted — see
+        # orchestrator.registry.traefik_status. "unknown" means Traefik polling
+        # is not configured or the poll failed, NOT that the route is missing.
+        "live_status": drift_status(ph.hostname, live_hostnames).value,
     }
 
 
@@ -117,20 +124,25 @@ def _validate_refs(
 
 
 @router.get("")
-async def list_proxy_hosts(session: SessionDep) -> list[dict[str, Any]]:
+async def list_proxy_hosts(session: SessionDep, settings: SettingsDep) -> list[dict[str, Any]]:
     services = _services_by_id(session)
     hosts = session.exec(select(ProxyHost).order_by(ProxyHost.hostname)).all()
-    return [_serialize(ph, services) for ph in hosts]
+    # One poll for the whole page load, not one per row.
+    live_hostnames = await fetch_router_hostnames(settings)
+    return [_serialize(ph, services, live_hostnames) for ph in hosts]
 
 
 @router.get("/{proxy_host_id}")
-async def get_proxy_host(proxy_host_id: int, session: SessionDep) -> dict[str, Any]:
-    return _serialize(_get_or_404(session, proxy_host_id), _services_by_id(session))
+async def get_proxy_host(
+    proxy_host_id: int, session: SessionDep, settings: SettingsDep
+) -> dict[str, Any]:
+    live_hostnames = await fetch_router_hostnames(settings)
+    return _serialize(_get_or_404(session, proxy_host_id), _services_by_id(session), live_hostnames)
 
 
 @router.post("", status_code=status.HTTP_201_CREATED)
 async def create_proxy_host(
-    body: ProxyHostIn, session: SessionDep, admin: CurrentAdmin
+    body: ProxyHostIn, session: SessionDep, admin: CurrentAdmin, settings: SettingsDep
 ) -> dict[str, Any]:
     svc = _validate_refs(session, body)
     ph = ProxyHost(
@@ -156,12 +168,17 @@ async def create_proxy_host(
     )
     session.commit()
     session.refresh(ph)
-    return _serialize(ph, _services_by_id(session))
+    live_hostnames = await fetch_router_hostnames(settings)
+    return _serialize(ph, _services_by_id(session), live_hostnames)
 
 
 @router.put("/{proxy_host_id}")
 async def update_proxy_host(
-    proxy_host_id: int, body: ProxyHostIn, session: SessionDep, admin: CurrentAdmin
+    proxy_host_id: int,
+    body: ProxyHostIn,
+    session: SessionDep,
+    admin: CurrentAdmin,
+    settings: SettingsDep,
 ) -> dict[str, Any]:
     ph = _get_or_404(session, proxy_host_id)
     svc = _validate_refs(session, body, exclude_id=ph.id)
@@ -197,7 +214,8 @@ async def update_proxy_host(
     )
     session.commit()
     session.refresh(ph)
-    return _serialize(ph, _services_by_id(session))
+    live_hostnames = await fetch_router_hostnames(settings)
+    return _serialize(ph, _services_by_id(session), live_hostnames)
 
 
 @router.delete("/{proxy_host_id}")

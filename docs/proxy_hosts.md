@@ -7,10 +7,13 @@ under each service's `proxy_hosts:` list.
 
 ## What they are today: a manual reference
 
-These records are **maintained by hand**. Nothing in this repo talks to
-Traefik (or Pangolin, or NPM): there is no API client, no route discovery, no
-metrics or access-log reader. Creating, editing or deleting a proxy host here
-changes nothing on the gateway, and `last_seen_at` is never set automatically.
+These records are **maintained by hand**. Creating, editing or deleting a
+proxy host here changes nothing on the gateway, and `last_seen_at` is never
+set automatically. The orchestrator can optionally *read* Traefik's router
+list to flag drift (below) — that is the only thing in this repo that talks
+to Traefik, Pangolin or NPM, and it is read-only: there is no route
+discovery, metrics or access-log reader, and nothing here ever writes to the
+gateway.
 
 They exist so both the operator and the orchestrator have one place to look
 up "which hostname reaches which service, through what":
@@ -54,17 +57,91 @@ Validation: hostname is required and must be a bare DNS name (optionally
 across all proxy hosts; `service_id` is required and must reference a real
 service; `router_provider` must be one of the enum values above.
 
-## What making them live would take (not designed yet)
+## Drift detection against Traefik (read-only)
 
-Turning these from reference records into observed state needs the gateway to
-expose *something* this repo can read. Any one of these would do; none is
-enabled on the gateway today, and the integration itself is deliberately
-left for a future PR:
+The orchestrator can optionally poll Traefik's own REST API and flag any
+`ProxyHost` whose hostname has no matching **live** router. This is strictly
+**read-only drift detection** — the orchestrator never writes to Traefik, and
+this is not config push/sync. It exists because, without it, the dashboard
+can say "this host is configured" while Traefik silently has no matching
+route (typo, Traefik config drift, the host never actually added to Traefik,
+and so on).
 
-- **Traefik API / dashboard** (`api: {}` in static config, ideally on an
-  internal-only entrypoint): `/api/http/routers` and `/api/http/services`
-  list live routers, rules, backends and their status — enough to populate or
-  diff these records and set `last_seen_at`.
+### Enabling it
+
+1. Start Traefik with its API enabled (static config):
+
+   ```yaml
+   api:
+     insecure: false  # see the warning below
+   ```
+
+   or the CLI equivalent `--api=true`. **Do not set `--api.insecure=true` on
+   a public-facing entrypoint.** Traefik's API/dashboard has no authentication
+   of its own — anyone who can reach it can read your full router/service
+   topology. Bind it to an internal-only entrypoint, a loopback/LAN-only
+   listener, or front it with a Traefik `BasicAuth` middleware. If you do add
+   a `BasicAuth` middleware in front of the API, pair it with
+   `TRAEFIK_API_USERNAME` / `TRAEFIK_API_PASSWORD` below.
+
+2. Point the orchestrator at it:
+
+   | Env var | Meaning | Default |
+   |---|---|---|
+   | `TRAEFIK_API_URL` | Base URL of the Traefik instance, e.g. `http://traefik.example.lan:8080`. **Empty disables drift checking entirely** — every proxy host reports `live_status: "unknown"`, same as if the poll had failed. | `""` |
+   | `TRAEFIK_API_VERIFY_TLS` | Verify the API's TLS certificate. Set `false` for a self-signed cert. | `true` |
+   | `TRAEFIK_API_USERNAME` / `TRAEFIK_API_PASSWORD` | Optional HTTP basic auth in front of the API. **Both must be set** to take effect; either alone is ignored. There is no bearer-token option — Traefik's API has no built-in way to check one. | `""` |
+   | `TRAEFIK_API_TIMEOUT_S` | Request timeout in seconds. Kept short on purpose: this call runs synchronously on a dashboard page load. | `5.0` |
+
+No orchestrator restart beyond picking up the new `.env` is needed — the poll
+happens fresh on each `GET /api/proxy-hosts[/{id}]` call (and on create/update),
+not on a background schedule, and nothing is cached across requests.
+
+### How it works
+
+`GET /api/http/routers` on Traefik's API returns every HTTP router, each with
+a `rule` string such as:
+
+```
+Host(`app.example.lan`) || Host(`app-alt.example.lan`)
+```
+
+The orchestrator parses every `Host(...)`/`HostSNI(...)` clause out of every
+router's rule (handling multiple hosts OR'd together) into one set of
+currently-routed hostnames, then compares each `ProxyHost.hostname` against
+it. The result is exposed per host as `live_status` in the API response and
+on the dashboard:
+
+| `live_status` | Meaning |
+|---|---|
+| `matched` | A live Traefik router's rule covers this hostname right now. |
+| `missing` | Traefik was reachable, but no router covers this hostname — check for a typo, config drift, or a host that was never actually added to Traefik. |
+| `unknown` | `TRAEFIK_API_URL` is not set, or the poll failed (network error, timeout, bad response). Deliberately **not** the same as `missing` — this means "we don't know", not "it's not there". |
+
+A poll failure (Traefik down, unreachable, wrong credentials, non-JSON
+response, etc.) is logged and degrades to `unknown` for every host — it never
+raises into the request handler, so a Traefik outage cannot break the
+`/proxy-hosts` dashboard page or the CRUD API.
+
+### What this is not
+
+This is the smallest first step towards closing the gap between "configured
+here" and "actually routing in Traefik" — read-only, no SSH, no shared
+filesystem, nothing pushed. It does **not**:
+
+- write, create, or modify anything in Traefik;
+- track traffic, request counts or latency (that's Prometheus metrics,
+  still a possible future addition, see below);
+- reconcile automatically — an operator still edits `ProxyHost` records by
+  hand and decides what to do about a `missing` one.
+
+A later phase may add real config push once SSH access or shared storage
+exists between the orchestrator and the Traefik host — not designed yet, and
+not assumed to be coming.
+
+Other options considered and not built here because Traefik's own API is
+quicker to turn on and sufficient for this:
+
 - **Prometheus metrics** (`metrics.prometheus` in static config): per-router
   and per-service request counts, status codes and latency — the basis for
   traffic/"last seen" monitoring rather than just route existence.
@@ -74,7 +151,8 @@ left for a future PR:
 - **The file-provider directory itself**: the migration's one-YAML-file-per-
   service convention means the route definitions are already on disk on the
   gateway; parsing them gives configured (not observed) routes without
-  touching Traefik at all.
+  touching Traefik at all, but needs filesystem or SSH access this phase
+  deliberately avoids.
 
 Pangolin and NPM would need their own equivalents; nothing above applies to
 them.

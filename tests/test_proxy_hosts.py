@@ -11,11 +11,13 @@ from __future__ import annotations
 from types import SimpleNamespace
 from typing import Any
 
+import httpx
 import pytest
 import webauthn
 from fastapi.testclient import TestClient
 from sqlmodel import Session, select
 
+from orchestrator import config as config_module
 from orchestrator.db import session as session_module
 from orchestrator.db.models import AuditEntry, ProxyHost, Service
 from orchestrator.db.session import get_engine
@@ -284,3 +286,85 @@ def test_page_renders_for_logged_in_admin(client: TestClient, service: Service) 
 
 def test_dashboard_links_to_proxy_hosts_page(client: TestClient) -> None:
     assert 'href="/proxy-hosts"' in client.get("/").text
+
+
+# ---------------------------------------------------------------------------
+# Traefik drift (live_status)
+# ---------------------------------------------------------------------------
+
+
+def _patch_traefik_transport(monkeypatch: pytest.MonkeyPatch, handler: Any) -> None:
+    import orchestrator.registry.traefik_status as ts_mod
+
+    real_async_client = httpx.AsyncClient
+
+    class _PatchedAsyncClient(real_async_client):  # type: ignore[misc]
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            kwargs["transport"] = httpx.MockTransport(handler)
+            super().__init__(*args, **kwargs)
+
+    monkeypatch.setattr(ts_mod.httpx, "AsyncClient", _PatchedAsyncClient)
+
+
+def test_live_status_is_unknown_when_traefik_not_configured(
+    client: TestClient, service: Service
+) -> None:
+    client.post("/api/proxy-hosts", json={"hostname": "a.example.com", "service_id": service.id})
+    listed = client.get("/api/proxy-hosts").json()
+    assert listed[0]["live_status"] == "unknown"
+
+
+def test_live_status_matched_when_traefik_has_the_router(
+    client: TestClient, service: Service, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("TRAEFIK_API_URL", "http://traefik.test:8080")
+    config_module.reset_settings_cache()
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200, json=[{"name": "r@docker", "rule": "Host(`a.example.com`)", "status": "enabled"}]
+        )
+
+    _patch_traefik_transport(monkeypatch, handle)
+
+    client.post("/api/proxy-hosts", json={"hostname": "a.example.com", "service_id": service.id})
+    listed = client.get("/api/proxy-hosts").json()
+    assert listed[0]["live_status"] == "matched"
+
+    single = client.get(f"/api/proxy-hosts/{listed[0]['id']}").json()
+    assert single["live_status"] == "matched"
+
+
+def test_live_status_missing_when_no_matching_router(
+    client: TestClient, service: Service, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("TRAEFIK_API_URL", "http://traefik.test:8080")
+    config_module.reset_settings_cache()
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json=[{"name": "r@docker", "rule": "Host(`other.example.com`)", "status": "enabled"}],
+        )
+
+    _patch_traefik_transport(monkeypatch, handle)
+
+    client.post("/api/proxy-hosts", json={"hostname": "a.example.com", "service_id": service.id})
+    listed = client.get("/api/proxy-hosts").json()
+    assert listed[0]["live_status"] == "missing"
+
+
+def test_live_status_unknown_when_traefik_unreachable(
+    client: TestClient, service: Service, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("TRAEFIK_API_URL", "http://traefik.test:8080")
+    config_module.reset_settings_cache()
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("connection refused")
+
+    _patch_traefik_transport(monkeypatch, handle)
+
+    client.post("/api/proxy-hosts", json={"hostname": "a.example.com", "service_id": service.id})
+    listed = client.get("/api/proxy-hosts").json()
+    assert listed[0]["live_status"] == "unknown"
