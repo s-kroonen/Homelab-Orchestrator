@@ -33,7 +33,9 @@ db/                 SQLModel schema + engine
 domain/             enums + Pydantic DTOs shared across modules
 health/             probe engine (phase 4)
 pipelines/          wake (phase 3), backup (phase 2/6), restore (phase 8)
-registry/           YAML <-> DB reconcile + save/reset
+registry/           YAML <-> DB reconcile + save/reset; also the Traefik
+                    (status/probes) and Traefik Manager (client/sync)
+                    integration modules
 scheduler/          APScheduler wiring: backups (phase 6), Traefik traffic
                     polling, periodic health scanning (HealthScanner)
 web/                FastAPI app: health, maintenance, wake, dashboard
@@ -122,6 +124,99 @@ alongside the periodic path and is unaffected by it — see
 purposes: manual is "debug this one thing right now" (its own fresh cache,
 one service at a time), periodic is "keep the whole fleet's state fresh and
 mutually consistent in the background."
+
+## Wake-unsupported: structurally impossible vs merely failed
+
+Every failure the wake pipeline (`orchestrator.pipelines.wake`) could hit
+used to look the same to a visitor on the maintenance page: a generic
+"Could not start" with a retry link. That conflates two very different
+situations:
+
+* **Failed or timed out** — the attempt itself went wrong (Proxmox
+  unreachable, a non-quorate cluster, the guest didn't become healthy in
+  time). Retrying is at least plausible; the operator or visitor might
+  reasonably try again later.
+* **Structurally unsupported** — this service's node has `power_mgr_target`
+  blank AND is not marked `always_on`. There is no command the orchestrator
+  could ever send to turn it on. Retrying can never help, no matter how
+  long you wait.
+
+`orchestrator.pipelines.wake.wake_is_unsupported(node)` is the one place
+this condition is defined (`node is None`, or both `power_mgr_target` is
+blank and `always_on` is false), shared by three call sites so they can
+never drift apart:
+
+1. `WakePipeline._resolve` raises `WakeUnsupportedError` (a `WakeError`
+   subclass — every existing `except WakeError` still catches it) as early
+   as possible, before any hold is asserted or power command sent.
+2. `web/routers/maintenance.py` recomputes the same condition directly from
+   the service's node, **before** even calling into the wake pipeline, and
+   renders a visually distinct page: a different `spinner_class`
+   (`"unsupported"`, styled amber in `maintenance.html`, not spinning, not
+   red) and `show_retry=False`. This recompute-rather-than-inspect-the-
+   pipeline-result approach matters beyond the very first visitor: a second
+   visitor's page load reuses a prior `PipelineRun` via `get_or_start`'s
+   cooldown/RUNNING-reuse logic (see `docs/proxy_hosts.md`-adjacent wake
+   docs) without re-raising, so relying solely on catching the exception
+   from the pipeline would only show the distinct page on the very first
+   hit.
+3. `web/routers/dashboard.py`'s `service_detail()` includes a
+   `wake_unsupported` boolean in the same payload the service detail page
+   already renders, so an admin sees which services this applies to up
+   front — a banner on `/services/<slug>` — rather than only discovering it
+   when a visitor actually hits a down backend.
+
+**Deliberately excluded**: `PowerAdapter.IMPLEMENTED is False` (an
+unimplemented/dry-run power adapter) does NOT count as wake-unsupported.
+That is a different kind of "not ready" — a deliberate, operator-visible
+deployment-time choice (`DRY_RUN=true`, or a power adapter not yet wired
+up) the operator already knows about from their own `.env`, not a per-node
+data gap a visitor might be the first to discover. Treating it the same way
+would also make every service in a dry-run/staging deployment show this
+page, which is the expected normal state there, not something worth an
+administrator-contact message.
+
+**Deliberately NOT checked**: whether the node happens to already be
+online right now. That would need an async Proxmox call, and this check is
+used from synchronous contexts (`WakePipeline.start`, the maintenance
+page's early check) specifically so it fires before anything else is
+attempted. The cost of this simplification is a node that's already on but
+happens to have no `power_mgr_target` set also shows this page — a rare
+edge case, and arguably still correct: the data gap is real even if it
+hasn't bitten anyone yet.
+
+## Traefik Manager (write path)
+
+Until this phase, every Traefik integration in this app was read-only
+(direct polls of Traefik's own API — see `docs/proxy_hosts.md`'s drift
+detection and the old Resync path). Traefik Manager
+(https://github.com/chr0nzz/traefik-manager) is now installed on the
+gateway alongside Traefik and is the stated source of truth for proxy
+routes; the orchestrator is a **client** of its REST API, the same
+relationship it already has with Proxmox/IPMI. See
+`src/orchestrator/registry/traefik_manager_client.py` (the thin HTTP
+client) and `traefik_manager_sync.py` (the maintenance-middleware feature
+built on top of it), and `docs/proxy_hosts.md` for the full design.
+
+New settings, all empty/disabled by default:
+
+| Setting | Purpose |
+|---|---|
+| `TRAEFIK_MANAGER_URL` | Base URL. Empty disables the read-path swap AND the middleware-injection feature. |
+| `TRAEFIK_MANAGER_API_KEY` | `X-Api-Key` header, generated per-device in Traefik Manager's own UI. |
+| `TRAEFIK_MANAGER_VERIFY_TLS` | TLS verification for that connection. |
+| `TRAEFIK_MANAGER_TIMEOUT_S` | Short — runs synchronously from a dashboard-triggered request. |
+| `ORCHESTRATOR_PUBLIC_URL` | This orchestrator's own address as reachable FROM THE GATEWAY VM — the backend target for the maintenance-page fallback service. Separately gates the middleware-injection feature (the read-path swap only needs `TRAEFIK_MANAGER_URL`). |
+
+No new DB tables or columns were needed for this — the middleware
+injection's state of record lives entirely in Traefik's own config files
+(managed by Traefik Manager), not in this app's database; the orchestrator
+only ever computes what should be there and syncs it on `ProxyHost`
+mutation, the same way `traefik_probes.sync_traefik_probe` already works
+for the auto-managed diagnostic probe. Exactly one new audit-action family
+(`backend_service.created`, `middleware.created`/`updated`/`injected`/
+`removed`) was added, following the existing `proxy_host.*`/`probe.*`
+naming convention.
 
 ## YAML-owned vs DB-owned tables
 

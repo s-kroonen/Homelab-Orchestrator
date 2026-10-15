@@ -20,6 +20,11 @@
   }
   .spinner.done { border-top-color: #3ecf6d; animation: none; }
   .spinner.failed { border-top-color: #e5534b; animation: none; }
+  /* Distinct from .failed: this is NOT a failed/timed-out wake attempt —
+     it's a host that structurally cannot be auto-started at all (no
+     power_mgr_target, not always_on). Amber, not red: red implies "this
+     attempt went wrong, maybe retry"; this is "retrying will never help". */
+  .spinner.unsupported { border: 3px solid #3b2e14; border-top-color: #e5a63e; animation: none; }
   @keyframes spin { to { transform: rotate(360deg); } }
   h1 { font-size: 1.25rem; margin: 0 0 0.5rem; }
   p.reason { color: #9aa4b2; font-size: 0.9rem; line-height: 1.4; margin: 0 0 1.5rem; }

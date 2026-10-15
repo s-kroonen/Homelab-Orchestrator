@@ -16,7 +16,7 @@ from orchestrator.config import get_settings
 from orchestrator.db.models import AuditEntry, Node, NodeState, PipelineRun
 from orchestrator.domain.enums import GuestKind, HealthState, PipelineStatus
 from orchestrator.domain.schemas import ServiceVerdict
-from orchestrator.pipelines.wake import WakeError, WakePipeline
+from orchestrator.pipelines.wake import WakeError, WakePipeline, WakeUnsupportedError
 from orchestrator.registry.loader import reconcile_yaml_into_db
 
 EXAMPLE = Path(__file__).parent.parent / "config" / "services.example.yaml"
@@ -266,6 +266,75 @@ async def test_wake_refuses_a_disabled_service(loaded_session: Session) -> None:
 
     with pytest.raises(WakeError, match="disabled"):
         await pipeline.run_for_service(loaded_session, SLUG)
+
+
+async def test_node_with_no_power_mgr_target_and_not_always_on_is_unsupported(
+    loaded_session: Session,
+) -> None:
+    """Structural "can never be woken" case — distinct from a real failure
+    or timeout: raised immediately, before any hold/power/poll attempt."""
+    node = loaded_session.exec(select(Node).where(Node.name == NODE_NAME)).one()
+    node.power_mgr_target = ""
+    node.always_on = False
+    loaded_session.add(node)
+    loaded_session.commit()
+
+    proxmox = FlakyProxmoxAdapter(node_name=NODE_NAME, simulated_guests=[_stopped_guest()])
+    pipeline, power = _pipeline(proxmox)
+
+    with pytest.raises(WakeUnsupportedError, match="no power management"):
+        await pipeline.run_for_service(loaded_session, SLUG)
+
+    # Raised before anything was attempted: no hold, no power command, no poll.
+    assert power._simulated_state == {}
+    assert proxmox.cluster_status_calls == 0
+    assert loaded_session.exec(select(PipelineRun)).all() == []
+
+
+async def test_wake_unsupported_is_still_a_wake_error(loaded_session: Session) -> None:
+    """Existing ``except WakeError`` call sites must keep catching this."""
+    node = loaded_session.exec(select(Node).where(Node.name == NODE_NAME)).one()
+    node.power_mgr_target = ""
+    node.always_on = False
+    loaded_session.add(node)
+    loaded_session.commit()
+
+    proxmox = DryRunProxmoxAdapter()
+    pipeline, _power = _pipeline(proxmox)
+
+    with pytest.raises(WakeError):
+        await pipeline.run_for_service(loaded_session, SLUG)
+
+
+async def test_always_on_node_with_no_power_mgr_target_is_not_unsupported(
+    loaded_session: Session,
+) -> None:
+    """always_on is its own escape hatch — a node that's never powered off
+    doesn't need a power_mgr_target to be commanded."""
+    node = loaded_session.exec(select(Node).where(Node.name == NODE_NAME)).one()
+    node.power_mgr_target = ""
+    node.always_on = True
+    loaded_session.add(node)
+    loaded_session.commit()
+
+    proxmox = FlakyProxmoxAdapter(node_name=NODE_NAME, simulated_guests=[_running_guest()])
+    pipeline, _power = _pipeline(proxmox)
+
+    run = await pipeline.run_for_service(loaded_session, SLUG)
+    assert run.status is PipelineStatus.SUCCEEDED
+
+
+async def test_a_real_timeout_is_not_treated_as_unsupported(loaded_session: Session) -> None:
+    """A node that CAN be commanded but doesn't come online in time is a
+    normal timeout failure, not WakeUnsupportedError."""
+    proxmox = FlakyProxmoxAdapter(
+        node_name=NODE_NAME, offline_polls=10_000, simulated_guests=[_stopped_guest()]
+    )
+    pipeline, _power = _pipeline(proxmox)
+
+    with pytest.raises(WakeError) as exc_info:
+        await pipeline.run_for_service(loaded_session, SLUG, timeout_s=0)
+    assert not isinstance(exc_info.value, WakeUnsupportedError)
 
 
 async def test_start_then_execute_produces_the_same_outcome_as_run_for_service(

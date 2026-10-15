@@ -31,15 +31,62 @@ from sqlmodel import Session, select
 from orchestrator.audit import log as audit
 from orchestrator.db.models import ProxyHost, Service
 from orchestrator.domain.enums import RouterProvider
+from orchestrator.registry.traefik_manager_sync import (
+    MaintenanceSyncEvent,
+    sync_maintenance_middleware,
+)
 from orchestrator.registry.traefik_probes import ProbeSyncEvent, sync_traefik_probe
 from orchestrator.registry.traefik_status import (
     RouterInfo,
     drift_status,
     fetch_router_details,
+    fetch_router_details_via_manager,
     fetch_router_hostnames,
+    fetch_router_hostnames_via_manager,
 )
 from orchestrator.web.auth import CurrentAdmin, require_admin
 from orchestrator.web.deps import SessionDep, SettingsDep
+
+
+async def _live_hostnames(settings: Any) -> set[str] | None:
+    """Read-path entry point for drift detection (``live_status``).
+
+    Prefers Traefik Manager's ``GET /api/routes`` (one call, richer —
+    routers + services + middlewares) when ``TRAEFIK_MANAGER_URL`` is
+    configured. Falls back to polling Traefik's own API directly
+    (``TRAEFIK_API_URL``) when Traefik Manager isn't configured — kept
+    rather than retired outright because (a) it costs nothing to keep working,
+    (b) an operator may run this orchestrator against a gateway that still
+    only exposes Traefik's bare API without Traefik Manager in front of it,
+    and (c) the existing test suite and docs exercise it directly. See
+    docs/proxy_hosts.md for the full reasoning. Both paths degrade to
+    ``None`` ("unknown") on any failure — never raised into a page load.
+    """
+    if settings.traefik_manager_url.strip():
+        return await fetch_router_hostnames_via_manager(settings)
+    return await fetch_router_hostnames(settings)
+
+
+async def _router_details_or_503(settings: Any) -> list[RouterInfo]:
+    """Read-path entry point for Resync — same TM-preferred/API-fallback
+    priority as :func:`_live_hostnames`, but raises a clear ``503`` instead
+    of degrading, matching Resync's existing "this is a manual action the
+    admin is watching" behaviour (see docs/proxy_hosts.md).
+    """
+    if settings.traefik_manager_url.strip():
+        routers = await fetch_router_details_via_manager(settings)
+        source = "Traefik Manager (TRAEFIK_MANAGER_URL)"
+    else:
+        routers = await fetch_router_details(settings)
+        source = "Traefik (TRAEFIK_API_URL)"
+    if routers is None:
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            f"{source} is not configured or could not be reached — see "
+            "docs/proxy_hosts.md#resync-manual-admin-triggered-write.",
+        )
+    return routers
+
 
 router = APIRouter(
     prefix="/api/proxy-hosts", tags=["proxy-hosts"], dependencies=[Depends(require_admin)]
@@ -148,6 +195,26 @@ def _audit_probe_sync_events(
         )
 
 
+def _audit_maintenance_sync_events(
+    session: Session, admin: CurrentAdmin, events: list[MaintenanceSyncEvent]
+) -> None:
+    """Audit each maintenance-middleware create/update/injection/removal.
+
+    Same ``orchestrator.audit.log.record`` mechanism as every other mutation
+    in this file. Action names are ``middleware.<action>`` /
+    ``backend_service.<action>`` — see
+    ``orchestrator.registry.traefik_manager_sync.MaintenanceSyncEvent``.
+    """
+    for event in events:
+        audit.record(
+            session,
+            actor=admin.username,
+            action=event.action,
+            target=f"traefik_manager:{event.name}",
+            details=event.details,
+        )
+
+
 def _get_or_404(session: Session, proxy_host_id: int) -> ProxyHost:
     ph = session.get(ProxyHost, proxy_host_id)
     if ph is None:
@@ -177,7 +244,7 @@ async def list_proxy_hosts(session: SessionDep, settings: SettingsDep) -> list[d
     services = _services_by_id(session)
     hosts = session.exec(select(ProxyHost).order_by(ProxyHost.hostname)).all()
     # One poll for the whole page load, not one per row.
-    live_hostnames = await fetch_router_hostnames(settings)
+    live_hostnames = await _live_hostnames(settings)
     return [_serialize(ph, services, live_hostnames) for ph in hosts]
 
 
@@ -185,7 +252,7 @@ async def list_proxy_hosts(session: SessionDep, settings: SettingsDep) -> list[d
 async def get_proxy_host(
     proxy_host_id: int, session: SessionDep, settings: SettingsDep
 ) -> dict[str, Any]:
-    live_hostnames = await fetch_router_hostnames(settings)
+    live_hostnames = await _live_hostnames(settings)
     return _serialize(_get_or_404(session, proxy_host_id), _services_by_id(session), live_hostnames)
 
 
@@ -222,7 +289,12 @@ async def create_proxy_host(
     _audit_probe_sync_events(session, admin, probe_events)
     session.commit()
     session.refresh(ph)
-    live_hostnames = await fetch_router_hostnames(settings)
+    maintenance_events = await sync_maintenance_middleware(
+        settings, hostname=ph.hostname, service_slug=svc.slug
+    )
+    _audit_maintenance_sync_events(session, admin, maintenance_events)
+    session.commit()
+    live_hostnames = await _live_hostnames(settings)
     return _serialize(ph, _services_by_id(session), live_hostnames)
 
 
@@ -249,13 +321,7 @@ async def resync_proxy_hosts(
     the dashboard can offer it to the admin, who picks a service and submits
     it through the existing ``POST /api/proxy-hosts``.
     """
-    routers = await fetch_router_details(settings)
-    if routers is None:
-        raise HTTPException(
-            status.HTTP_503_SERVICE_UNAVAILABLE,
-            "Traefik is not configured (TRAEFIK_API_URL unset) or could not be "
-            "reached — see docs/proxy_hosts.md#drift-detection-against-traefik-read-only.",
-        )
+    routers = await _router_details_or_503(settings)
 
     # First router to claim a hostname wins ties (two routers rarely share a
     # Host() rule in practice; this just needs to be deterministic).
@@ -347,6 +413,7 @@ async def update_proxy_host(
 ) -> dict[str, Any]:
     ph = _get_or_404(session, proxy_host_id)
     svc = _validate_refs(session, body, exclude_id=ph.id)
+    old_svc = session.get(Service, ph.service_id) if ph.service_id else None
 
     before = {
         "hostname": ph.hostname,
@@ -391,7 +458,16 @@ async def update_proxy_host(
     _audit_probe_sync_events(session, admin, probe_events)
     session.commit()
     session.refresh(ph)
-    live_hostnames = await fetch_router_hostnames(settings)
+    maintenance_events = await sync_maintenance_middleware(
+        settings,
+        hostname=ph.hostname,
+        service_slug=svc.slug,
+        old_hostname=before["hostname"],
+        old_service_slug=old_svc.slug if old_svc else None,
+    )
+    _audit_maintenance_sync_events(session, admin, maintenance_events)
+    session.commit()
+    live_hostnames = await _live_hostnames(settings)
     return _serialize(ph, _services_by_id(session), live_hostnames)
 
 
@@ -401,6 +477,7 @@ async def delete_proxy_host(
 ) -> dict[str, Any]:
     ph = _get_or_404(session, proxy_host_id)
     hostname = ph.hostname
+    old_svc = session.get(Service, ph.service_id) if ph.service_id else None
     details = {
         "id": ph.id,
         "upstream": ph.upstream,
@@ -424,5 +501,14 @@ async def delete_proxy_host(
         target=f"proxy_host:{hostname}",
         details=details,
     )
+    session.commit()
+    maintenance_events = await sync_maintenance_middleware(
+        settings,
+        hostname=None,
+        service_slug=None,
+        old_hostname=hostname,
+        old_service_slug=old_svc.slug if old_svc else None,
+    )
+    _audit_maintenance_sync_events(session, admin, maintenance_events)
     session.commit()
     return {"status": "deleted", "id": proxy_host_id, "hostname": hostname}

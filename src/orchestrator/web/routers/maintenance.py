@@ -26,10 +26,15 @@ from fastapi.templating import Jinja2Templates
 from sqlmodel import select
 
 from orchestrator.adapters.errors import AdapterError
-from orchestrator.db.models import Service
+from orchestrator.db.models import Node, Service
 from orchestrator.domain.enums import PipelineStatus
 from orchestrator.logging_setup import get_logger
-from orchestrator.pipelines.wake import WakeError, WakePipeline
+from orchestrator.pipelines.wake import (
+    WakeError,
+    WakePipeline,
+    WakeUnsupportedError,
+    wake_is_unsupported,
+)
 from orchestrator.web.deps import AdaptersDep, SessionDep, SettingsDep
 from orchestrator.web.wake_support import fire_background
 
@@ -89,11 +94,55 @@ async def maintenance_page(
             show_retry=False,
         )
 
+    # Checked BEFORE even attempting a wake, and recomputed on every page
+    # load rather than inferred from a stored run's error string — see
+    # orchestrator.pipelines.wake.wake_is_unsupported. This matters beyond
+    # the very first hit: get_or_start() below reuses a prior run (RUNNING,
+    # or within WAKE_RETRY_COOLDOWN_S) WITHOUT re-raising on every reload, so
+    # relying solely on catching WakeUnsupportedError from get_or_start would
+    # only show this page on the first visitor's first hit and fall back to
+    # the generic "Could not start" page for everyone after.
+    node = session.get(Node, service.node_id) if service.node_id else None
+    if wake_is_unsupported(node):
+        return _render(
+            request,
+            service_name=service.name,
+            headline=f"{service.name} cannot be started automatically",
+            reason=(
+                f"{service.name} has no power management configured — this host has no "
+                f"way to be turned on remotely. Retrying will not help; contact an "
+                f"administrator."
+            ),
+            spinner_class="unsupported",
+            steps=[],
+            refresh_seconds=None,
+            show_retry=False,
+        )
+
     pipeline = WakePipeline(power=adapters.power, proxmox=adapters.proxmox, settings=settings)
     try:
         run, started_new = pipeline.get_or_start(session, service_slug, actor="maintenance-page")
         if started_new:
             fire_background(pipeline, run, service_slug, actor="maintenance-page")
+    except WakeUnsupportedError as exc:
+        # Defense in depth: the early check above should always catch this
+        # first, but node state could theoretically change between that
+        # check and here. Same distinct rendering either way.
+        log.error("maintenance.wake_unsupported", service=service_slug, error=str(exc))
+        return _render(
+            request,
+            service_name=service.name,
+            headline=f"{service.name} cannot be started automatically",
+            reason=(
+                f"{service.name} has no power management configured — this host has no "
+                f"way to be turned on remotely. Retrying will not help; contact an "
+                f"administrator."
+            ),
+            spinner_class="unsupported",
+            steps=[],
+            refresh_seconds=None,
+            show_retry=False,
+        )
     except (WakeError, AdapterError) as exc:
         # Couldn't even start — still fail-open, still no 5xx.
         log.error("maintenance.wake_trigger_failed", service=service_slug, error=str(exc))
