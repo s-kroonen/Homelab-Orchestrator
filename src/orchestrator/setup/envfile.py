@@ -259,6 +259,36 @@ ENV_SECTIONS: tuple[EnvSection, ...] = (
         ),
     ),
     EnvSection(
+        "traefik_manager",
+        "Traefik Manager (write path)",
+        (
+            EnvKey(
+                "TRAEFIK_MANAGER_URL",
+                "Empty = disabled (default): the maintenance-page middleware injection\n"
+                "below is never attempted. Set to Traefik Manager's base URL, e.g.\n"
+                "http://traefik-manager.example.lan:8080 — see docs/proxy_hosts.md.",
+            ),
+            EnvKey(
+                "TRAEFIK_MANAGER_API_KEY",
+                "Generate per-device in Traefik Manager's UI: Settings > Authentication\n"
+                "> API Keys. Sent as X-Api-Key; bypasses CSRF checks entirely.",
+                secret=True,
+            ),
+            EnvKey("TRAEFIK_MANAGER_VERIFY_TLS", "false for a self-signed certificate."),
+            EnvKey(
+                "TRAEFIK_MANAGER_TIMEOUT_S",
+                "Short on purpose — this runs synchronously from a proxy-host mutation.",
+            ),
+            EnvKey(
+                "ORCHESTRATOR_PUBLIC_URL",
+                "This orchestrator's own base URL AS REACHABLE FROM THE GATEWAY VM, e.g.\n"
+                "http://10.0.0.5:8000 — not necessarily what a browser uses. Backend\n"
+                "target for the maintenance-page fallback service. Empty = that feature\n"
+                "is a no-op even if TRAEFIK_MANAGER_URL is set.",
+            ),
+        ),
+    ),
+    EnvSection(
         "network",
         "Reaching guests (probes)",
         (
@@ -397,6 +427,9 @@ EXAMPLE_VALUES: dict[str, str] = {
     "PBS_TOKEN_ID": "orchestrator@pbs!datastore",
     "PBS_TOKEN_SECRET": "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx",
     "TRAEFIK_API_URL": "http://traefik.example.lan:8080",
+    "TRAEFIK_MANAGER_URL": "http://traefik-manager.example.lan:8080",
+    "TRAEFIK_MANAGER_API_KEY": "change-me",
+    "ORCHESTRATOR_PUBLIC_URL": "http://10.0.0.5:8000",
     "MQTT_HOST": "mqtt.example.lan",
     "MQTT_USERNAME": "orchestrator",
     "MQTT_PASSWORD": "change-me",

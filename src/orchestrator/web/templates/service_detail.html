@@ -86,6 +86,16 @@
     <span class="msg" id="registry-msg">Edits here change the live registry; Save writes them to services.yaml.</span>
   </div>
 
+  <div class="row" id="wake-unsupported-banner" hidden>
+    <span class="msg error">
+      ⚠ This service cannot be auto-started: its node has no power management
+      configured (no <code>power_mgr_target</code> and not marked
+      <code>always_on</code>). A visitor hitting a down backend sees a plain
+      "contact an administrator" page instead of a retryable wake attempt —
+      set one of those on the node to fix this.
+    </span>
+  </div>
+
   <section>
     <h2>Service</h2>
     <div class="grid">
@@ -629,6 +639,7 @@
   fillServiceForm(SERVICE);
   renderProbes();
   loadHealthHistory();
+  $("wake-unsupported-banner").hidden = !SERVICE.wake_unsupported;
 
   // This page's "Health history" strip and the dashboard badges it links
   // back to only display state the periodic HealthScanner already

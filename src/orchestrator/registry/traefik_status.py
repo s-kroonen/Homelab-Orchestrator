@@ -370,6 +370,91 @@ async def fetch_router_metrics(settings: Settings) -> dict[str, RouterMetricSamp
     return parse_router_metrics(text)
 
 
+def _routes_to_router_info(apps: Any) -> list[RouterInfo]:
+    """Convert Traefik Manager's ``GET /api/routes`` ``apps`` list into the
+    same :class:`RouterInfo` shape :func:`fetch_router_details` returns.
+
+    Traefik Manager already resolves each route's backend servers (its
+    ``servers``/``target`` fields), so this needs no second call the way the
+    direct-Traefik-API path does to resolve a router's ``service`` ->
+    backend URL. HTTP routes only — ``protocol`` other than ``"http"`` (tcp,
+    udp) is skipped, since ``ProxyHost``/drift detection is HTTP-only.
+    """
+    infos: list[RouterInfo] = []
+    if not isinstance(apps, list):
+        return infos
+    for app in apps:
+        if not isinstance(app, dict) or app.get("protocol", "http") != "http":
+            continue
+        name = app.get("name") or app.get("id")
+        rule = app.get("rule")
+        if not isinstance(name, str) or not isinstance(rule, str):
+            continue
+        hostnames = extract_hostnames(rule)
+        if not hostnames:
+            continue
+        servers = app.get("servers")
+        upstream = (
+            ",".join(s for s in servers if isinstance(s, str))
+            if isinstance(servers, list) and servers
+            else (app.get("target") if isinstance(app.get("target"), str) else None)
+        )
+        infos.append(RouterInfo(name=name, hostnames=hostnames, upstream=upstream or None))
+    return infos
+
+
+async def fetch_router_hostnames_via_manager(settings: Settings) -> set[str] | None:
+    """Traefik-Manager-backed equivalent of :func:`fetch_router_hostnames`.
+
+    One call (``GET /api/routes``) instead of the direct Traefik API's two
+    (``/api/http/routers`` + ``/api/http/services``). Returns ``None`` (never
+    raises) when ``TRAEFIK_MANAGER_URL`` is unset or the call fails — same
+    silent-degrade convention as every other function in this module, even
+    though the underlying client (``traefik_manager_client``) itself raises;
+    this function is the adapter between that raising client and this
+    module's degrade-to-``None`` contract for passive drift detection.
+    """
+    details = await fetch_router_details_via_manager(settings)
+    if details is None:
+        return None
+    hostnames: set[str] = set()
+    for info in details:
+        hostnames.update(info.hostnames)
+    return hostnames
+
+
+async def fetch_router_details_via_manager(settings: Settings) -> list[RouterInfo] | None:
+    """Traefik-Manager-backed equivalent of :func:`fetch_router_details`.
+
+    Returns ``None`` (never raises) when ``TRAEFIK_MANAGER_URL`` is unset or
+    unreachable. Callers that need a hard failure instead (e.g. Resync) should
+    call :class:`orchestrator.registry.traefik_manager_client.TraefikManagerClient`
+    directly and let its exceptions propagate.
+    """
+    # Imported locally: traefik_manager_client is the "write-capable" module,
+    # kept separate from this read-only one; importing it only inside this
+    # TM-specific function (rather than at module level) keeps the dependency
+    # one-directional and avoids any risk of a circular import later.
+    from orchestrator.registry.traefik_manager_client import (
+        TraefikManagerClient,
+        TraefikManagerError,
+        TraefikManagerNotConfigured,
+    )
+
+    if not settings.traefik_manager_url.strip():
+        return None
+    try:
+        client = TraefikManagerClient(settings)
+        response = await client.get_routes()
+    except TraefikManagerNotConfigured:
+        return None
+    except TraefikManagerError as exc:
+        log.warning("traefik_manager.poll_failed", error=str(exc))
+        return None
+    apps = response.get("apps") if isinstance(response, dict) else None
+    return _routes_to_router_info(apps)
+
+
 def drift_status(hostname: str, live_hostnames: set[str] | None) -> DriftStatus:
     """Classify one ``ProxyHost.hostname`` against a poll result.
 

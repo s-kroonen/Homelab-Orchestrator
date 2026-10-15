@@ -53,6 +53,63 @@ class WakeError(Exception):
     """Raised when a wake cannot proceed or did not complete in time."""
 
 
+class WakeUnsupportedError(WakeError):
+    """Raised when a wake is structurally IMPOSSIBLE for this service/node —
+    not merely failed, timed out, or indeterminate.
+
+    A subclass of :class:`WakeError` (not a sibling) so every existing
+    ``except WakeError`` call site (``_run`` below, ``maintenance.py``,
+    ``web/routers/wake.py``, the CLI) keeps catching it with no code change
+    — it is still "a wake error". Callers that want to tell this ONE case
+    apart from a real failure (retrying would help) or a timeout (retrying
+    MIGHT help) catch :class:`WakeUnsupportedError` specifically, and catch
+    it *before* the broader ``WakeError`` where both appear (see
+    ``maintenance.py``).
+
+    Raised as early as possible — see :func:`wake_is_unsupported` and
+    :meth:`WakePipeline._resolve` — before any hold is asserted, any power
+    command sent, or any polling begins. Retrying changes nothing about this
+    case, unlike a timeout or a transient adapter failure.
+
+    Deliberately does NOT cover an unimplemented/dry-run power adapter
+    (``PowerAdapter.IMPLEMENTED is False``). That is a different kind of
+    "not ready" — a deliberate, operator-visible deployment-time choice
+    (DRY_RUN=true, or a power adapter not yet wired up) the operator already
+    knows about from their own `.env`, not a per-node data gap a visitor
+    might be the first to discover. Mixing the two would also make this
+    exception fire for every service in a dry-run/staging deployment, which
+    is the normal, expected state there, not an error worth a distinct
+    "contact an administrator" page.
+    """
+
+
+def wake_is_unsupported(node: Node | None) -> bool:
+    """True when a wake for this node is structurally impossible: no node
+    at all, or no way to command it on (``power_mgr_target`` blank and not
+    ``always_on``).
+
+    Shared by :meth:`WakePipeline._resolve` (to raise
+    :class:`WakeUnsupportedError` as early as possible) and
+    ``web/routers/maintenance.py``/``web/routers/dashboard.py`` (to show the
+    same signal up front — on the maintenance page before even attempting a
+    wake, and on the service detail page before anything is down at all —
+    without needing to parse a stored error string after the fact). Kept as
+    one function so the three call sites can never drift out of sync on
+    what "unsupported" means.
+
+    Deliberately does NOT check whether the node happens to already be
+    online right now (that would need an async Proxmox call, and this is
+    used from synchronous contexts). A node that's already on but has no
+    `power_mgr_target` set is a real, if unusual, data gap — this still
+    flags it, trading a rare false positive (it would have "woken"
+    trivially via `_wait_node_online` finding it already up) for a cheap,
+    instant, always-synchronous check everywhere this is called.
+    """
+    if node is None:
+        return True
+    return not node.power_mgr_target and not node.always_on
+
+
 class WakePipeline:
     def __init__(
         self,
@@ -411,6 +468,13 @@ class WakePipeline:
         node = session.get(Node, service.node_id) if service.node_id else None
         if node is None:
             raise WakeError(f"service {slug!r} is not attached to a node")
+        if wake_is_unsupported(node):
+            raise WakeUnsupportedError(
+                f"node {node.name!r} has no power management configured — "
+                f"power_mgr_target is blank and it is not marked always_on, so there is "
+                f"no way for the orchestrator to turn it on. An administrator must set "
+                f"one of those on the node before {slug!r} can be auto-started."
+            )
         return service, node
 
     @staticmethod

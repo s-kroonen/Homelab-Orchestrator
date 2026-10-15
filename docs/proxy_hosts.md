@@ -8,16 +8,27 @@ under each service's `proxy_hosts:` list.
 ## What they are today: a manual reference
 
 These records are **maintained by hand**. Creating, editing or deleting a
-proxy host here changes nothing on the gateway, and `last_seen_at` is never
-set automatically. The orchestrator can optionally *read* Traefik's router
-list to flag drift (below), and optionally poll Traefik's Prometheus metrics
-to show per-service/per-host traffic (see
-[traffic_metrics.md](traffic_metrics.md)) — both entirely read-only. Nothing
-in this repo ever writes to Traefik, Pangolin or NPM.
+proxy host here changes nothing on the gateway on its own, and
+`last_seen_at` is never set automatically. The orchestrator can optionally
+*read* the live router list to flag drift (below), and optionally poll
+Traefik's Prometheus metrics to show per-service/per-host traffic (see
+[traffic_metrics.md](traffic_metrics.md)) — both entirely read-only.
+
+The one exception, now that Traefik Manager is installed on the gateway
+(see below): linking a `ProxyHost` to a `Service` also keeps a small,
+surgical maintenance-page fallback middleware in sync on the gateway —
+["Maintenance-page fallback"](#maintenance-page-fallback-never-overwrite-an-existing-traefik-config)
+further down. Everything else in this file — Pangolin, NPM, and every
+other field on `ProxyHost` — is still never written anywhere outside this
+app's own database.
 
 That traffic poll can also, per-hostname, trigger a wake for a down
-service — a stand-in until write access to Traefik's config exists to wire
-up a real Traefik-side trigger. See
+service — this predates the maintenance-page fallback middleware below and
+is a stand-in for the SAME outcome via a different mechanism (a poll loop
+noticing traffic, rather than Traefik's own `errors` middleware routing the
+failing request straight to the maintenance page). The two are independent
+and both still work; a service can have either, both, or neither enabled.
+See
 [traffic_metrics.md#wake-on-hit-a-stand-in-for-a-real-traefik-side-trigger](traffic_metrics.md#wake-on-hit-a-stand-in-for-a-real-traefik-side-trigger).
 
 They exist so both the operator and the orchestrator have one place to look
@@ -62,17 +73,57 @@ Validation: hostname is required and must be a bare DNS name (optionally
 across all proxy hosts; `service_id` is required and must reference a real
 service; `router_provider` must be one of the enum values above.
 
-## Drift detection against Traefik (read-only)
+## Drift detection: Traefik Manager preferred, direct Traefik API as fallback
 
-The orchestrator can optionally poll Traefik's own REST API and flag any
-`ProxyHost` whose hostname has no matching **live** router. This is strictly
-**read-only drift detection** — the orchestrator never writes to Traefik, and
-this is not config push/sync. It exists because, without it, the dashboard
-can say "this host is configured" while Traefik silently has no matching
-route (typo, Traefik config drift, the host never actually added to Traefik,
-and so on).
+**Traefik Manager** (https://github.com/chr0nzz/traefik-manager) now runs
+on the gateway alongside Traefik and is the stated source of truth for
+proxy routes — it manages the same one-file-per-service
+`/etc/traefik/dynamic/` layout [gateway_traefik_migration.md](gateway_traefik_migration.md)
+describes, confirmed compatible with no migration needed. The orchestrator
+is a **client** of its REST API (`X-Api-Key` auth), the same relationship
+it already has with Proxmox/IPMI — see
+`orchestrator.registry.traefik_manager_client`.
 
-### Enabling it
+The read path (drift detection below, and Resync further down) now prefers
+Traefik Manager's `GET /api/routes` — one call, returning routers,
+services *and* middlewares together — over the direct-Traefik-API path
+this section used to describe exclusively:
+
+| Condition | Read path used |
+|---|---|
+| `TRAEFIK_MANAGER_URL` set | Traefik Manager's `GET /api/routes` |
+| `TRAEFIK_MANAGER_URL` empty, `TRAEFIK_API_URL` set | The direct Traefik API (`/api/http/routers` + `/api/http/services`), as before |
+| Neither set | Disabled — `live_status` is always `unknown`; Resync answers `503` |
+
+**Why the direct-API path was kept as a fallback instead of being retired
+outright**, now that Traefik Manager is the stated source of truth: it
+costs nothing to keep working, an operator could still run this
+orchestrator against a gateway that only exposes Traefik's bare API
+without Traefik Manager in front of it (e.g. mid-migration, or a simpler
+deployment that never adopts Traefik Manager), and retiring it would mean
+deleting working, tested code for no operational benefit. Both paths
+degrade identically — see below.
+
+This is strictly **read-only drift detection** — this section never writes
+to Traefik or Traefik Manager, and this is not config push/sync. It exists
+because, without it, the dashboard can say "this host is configured" while
+nothing live actually routes it (typo, config drift, the host never
+actually added, and so on).
+
+### Enabling it (Traefik Manager — preferred)
+
+Generate an API key in Traefik Manager's own UI (Settings -> Authentication
+-> API Keys — per-device keys are supported) and point the orchestrator at
+it:
+
+| Env var | Meaning | Default |
+|---|---|---|
+| `TRAEFIK_MANAGER_URL` | Base URL of Traefik Manager, e.g. `http://traefik-manager.example.lan:8080`. **Empty disables this path** (falls back to the direct Traefik API below, or to `unknown` if that's unset too). | `""` |
+| `TRAEFIK_MANAGER_API_KEY` | The API key from Traefik Manager's UI. Sent as `X-Api-Key`; this also bypasses Traefik Manager's CSRF checks. | `""` |
+| `TRAEFIK_MANAGER_VERIFY_TLS` | Verify TLS. Set `false` for a self-signed cert. | `true` |
+| `TRAEFIK_MANAGER_TIMEOUT_S` | Request timeout in seconds — short on purpose, same reasoning as `TRAEFIK_API_TIMEOUT_S` below. | `5.0` |
+
+### Enabling it (direct Traefik API — fallback)
 
 1. Start Traefik with its API enabled (static config):
 
@@ -121,7 +172,7 @@ on the dashboard:
 |---|---|
 | `matched` | A live Traefik router's rule covers this hostname right now. |
 | `missing` | Traefik was reachable, but no router covers this hostname — check for a typo, config drift, or a host that was never actually added to Traefik. |
-| `unknown` | `TRAEFIK_API_URL` is not set, or the poll failed (network error, timeout, bad response). Deliberately **not** the same as `missing` — this means "we don't know", not "it's not there". |
+| `unknown` | Neither `TRAEFIK_MANAGER_URL` nor `TRAEFIK_API_URL` is set, or the configured one's poll failed (network error, timeout, bad response). Deliberately **not** the same as `missing` — this means "we don't know", not "it's not there". |
 
 A poll failure (Traefik down, unreachable, wrong credentials, non-JSON
 response, etc.) is logged and degrades to `unknown` for every host — it never
@@ -130,11 +181,13 @@ raises into the request handler, so a Traefik outage cannot break the
 
 ### What this is not
 
-This is the smallest first step towards closing the gap between "configured
-here" and "actually routing in Traefik" — read-only, no SSH, no shared
-filesystem, nothing pushed. It does **not**:
+This drift check itself remains read-only — no SSH, no shared filesystem,
+nothing pushed — whichever of the two sources answers it. It does **not**:
 
-- write, create, or modify anything in Traefik;
+- write, create, or modify any route, service, or middleware (that's what
+  the separate ["Maintenance-page fallback"](#maintenance-page-fallback-never-overwrite-an-existing-traefik-config)
+  feature further down does, deliberately scoped to exactly one appended
+  middleware name per route);
 - reconcile automatically — an operator still edits `ProxyHost` records by
   hand and decides what to do about a `missing` one.
 
@@ -143,9 +196,11 @@ Prometheus metrics endpoint — see [traffic_metrics.md](traffic_metrics.md).
 That is a separate, independent read path (`/metrics`, not `/api/http/*`)
 with its own poller; it does not change anything described above.
 
-A later phase may add real config push once SSH access or shared storage
-exists between the orchestrator and the Traefik host — not designed yet, and
-not assumed to be coming.
+That "real config push" phase has now arrived, scoped narrowly — see
+["Maintenance-page fallback"](#maintenance-page-fallback-never-overwrite-an-existing-traefik-config)
+below. It is not a general Traefik config editor: it manages exactly one
+middleware name on exactly the routes a linked `ProxyHost` identifies, via
+Traefik Manager's API rather than SSH or shared storage.
 
 Other options considered and not built here because Traefik's own API is
 quicker to turn on and sufficient for this (Prometheus metrics, the other
@@ -164,21 +219,28 @@ option originally listed here, now IS built — see
 Pangolin and NPM would need their own equivalents; nothing above applies to
 them.
 
-## Resync from Traefik (manual, admin-triggered write)
+## Resync (manual, admin-triggered write to the DATABASE)
 
 Drift detection above is read-only and automatic (it runs on every page
 load). **Resync** is the opposite in both respects: it is the one thing in
-this file that writes data sourced from Traefik into the database, and it
-only ever runs when an admin clicks the **Resync from Traefik** button on
-`/proxy-hosts` (`POST /api/proxy-hosts/resync`). Nothing changes on a
-schedule, on page load, or as a side effect of any other request.
+this section that writes data into the database (sourced from Traefik
+Manager or, as a fallback, Traefik's own API — see "Drift detection"
+above), and it only ever runs when an admin clicks the **Resync from
+Traefik** button on `/proxy-hosts` (`POST /api/proxy-hosts/resync`).
+Nothing changes on a schedule, on page load, or as a side effect of any
+other request. This is unrelated to, and does not touch, the
+maintenance-page fallback middleware further down — that's a write to
+Traefik's own config, not to this database.
 
 ### What it does
 
-1. Calls Traefik's `/api/http/routers` **and** `/api/http/services` APIs
-   (the second to resolve each router's Traefik *service* reference — not
-   our own `Service` model, an unfortunate name collision — to the backend
-   URL(s) it is currently load-balancing to).
+1. Uses the SAME TM-preferred/direct-API-fallback priority as drift
+   detection above to fetch every route's hostname(s), resolved backend
+   URL, and router name. Via Traefik Manager this is one `GET /api/routes`
+   call; via the direct API it is `/api/http/routers` **and**
+   `/api/http/services` (the second to resolve each router's Traefik
+   *service* reference — not our own `Service` model, an unfortunate name
+   collision — to the backend URL(s) it is currently load-balancing to).
 2. For every existing `ProxyHost` whose `hostname` matches a live router:
    - `upstream` is **overwritten** with the backend URL Traefik reports.
      **This intentionally replaces a manually-set `upstream` value** — the
@@ -205,11 +267,12 @@ schedule, on page load, or as a side effect of any other request.
    same `orchestrator.audit.log.record` mechanism as every other mutation
    in this file.
 
-If `TRAEFIK_API_URL` is unset, or Traefik could not be reached, Resync
-returns `503 Service Unavailable` with a clear error message — unlike the
-read-only drift check, which silently degrades to `unknown`, this is a
-manual action the clicking admin is watching, so a real error is more useful
-than a fake success.
+If neither `TRAEFIK_MANAGER_URL` nor `TRAEFIK_API_URL` is set, or the
+configured one could not be reached, Resync returns `503 Service
+Unavailable` with a clear error message naming which source was tried —
+unlike the read-only drift check, which silently degrades to `unknown`,
+this is a manual action the clicking admin is watching, so a real error is
+more useful than a fake success.
 
 ### Why `upstream` only, and why it can be overwritten
 
@@ -306,3 +369,179 @@ already use, targeting `service:<slug>`.
 The whole feature is opt-in: it does nothing (no probe is ever created,
 updated or removed) when `PROBE_PROXY_BASE_URL` is unset, same as every
 other optional integration in this app.
+
+## Maintenance-page fallback (never overwrite an existing Traefik config)
+
+The orchestrator already renders a self-refreshing "starting up" page and
+fires the wake pipeline at `GET /maintenance/{service_slug}`
+(`orchestrator.web.routers.maintenance`) — but until now, Traefik had to be
+hand-configured, per service, to actually send a visitor there when the
+real backend is down. This feature closes that gap automatically for every
+`ProxyHost` linked to a `Service`, using Traefik's own `errors` middleware
+and Traefik Manager's write API — see
+`orchestrator.registry.traefik_manager_sync` for the implementation this
+section describes.
+
+### Enabling it
+
+Two settings, both required (see `docs/architecture.md` for the full
+table):
+
+* `TRAEFIK_MANAGER_URL` + `TRAEFIK_MANAGER_API_KEY` — also used for the
+  read-path swap above.
+* `ORCHESTRATOR_PUBLIC_URL` — this orchestrator's own address **as
+  reachable from the gateway VM**, e.g. `http://10.0.0.5:8000`. This is
+  what Traefik's `errors` middleware sends the failed request to.
+
+Either unset and this entire feature is a no-op — no shared backend
+service, no middleware, no injection, same "empty disables it" convention
+as every other optional integration in this app.
+
+### What it builds, and why
+
+1. **One shared backend service**
+   (`orchestrator-maintenance-backend`), pointing at
+   `ORCHESTRATOR_PUBLIC_URL`, created once and reused by every service's
+   middleware. Traefik's `errors` middleware invokes a Traefik *service*
+   directly — it does not need a router to reach it — but Traefik
+   Manager's `POST /save` endpoint is modeled around creating a
+   router+service PAIR, with no supported way to write a bare service with
+   no router.
+
+   **The "service with no router" resolution**: create a minimal,
+   deliberately-never-matched router alongside the service, whose
+   `httpRule` targets a hostname under the reserved `.invalid` TLD
+   (RFC 2606: "and are guaranteed not to be installed" as a real DNS name,
+   ever) rather than relying on an empty/absent `entryPoints` value, whose
+   exact behaviour (no binding at all, vs. falling back to Traefik
+   Manager's documented HTTP default of `https`) isn't nailed down by its
+   docs. Even in the worst case — the router ends up bound to a real
+   entrypoint — no real request will ever carry
+   `Host: orchestrator-maintenance-backend.invalid`, so it can never
+   actually serve live traffic. This is belt-and-suspenders against that
+   one documentation gap, and is called out explicitly here because it's
+   the one judgment call in this feature that couldn't be fully verified
+   against a live Traefik Manager instance; the exact request shape sent
+   is pinned down by a test against a mocked API
+   (`tests/test_traefik_manager_sync.py`).
+
+   Idempotent: checked via `GET /api/routes`'s `services.http` list before
+   creating — a second sync (another `ProxyHost` create, a resync, a
+   restart) makes no write at all once it exists.
+
+2. **One middleware per service** (`maintenance-<slug>`), of Traefik's
+   `errors` type:
+
+   ```yaml
+   errors:
+     status: ["500-599"]
+     service: orchestrator-maintenance-backend
+     query: /maintenance/<slug>
+   ```
+
+   `status` covers the full 5xx range — Traefik's own convention for "the
+   backend is unreachable at all", since a fully down backend surfaces to
+   this middleware as a synthetic 5xx (Traefik's own "no server
+   available"/"bad gateway" response). This alone is sufficient to catch a
+   sleeping/off backend; a `forwardAuth`-based health check was considered
+   and explicitly rejected as unnecessary complexity for the same outcome.
+   `query` is the literal path `/maintenance/<slug>` — exactly the existing
+   `GET /maintenance/{service_slug}` route, unmodified; nothing there
+   needed to change for this feature. `service` always points at the one
+   shared backend from step 1.
+
+   Created/updated via `POST /save-middleware`. Looked up by name in
+   `GET /api/routes`'s `middlewares` list to decide create vs. update; the
+   content is always rewritten on an update so a renamed service's stale
+   `query` (pointing at an old slug) can never linger.
+
+3. **Injection into every route matching the `ProxyHost`'s hostname** — the
+   one hard, non-negotiable requirement of this feature: **the middleware
+   name is appended to that route's `middlewares:` list via the raw-YAML
+   read-modify-write pair**, never `POST /save`:
+
+   ```
+   GET /api/routes/{id}/raw  ->  parse YAML
+                              ->  append the name to middlewares: if absent
+                              ->  POST /api/routes/{id}/raw with the full content
+   ```
+
+   Every other field on that route — its rule, entrypoints, TLS options,
+   and every OTHER middleware already on it, hand-authored ones
+   included — survives byte-for-byte except for that one appended list
+   entry. `POST /save`'s field-by-field semantics were deliberately NOT
+   used here: a client that doesn't echo back every field it didn't touch
+   risks silently dropping ones it doesn't know about (see `/save`'s own
+   docs on this exact hazard for its `backendsJson*`/sticky/healthCheck
+   fields) — exactly the "must not overwrite an existing Traefik config"
+   failure mode the operator was explicit about avoiding. Idempotent: the
+   name is never appended twice, so re-running (another `ProxyHost` edit, a
+   container restart, a resync) is always safe.
+
+   `tests/test_traefik_manager_sync.py` asserts this round-trip directly:
+   every other field on a route carrying a hand-authored middleware
+   survives an injection untouched, and a second run makes no further
+   write at all.
+
+### Lifecycle
+
+Mirrors the existing auto-managed Traefik probe's lifecycle (above) and the
+same trigger points in `web/routers/proxy_hosts.py`:
+
+* **Create** a linked `ProxyHost` → ensure the shared backend service +
+  this service's middleware exist, inject the middleware name into every
+  route matching the hostname.
+* **Rename** the hostname (same service) → remove the (unchanged,
+  slug-named) middleware name from the OLD hostname's routes, inject it
+  into the NEW hostname's routes.
+* **Re-link** to a different service → the middleware name is slug-based,
+  so a different service means a different middleware: remove the OLD
+  slug's middleware name from the hostname's routes, ensure the NEW slug's
+  middleware, inject it.
+* **Unlink** (`service_id` cleared) or **delete** the `ProxyHost` → remove
+  the middleware name from the (old) hostname's routes.
+
+**On unlink/delete, the middleware DEFINITION itself is deliberately left
+in place** (orphaned-but-harmless), not deleted. Deleting it would first
+need to confirm no OTHER route still references it
+(`POST /delete-middleware/{name}` answers `409` otherwise, naming the
+routers that do), and the next create/re-link for the same slug would just
+recreate it anyway — so this module trades a harmless unreferenced
+middleware definition for not having to do that extra round trip. An
+operator who wants the gateway's config file fully clean of a removed
+service's middleware can delete it by hand, or via Traefik Manager's own
+UI, at any time — nothing reads or re-creates a middleware definition
+except by its own slug-derived name.
+
+Every create/update/injection/removal is audit-logged
+(`backend_service.created`, `middleware.created` / `middleware.updated` /
+`middleware.injected` / `middleware.removed`), the same
+`orchestrator.audit.log.record` mechanism as every other mutation in this
+file, target `traefik_manager:<name>`.
+
+### Fail-open, by design
+
+Unlike Resync (an explicit, admin-watched action that surfaces a real
+`503` on failure), this sync is a *side effect* of an ordinary `ProxyHost`
+create/update/delete — the same kind of request this app has always
+allowed to succeed even when Traefik is completely unconfigured. A Traefik
+Manager outage (or misconfiguration) is caught and logged here, never
+raised into that request: editing proxy hosts in the database must keep
+working even when the gateway integration is unreachable. An operator who
+needs to know whether a particular sync actually happened should check the
+audit log for the expected `middleware.*` entries, or the activity page.
+
+### What this is not
+
+* Not a general Traefik/Traefik-Manager config editor — it manages exactly
+  one middleware name, on exactly the routes matching one `ProxyHost`'s
+  hostname, and one shared backend service. Nothing else on those routes,
+  and no OTHER route, is ever touched.
+* Not a health check of its own — it relies entirely on Traefik's own
+  `errors` middleware semantics (a dead backend already reads as a 5xx to
+  it); no separate polling or `forwardAuth` call is made by this feature.
+* Not required for the maintenance page itself to work — `GET
+  /maintenance/{service_slug}` has existed since an earlier phase and keeps
+  working exactly as before however a visitor arrives at it (a hand-wired
+  Traefik `errors` middleware, a reverse proxy elsewhere, or a direct hit).
+  This feature only automates wiring Traefik up to send visitors there.

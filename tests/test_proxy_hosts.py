@@ -26,6 +26,14 @@ from orchestrator.registry.loader import read_yaml_file
 from orchestrator.web import auth as auth_lib
 from orchestrator.web.app import create_app
 
+# Captured once, at import time, before anything in this module monkeypatches
+# httpx.AsyncClient — a test that patches BOTH the direct-Traefik-API client
+# and the Traefik Manager client in the same test (they share one underlying
+# `httpx` module object) must subclass this fixed original, not whatever
+# `httpx.AsyncClient` currently is, or the second patch ends up wrapping the
+# first and its transport silently wins instead.
+_REAL_HTTPX_ASYNC_CLIENT = httpx.AsyncClient
+
 
 @pytest.fixture
 def app() -> Any:
@@ -337,9 +345,7 @@ def test_dashboard_links_to_proxy_hosts_page(client: TestClient) -> None:
 def _patch_traefik_transport(monkeypatch: pytest.MonkeyPatch, handler: Any) -> None:
     import orchestrator.registry.traefik_status as ts_mod
 
-    real_async_client = httpx.AsyncClient
-
-    class _PatchedAsyncClient(real_async_client):  # type: ignore[misc]
+    class _PatchedAsyncClient(_REAL_HTTPX_ASYNC_CLIENT):  # type: ignore[misc]
         def __init__(self, *args: Any, **kwargs: Any) -> None:
             kwargs["transport"] = httpx.MockTransport(handler)
             super().__init__(*args, **kwargs)
@@ -796,3 +802,236 @@ def test_auto_probe_appears_on_service_detail_as_non_required(
 def _audit_actions_all() -> list[str]:
     with Session(get_engine()) as s:
         return [r.action for r in s.exec(select(AuditEntry)).all()]
+
+
+# ---------------------------------------------------------------------------
+# Read path: Traefik Manager preferred over the direct Traefik API
+# ---------------------------------------------------------------------------
+
+
+def _patch_tm_transport(monkeypatch: pytest.MonkeyPatch, handler: Any) -> None:
+    import orchestrator.registry.traefik_manager_client as tm_mod
+
+    class _PatchedAsyncClient(_REAL_HTTPX_ASYNC_CLIENT):  # type: ignore[misc]
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            kwargs["transport"] = httpx.MockTransport(handler)
+            super().__init__(*args, **kwargs)
+
+    monkeypatch.setattr(tm_mod.httpx, "AsyncClient", _PatchedAsyncClient)
+
+
+def _enable_traefik_manager(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("TRAEFIK_MANAGER_URL", "http://tm.test:8080")
+    monkeypatch.setenv("TRAEFIK_MANAGER_API_KEY", "key")
+    config_module.reset_settings_cache()
+
+
+def test_live_status_matched_via_traefik_manager(
+    client: TestClient, service: Service, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _enable_traefik_manager(monkeypatch)
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/api/routes"
+        return httpx.Response(
+            200,
+            json={
+                "apps": [
+                    {
+                        "id": "r1",
+                        "name": "r1",
+                        "protocol": "http",
+                        "rule": "Host(`a.example.com`)",
+                        "servers": ["http://10.0.0.9:80"],
+                    }
+                ],
+                "middlewares": [],
+                "services": {"http": [], "tcp": [], "udp": []},
+            },
+        )
+
+    _patch_tm_transport(monkeypatch, handle)
+
+    client.post("/api/proxy-hosts", json={"hostname": "a.example.com", "service_id": service.id})
+    listed = client.get("/api/proxy-hosts").json()
+    assert listed[0]["live_status"] == "matched"
+
+
+def test_live_status_unknown_when_traefik_manager_unreachable(
+    client: TestClient, service: Service, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _enable_traefik_manager(monkeypatch)
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("refused")
+
+    _patch_tm_transport(monkeypatch, handle)
+
+    client.post("/api/proxy-hosts", json={"hostname": "a.example.com", "service_id": service.id})
+    listed = client.get("/api/proxy-hosts").json()
+    assert listed[0]["live_status"] == "unknown"
+
+
+def test_traefik_manager_takes_priority_over_direct_traefik_api(
+    client: TestClient, service: Service, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """When BOTH are configured, Traefik Manager wins — the direct API is
+    never even called."""
+    _enable_traefik_manager(monkeypatch)
+    monkeypatch.setenv("TRAEFIK_API_URL", "http://traefik.test:8080")
+    config_module.reset_settings_cache()
+
+    direct_api_called = False
+
+    def direct_handle(request: httpx.Request) -> httpx.Response:
+        nonlocal direct_api_called
+        direct_api_called = True
+        return httpx.Response(200, json=[])
+
+    def tm_handle(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "apps": [
+                    {
+                        "id": "r1",
+                        "name": "r1",
+                        "protocol": "http",
+                        "rule": "Host(`a.example.com`)",
+                        "servers": ["http://10.0.0.9:80"],
+                    }
+                ],
+                "middlewares": [],
+                "services": {"http": [], "tcp": [], "udp": []},
+            },
+        )
+
+    _patch_traefik_transport(monkeypatch, direct_handle)
+    _patch_tm_transport(monkeypatch, tm_handle)
+
+    client.post("/api/proxy-hosts", json={"hostname": "a.example.com", "service_id": service.id})
+    listed = client.get("/api/proxy-hosts").json()
+    assert listed[0]["live_status"] == "matched"
+    assert direct_api_called is False
+
+
+def test_resync_via_traefik_manager_updates_matched_host(
+    client: TestClient, service: Service, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _enable_traefik_manager(monkeypatch)
+
+    created = client.post(
+        "/api/proxy-hosts",
+        json={"hostname": "a.example.com", "upstream": "http://stale:9", "service_id": service.id},
+    ).json()
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "apps": [
+                    {
+                        "id": "r1",
+                        "name": "r1",
+                        "protocol": "http",
+                        "rule": "Host(`a.example.com`)",
+                        "servers": ["http://10.0.0.5:8080"],
+                    }
+                ],
+                "middlewares": [],
+                "services": {"http": ["r1"], "tcp": [], "udp": []},
+            },
+        )
+
+    _patch_tm_transport(monkeypatch, handle)
+
+    r = client.post("/api/proxy-hosts/resync")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["updated_count"] == 1
+    assert body["updated"][0]["upstream"] == "http://10.0.0.5:8080"
+
+    refreshed = client.get(f"/api/proxy-hosts/{created['id']}").json()
+    assert refreshed["upstream"] == "http://10.0.0.5:8080"
+
+
+def test_create_proxy_host_injects_maintenance_middleware_and_audits_it(
+    client: TestClient, service: Service, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """End-to-end through the real router: create a ProxyHost with both
+    TRAEFIK_MANAGER_URL and ORCHESTRATOR_PUBLIC_URL set, and confirm the
+    middleware gets injected into a matching live route and audited."""
+    _enable_traefik_manager(monkeypatch)
+    monkeypatch.setenv("ORCHESTRATOR_PUBLIC_URL", "http://10.0.0.5:8000")
+    config_module.reset_settings_cache()
+
+    from orchestrator.registry.traefik_manager_sync import (
+        SHARED_BACKEND_SERVICE_NAME,
+        maintenance_middleware_name,
+    )
+
+    state = {
+        "raw": (
+            "http:\n  routers:\n    r1:\n      rule: Host(`a.example.com`)\n"
+            "      service: s1\n      middlewares:\n        - existing-mw\n"
+        )
+    }
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        if path == "/api/routes":
+            return httpx.Response(
+                200,
+                json={
+                    "apps": [
+                        {
+                            "id": "r1",
+                            "name": "r1",
+                            "protocol": "http",
+                            "rule": "Host(`a.example.com`)",
+                        }
+                    ],
+                    "middlewares": [],
+                    "services": {"http": [SHARED_BACKEND_SERVICE_NAME], "tcp": [], "udp": []},
+                },
+            )
+        if path == "/api/routes/r1/raw" and request.method == "GET":
+            return httpx.Response(200, json={"raw": state["raw"]})
+        if path == "/api/routes/r1/raw" and request.method == "POST":
+            import json as _json
+
+            state["raw"] = _json.loads(request.read())["content"]
+            return httpx.Response(200, json={"ok": True})
+        if path == "/save-middleware":
+            return httpx.Response(200, json={"ok": True})
+        return httpx.Response(404, json={"ok": False})
+
+    _patch_tm_transport(monkeypatch, handle)
+
+    r = client.post(
+        "/api/proxy-hosts", json={"hostname": "a.example.com", "service_id": service.id}
+    )
+    assert r.status_code == 201, r.text
+
+    mw_name = maintenance_middleware_name(service.slug)
+    assert mw_name in state["raw"]
+    assert "existing-mw" in state["raw"]  # untouched
+
+    actions = _audit_actions_all()
+    assert "middleware.created" in actions
+    assert "middleware.injected" in actions
+
+
+def test_resync_via_traefik_manager_surfaces_503_when_unreachable(
+    client: TestClient, service: Service, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _enable_traefik_manager(monkeypatch)
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("refused")
+
+    _patch_tm_transport(monkeypatch, handle)
+
+    r = client.post("/api/proxy-hosts/resync")
+    assert r.status_code == 503
+    assert "traefik" in r.json()["detail"].lower()

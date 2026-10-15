@@ -33,6 +33,7 @@ from orchestrator.db.models import BackupPolicy, HealthScanSample, Node, Probe, 
 from orchestrator.domain.enums import GuestKind, ProbeKind
 from orchestrator.domain.schemas import HttpProbeConfig, TcpProbeConfig
 from orchestrator.health.engine import HealthEngine
+from orchestrator.pipelines.wake import wake_is_unsupported
 from orchestrator.registry.loader import (
     _find_dependency_cycle,
     compute_registry_diff,
@@ -216,6 +217,12 @@ def service_detail(session: Session, svc: Service) -> dict[str, Any]:
         "depends_on": list(svc.depends_on or []),
         "node_id": svc.node_id,
         "node": _node_dict(node) if node else None,
+        # Same condition orchestrator.pipelines.wake.WakePipeline uses to
+        # raise WakeUnsupportedError, computed here so an admin can see
+        # upfront which services this applies to rather than only
+        # discovering it when something is actually down — see
+        # docs/architecture.md.
+        "wake_unsupported": wake_is_unsupported(node),
         "probes": [_probe_dict(p) for p in _service_probes(session, svc)],
         "created_at": svc.created_at.isoformat(),
         "updated_at": svc.updated_at.isoformat(),

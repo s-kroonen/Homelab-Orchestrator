@@ -190,6 +190,19 @@ def test_unknown_node_404s(client: TestClient) -> None:
 # ---------------------------------------------------------------------------
 
 
+def test_service_detail_flags_wake_unsupported_node(client: TestClient) -> None:
+    """Surfaced up front on the service detail page — see
+    docs/architecture.md's wake-unsupported section — not only discovered
+    when a visitor actually hits a down backend."""
+    bare_node = _make_node(client, "bare")  # no power_mgr_target, not always_on
+    _make_service(client, bare_node["id"], slug="unsupported-svc")
+    assert client.get("/api/registry/services/unsupported-svc").json()["wake_unsupported"] is True
+
+    on_node = _make_node(client, "on", always_on=True)
+    _make_service(client, on_node["id"], slug="fine-svc")
+    assert client.get("/api/registry/services/fine-svc").json()["wake_unsupported"] is False
+
+
 def test_service_create_get_update_delete(client: TestClient) -> None:
     node = _make_node(client)
     created = _make_service(client, node["id"], guest_id=101)

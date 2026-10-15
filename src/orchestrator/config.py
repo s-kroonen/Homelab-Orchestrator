@@ -162,6 +162,37 @@ class Settings(BaseSettings):
     traefik_metrics_poll_interval_s: int = 60
     traefik_metrics_retention_days: int = 14
 
+    # ---- Traefik Manager (write path) --------------------------------------
+    # Traefik Manager (https://github.com/chr0nzz/traefik-manager) is now the
+    # source of truth for proxy routes on the gateway VM — it manages the same
+    # one-file-per-service /etc/traefik/dynamic/ layout docs/gateway_traefik_
+    # migration.md describes, and the orchestrator talks to it as a CLIENT,
+    # the same relationship it already has with Proxmox/IPMI. Unlike
+    # TRAEFIK_API_URL above (Traefik's own API, read-only, never written to),
+    # this integration DOES write: the maintenance-page middleware injection
+    # in docs/proxy_hosts.md. Empty = disabled entirely, same "empty disables
+    # it" convention as every other optional integration in this app.
+    traefik_manager_url: str = ""
+    # Generated per-device in Traefik Manager's own UI (Settings ->
+    # Authentication -> API Keys). Sent as the X-Api-Key header; API-key auth
+    # bypasses Traefik Manager's CSRF checks entirely, so no CSRF token
+    # handling is needed here.
+    traefik_manager_api_key: SecretStr = SecretStr("")
+    traefik_manager_verify_tls: bool = True
+    # Short on purpose, same reasoning as TRAEFIK_API_TIMEOUT_S: these calls
+    # run synchronously from a dashboard-triggered proxy-host mutation, not a
+    # background job.
+    traefik_manager_timeout_s: float = 5.0
+
+    # The orchestrator's own base URL, as REACHABLE FROM THE GATEWAY VM (e.g.
+    # http://10.0.0.5:8000) — not necessarily the same as anything a browser
+    # uses. This is the backend target for the maintenance-page fallback
+    # service Traefik's `errors` middleware calls when a service's backend is
+    # down (see docs/proxy_hosts.md's "Maintenance-page fallback" section).
+    # Empty = the whole maintenance-middleware-injection feature is a no-op,
+    # same convention as PROBE_PROXY_BASE_URL above.
+    orchestrator_public_url: str = ""
+
     # ---- Probe transports (phase 4) ---------------------------------------
     # Defaults for SSH probes; a probe's own transport block can override them.
     # In Docker the key and known_hosts must be MOUNTED into the container —

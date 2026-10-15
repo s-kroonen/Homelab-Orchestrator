@@ -83,6 +83,35 @@ def test_a_second_hit_does_not_duplicate_the_wake(app_with_registry) -> None:
     assert len(runs) == 1
 
 
+def test_node_with_no_power_management_shows_the_distinct_unsupported_page(
+    app_with_registry,
+) -> None:
+    from sqlmodel import Session, select
+
+    from orchestrator.db.models import Node, Service
+
+    with TestClient(app_with_registry) as client:
+        with Session(get_engine()) as session:
+            svc = session.exec(select(Service).where(Service.slug == "example-media")).one()
+            node = session.get(Node, svc.node_id)
+            node.power_mgr_target = ""
+            node.always_on = False
+            session.add(node)
+            session.commit()
+
+        r = client.get("/maintenance/example-media")
+
+        with Session(get_engine()) as session:
+            runs = session.exec(select(PipelineRun)).all()
+
+    assert r.status_code == 200
+    assert "cannot be started automatically" in r.text
+    assert "contact an administrator" in r.text.lower()
+    assert "spinner unsupported" in r.text
+    assert "Try again" not in r.text  # show_retry=False — retrying changes nothing
+    assert runs == []  # never even attempted
+
+
 def test_a_failed_wake_renders_the_failed_page(
     app_with_registry, monkeypatch: pytest.MonkeyPatch
 ) -> None:
