@@ -1,0 +1,201 @@
+/* Shared dark-theme chrome for every homelab-orchestrator page.
+ *
+ * Consolidated out of the near-identical <style> blocks that used to be
+ * duplicated at the top of every template (dashboard.html, proxy_hosts.html,
+ * service_detail.html, backup_policies.html, activity.html, traffic.html,
+ * maintenance.html, setup.html). Page-specific rules (a page's own layout,
+ * one-off widgets) stay inline in that page's template; anything shared
+ * lives here. See base.html, which links this file on every page.
+ */
+
+:root { color-scheme: light dark; }
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  padding: 2rem 1rem;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  background: #0b0e14;
+  color: #e6e9ef;
+}
+
+.wrap { max-width: 56rem; margin: 0 auto; }
+
+/* --- header / nav --------------------------------------------------- */
+header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  margin-bottom: 1.5rem;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+header h1 { font-size: 1.1rem; margin: 0; }
+header h1 a { color: inherit; text-decoration: none; }
+header .who { color: #9aa4b2; font-size: 0.85rem; }
+
+nav { display: flex; gap: 1rem; font-size: 0.85rem; }
+nav a { color: #9aa4b2; text-decoration: none; }
+nav a:hover { color: #5b8def; }
+nav a.current { color: #e6e9ef; border-bottom: 2px solid #5b8def; }
+
+/* --- buttons ---------------------------------------------------------- */
+button, a.btn {
+  padding: 0.4rem 0.9rem;
+  background: #5b8def;
+  color: #0b0e14;
+  border: none;
+  border-radius: 0.4rem;
+  font-weight: 600;
+  cursor: pointer;
+  font-size: 0.85rem;
+  text-decoration: none;
+  display: inline-block;
+}
+button:disabled { opacity: 0.5; cursor: default; }
+button.secondary { background: #2a2f3a; color: #e6e9ef; }
+button.danger { background: transparent; color: #e5534b; border: 1px solid #2a2f3a; }
+button.logout { background: transparent; color: #9aa4b2; border: 1px solid #2a2f3a; }
+button.small { padding: 0.2rem 0.6rem; font-size: 0.75rem; }
+
+/* --- tables ------------------------------------------------------------ */
+table { width: 100%; border-collapse: collapse; margin-bottom: 1.5rem; }
+th, td {
+  text-align: left;
+  padding: 0.5rem 0.6rem;
+  border-bottom: 1px solid #1a1e27;
+  font-size: 0.85rem;
+  vertical-align: top;
+}
+th { color: #9aa4b2; font-weight: 500; }
+td.actions { white-space: nowrap; }
+.table-scroll { overflow-x: auto; margin-bottom: 1.5rem; }
+
+/* --- forms -------------------------------------------------------------- */
+input, select, textarea {
+  padding: 0.4rem;
+  background: #171b24;
+  border: 1px solid #2a2f3a;
+  border-radius: 0.4rem;
+  color: #e6e9ef;
+  font: inherit;
+  font-size: 0.85rem;
+}
+input[type=checkbox] { padding: 0; }
+textarea { width: 100%; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+label.inline { color: #9aa4b2; font-size: 0.85rem; display: inline-flex; gap: 0.3rem; align-items: center; }
+fieldset { border: 1px solid #2a2f3a; border-radius: 0.4rem; padding: 0.6rem 0.8rem; margin: 0 0 0.75rem; }
+legend { color: #9aa4b2; font-size: 0.8rem; padding: 0 0.3rem; }
+
+.row { display: flex; gap: 0.5rem; align-items: center; margin-bottom: 0.75rem; flex-wrap: wrap; }
+
+/* --- sections / layout -------------------------------------------------- */
+section { margin-bottom: 2rem; }
+section h2 { font-size: 0.95rem; margin: 0 0 0.75rem; }
+
+/* --- feedback text / badges --------------------------------------------- */
+.msg { font-size: 0.85rem; color: #9aa4b2; }
+.msg.ok { color: #3ecf6d; }
+.msg.error { color: #e5534b; }
+.muted { color: #9aa4b2; }
+
+.badge { padding: 0.1rem 0.5rem; border-radius: 1rem; font-size: 0.75rem; white-space: nowrap; }
+.badge.healthy, .badge.ok { background: #113b23; color: #3ecf6d; }
+.badge.failed { background: #3b1414; color: #e5534b; }
+.badge.unknown { background: #2a2f3a; color: #9aa4b2; }
+.badge.disabled { background: #2a2f3a; color: #6b7280; }
+
+.dirty-badge { background: #3b2e14; color: #e5a63e; padding: 0.2rem 0.6rem; border-radius: 0.4rem; font-size: 0.8rem; }
+
+.banner, .notice {
+  background: #3b2e14;
+  color: #e5a63e;
+  padding: 0.75rem 1rem;
+  border-radius: 0.4rem;
+  font-size: 0.85rem;
+  margin-bottom: 1.5rem;
+  line-height: 1.4;
+}
+.banner strong { color: #e5a63e; }
+.banner a { color: #e5a63e; }
+.notice { padding: 0.5rem 0.8rem; border: 1px solid #2a2f3a; background: none; color: #9aa4b2; margin-bottom: 1rem; }
+
+code { background: #171b24; padding: 0.1rem 0.3rem; border-radius: 0.3rem; }
+
+a, a:visited { color: #5b8def; text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+[hidden] { display: none !important; }
+
+/* --- step lists (✓/✗ vocabulary shared by dashboard, maintenance,
+   activity and service_detail) ------------------------------------------ */
+ol.steps { list-style: none; padding: 0; margin: 0.4rem 0 0; text-align: left; font-size: 0.8rem; }
+ol.steps li { padding: 0.15rem 0; color: #9aa4b2; }
+ol.steps li.ok::before { content: "✓ "; color: #3ecf6d; }
+ol.steps li.failed::before, ol.steps li.indeterminate::before { content: "✗ "; color: #e5534b; }
+
+/* health-strip variant (service_detail.html): compact ticks instead of a
+   vertical list, same ok/failed/indeterminate vocabulary. */
+ol.health-strip { display: flex; gap: 0.25rem; flex-wrap: wrap; }
+ol.health-strip li {
+  width: 1.5rem; height: 1.5rem; display: flex; align-items: center; justify-content: center;
+  border-radius: 0.3rem; background: #171b24; font-size: 0.9rem; cursor: default;
+}
+ol.health-strip li.ok::before { content: "✓"; color: #3ecf6d; }
+ol.health-strip li.failed::before, ol.health-strip li.indeterminate::before { content: "✗"; color: #e5534b; }
+ol.health-strip li.muted-tick { color: #9aa4b2; width: auto; background: none; }
+
+/* --- collapsible groups (dashboard service groups, traffic groups) ------ */
+details summary { cursor: pointer; list-style: none; }
+details summary::-webkit-details-marker { display: none; }
+details.group { margin-bottom: 1rem; }
+details.group summary { padding: 0.4rem 0; font-size: 0.9rem; }
+details.group summary::before { content: "▸ "; color: #9aa4b2; }
+details.group[open] summary::before { content: "▾ "; color: #9aa4b2; }
+details.group .group-name { font-weight: 600; }
+details.group table { margin-top: 0.5rem; }
+
+/* --- toast / banner notifications (app.js) ------------------------------ */
+#toast-stack {
+  position: fixed;
+  top: 1rem;
+  right: 1rem;
+  z-index: 1000;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  max-width: 24rem;
+}
+.toast {
+  background: #171b24;
+  border: 1px solid #2a2f3a;
+  border-left: 3px solid #5b8def;
+  border-radius: 0.4rem;
+  padding: 0.6rem 0.8rem;
+  font-size: 0.85rem;
+  color: #e6e9ef;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+  display: flex;
+  align-items: flex-start;
+  gap: 0.6rem;
+}
+.toast.error { border-left-color: #e5534b; }
+.toast.ok { border-left-color: #3ecf6d; }
+.toast .toast-text { flex: 1; line-height: 1.4; }
+.toast .toast-close {
+  background: none;
+  border: none;
+  color: #9aa4b2;
+  cursor: pointer;
+  font-size: 0.9rem;
+  padding: 0;
+  line-height: 1;
+}
+
+@media (max-width: 40rem) {
+  header { flex-wrap: wrap; gap: 0.5rem; }
+  table { display: block; overflow-x: auto; }
+  #toast-stack { left: 1rem; right: 1rem; max-width: none; }
+}

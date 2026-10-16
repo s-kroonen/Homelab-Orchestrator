@@ -50,6 +50,25 @@ every other optional integration here. Once it's set:
   covers backups that got as far as writing one, and a failed run is
   exactly what this view most needs to surface).
 
+## Done: shared template/CSS/JS foundation
+
+~~**Every page was a fully standalone HTML document** (own `<html><head>`,
+own duplicated `<nav>`, own duplicated dark-theme `<style>` block, no shared
+JS) — nothing new built on a foundation, every feature reinvented its own
+chrome.~~ **Done.** `base.html` (Jinja2 `{% block %}` inheritance — every
+other template now extends it), `static/app.css` (the near-identical
+per-page `<style>` blocks consolidated into one stylesheet) and
+`static/app.js` (`toast()` + an `apiFetch()` wrapper that auto-shows a toast
+for any non-2xx response or network failure, replacing the bespoke
+`sendJson`/`errorText`/`apiError` helpers copy-pasted into several templates)
+now carry the chrome and the error-surfacing every page shares. This was
+scoped as foundation only — chrome + error handling, no change to any page's
+actual information architecture — so the deeper redesign (sub-tabs,
+dedicated add/edit pages, list filtering) mentioned below is still open and
+should build on this rather than duplicate it. See "The big question:
+frontend direction" below for why this stays server-rendered Jinja2 rather
+than a SPA rewrite.
+
 ## Architecture: generalize the adapter pattern
 
 This app already has the right shape for *some* integrations —

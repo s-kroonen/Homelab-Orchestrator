@@ -1,75 +1,6 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>homelab-orchestrator — backup policies</title>
-<style>
-  :root { color-scheme: light dark; }
-  body {
-    margin: 0; min-height: 100vh; padding: 2rem 1rem;
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-    background: #0b0e14; color: #e6e9ef;
-  }
-  .wrap { max-width: 56rem; margin: 0 auto; }
-  header { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 1.5rem; gap: 1rem; flex-wrap: wrap; }
-  header h1 { font-size: 1.1rem; margin: 0; }
-  header .who { color: #9aa4b2; font-size: 0.85rem; }
-  nav { display: flex; gap: 1rem; font-size: 0.85rem; }
-  nav a { color: #9aa4b2; text-decoration: none; }
-  nav a:hover, nav a.current { color: #5b8def; }
-  button {
-    padding: 0.4rem 0.9rem; background: #5b8def; color: #0b0e14; border: none;
-    border-radius: 0.4rem; font-weight: 600; cursor: pointer; font-size: 0.85rem;
-  }
-  button.secondary { background: #2a2f3a; color: #e6e9ef; }
-  button.danger { background: transparent; color: #e5534b; border: 1px solid #2a2f3a; }
-  button.small { padding: 0.2rem 0.6rem; font-size: 0.75rem; }
-  button.logout { background: transparent; color: #9aa4b2; border: 1px solid #2a2f3a; }
-  .table-scroll { overflow-x: auto; margin-bottom: 1.5rem; }
-  table { width: 100%; border-collapse: collapse; }
-  th, td { text-align: left; padding: 0.5rem 0.6rem; border-bottom: 1px solid #1a1e27; font-size: 0.85rem; vertical-align: top; }
-  th { color: #9aa4b2; font-weight: 500; }
-  td .muted, .muted { color: #9aa4b2; }
-  .badge { padding: 0.1rem 0.5rem; border-radius: 1rem; font-size: 0.75rem; white-space: nowrap; }
-  .badge.ok { background: #113b23; color: #3ecf6d; }
-  .badge.failed { background: #3b1414; color: #e5534b; }
-  .badge.unknown { background: #2a2f3a; color: #9aa4b2; }
-  section { margin-bottom: 2rem; }
-  section h2 { font-size: 0.95rem; margin: 0 0 0.75rem; }
-  .dirty-badge { background: #3b2e14; color: #e5a63e; padding: 0.2rem 0.6rem; border-radius: 0.4rem; font-size: 0.8rem; }
-  .row { display: flex; gap: 0.5rem; align-items: center; margin-bottom: 0.75rem; flex-wrap: wrap; }
-  label { font-size: 0.85rem; color: #9aa4b2; display: flex; flex-direction: column; gap: 0.25rem; }
-  label.inline { flex-direction: row; align-items: center; gap: 0.4rem; }
-  input, select { padding: 0.4rem; background: #171b24; border: 1px solid #2a2f3a; border-radius: 0.4rem; color: #e6e9ef; }
-  input[type=number] { width: 5rem; }
-  fieldset { border: 1px solid #2a2f3a; border-radius: 0.4rem; padding: 0.6rem 0.8rem; margin: 0 0 0.75rem; }
-  legend { color: #9aa4b2; font-size: 0.8rem; padding: 0 0.3rem; }
-  .services { display: flex; flex-wrap: wrap; gap: 0.3rem 1rem; }
-  .msg { font-size: 0.85rem; color: #9aa4b2; }
-  .msg.ok { color: #3ecf6d; }
-  .msg.error { color: #e5534b; }
-  code { background: #171b24; padding: 0.1rem 0.3rem; border-radius: 0.3rem; }
-  .notice { border: 1px solid #2a2f3a; border-radius: 0.4rem; padding: 0.5rem 0.8rem; font-size: 0.85rem; color: #9aa4b2; margin-bottom: 1rem; }
-</style>
-</head>
-<body>
-<div class="wrap">
-  <header>
-    <h1>homelab-orchestrator</h1>
-    <nav>
-      <a href="/">Dashboard</a>
-      <a href="/backup-policies" class="current">Backup policies</a>
-      <a href="/proxy-hosts">Proxy hosts</a>
-      <a href="/traffic">Traffic</a>
-      <a href="/activity">Activity</a>
-    </nav>
-    <span class="who">
-      {{ admin.username }}
-      <button class="logout" id="logout-btn">Log out</button>
-    </span>
-  </header>
-
+{% extends "base.html" %}
+{% block title %}homelab-orchestrator — backup policies{% endblock %}
+{% block content %}
   {% if not scheduler_enabled %}
   <p class="notice">Scheduler is <strong>disabled</strong> (<code>SCHEDULER_ENABLED=false</code>). Policies are stored but nothing runs on its schedule; "next run" shows when it <em>would</em> fire.</p>
   {% elif not scheduler_running %}
@@ -191,8 +122,16 @@
       </div>
     </form>
   </section>
-</div>
-
+{% endblock %}
+{% block extra_head %}
+<style>
+  .services { display: flex; flex-wrap: wrap; gap: 0.3rem 1rem; }
+  input[type=number] { width: 5rem; }
+  label { display: flex; flex-direction: column; gap: 0.25rem; }
+  label.inline { flex-direction: row; align-items: center; gap: 0.4rem; }
+</style>
+{% endblock %}
+{% block scripts %}
 <script>
   const POLICIES = {{ policies|tojson }};
   let editing = null;
@@ -203,29 +142,23 @@
     el.className = "msg" + (kind ? " " + kind : "");
   }
 
-  async function errorText(resp) {
-    try {
-      const data = await resp.json();
-      return typeof data.detail === "string" ? data.detail : JSON.stringify(data.detail);
-    } catch (_) {
-      return resp.status + " " + resp.statusText;
-    }
-  }
-
-  document.getElementById("logout-btn").addEventListener("click", async () => {
-    await fetch("/api/auth/logout", { method: "POST" });
-    location.href = "/login";
-  });
-
   document.getElementById("save-btn").addEventListener("click", async () => {
-    const r = await fetch("/api/registry/save", { method: "POST" });
-    setMsg("registry-msg", r.ok ? "Saved." : "Save failed.", r.ok ? "ok" : "error");
-    if (r.ok) setTimeout(() => location.reload(), 600);
+    try {
+      await apiFetch("POST", "/api/registry/save");
+      setMsg("registry-msg", "Saved.", "ok");
+      setTimeout(() => location.reload(), 600);
+    } catch (err) {
+      setMsg("registry-msg", "Save failed: " + err.message, "error");
+    }
   });
   document.getElementById("reset-btn").addEventListener("click", async () => {
-    const r = await fetch("/api/registry/reset", { method: "POST" });
-    setMsg("registry-msg", r.ok ? "Reset." : "Reset failed.", r.ok ? "ok" : "error");
-    if (r.ok) setTimeout(() => location.reload(), 600);
+    try {
+      await apiFetch("POST", "/api/registry/reset");
+      setMsg("registry-msg", "Reset.", "ok");
+      setTimeout(() => location.reload(), 600);
+    } catch (err) {
+      setMsg("registry-msg", "Reset failed: " + err.message, "error");
+    }
   });
 
   const KEEP = ["keep_last", "keep_daily", "keep_monthly"];
@@ -269,23 +202,15 @@
   document.getElementById("policy-form").addEventListener("submit", async (ev) => {
     ev.preventDefault();
     const body = readForm();
-    let resp;
-    if (editing) {
-      resp = await fetch("/api/backup-policies/" + encodeURIComponent(editing), {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-      });
-    } else {
-      body.name = document.getElementById("f-name").value.trim();
-      resp = await fetch("/api/backup-policies", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-      });
-    }
-    if (!resp.ok) {
-      setMsg("form-msg", await errorText(resp), "error");
+    try {
+      if (editing) {
+        await apiFetch("PUT", "/api/backup-policies/" + encodeURIComponent(editing), body, { suppressToast: true });
+      } else {
+        body.name = document.getElementById("f-name").value.trim();
+        await apiFetch("POST", "/api/backup-policies", body, { suppressToast: true });
+      }
+    } catch (err) {
+      setMsg("form-msg", err.message, "error");
       return;
     }
     setMsg("form-msg", editing ? "Saved." : "Created.", "ok");
@@ -359,11 +284,11 @@
       if (row.hidden || row.dataset.loaded) return;
       const body = row.querySelector(`[data-history-body="${id}"]`);
       try {
-        const runs = await (await fetch("/api/runs?policy_id=" + encodeURIComponent(id) + "&limit=50")).json();
+        const runs = await apiFetch("GET", "/api/runs?policy_id=" + encodeURIComponent(id) + "&limit=50", undefined, { suppressToast: true });
         renderHistoryRows(body, runs);
         row.dataset.loaded = "1";
-      } catch (_) {
-        body.innerHTML = '<tr><td colspan="6" class="msg error">Could not load run history.</td></tr>';
+      } catch (err) {
+        body.innerHTML = `<tr><td colspan="6" class="msg error">Could not load run history: ${err.message}</td></tr>`;
       }
     });
   }
@@ -372,14 +297,14 @@
     btn.addEventListener("click", async () => {
       const name = btn.dataset.delete;
       if (!confirm("Delete backup policy " + name + "? Services attached to it will be detached.")) return;
-      const resp = await fetch("/api/backup-policies/" + encodeURIComponent(name), { method: "DELETE" });
-      if (!resp.ok) {
-        setMsg("registry-msg", await errorText(resp), "error");
+      try {
+        await apiFetch("DELETE", "/api/backup-policies/" + encodeURIComponent(name), undefined, { suppressToast: true });
+      } catch (err) {
+        setMsg("registry-msg", err.message, "error");
         return;
       }
       location.reload();
     });
   }
 </script>
-</body>
-</html>
+{% endblock %}

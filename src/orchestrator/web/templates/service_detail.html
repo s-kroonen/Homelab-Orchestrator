@@ -1,84 +1,7 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>homelab-orchestrator — {{ service.slug }}</title>
-<style>
-  :root { color-scheme: light dark; }
-  body {
-    margin: 0; min-height: 100vh; padding: 2rem 1rem;
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-    background: #0b0e14; color: #e6e9ef;
-  }
-  .wrap { max-width: 56rem; margin: 0 auto; }
-  header { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 1.5rem; gap: 1rem; flex-wrap: wrap; }
-  header h1 { font-size: 1.1rem; margin: 0; }
-  header .who { color: #9aa4b2; font-size: 0.85rem; }
-  nav { display: flex; gap: 1rem; font-size: 0.85rem; }
-  nav a { color: #9aa4b2; text-decoration: none; }
-  nav a:hover, nav a.current { color: #5b8def; }
-  a, a:visited { color: #5b8def; text-decoration: none; }
-  a:hover { text-decoration: underline; }
-  button {
-    padding: 0.4rem 0.9rem; background: #5b8def; color: #0b0e14; border: none;
-    border-radius: 0.4rem; font-weight: 600; cursor: pointer; font-size: 0.85rem;
-  }
-  button.secondary { background: #2a2f3a; color: #e6e9ef; }
-  button.danger { background: transparent; color: #e5534b; border: 1px solid #2a2f3a; }
-  table { width: 100%; border-collapse: collapse; margin-bottom: 1rem; }
-  th, td { text-align: left; padding: 0.5rem 0.6rem; border-bottom: 1px solid #1a1e27; font-size: 0.85rem; vertical-align: top; }
-  th { color: #9aa4b2; font-weight: 500; }
-  section { margin-bottom: 2rem; }
-  section h2 { font-size: 0.95rem; margin: 0 0 0.75rem; }
-  .dirty-badge { background: #3b2e14; color: #e5a63e; padding: 0.2rem 0.6rem; border-radius: 0.4rem; font-size: 0.8rem; }
-  .row { display: flex; gap: 0.5rem; align-items: center; margin-bottom: 0.75rem; flex-wrap: wrap; }
-  input, select, textarea { padding: 0.4rem; background: #171b24; border: 1px solid #2a2f3a; border-radius: 0.4rem; color: #e6e9ef; font: inherit; font-size: 0.85rem; }
-  input[type=checkbox] { padding: 0; }
-  textarea { width: 100%; box-sizing: border-box; }
-  textarea.json { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; min-height: 10rem; }
-  .grid { display: grid; grid-template-columns: 11rem 1fr; gap: 0.6rem 1rem; align-items: center; margin-bottom: 1rem; }
-  .grid > label { color: #9aa4b2; font-size: 0.85rem; }
-  .grid .hint { grid-column: 2; color: #9aa4b2; font-size: 0.75rem; margin-top: -0.4rem; }
-  .checks { display: flex; flex-wrap: wrap; gap: 0.4rem 1rem; }
-  label.inline { color: #9aa4b2; font-size: 0.85rem; display: inline-flex; gap: 0.3rem; align-items: center; }
-  .msg { font-size: 0.85rem; color: #9aa4b2; }
-  .msg.ok { color: #3ecf6d; }
-  .msg.error { color: #e5534b; }
-  code { background: #171b24; padding: 0.1rem 0.3rem; border-radius: 0.3rem; }
-  .panel { border: 1px solid #2a2f3a; border-radius: 0.5rem; padding: 1rem; margin-bottom: 1rem; }
-  .panel h3 { font-size: 0.9rem; margin: 0 0 0.75rem; }
-  .muted { color: #9aa4b2; }
-  .yes { color: #3ecf6d; }
-  [hidden] { display: none !important; }
-  ol.steps { list-style: none; padding: 0; margin: 0.4rem 0; }
-  ol.health-strip { display: flex; gap: 0.25rem; flex-wrap: wrap; }
-  ol.health-strip li {
-    width: 1.5rem; height: 1.5rem; display: flex; align-items: center; justify-content: center;
-    border-radius: 0.3rem; background: #171b24; font-size: 0.9rem; cursor: default;
-  }
-  /* Same vocabulary and classes as the probe-result steps elsewhere
-     (dashboard.html, maintenance.html, activity.html): ok = ✓ green,
-     failed/indeterminate = ✗ red. Unknown health maps to "indeterminate". */
-  ol.health-strip li.ok::before { content: "✓"; color: #3ecf6d; }
-  ol.health-strip li.failed::before, ol.health-strip li.indeterminate::before { content: "✗"; color: #e5534b; }
-  ol.health-strip li.muted-tick { color: #9aa4b2; width: auto; background: none; }
-</style>
-</head>
-<body>
-<div class="wrap">
-  <header>
-    <h1><a href="/">homelab-orchestrator</a> / {{ service.name }} <code>{{ service.slug }}</code></h1>
-    <nav>
-      <a href="/" class="current">Dashboard</a>
-      <a href="/backup-policies">Backup policies</a>
-      <a href="/proxy-hosts">Proxy hosts</a>
-      <a href="/traffic">Traffic</a>
-      <a href="/activity">Activity</a>
-    </nav>
-    <span class="who">{{ admin.username }}</span>
-  </header>
-
+{% extends "base.html" %}
+{% block title %}homelab-orchestrator — {{ service.slug }}{% endblock %}
+{% block title_suffix %} / {{ service.name }} <code>{{ service.slug }}</code>{% endblock %}
+{% block content %}
   <div class="row">
     {% if registry_dirty %}<span class="dirty-badge">unsaved changes vs {{ yaml_path }}</span>{% endif %}
     <button id="save-btn">Save to YAML</button>
@@ -288,8 +211,20 @@
       <tbody id="backups-body"><tr><td colspan="5" class="muted">Loading…</td></tr></tbody>
     </table>
   </section>
-</div>
-
+{% endblock %}
+{% block extra_head %}
+<style>
+  .grid { display: grid; grid-template-columns: 11rem 1fr; gap: 0.6rem 1rem; align-items: center; margin-bottom: 1rem; }
+  .grid > label { color: #9aa4b2; font-size: 0.85rem; }
+  .grid .hint { grid-column: 2; color: #9aa4b2; font-size: 0.75rem; margin-top: -0.4rem; }
+  .checks { display: flex; flex-wrap: wrap; gap: 0.4rem 1rem; }
+  textarea.json { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; min-height: 10rem; }
+  .panel { border: 1px solid #2a2f3a; border-radius: 0.5rem; padding: 1rem; margin-bottom: 1rem; }
+  .panel h3 { font-size: 0.9rem; margin: 0 0 0.75rem; }
+  .yes { color: #3ecf6d; }
+</style>
+{% endblock %}
+{% block scripts %}
 <script>
   const SERVICE = {{ service|tojson }};
   const PROBE_KINDS = {{ probe_kinds|tojson }};
@@ -302,37 +237,27 @@
     el.textContent = text;
     el.className = "msg" + (kind ? " " + kind : "");
   }
-  async function apiError(resp) {
-    try {
-      const data = await resp.json();
-      if (typeof data.detail === "string") return data.detail;
-      return JSON.stringify(data.detail ?? data);
-    } catch (_) {
-      return `HTTP ${resp.status}`;
-    }
-  }
-  async function sendJson(method, url, body) {
-    const resp = await fetch(url, {
-      method,
-      headers: { "Content-Type": "application/json" },
-      body: body === undefined ? undefined : JSON.stringify(body),
-    });
-    if (!resp.ok) throw new Error(await apiError(resp));
-    return resp.json();
-  }
 
   // --- registry save/reset (same endpoints as the main dashboard) ---------
   $("save-btn").addEventListener("click", async () => {
-    const r = await fetch("/api/registry/save", { method: "POST" });
-    setMsg("registry-msg", r.ok ? "Saved." : "Save failed: " + (await apiError(r)), r.ok ? "ok" : "error");
-    if (r.ok) setTimeout(() => location.reload(), 600);
+    try {
+      await apiFetch("POST", "/api/registry/save");
+      setMsg("registry-msg", "Saved.", "ok");
+      setTimeout(() => location.reload(), 600);
+    } catch (err) {
+      setMsg("registry-msg", "Save failed: " + err.message, "error");
+    }
   });
   $("reset-btn").addEventListener("click", async () => {
     if (!confirm("Discard all unsaved registry edits and reload from YAML?")) return;
-    const r = await fetch("/api/registry/reset", { method: "POST" });
-    setMsg("registry-msg", r.ok ? "Reset." : "Reset failed: " + (await apiError(r)), r.ok ? "ok" : "error");
-    // The service may not exist in the saved YAML at all.
-    if (r.ok) setTimeout(() => (location.href = "/"), 600);
+    try {
+      await apiFetch("POST", "/api/registry/reset");
+      setMsg("registry-msg", "Reset.", "ok");
+      // The service may not exist in the saved YAML at all.
+      setTimeout(() => (location.href = "/"), 600);
+    } catch (err) {
+      setMsg("registry-msg", "Reset failed: " + err.message, "error");
+    }
   });
 
   // --- service form -------------------------------------------------------
@@ -371,7 +296,7 @@
       depends_on: [...$("f-depends").querySelectorAll("input:checked")].map((cb) => cb.value),
     };
     try {
-      const updated = await sendJson("PUT", svcPath, body);
+      const updated = await apiFetch("PUT", svcPath, body, { suppressToast: true });
       Object.assign(SERVICE, updated);
       fillServiceForm(SERVICE);
       setMsg("svc-msg", "Saved to the live registry. Remember to Save to YAML.", "ok");
@@ -384,7 +309,7 @@
     const n = SERVICE.probes.length;
     if (!confirm(`Delete ${SERVICE.slug} and its ${n} probe(s)? Backup history is kept.`)) return;
     try {
-      await sendJson("DELETE", svcPath);
+      await apiFetch("DELETE", svcPath, undefined, { suppressToast: true });
       location.href = "/";
     } catch (err) {
       setMsg("svc-msg", err.message, "error");
@@ -439,7 +364,7 @@
         test.disabled = true;
         test.textContent = "Testing…";
         try {
-          const result = await sendJson("POST", "/api/registry/probes/" + p.id + "/test");
+          const result = await apiFetch("POST", "/api/registry/probes/" + p.id + "/test", undefined, { suppressToast: true });
           renderProbeTestResult(resultCell, result);
           resultRow.hidden = false;
         } catch (err) {
@@ -464,7 +389,7 @@
       del.addEventListener("click", async () => {
         if (!confirm(`Delete probe ${p.name}?`)) return;
         try {
-          await sendJson("DELETE", "/api/registry/probes/" + p.id);
+          await apiFetch("DELETE", "/api/registry/probes/" + p.id, undefined, { suppressToast: true });
           await reloadProbes();
           setMsg("probes-msg", `Deleted ${p.name}.`, "ok");
         } catch (err) {
@@ -502,9 +427,7 @@
   }
 
   async function reloadProbes() {
-    const resp = await fetch(svcPath + "/probes");
-    if (!resp.ok) throw new Error(await apiError(resp));
-    SERVICE.probes = await resp.json();
+    SERVICE.probes = await apiFetch("GET", svcPath + "/probes", undefined, { suppressToast: true });
     renderProbes();
   }
 
@@ -646,9 +569,9 @@
         config: collectConfig(kind, base),
       };
       if (editing) {
-        await sendJson("PUT", "/api/registry/probes/" + editing.id, body);
+        await apiFetch("PUT", "/api/registry/probes/" + editing.id, body, { suppressToast: true });
       } else {
-        await sendJson("POST", svcPath + "/probes", body);
+        await apiFetch("POST", svcPath + "/probes", body, { suppressToast: true });
       }
       $("probe-editor").hidden = true;
       editing = null;
@@ -691,7 +614,7 @@
       del.addEventListener("click", async () => {
         if (!confirm(`Delete the proxy host record for ${h.hostname}? (This does not touch Traefik.)`)) return;
         try {
-          await sendJson("DELETE", "/api/proxy-hosts/" + h.id);
+          await apiFetch("DELETE", "/api/proxy-hosts/" + h.id, undefined, { suppressToast: true });
           await reloadProxyHosts();
           setMsg("ph-msg", `Deleted ${h.hostname}. Save to YAML to persist.`, "ok");
         } catch (err) {
@@ -705,7 +628,7 @@
   }
 
   async function reloadProxyHosts() {
-    const updated = await sendJson("GET", svcPath);
+    const updated = await apiFetch("GET", svcPath, undefined, { suppressToast: true });
     SERVICE.proxy_hosts = updated.proxy_hosts;
     renderProxyHosts();
   }
@@ -715,12 +638,12 @@
     const hostname = $("ph-add-hostname").value.trim();
     if (!hostname) return;
     try {
-      await sendJson("POST", "/api/proxy-hosts", {
+      await apiFetch("POST", "/api/proxy-hosts", {
         hostname,
         upstream: $("ph-add-upstream").value.trim(),
         router_provider: $("ph-add-provider").value,
         service_id: SERVICE.id,
-      });
+      }, { suppressToast: true });
       $("ph-add-form").reset();
       await reloadProxyHosts();
       setMsg("ph-msg", `Added ${hostname}. Save to YAML to persist.`, "ok");
@@ -744,7 +667,7 @@
   async function loadBackups() {
     const body = $("backups-body");
     try {
-      const records = await (await fetch("/api/backups?slug=" + encodeURIComponent(SERVICE.slug))).json();
+      const records = await apiFetch("GET", "/api/backups?slug=" + encodeURIComponent(SERVICE.slug), undefined, { suppressToast: true });
       body.innerHTML = "";
       if (!records.length) {
         body.innerHTML = '<tr><td colspan="5" class="muted">No backups recorded yet.</td></tr>';
@@ -776,8 +699,8 @@
         tr.appendChild(run);
         body.appendChild(tr);
       }
-    } catch (_) {
-      body.innerHTML = '<tr><td colspan="5" class="msg error">Could not load backups.</td></tr>';
+    } catch (err) {
+      body.innerHTML = `<tr><td colspan="5" class="msg error">Could not load backups: ${err.message}</td></tr>`;
     }
   }
 
@@ -786,7 +709,7 @@
   async function loadHealthHistory() {
     const strip = $("health-strip");
     try {
-      const rows = await (await fetch(svcPath + "/health-history?limit=20")).json();
+      const rows = await apiFetch("GET", svcPath + "/health-history?limit=20", undefined, { suppressToast: true });
       if (!rows.length) {
         strip.innerHTML = '<li class="muted-tick">no scans yet</li>';
         return;
@@ -798,8 +721,8 @@
         li.title = `${row.sampled_at} — ${row.state}: ${row.reason}`;
         strip.appendChild(li);
       }
-    } catch (_) {
-      strip.innerHTML = '<li class="muted-tick">could not load history</li>';
+    } catch (err) {
+      strip.innerHTML = `<li class="muted-tick">could not load history: ${err.message}</li>`;
     }
   }
 
@@ -834,5 +757,4 @@
     location.reload();
   }, 60000);
 </script>
-</body>
-</html>
+{% endblock %}
