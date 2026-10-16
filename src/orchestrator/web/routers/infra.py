@@ -1,19 +1,28 @@
-"""Read-only infrastructure inspection — connectivity checks, guests, snapshots.
+"""Infrastructure inspection — connectivity checks, guests, snapshots — plus
+one manual mutating action: node power.
 
 Deliberately separate from ``/healthz``: those report on *us*, these report on
 what we can see of Proxmox and PBS. An unreachable Proxmox is not an
 orchestrator health problem.
+
+``POST /nodes/{name}/power`` is the one write in this module: a manual,
+admin-triggered power action straight through ``adapters.power`` (wake/
+power_off/restart), not the wake pipeline. See :func:`node_power_action`.
 """
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException, status
+from pydantic import BaseModel, ConfigDict
+from sqlmodel import select
 
 from orchestrator.adapters.errors import AdapterError, AdapterUnreachable
-from orchestrator.web.auth import require_admin
-from orchestrator.web.deps import AdaptersDep, SettingsDep
+from orchestrator.audit import log as audit
+from orchestrator.db.models import Node
+from orchestrator.web.auth import CurrentAdmin, require_admin
+from orchestrator.web.deps import AdaptersDep, SessionDep, SettingsDep
 
 router = APIRouter(prefix="/api/infra", tags=["infra"], dependencies=[Depends(require_admin)])
 
@@ -65,6 +74,61 @@ async def infra_status(adapters: AdaptersDep, settings: SettingsDep) -> dict[str
         "pbs_datastore": settings.pbs_datastore,
         "checks": [pve, pbs, datastore],
     }
+
+
+class NodePowerIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    action: Literal["wake", "power_off", "restart"]
+    #: Only meaningful for power_off/restart, matching ``PowerAdapter``'s own
+    #: semantics exactly (see ``orchestrator/adapters/power/base.py``):
+    #: False (default) asks for a graceful action, True skips straight to an
+    #: immediate power cut / full power-cycle. Ignored for "wake".
+    force: bool = False
+
+
+@router.post("/nodes/{name}/power")
+async def node_power_action(
+    name: str,
+    body: NodePowerIn,
+    session: SessionDep,
+    adapters: AdaptersDep,
+    admin: CurrentAdmin,
+) -> dict[str, Any]:
+    """Manual, admin-triggered power action on a ``Node``, via
+    ``adapters.power`` directly.
+
+    Deliberately NOT the wake pipeline — no guest start, no health wait, no
+    hold asserted. This is a genuinely destructive action for power_off/
+    restart (cutting power to a physical/VM host); the dashboard button
+    gates those two behind a ``confirm()`` dialog that spells out exactly
+    what ``force=true`` means. ``wake`` is harmless and unconditional in the
+    UI too.
+    """
+    node = session.exec(select(Node).where(Node.name == name)).one_or_none()
+    if node is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, f"no node named {name!r}")
+
+    reason = f"manual dashboard action by {admin.username}"
+    try:
+        if body.action == "wake":
+            await adapters.power.wake(node.power_mgr_target, reason=reason)
+        elif body.action == "power_off":
+            await adapters.power.power_off(node.power_mgr_target, reason=reason, force=body.force)
+        else:
+            await adapters.power.restart(node.power_mgr_target, reason=reason, force=body.force)
+    except AdapterError as exc:
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc)) from exc
+
+    audit.record(
+        session,
+        actor=admin.username,
+        action="node.power_action",
+        target=f"node:{node.name}",
+        details={"action": body.action, "force": body.force},
+    )
+    session.commit()
+    return {"status": "ok", "node": node.name, "action": body.action, "force": body.force}
 
 
 @router.get("/proxmox/guests")

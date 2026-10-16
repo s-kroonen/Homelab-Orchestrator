@@ -1,0 +1,131 @@
+{% extends "base.html" %}
+{% block title %}homelab-orchestrator — {{ "edit" if mode == "edit" else "add" }} backup policy{% endblock %}
+{% block content %}
+  <div class="row">
+    <a href="/backup-policies">&larr; Back to backup policies</a>
+  </div>
+
+  <section>
+    <h2>{{ "Edit " + policy.name if mode == "edit" else "New policy" }}</h2>
+    <form id="policy-form">
+      <div class="row">
+        <label>Name <input id="f-name" required placeholder="nightly"
+          value="{{ policy.name if policy else '' }}" {% if mode == "edit" %}disabled{% endif %}></label>
+        <label>Schedule (cron) <input id="f-cron" placeholder="0 3 * * *"
+          value="{{ policy.schedule_cron if policy else '' }}"></label>
+        <label>Mode
+          <select id="f-mode">
+            {% for m in modes %}<option value="{{ m }}" {% if policy and policy.mode == m %}selected{% endif %}>{{ m }}</option>{% endfor %}
+          </select>
+        </label>
+      </div>
+      {% if mode == "edit" %}
+      <p class="msg muted">Renaming a policy is a delete + create (keeps the audit trail honest) — the name field above is locked; delete and recreate it under a new name if you need one.</p>
+      {% endif %}
+      <fieldset>
+        <legend>Retention (blank = not set)</legend>
+        <div class="row">
+          <label>keep_last <input type="number" min="0" id="f-keep_last"
+            value="{{ policy.retention.keep_last if policy and policy.retention.keep_last is defined else '' }}"></label>
+          <label>keep_daily <input type="number" min="0" id="f-keep_daily"
+            value="{{ policy.retention.keep_daily if policy and policy.retention.keep_daily is defined else '' }}"></label>
+          <label>keep_monthly <input type="number" min="0" id="f-keep_monthly"
+            value="{{ policy.retention.keep_monthly if policy and policy.retention.keep_monthly is defined else '' }}"></label>
+          <label class="inline"><input type="checkbox" id="f-protect" {% if policy and policy.retention.protect_latest_verified %}checked{% endif %}> protect latest verified</label>
+        </div>
+      </fieldset>
+      <fieldset>
+        <legend>Target services</legend>
+        {% if groups %}
+        <div class="row" id="group-select-row">
+          <span class="muted">Select group:</span>
+          {% for g in groups %}
+          <button type="button" class="secondary small" data-select-group="{{ g }}">{{ g }}</button>
+          {% endfor %}
+          <button type="button" class="secondary small" data-select-group="">ungrouped</button>
+        </div>
+        {% endif %}
+        <div class="services">
+          {% for svc in services %}
+          <label class="inline"><input type="checkbox" name="svc" value="{{ svc.slug }}" data-group="{{ svc.group }}"
+            {% if policy and svc.slug in policy.services %}checked{% endif %}> {{ svc.slug }}{% if svc.group %} <span class="muted">({{ svc.group }})</span>{% endif %}</label>
+          {% else %}<span class="muted">No services registered.</span>{% endfor %}
+        </div>
+      </fieldset>
+      <div class="row">
+        <button type="submit" id="submit-btn">{{ "Save changes" if mode == "edit" else "Create policy" }}</button>
+        <a class="btn secondary" href="/backup-policies">Cancel</a>
+        <span class="msg" id="form-msg"></span>
+      </div>
+    </form>
+  </section>
+{% endblock %}
+{% block extra_head %}
+<style>
+  .services { display: flex; flex-wrap: wrap; gap: 0.3rem 1rem; }
+  input[type=number] { width: 5rem; }
+  form#policy-form label { display: flex; flex-direction: column; gap: 0.25rem; color: #9aa4b2; font-size: 0.85rem; }
+  form#policy-form label.inline { flex-direction: row; align-items: center; gap: 0.4rem; }
+</style>
+{% endblock %}
+{% block scripts %}
+<script>
+  const MODE = {{ mode | tojson }};
+  const POLICY_NAME = {{ (policy.name if policy else None) | tojson }};
+  const KEEP = ["keep_last", "keep_daily", "keep_monthly"];
+
+  function setMsg(id, text, kind) {
+    const el = document.getElementById(id);
+    el.textContent = text;
+    el.className = "msg" + (kind ? " " + kind : "");
+  }
+
+  function readForm() {
+    const retention = {};
+    for (const k of KEEP) {
+      const raw = document.getElementById("f-" + k).value.trim();
+      if (raw !== "") retention[k] = Number(raw);
+    }
+    if (document.getElementById("f-protect").checked) retention.protect_latest_verified = true;
+    const services = [...document.querySelectorAll("input[name=svc]:checked")].map((cb) => cb.value);
+    return {
+      schedule_cron: document.getElementById("f-cron").value.trim(),
+      mode: document.getElementById("f-mode").value,
+      retention,
+      services,
+    };
+  }
+
+  document.getElementById("policy-form").addEventListener("submit", async (ev) => {
+    ev.preventDefault();
+    const body = readForm();
+    try {
+      if (MODE === "edit") {
+        await apiFetch("PUT", "/api/backup-policies/" + encodeURIComponent(POLICY_NAME), body, { suppressToast: true });
+      } else {
+        body.name = document.getElementById("f-name").value.trim();
+        await apiFetch("POST", "/api/backup-policies", body, { suppressToast: true });
+      }
+    } catch (err) {
+      setMsg("form-msg", err.message, "error");
+      return;
+    }
+    location.href = "/backup-policies";
+  });
+
+  // "select group" buttons: pure client-side convenience, same as the
+  // service-detail/dashboard pattern — toggles every checkbox for that
+  // group on if any are currently unchecked, else clears the whole group.
+  // The submitted payload is still the flat services: [...] array the API
+  // already expects.
+  for (const btn of document.querySelectorAll("[data-select-group]")) {
+    btn.addEventListener("click", () => {
+      const grp = btn.dataset.selectGroup;
+      const boxes = [...document.querySelectorAll(`input[name=svc][data-group="${grp}"]`)];
+      if (!boxes.length) return;
+      const allChecked = boxes.every((cb) => cb.checked);
+      for (const cb of boxes) cb.checked = !allChecked;
+    });
+  }
+</script>
+{% endblock %}

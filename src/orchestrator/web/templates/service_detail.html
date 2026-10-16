@@ -69,6 +69,17 @@
       <button class="danger" id="svc-delete-btn">Delete service</button>
       <span class="msg" id="svc-msg"></span>
     </div>
+    <div class="row" id="guest-power-row" hidden>
+      <span class="muted">Guest ({{ service.guest_kind }} {{ service.guest_id }}):</span>
+      <button class="secondary small" id="guest-start-btn">Start guest</button>
+      <button class="danger small" id="guest-stop-btn">Stop guest</button>
+      <span class="msg" id="guest-power-msg"></span>
+    </div>
+    <p class="msg muted" id="guest-power-hint" hidden>
+      Raw, direct Proxmox guest start/stop — <strong>not</strong> the full wake
+      pipeline (no node power-on, no hold, no health wait). Stopping is
+      refused while a backup is currently running for this service.
+    </p>
   </section>
 
   <section>
@@ -193,8 +204,11 @@
     <p class="msg">
       Most recent first, from <code>GET /api/backups?slug={{ service.slug }}</code>
       (same endpoint and default limit <a href="/api/backups?slug={{ service.slug }}">the API uses</a>).
-      Trigger one from the main <a href="/">dashboard</a>.
     </p>
+    <div class="row">
+      <button class="secondary" id="run-backup-btn">Run backup now</button>
+      <span class="msg" id="backup-trigger-msg"></span>
+    </div>
     <table>
       <thead>
         <tr><th>Created</th><th>Verified</th><th>Protected</th><th>Size</th><th>Run</th></tr>
@@ -641,6 +655,30 @@
     return `${n} B`;
   }
 
+  // POST /api/backup/{slug}?verify=true already exists and works (it's the
+  // same synchronous pipeline run the CLI/scheduler use) — this just gives
+  // it a button. Not destructive (an on-demand backup, unlike a restore),
+  // so no confirm() — but the button IS disabled for the duration of the
+  // request so a double-click can't fire two runs at once.
+  $("run-backup-btn").addEventListener("click", async () => {
+    const btn = $("run-backup-btn");
+    btn.disabled = true;
+    setMsg("backup-trigger-msg", "Running…");
+    try {
+      const run = await apiFetch("POST", `/api/backup/${encodeURIComponent(SERVICE.slug)}?verify=true`);
+      setMsg(
+        "backup-trigger-msg",
+        `Backup ${run.status}${run.error ? ": " + run.error : ""} (run #${run.id}).`,
+        run.status === "succeeded" ? "ok" : "error",
+      );
+      await loadBackups();
+    } catch (err) {
+      setMsg("backup-trigger-msg", err.message, "error");
+    } finally {
+      btn.disabled = false;
+    }
+  });
+
   async function loadBackups() {
     const body = $("backups-body");
     try {
@@ -703,12 +741,44 @@
     }
   }
 
+  // --- guest power (raw start/stop of this service's Proxmox guest) ------
+  // POST /api/services/{slug}/guest/power — deliberately NOT the /wake
+  // pipeline: no node power-on, no hold, no health wait. See
+  // docs/architecture.md and docs/adding_a_service.md.
+  async function doGuestPower(action) {
+    if (action === "stop" && !confirm(
+      `Stop the Proxmox guest for ${SERVICE.slug} directly? This bypasses the wake ` +
+      `pipeline entirely — it stops the VM/CT right now, not a graceful service ` +
+      `shutdown. Refused if a backup is currently running for this service.`
+    )) return;
+    const btn = action === "start" ? $("guest-start-btn") : $("guest-stop-btn");
+    btn.disabled = true;
+    try {
+      await apiFetch(
+        "POST",
+        `/api/services/${encodeURIComponent(SERVICE.slug)}/guest/power`,
+        { action },
+        { suppressToast: true },
+      );
+      setMsg("guest-power-msg", `Guest ${action} requested.`, "ok");
+    } catch (err) {
+      setMsg("guest-power-msg", err.message, "error");
+    } finally {
+      btn.disabled = false;
+    }
+  }
+  $("guest-start-btn").addEventListener("click", () => doGuestPower("start"));
+  $("guest-stop-btn").addEventListener("click", () => doGuestPower("stop"));
+
   fillServiceForm(SERVICE);
   renderProbes();
   renderProxyHosts();
   loadBackups();
   loadHealthHistory();
   $("wake-unsupported-banner").hidden = !SERVICE.wake_unsupported;
+  const hasGuest = SERVICE.guest_kind !== "none" && SERVICE.guest_id !== null && SERVICE.guest_id !== undefined;
+  $("guest-power-row").hidden = !hasGuest;
+  $("guest-power-hint").hidden = !hasGuest;
 
   // This page's "Health history" strip and the dashboard badges it links
   // back to only display state the periodic HealthScanner already

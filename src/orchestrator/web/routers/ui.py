@@ -20,7 +20,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
-from sqlmodel import select
+from sqlmodel import Session, select
 
 from orchestrator.db.models import (
     BackupPolicy,
@@ -274,8 +274,12 @@ async def edit_proxy_host_page(
 async def backup_policies_page(
     request: Request, session: SessionDep, settings: SettingsDep
 ) -> HTMLResponse | RedirectResponse:
-    """Phase 6: list/create/edit/delete backup policies. Same data and same
-    mutations as ``/api/backup-policies``; the page's forms call that API."""
+    """List-only backup-policy page, same "dedicated add/edit pages" pattern
+    as ``/proxy-hosts`` (:func:`new_backup_policy_page`/
+    :func:`edit_backup_policy_page`) — see ``docs/proxy_hosts.md``'s
+    "Dedicated add/edit pages" note and ``docs/roadmap.md``. Driven by
+    ``/api/backup-policies`` for mutations; the table, per-policy run-history
+    expanders and name filter all live here."""
     admin = get_current_admin(request, session)
     if admin is None:
         return RedirectResponse("/login?next=/backup-policies", status_code=303)
@@ -283,8 +287,6 @@ async def backup_policies_page(
     scheduler = getattr(request.app.state, "scheduler", None)
     policies = session.exec(select(BackupPolicy).order_by(BackupPolicy.name)).all()
     diff = compute_registry_diff(session)
-    services = session.exec(select(Service).order_by(Service.slug)).all()
-    groups = sorted({s.group for s in services if s.group})
 
     return _templates.TemplateResponse(
         request,
@@ -292,14 +294,78 @@ async def backup_policies_page(
         {
             "admin": admin,
             "policies": [policy_to_dict(session, p, scheduler) for p in policies],
-            "services": [{"slug": s.slug, "group": s.group} for s in services],
-            "groups": groups,
-            "modes": [m.value for m in BackupMode],
             "scheduler_enabled": settings.scheduler_enabled,
             "scheduler_running": bool(scheduler and scheduler.running),
             "dry_run": settings.dry_run,
             "registry_dirty": diff.dirty,
             "yaml_path": diff.yaml_path,
+        },
+    )
+
+
+def _policy_form_context(session: Session) -> dict[str, Any]:
+    """Shared context for both dedicated backup-policy form pages: the
+    service picker (with each service's group, for the group-select-all
+    buttons — see ``docs/adding_a_service.md``'s Groups section) and the
+    list of modes."""
+    services = session.exec(select(Service).order_by(Service.slug)).all()
+    return {
+        "services": [{"slug": s.slug, "group": s.group} for s in services],
+        "groups": sorted({s.group for s in services if s.group}),
+        "modes": [m.value for m in BackupMode],
+    }
+
+
+@router.get("/backup-policies/new", response_model=None)
+async def new_backup_policy_page(
+    request: Request, session: SessionDep
+) -> HTMLResponse | RedirectResponse:
+    """Dedicated add page — see :func:`new_proxy_host_page` for the
+    precedent this follows. Submits to the existing ``POST
+    /api/backup-policies``."""
+    admin = get_current_admin(request, session)
+    if admin is None:
+        return RedirectResponse("/login?next=/backup-policies/new", status_code=303)
+
+    return _templates.TemplateResponse(
+        request,
+        "backup_policy_form.html",
+        {
+            "admin": admin,
+            "mode": "new",
+            "policy": None,
+            **_policy_form_context(session),
+        },
+    )
+
+
+@router.get("/backup-policies/{name}/edit", response_model=None)
+async def edit_backup_policy_page(
+    name: str, request: Request, session: SessionDep
+) -> HTMLResponse | RedirectResponse:
+    """Dedicated edit page — see :func:`edit_proxy_host_page` for the
+    precedent this follows. Policies are keyed by ``name`` (unique, no
+    surrogate id exposed here), so this takes the name directly rather than
+    an id, matching ``PUT /api/backup-policies/{name}``. Prefilled from
+    :func:`orchestrator.web.routers.backup_policies.policy_to_dict`, the same
+    serialization the list page and the API already use."""
+    admin = get_current_admin(request, session)
+    if admin is None:
+        return RedirectResponse(f"/login?next=/backup-policies/{name}/edit", status_code=303)
+
+    policy = session.exec(select(BackupPolicy).where(BackupPolicy.name == name)).one_or_none()
+    if policy is None:
+        raise HTTPException(status_code=404, detail=f"no backup policy named {name!r}")
+
+    scheduler = getattr(request.app.state, "scheduler", None)
+    return _templates.TemplateResponse(
+        request,
+        "backup_policy_form.html",
+        {
+            "admin": admin,
+            "mode": "edit",
+            "policy": policy_to_dict(session, policy, scheduler),
+            **_policy_form_context(session),
         },
     )
 

@@ -243,8 +243,47 @@
         cell(node.notes || "—"), cell(node.wake_on_hit_enabled ? "yes" : "no"),
         cell(String(node.service_count)),
       );
+      // Manual power actions, POST /api/infra/nodes/{name}/power — straight
+      // through PowerAdapter, NOT the wake pipeline. Wake is harmless and
+      // fires unconditionally; power off/restart are genuinely destructive
+      // (cutting power to a physical/VM host), so each is gated behind a
+      // confirm() that spells out exactly what the "force" checkbox means.
+      const forceCb = document.createElement("input");
+      forceCb.type = "checkbox";
+      forceCb.title = "force — skips a graceful shutdown";
+      const forceLabel = document.createElement("label");
+      forceLabel.className = "inline";
+      forceLabel.style.fontSize = "0.75rem";
+      forceLabel.append(forceCb, " force");
+
+      async function doPower(action) {
+        if (action !== "wake") {
+          const verb = action === "power_off" ? "Power off" : "Restart";
+          const forceNote = forceCb.checked
+            ? " force=true SKIPS a graceful shutdown — this cuts power immediately, " +
+              "with no chance for a clean shutdown and possible data loss."
+            : " force=false asks for a graceful shutdown first.";
+          if (!confirm(`${verb} node ${node.name}?${forceNote}`)) return;
+        }
+        try {
+          await apiFetch(
+            "POST",
+            `/api/infra/nodes/${encodeURIComponent(node.name)}/power`,
+            { action, force: forceCb.checked },
+            { suppressToast: true },
+          );
+          setMsg("nodes-msg", `${action} sent to ${node.name}.`, "ok");
+        } catch (err) {
+          setMsg("nodes-msg", err.message, "error");
+        }
+      }
+
       actions.append(
         button("Edit", "secondary", () => tr.replaceWith(renderNodeRow(node, true))), " ",
+        button("Wake", "secondary small", () => doPower("wake")), " ",
+        button("Power off", "danger small", () => doPower("power_off")), " ",
+        button("Restart", "danger small", () => doPower("restart")), " ",
+        forceLabel, " ",
         button("Delete", "danger", async () => {
           if (!confirm(`Delete node ${node.name}?`)) return;
           try {

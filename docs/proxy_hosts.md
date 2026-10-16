@@ -60,8 +60,9 @@ up "which hostname reaches which service, through what":
 `ProxyHost` used to be a form bolted onto the bottom of `/proxy-hosts` (and
 a second, near-duplicate copy of it inline on a service's own page) — "the
 same edit on the same page everywhere" was explicitly the wrong pattern,
-and this is the first page fixed (more get the same treatment later, see
-`docs/roadmap.md`). `/proxy-hosts` is now list-only (hostnames, upstream,
+and this was the first page fixed — backup policies got the same treatment
+next (`/backup-policies` + `/backup-policies/new` + `/backup-policies/{name}
+/edit`, see `docs/roadmap.md`). `/proxy-hosts` is now list-only (hostnames, upstream,
 provider, live status, a hostname-substring filter box, an **Add** button
 and a per-row **Edit** link); `/proxy-hosts/new` and
 `/proxy-hosts/{id}/edit` are real, dedicated pages, not fragments, that
