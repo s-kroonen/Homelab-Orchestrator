@@ -173,7 +173,7 @@ and the privilege-separation gotcha that causes most 403s are documented in
 `DRY_RUN=true` (the default in `.env.example`) forces every external adapter
 (power manager, Proxmox, PBS) to a logging no-op. Safe for local dev; safe for
 CI. Individual adapters can be overridden with `POWER_ADAPTER`,
-`PROXMOX_ADAPTER`, `PBS_ADAPTER` for mixed testing.
+`PROXMOX_ADAPTER`, `PBS_ADAPTER`, `PROXY_ADAPTER` for mixed testing.
 
 ---
 

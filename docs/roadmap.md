@@ -56,27 +56,27 @@ This app already has the right shape for *some* integrations —
 `orchestrator.adapters.{pbs,power,proxmox}` are each an ABC with a `dry_run`
 implementation and one or more real ones (`MqttPowerAdapter` today,
 e.g. a future `HttpPowerAdapter` sitting right alongside it with no interface
-change needed). The gap: **proxy management doesn't follow this pattern yet**
-— `TraefikManagerClient` (`registry/traefik_manager_client.py`) was built as
-a standalone client, not as a `ProxyAdapter` ABC implementation, because at
-the time there was only one real backend to support.
+change needed). ~~The gap: **proxy management doesn't follow this pattern
+yet** — `TraefikManagerClient` (`registry/traefik_manager_client.py`) was
+built as a standalone client, not as a `ProxyAdapter` ABC implementation,
+because at the time there was only one real backend to support.~~
 
-Now that the actual need is named (room for Traefik Manager today, bare
-Traefik, NPM, Pangolin, or something else later, without rewriting every
-caller), formalize it:
-
-- New `orchestrator.adapters.proxy` package: `ProxyAdapter` ABC (methods like
-  `list_routes`, `inject_middleware`, `remove_middleware` — shaped from what
-  `traefik_manager_sync.py` actually needs today, not speculative extras),
-  `DryRunProxyAdapter`, and `TraefikManagerProxyAdapter` wrapping the existing
-  client. Everything in `traefik_manager_sync.py` and the proxy-hosts router
-  that currently imports `TraefikManagerClient` directly switches to the
-  adapter interface instead — mechanical, low-risk, same diff shape as any
-  other adapter.
-- **Not urgent to add more backends now** — the point is the seam exists so a
-  second one (bare Traefik file-provider writes, NPM, Pangolin) is additive
-  later, not a rewrite. Don't build a second proxy backend speculatively;
-  build the ABC now, add implementations when a real one is needed.
+**Done** (proxy adapter): new `orchestrator.adapters.proxy` package —
+`ProxyAdapter` ABC (`list_routes`, `ensure_maintenance_fallback`,
+`remove_maintenance_fallback` — domain verbs, shaped from what the
+maintenance-fallback feature and drift detection actually need, not a
+passthrough of Traefik-Manager-specific REST shapes), `DryRunProxyAdapter`,
+and `TraefikManagerProxyAdapter`, which is where the old
+`registry/traefik_manager_client.py` + `traefik_manager_sync.py` logic
+actually lives now (both deleted — no parallel implementation was kept).
+`web/routers/proxy_hosts.py` and `orchestrator-cli proxy resync-maintenance`
+both go through `adapters.proxy` (`AdaptersDep` / `build_adapters()`)
+instead of constructing a client directly. New `PROXY_ADAPTER` setting,
+same `dry_run`/live shape as the other three, with the factory falling back
+to `dry_run` (loudly) when `TRAEFIK_MANAGER_URL` is blank — see
+`docs/architecture.md`. Not urgent to add a second backend (bare Traefik,
+NPM, Pangolin) — the point was that the seam now exists for one to be
+additive later, not a rewrite.
 - Power: no structural change needed — `PowerAdapter` already supports this.
   When the direct-HTTP power manager exists, it's a new `HttpPowerAdapter`
   class next to `MqttPowerAdapter`, selected the same way the factory already

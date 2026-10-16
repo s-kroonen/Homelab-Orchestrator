@@ -4,11 +4,12 @@ set, or that predate the maintenance-middleware feature entirely (see
 docs/roadmap.md's "Quick fix" entry and docs/proxy_hosts.md's
 "Maintenance-page fallback" section).
 
-``sync_maintenance_middleware`` itself is exercised thoroughly against a
-mocked Traefik Manager API in ``tests/test_traefik_manager_sync.py``; this
-only has to prove the CLI command loops every linked ``ProxyHost`` and calls
-it once per host with its current ``(hostname, service_slug)`` — so the
-sync function is mocked here.
+``TraefikManagerProxyAdapter.ensure_maintenance_fallback`` itself is
+exercised thoroughly against a mocked Traefik Manager API in
+``tests/test_proxy_adapter_traefik_manager.py``; this only has to prove the
+CLI command loops every linked ``ProxyHost`` and calls it once per host with
+its current ``(hostname, service_slug)`` — so ``build_adapters`` is mocked
+here to hand back a fake ``ProxyAdapter``.
 """
 
 from __future__ import annotations
@@ -21,17 +22,56 @@ from sqlmodel import Session, select
 
 from orchestrator import cli_config
 from orchestrator import config as config_module
+from orchestrator.adapters.factory import AdapterBundle
+from orchestrator.adapters.proxy.base import SyncEvent
+from orchestrator.adapters.proxy.dry_run import DryRunProxyAdapter
 from orchestrator.cli import cli
 from orchestrator.db.models import AuditEntry, Node, ProxyHost, Service
 from orchestrator.db.session import get_engine
 from orchestrator.domain.enums import GuestKind
-from orchestrator.registry.traefik_manager_sync import MaintenanceSyncEvent
 
 
 def _enable(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("TRAEFIK_MANAGER_URL", "http://tm.test:8080")
     monkeypatch.setenv("ORCHESTRATOR_PUBLIC_URL", "http://10.0.0.5:8000")
     config_module.reset_settings_cache()
+
+
+class _FakeProxyAdapter(DryRunProxyAdapter):
+    """Records every ``ensure_maintenance_fallback`` call and returns a
+    scripted event list instead of touching the dry-run defaults."""
+
+    def __init__(self, events: list[SyncEvent] | None = None) -> None:
+        self.calls: list[dict[str, Any]] = []
+        self._events = events if events is not None else []
+
+    async def ensure_maintenance_fallback(
+        self, *, hostname: str, service_slug: str
+    ) -> list[SyncEvent]:
+        self.calls.append({"hostname": hostname, "service_slug": service_slug})
+        if self._events:
+            return [
+                SyncEvent(e.action, f"maintenance-{service_slug}", e.details) for e in self._events
+            ]
+        return []
+
+
+def _patch_proxy_adapter(monkeypatch: pytest.MonkeyPatch, adapter: _FakeProxyAdapter) -> None:
+    def _fake_build_adapters(settings: Any = None) -> AdapterBundle:
+        from orchestrator.adapters.notifier.null import NullNotifier
+        from orchestrator.adapters.pbs.dry_run import DryRunPbsAdapter
+        from orchestrator.adapters.power.dry_run import DryRunPowerAdapter
+        from orchestrator.adapters.proxmox.dry_run import DryRunProxmoxAdapter
+
+        return AdapterBundle(
+            power=DryRunPowerAdapter(),
+            proxmox=DryRunProxmoxAdapter(),
+            pbs=DryRunPbsAdapter(),
+            proxy=adapter,
+            notifier=NullNotifier(),
+        )
+
+    monkeypatch.setattr(cli_config, "build_adapters", _fake_build_adapters)
 
 
 def _service(session: Session, slug: str) -> Service:
@@ -64,28 +104,17 @@ def test_resync_maintenance_calls_sync_once_per_linked_host(
     session.add(ProxyHost(hostname="unlinked.example.com", service_id=None))
     session.commit()
 
-    calls: list[dict[str, Any]] = []
-
-    async def _fake_sync(settings: Any, **kwargs: Any) -> list[MaintenanceSyncEvent]:
-        calls.append(kwargs)
-        return [
-            MaintenanceSyncEvent("middleware.injected", f"maintenance-{kwargs['service_slug']}", {})
-        ]
-
-    monkeypatch.setattr(cli_config, "sync_maintenance_middleware", _fake_sync)
+    adapter = _FakeProxyAdapter([SyncEvent("middleware.injected", "unused", {})])
+    _patch_proxy_adapter(monkeypatch, adapter)
 
     result = _run("proxy", "resync-maintenance")
     assert result.exit_code == 0, result.output
     assert "2 linked proxy host(s) processed." in result.output
 
-    assert len(calls) == 2
-    by_hostname = {c["hostname"]: c for c in calls}
+    assert len(adapter.calls) == 2
+    by_hostname = {c["hostname"]: c for c in adapter.calls}
     assert by_hostname["media.example.com"]["service_slug"] == "media"
     assert by_hostname["cloud.example.com"]["service_slug"] == "cloud"
-    # Same-shape no-op resync: old == new.
-    for c in calls:
-        assert "old_hostname" not in c or c.get("old_hostname") is None
-        assert "old_service_slug" not in c or c.get("old_service_slug") is None
 
 
 def test_resync_maintenance_audits_each_event(
@@ -96,12 +125,10 @@ def test_resync_maintenance_audits_each_event(
     session.add(ProxyHost(hostname="media.example.com", service_id=svc.id))
     session.commit()
 
-    async def _fake_sync(settings: Any, **kwargs: Any) -> list[MaintenanceSyncEvent]:
-        return [
-            MaintenanceSyncEvent("middleware.injected", "maintenance-media", {"route_id": "r1"})
-        ]
-
-    monkeypatch.setattr(cli_config, "sync_maintenance_middleware", _fake_sync)
+    adapter = _FakeProxyAdapter(
+        [SyncEvent("middleware.injected", "maintenance-media", {"route_id": "r1"})]
+    )
+    _patch_proxy_adapter(monkeypatch, adapter)
 
     result = _run("proxy", "resync-maintenance")
     assert result.exit_code == 0, result.output
@@ -127,6 +154,9 @@ def test_resync_maintenance_no_linked_hosts(
     _enable(monkeypatch)
     session.add(ProxyHost(hostname="unlinked.example.com", service_id=None))
     session.commit()
+
+    adapter = _FakeProxyAdapter()
+    _patch_proxy_adapter(monkeypatch, adapter)
 
     result = _run("proxy", "resync-maintenance")
     assert result.exit_code == 0, result.output

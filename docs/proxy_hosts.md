@@ -82,9 +82,26 @@ on the gateway alongside Traefik and is the stated source of truth for
 proxy routes — it manages the same one-file-per-service
 `/etc/traefik/dynamic/` layout [gateway_traefik_migration.md](gateway_traefik_migration.md)
 describes, confirmed compatible with no migration needed. The orchestrator
-is a **client** of its REST API (`X-Api-Key` auth), the same relationship
-it already has with Proxmox/IPMI — see
-`orchestrator.registry.traefik_manager_client`.
+talks to it through `orchestrator.adapters.proxy` — a `ProxyAdapter` ABC
+(`orchestrator.adapters.proxy.base`) with a `DryRunProxyAdapter`
+(`dry_run.py`) and a real `TraefikManagerProxyAdapter`
+(`traefik_manager.py`), the same `dry_run`/live-implementation shape every
+other external system in this app already follows
+(`orchestrator.adapters.{power,proxmox,pbs}` — see `docs/architecture.md`).
+
+This used to be two standalone modules kept deliberately outside
+`orchestrator.adapters` — a thin REST client and the maintenance-middleware
+logic built on top of it — reasoned at the time as "nothing to
+dry-run/start/stop here, just short-lived HTTP calls" (there being only one
+real proxy backend to support). That reasoning no longer holds now that the
+actual requirement is multiple interchangeable proxy backends (today:
+Traefik Manager; someday: bare Traefik, NPM, Pangolin) — formalizing the
+seam as a real adapter means a second backend is additive later, not a
+rewrite of every caller. See `docs/roadmap.md`'s "generalize the adapter
+pattern" entry. `TraefikManagerProxyAdapter.start`/`stop` are still no-ops —
+every call still builds its own short-lived `httpx.AsyncClient`, same
+reasoning as before, it just no longer implies "don't make this an
+adapter."
 
 The read path (drift detection below, and Resync further down) now prefers
 Traefik Manager's `GET /api/routes` — one call, returning routers,
@@ -381,19 +398,32 @@ hand-configured, per service, to actually send a visitor there when the
 real backend is down. This feature closes that gap automatically for every
 `ProxyHost` linked to a `Service`, using Traefik's own `errors` middleware
 and Traefik Manager's write API — see
-`orchestrator.registry.traefik_manager_sync` for the implementation this
-section describes.
+`TraefikManagerProxyAdapter.ensure_maintenance_fallback`/
+`remove_maintenance_fallback` (`orchestrator.adapters.proxy.
+traefik_manager`) for the implementation this section describes. The
+create/rename/re-link/unlink lifecycle orchestration around those two
+calls — which hostname/slug is old vs. new — lives in
+`web/routers/proxy_hosts.py`'s `_sync_maintenance_fallback`, since the
+adapter's two methods are deliberately simple, single-purpose verbs that
+don't know about "old" values themselves (see the lifecycle section
+below).
 
 ### Enabling it
 
-Two settings, both required (see `docs/architecture.md` for the full
-table):
+Two settings (see `docs/architecture.md` for the full table):
 
 * `TRAEFIK_MANAGER_URL` + `TRAEFIK_MANAGER_API_KEY` — also used for the
-  read-path swap above.
+  read-path swap above, and the ONE hard requirement for `PROXY_ADAPTER` to
+  resolve to `TraefikManagerProxyAdapter` at all (`PROXY_ADAPTER=traefik_manager`
+  with this left blank falls back to `DryRunProxyAdapter`, loudly — see
+  `orchestrator.adapters.factory.build_adapters`).
 * `ORCHESTRATOR_PUBLIC_URL` — this orchestrator's own address **as
   reachable from the gateway VM**, e.g. `http://10.0.0.5:8000`. This is
-  what Traefik's `errors` middleware sends the failed request to.
+  what Traefik's `errors` middleware sends the failed request to. Unlike
+  `TRAEFIK_MANAGER_URL`, leaving this blank does NOT change which adapter
+  is selected — it only makes this one feature's `ensure_maintenance_fallback`/
+  `remove_maintenance_fallback` calls a no-op; drift detection and Resync
+  still work.
 
 Either unset and this entire feature is a no-op — no shared backend
 service, no middleware, no injection, same "empty disables it" convention
@@ -425,7 +455,7 @@ as every other optional integration in this app.
    the one judgment call in this feature that couldn't be fully verified
    against a live Traefik Manager instance; the exact request shape sent
    is pinned down by a test against a mocked API
-   (`tests/test_traefik_manager_sync.py`).
+   (`tests/test_proxy_adapter_traefik_manager.py`).
 
    Idempotent: checked via `GET /api/routes`'s `services.http` list before
    creating — a second sync (another `ProxyHost` create, a resync, a
@@ -480,7 +510,7 @@ as every other optional integration in this app.
    name is never appended twice, so re-running (another `ProxyHost` edit, a
    container restart, a resync) is always safe.
 
-   `tests/test_traefik_manager_sync.py` asserts this round-trip directly:
+   `tests/test_proxy_adapter_traefik_manager.py` asserts this round-trip directly:
    every other field on a route carrying a hand-authored middleware
    survives an injection untouched, and a second run makes no further
    write at all.
@@ -560,9 +590,10 @@ orchestrator-cli proxy resync-maintenance
 ```
 
 Loops every `ProxyHost` row with a linked `service_id`, calls
-`sync_maintenance_middleware` once per host (same as above — a no-op
-without `TRAEFIK_MANAGER_URL`/`ORCHESTRATOR_PUBLIC_URL`, printing a message
-saying so rather than doing anything), and prints what happened per host.
+`ProxyAdapter.ensure_maintenance_fallback` (via `build_adapters(settings).proxy`)
+once per host (same as above — a no-op without `TRAEFIK_MANAGER_URL`/
+`ORCHESTRATOR_PUBLIC_URL`, printing a message saying so rather than doing
+anything), and prints what happened per host.
 Unlike `proxy add/list/remove`, this operates on the **live database**
 directly rather than `services.yaml` — there is nothing to reconcile or
 save afterwards, since nothing about a `ProxyHost` row itself changes; only

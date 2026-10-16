@@ -28,53 +28,54 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field, field_validator
 from sqlmodel import Session, select
 
+from orchestrator.adapters.factory import AdapterBundle
+from orchestrator.adapters.proxy.base import RouteInfo, SyncEvent
 from orchestrator.audit import log as audit
 from orchestrator.db.models import ProxyHost, Service
 from orchestrator.domain.enums import RouterProvider
-from orchestrator.registry.traefik_manager_sync import (
-    MaintenanceSyncEvent,
-    sync_maintenance_middleware,
-)
 from orchestrator.registry.traefik_probes import ProbeSyncEvent, sync_traefik_probe
 from orchestrator.registry.traefik_status import (
-    RouterInfo,
     drift_status,
     fetch_router_details,
-    fetch_router_details_via_manager,
     fetch_router_hostnames,
-    fetch_router_hostnames_via_manager,
 )
 from orchestrator.web.auth import CurrentAdmin, require_admin
-from orchestrator.web.deps import SessionDep, SettingsDep
+from orchestrator.web.deps import AdaptersDep, SessionDep, SettingsDep
 
 
-async def _live_hostnames(settings: Any) -> set[str] | None:
+async def _live_hostnames(settings: Any, adapters: AdapterBundle) -> set[str] | None:
     """Read-path entry point for drift detection (``live_status``).
 
-    Prefers Traefik Manager's ``GET /api/routes`` (one call, richer —
-    routers + services + middlewares) when ``TRAEFIK_MANAGER_URL`` is
-    configured. Falls back to polling Traefik's own API directly
-    (``TRAEFIK_API_URL``) when Traefik Manager isn't configured — kept
-    rather than retired outright because (a) it costs nothing to keep working,
-    (b) an operator may run this orchestrator against a gateway that still
-    only exposes Traefik's bare API without Traefik Manager in front of it,
-    and (c) the existing test suite and docs exercise it directly. See
-    docs/proxy_hosts.md for the full reasoning. Both paths degrade to
-    ``None`` ("unknown") on any failure — never raised into a page load.
+    Prefers the ``ProxyAdapter`` (Traefik Manager today) when
+    ``TRAEFIK_MANAGER_URL`` is configured. Falls back to polling Traefik's
+    own API directly (``TRAEFIK_API_URL``) when Traefik Manager isn't
+    configured — kept rather than retired outright because (a) it costs
+    nothing to keep working, (b) an operator may run this orchestrator
+    against a gateway that still only exposes Traefik's bare API without
+    Traefik Manager in front of it, and (c) the existing test suite and
+    docs exercise it directly. See docs/proxy_hosts.md for the full
+    reasoning. Both paths degrade to ``None`` ("unknown") on any failure —
+    never raised into a page load.
     """
     if settings.traefik_manager_url.strip():
-        return await fetch_router_hostnames_via_manager(settings)
+        routes = await adapters.proxy.list_routes()
+        if routes is None:
+            return None
+        hostnames: set[str] = set()
+        for route in routes:
+            hostnames.update(route.hostnames)
+        return hostnames
     return await fetch_router_hostnames(settings)
 
 
-async def _router_details_or_503(settings: Any) -> list[RouterInfo]:
+async def _router_details_or_503(settings: Any, adapters: AdapterBundle) -> list[RouteInfo]:
     """Read-path entry point for Resync — same TM-preferred/API-fallback
     priority as :func:`_live_hostnames`, but raises a clear ``503`` instead
     of degrading, matching Resync's existing "this is a manual action the
     admin is watching" behaviour (see docs/proxy_hosts.md).
     """
     if settings.traefik_manager_url.strip():
-        routers = await fetch_router_details_via_manager(settings)
+        routers = await adapters.proxy.list_routes()
         source = "Traefik Manager (TRAEFIK_MANAGER_URL)"
     else:
         routers = await fetch_router_details(settings)
@@ -86,6 +87,56 @@ async def _router_details_or_503(settings: Any) -> list[RouterInfo]:
             "docs/proxy_hosts.md#resync-manual-admin-triggered-write.",
         )
     return routers
+
+
+async def _sync_maintenance_fallback(
+    adapters: AdapterBundle,
+    *,
+    hostname: str | None,
+    service_slug: str | None,
+    old_hostname: str | None = None,
+    old_service_slug: str | None = None,
+) -> list[SyncEvent]:
+    """Lifecycle orchestration around ``ProxyAdapter.ensure/remove_
+    maintenance_fallback`` — create/rename/re-link/unlink/delete, exactly
+    the same shape ``orchestrator.registry.traefik_manager_sync.
+    sync_maintenance_middleware`` used to implement itself (see its
+    docstring, preserved here since the adapter's two methods are
+    deliberately simpler single-purpose verbs and don't know about "old"
+    values themselves).
+
+    Call with the ``ProxyHost``'s CURRENT ``(hostname, service_slug)`` and,
+    when either changed, the PREVIOUS values. No-op, returns ``[]``, when
+    there is nothing to do (everything — new and old — is unset).
+    """
+    if old_service_slug is None and old_hostname is None:
+        old_service_slug, old_hostname = service_slug, hostname
+    if service_slug is None and old_service_slug is None:
+        return []
+
+    events: list[SyncEvent] = []
+    moved_or_cleared = old_service_slug is not None and old_service_slug != service_slug
+    renamed_in_place = (
+        not moved_or_cleared
+        and old_hostname is not None
+        and hostname is not None
+        and old_hostname != hostname
+    )
+    if (moved_or_cleared or renamed_in_place) and old_service_slug and old_hostname:
+        events.extend(
+            await adapters.proxy.remove_maintenance_fallback(
+                hostname=old_hostname, service_slug=old_service_slug
+            )
+        )
+
+    if service_slug is None or not hostname:
+        return events
+    events.extend(
+        await adapters.proxy.ensure_maintenance_fallback(
+            hostname=hostname, service_slug=service_slug
+        )
+    )
+    return events
 
 
 router = APIRouter(
@@ -196,14 +247,14 @@ def _audit_probe_sync_events(
 
 
 def _audit_maintenance_sync_events(
-    session: Session, admin: CurrentAdmin, events: list[MaintenanceSyncEvent]
+    session: Session, admin: CurrentAdmin, events: list[SyncEvent]
 ) -> None:
     """Audit each maintenance-middleware create/update/injection/removal.
 
     Same ``orchestrator.audit.log.record`` mechanism as every other mutation
     in this file. Action names are ``middleware.<action>`` /
     ``backend_service.<action>`` — see
-    ``orchestrator.registry.traefik_manager_sync.MaintenanceSyncEvent``.
+    ``orchestrator.adapters.proxy.base.SyncEvent``.
     """
     for event in events:
         audit.record(
@@ -240,25 +291,31 @@ def _validate_refs(
 
 
 @router.get("")
-async def list_proxy_hosts(session: SessionDep, settings: SettingsDep) -> list[dict[str, Any]]:
+async def list_proxy_hosts(
+    session: SessionDep, settings: SettingsDep, adapters: AdaptersDep
+) -> list[dict[str, Any]]:
     services = _services_by_id(session)
     hosts = session.exec(select(ProxyHost).order_by(ProxyHost.hostname)).all()
     # One poll for the whole page load, not one per row.
-    live_hostnames = await _live_hostnames(settings)
+    live_hostnames = await _live_hostnames(settings, adapters)
     return [_serialize(ph, services, live_hostnames) for ph in hosts]
 
 
 @router.get("/{proxy_host_id}")
 async def get_proxy_host(
-    proxy_host_id: int, session: SessionDep, settings: SettingsDep
+    proxy_host_id: int, session: SessionDep, settings: SettingsDep, adapters: AdaptersDep
 ) -> dict[str, Any]:
-    live_hostnames = await _live_hostnames(settings)
+    live_hostnames = await _live_hostnames(settings, adapters)
     return _serialize(_get_or_404(session, proxy_host_id), _services_by_id(session), live_hostnames)
 
 
 @router.post("", status_code=status.HTTP_201_CREATED)
 async def create_proxy_host(
-    body: ProxyHostIn, session: SessionDep, admin: CurrentAdmin, settings: SettingsDep
+    body: ProxyHostIn,
+    session: SessionDep,
+    admin: CurrentAdmin,
+    settings: SettingsDep,
+    adapters: AdaptersDep,
 ) -> dict[str, Any]:
     svc = _validate_refs(session, body)
     ph = ProxyHost(
@@ -289,18 +346,18 @@ async def create_proxy_host(
     _audit_probe_sync_events(session, admin, probe_events)
     session.commit()
     session.refresh(ph)
-    maintenance_events = await sync_maintenance_middleware(
-        settings, hostname=ph.hostname, service_slug=svc.slug
+    maintenance_events = await _sync_maintenance_fallback(
+        adapters, hostname=ph.hostname, service_slug=svc.slug
     )
     _audit_maintenance_sync_events(session, admin, maintenance_events)
     session.commit()
-    live_hostnames = await _live_hostnames(settings)
+    live_hostnames = await _live_hostnames(settings, adapters)
     return _serialize(ph, _services_by_id(session), live_hostnames)
 
 
 @router.post("/resync")
 async def resync_proxy_hosts(
-    session: SessionDep, admin: CurrentAdmin, settings: SettingsDep
+    session: SessionDep, admin: CurrentAdmin, settings: SettingsDep, adapters: AdaptersDep
 ) -> dict[str, Any]:
     """Pull Traefik's current router/backend state into the DB.
 
@@ -321,11 +378,11 @@ async def resync_proxy_hosts(
     the dashboard can offer it to the admin, who picks a service and submits
     it through the existing ``POST /api/proxy-hosts``.
     """
-    routers = await _router_details_or_503(settings)
+    routers = await _router_details_or_503(settings, adapters)
 
     # First router to claim a hostname wins ties (two routers rarely share a
     # Host() rule in practice; this just needs to be deterministic).
-    hostname_to_router: dict[str, RouterInfo] = {}
+    hostname_to_router: dict[str, RouteInfo] = {}
     for info in routers:
         for hostname in info.hostnames:
             hostname_to_router.setdefault(hostname, info)
@@ -410,6 +467,7 @@ async def update_proxy_host(
     session: SessionDep,
     admin: CurrentAdmin,
     settings: SettingsDep,
+    adapters: AdaptersDep,
 ) -> dict[str, Any]:
     ph = _get_or_404(session, proxy_host_id)
     svc = _validate_refs(session, body, exclude_id=ph.id)
@@ -458,8 +516,8 @@ async def update_proxy_host(
     _audit_probe_sync_events(session, admin, probe_events)
     session.commit()
     session.refresh(ph)
-    maintenance_events = await sync_maintenance_middleware(
-        settings,
+    maintenance_events = await _sync_maintenance_fallback(
+        adapters,
         hostname=ph.hostname,
         service_slug=svc.slug,
         old_hostname=before["hostname"],
@@ -467,13 +525,17 @@ async def update_proxy_host(
     )
     _audit_maintenance_sync_events(session, admin, maintenance_events)
     session.commit()
-    live_hostnames = await _live_hostnames(settings)
+    live_hostnames = await _live_hostnames(settings, adapters)
     return _serialize(ph, _services_by_id(session), live_hostnames)
 
 
 @router.delete("/{proxy_host_id}")
 async def delete_proxy_host(
-    proxy_host_id: int, session: SessionDep, admin: CurrentAdmin, settings: SettingsDep
+    proxy_host_id: int,
+    session: SessionDep,
+    admin: CurrentAdmin,
+    settings: SettingsDep,
+    adapters: AdaptersDep,
 ) -> dict[str, Any]:
     ph = _get_or_404(session, proxy_host_id)
     hostname = ph.hostname
@@ -502,8 +564,8 @@ async def delete_proxy_host(
         details=details,
     )
     session.commit()
-    maintenance_events = await sync_maintenance_middleware(
-        settings,
+    maintenance_events = await _sync_maintenance_fallback(
+        adapters,
         hostname=None,
         service_slug=None,
         old_hostname=hostname,

@@ -806,11 +806,24 @@ def _audit_actions_all() -> list[str]:
 
 # ---------------------------------------------------------------------------
 # Read path: Traefik Manager preferred over the direct Traefik API
+#
+# The proxy adapter is resolved ONCE, at app startup (``AdapterBundle`` is
+# built in ``lifespan`` and stashed on ``app.state`` — see
+# ``orchestrator.adapters.factory.build_adapters``), unlike the old
+# standalone ``TraefikManagerClient`` these tests used to exercise directly,
+# which read ``Settings`` fresh on every call. So every test below builds
+# its OWN app via ``_tm_client`` with the env already set — reusing the
+# module's shared ``client``/``app`` fixtures (built before any
+# TRAEFIK_MANAGER_URL env var is set) would get a ``DryRunProxyAdapter``
+# that never makes an HTTP call, same as every other adapter-backed
+# feature in this app (power/proxmox/pbs). This also means ``DRY_RUN``
+# (default ``true`` — see the autouse ``_isolated_settings`` fixture) must
+# be turned off here, same as a live-power/proxmox/pbs test would.
 # ---------------------------------------------------------------------------
 
 
 def _patch_tm_transport(monkeypatch: pytest.MonkeyPatch, handler: Any) -> None:
-    import orchestrator.registry.traefik_manager_client as tm_mod
+    import orchestrator.adapters.proxy.traefik_manager as tm_mod
 
     class _PatchedAsyncClient(_REAL_HTTPX_ASYNC_CLIENT):  # type: ignore[misc]
         def __init__(self, *args: Any, **kwargs: Any) -> None:
@@ -820,16 +833,34 @@ def _patch_tm_transport(monkeypatch: pytest.MonkeyPatch, handler: Any) -> None:
     monkeypatch.setattr(tm_mod.httpx, "AsyncClient", _PatchedAsyncClient)
 
 
-def _enable_traefik_manager(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("TRAEFIK_MANAGER_URL", "http://tm.test:8080")
-    monkeypatch.setenv("TRAEFIK_MANAGER_API_KEY", "key")
+def _tm_client(monkeypatch: pytest.MonkeyPatch, **env: str) -> TestClient:
+    """Build a fresh app with the proxy adapter resolved to
+    ``TraefikManagerProxyAdapter`` — ``DRY_RUN=false``,
+    ``PROXY_ADAPTER=traefik_manager``, plus whatever TM/public-URL env vars
+    this test needs — and log in as the first admin, same as the shared
+    ``client`` fixture above. Must be called before any
+    ``_patch_tm_transport``/request, since the adapter (and its httpx
+    client construction) is only ever created once, in this call's
+    ``create_app()`` -> lifespan.
+    """
+    monkeypatch.setenv("DRY_RUN", "false")
+    monkeypatch.setenv("PROXY_ADAPTER", "traefik_manager")
+    for key, value in env.items():
+        monkeypatch.setenv(key, value)
     config_module.reset_settings_cache()
+    session_module.create_all_for_tests()
+    client = TestClient(create_app())
+    client.__enter__()
+    _login_as_first_admin(client, monkeypatch)
+    return client
 
 
 def test_live_status_matched_via_traefik_manager(
-    client: TestClient, service: Service, monkeypatch: pytest.MonkeyPatch
+    service: Service, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    _enable_traefik_manager(monkeypatch)
+    client = _tm_client(
+        monkeypatch, TRAEFIK_MANAGER_URL="http://tm.test:8080", TRAEFIK_MANAGER_API_KEY="key"
+    )
 
     def handle(request: httpx.Request) -> httpx.Response:
         assert request.url.path == "/api/routes"
@@ -858,9 +889,11 @@ def test_live_status_matched_via_traefik_manager(
 
 
 def test_live_status_unknown_when_traefik_manager_unreachable(
-    client: TestClient, service: Service, monkeypatch: pytest.MonkeyPatch
+    service: Service, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    _enable_traefik_manager(monkeypatch)
+    client = _tm_client(
+        monkeypatch, TRAEFIK_MANAGER_URL="http://tm.test:8080", TRAEFIK_MANAGER_API_KEY="key"
+    )
 
     def handle(request: httpx.Request) -> httpx.Response:
         raise httpx.ConnectError("refused")
@@ -873,13 +906,16 @@ def test_live_status_unknown_when_traefik_manager_unreachable(
 
 
 def test_traefik_manager_takes_priority_over_direct_traefik_api(
-    client: TestClient, service: Service, monkeypatch: pytest.MonkeyPatch
+    service: Service, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """When BOTH are configured, Traefik Manager wins — the direct API is
     never even called."""
-    _enable_traefik_manager(monkeypatch)
-    monkeypatch.setenv("TRAEFIK_API_URL", "http://traefik.test:8080")
-    config_module.reset_settings_cache()
+    client = _tm_client(
+        monkeypatch,
+        TRAEFIK_MANAGER_URL="http://tm.test:8080",
+        TRAEFIK_MANAGER_API_KEY="key",
+        TRAEFIK_API_URL="http://traefik.test:8080",
+    )
 
     direct_api_called = False
 
@@ -916,9 +952,11 @@ def test_traefik_manager_takes_priority_over_direct_traefik_api(
 
 
 def test_resync_via_traefik_manager_updates_matched_host(
-    client: TestClient, service: Service, monkeypatch: pytest.MonkeyPatch
+    service: Service, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    _enable_traefik_manager(monkeypatch)
+    client = _tm_client(
+        monkeypatch, TRAEFIK_MANAGER_URL="http://tm.test:8080", TRAEFIK_MANAGER_API_KEY="key"
+    )
 
     created = client.post(
         "/api/proxy-hosts",
@@ -956,16 +994,19 @@ def test_resync_via_traefik_manager_updates_matched_host(
 
 
 def test_create_proxy_host_injects_maintenance_middleware_and_audits_it(
-    client: TestClient, service: Service, monkeypatch: pytest.MonkeyPatch
+    service: Service, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """End-to-end through the real router: create a ProxyHost with both
     TRAEFIK_MANAGER_URL and ORCHESTRATOR_PUBLIC_URL set, and confirm the
     middleware gets injected into a matching live route and audited."""
-    _enable_traefik_manager(monkeypatch)
-    monkeypatch.setenv("ORCHESTRATOR_PUBLIC_URL", "http://10.0.0.5:8000")
-    config_module.reset_settings_cache()
+    client = _tm_client(
+        monkeypatch,
+        TRAEFIK_MANAGER_URL="http://tm.test:8080",
+        TRAEFIK_MANAGER_API_KEY="key",
+        ORCHESTRATOR_PUBLIC_URL="http://10.0.0.5:8000",
+    )
 
-    from orchestrator.registry.traefik_manager_sync import (
+    from orchestrator.adapters.proxy.traefik_manager import (
         SHARED_BACKEND_SERVICE_NAME,
         maintenance_middleware_name,
     )
@@ -1023,9 +1064,11 @@ def test_create_proxy_host_injects_maintenance_middleware_and_audits_it(
 
 
 def test_resync_via_traefik_manager_surfaces_503_when_unreachable(
-    client: TestClient, service: Service, monkeypatch: pytest.MonkeyPatch
+    service: Service, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    _enable_traefik_manager(monkeypatch)
+    client = _tm_client(
+        monkeypatch, TRAEFIK_MANAGER_URL="http://tm.test:8080", TRAEFIK_MANAGER_API_KEY="key"
+    )
 
     def handle(request: httpx.Request) -> httpx.Response:
         raise httpx.ConnectError("refused")
