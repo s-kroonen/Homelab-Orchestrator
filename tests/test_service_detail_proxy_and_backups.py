@@ -33,9 +33,9 @@ def test_service_page_renders_proxy_hosts_section_and_form(client: TestClient) -
     assert page.status_code == 200, page.text
     assert "Proxy hosts" in page.text
     assert "media.example.com" in page.text
-    # The inline add form posts straight to the existing create endpoint,
-    # pre-filled with this service's id — no new backend route.
-    assert 'id="ph-add-form"' in page.text
+    # No more inline add form — a link to the dedicated add page, pre-filled
+    # with this service's id, replaces it (see docs/proxy_hosts.md).
+    assert f'href="/proxy-hosts/new?service_id={svc["id"]}"' in page.text
     assert "/api/proxy-hosts" in page.text
 
 

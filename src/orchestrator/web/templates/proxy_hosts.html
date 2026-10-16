@@ -2,11 +2,13 @@
 {% block title %}homelab-orchestrator — proxy hosts{% endblock %}
 {% block content %}
   <div class="banner" role="note">
-    <strong>Reference records only — not synced with Traefik.</strong>
-    These hostname → upstream mappings are maintained by hand. Adding, editing or
-    deleting one here does not change any route on the gateway, and "last seen" is
-    never updated automatically. Live traffic monitoring is planned for a future
-    update once Traefik's API/metrics are configured.
+    <strong>Traefik Manager is the source of truth for routes.</strong>
+    A <code>router_provider: traefik</code> host below is live-managed: adding, editing or
+    deleting it also adds/edits/deletes the real route on Traefik Manager (an upstream is
+    required for that — a blank one keeps it a local-only reference for now).
+    <code>pangolin</code>/<code>npm</code>/<code>other</code> hosts stay local-only reference
+    records, since no adapter exists for those backends yet. See
+    <code>docs/proxy_hosts.md</code>.
   </div>
 
   <section>
@@ -15,26 +17,36 @@
       {% if registry_dirty %}<span class="dirty-badge">unsaved changes vs {{ yaml_path }}</span>{% endif %}
     </h2>
     <p class="msg">
-      Edits here change the live DB only. Use <strong>Save to YAML</strong> to write them to
-      <code>services.yaml</code>, or <strong>Reset to saved</strong> to discard them. A host with
-      no linked service cannot be written to YAML (proxy hosts are nested under services
-      there), so it stays DB-only.
+      Edits here change the live DB (and, for a live-managed host, the real route) — nothing
+      is written to <code>services.yaml</code> until you <strong>Save to YAML</strong>, or
+      discarded until you <strong>Reset to saved</strong>. A host with no linked service cannot
+      be written to YAML (proxy hosts are nested under services there), so it stays DB-only.
     </p>
     <p class="msg">
       <strong>Traefik</strong> column: <span class="badge healthy">matched</span> a live Traefik
       router covers this hostname right now; <span class="badge failed">missing</span> Traefik is
       reachable but has no matching router (typo, drift, or never added); <span class="badge
-      unknown">unknown</span> either <code>TRAEFIK_API_URL</code> is not configured, or the last
-      poll failed — this is NOT the same as "missing". This is read-only drift detection; nothing
-      here ever writes to Traefik. See <code>docs/proxy_hosts.md</code>.
+      unknown">unknown</span> either Traefik Manager/Traefik is not configured, or the last poll
+      failed — this is NOT the same as "missing". See <code>docs/proxy_hosts.md</code>.
     </p>
     <div class="row">
+      <a class="btn" href="/proxy-hosts/new">Add proxy host</a>
       <button id="save-btn">Save to YAML</button>
       <button class="secondary" id="reset-btn">Reset to saved</button>
       <button class="secondary" id="resync-btn">Resync from Traefik</button>
       <span class="msg" id="registry-msg"></span>
     </div>
-    <p class="msg" id="resync-msg"></p>
+    <div class="row">
+      <label class="inline" for="ph-filter">Filter</label>
+      <input id="ph-filter" type="search" placeholder="hostname contains…">
+    </div>
+    <p class="msg" id="resync-msg">
+      Resync pulls Traefik Manager's/Traefik's current routes into the DB — it imports routes
+      that exist there but have no local record yet (below, "Discovered"), and catches drift on
+      an already-linked host (e.g. its upstream changed on the gateway side). It's the bulk/
+      catch-up path now, not the only way to reach parity — <strong>Add proxy host</strong>
+      above creates a real route directly.
+    </p>
     <table>
       <thead>
         <tr><th>Hostname</th><th>Upstream</th><th>Provider</th><th>Service</th><th>Traefik</th><th>Last seen</th><th>Wake on hit</th><th></th></tr>
@@ -48,7 +60,7 @@
     <p class="msg">
       Live Traefik routers with no matching <code>ProxyHost</code> record. Nothing here is
       saved until you pick a service and click <strong>Add</strong> — that calls the same
-      create endpoint as the form below, pre-filled from what Traefik reported.
+      create endpoint the dedicated add page uses, pre-filled from what Traefik reported.
     </p>
     <table>
       <thead>
@@ -57,52 +69,6 @@
       <tbody id="discovered-rows"></tbody>
     </table>
   </section>
-
-  <section>
-    <h2 id="form-title">Add a proxy host</h2>
-    <form class="ph-form" id="ph-form" autocomplete="off">
-      <input type="hidden" id="ph-id">
-      <label for="ph-hostname">Hostname</label>
-      <input id="ph-hostname" required placeholder="app.example.com">
-      <label for="ph-upstream">Upstream</label>
-      <input id="ph-upstream" placeholder="http://10.0.0.12:8080">
-      <label for="ph-provider">Provider</label>
-      <select id="ph-provider">
-        {% for p in providers %}<option value="{{ p }}">{{ p }}</option>{% endfor %}
-      </select>
-      <label for="ph-service">Linked service</label>
-      <select id="ph-service" required>
-        <option value="" disabled selected>— select a service —</option>
-        {% for s in services %}<option value="{{ s.id }}">{{ s.name }} ({{ s.slug }})</option>{% endfor %}
-      </select>
-      <label for="ph-wake-on-hit">Wake on hit</label>
-      <span><input id="ph-wake-on-hit" type="checkbox"></span>
-      <span class="full msg muted">
-        Stand-in for a real Traefik-side trigger (future work — see docs/traffic_metrics.md):
-        the traffic-metrics poller treats a hit on this hostname as a wake trigger for its
-        linked service, gated by that service's and its node's own "wake on hit" toggles too.
-        Up to one poll interval (<code>TRAEFIK_METRICS_POLL_INTERVAL_S</code>) of delay. Off by default.
-      </span>
-      <label class="full" for="ph-extra">Extra (JSON object, optional)</label>
-      <textarea class="full" id="ph-extra" placeholder='{"middlewares": ["auth"]}'></textarea>
-      <div class="row full">
-        <button type="submit" id="submit-btn">Add</button>
-        <button type="button" class="secondary" id="cancel-btn" hidden>Cancel edit</button>
-        <span class="msg" id="form-msg"></span>
-      </div>
-    </form>
-  </section>
-{% endblock %}
-{% block extra_head %}
-<style>
-  textarea { box-sizing: border-box; min-height: 4rem; }
-  form.ph-form { display: grid; grid-template-columns: max-content 1fr; gap: 0.5rem 0.75rem; align-items: center; max-width: 40rem; }
-  form.ph-form label { color: #9aa4b2; font-size: 0.85rem; }
-  form.ph-form .full { grid-column: 1 / -1; }
-  @media (max-width: 40rem) {
-    form.ph-form { grid-template-columns: 1fr; }
-  }
-</style>
 {% endblock %}
 {% block scripts %}
 <script>
@@ -255,6 +221,7 @@
     }
     for (const h of hosts) {
       const tr = document.createElement("tr");
+      tr.dataset.hostname = h.hostname.toLowerCase();
       const hostTd = document.createElement("td");
       const code = document.createElement("code");
       code.textContent = h.hostname;
@@ -290,10 +257,10 @@
 
       const actions = document.createElement("td");
       actions.className = "actions";
-      const edit = document.createElement("button");
-      edit.className = "secondary small";
+      const edit = document.createElement("a");
+      edit.className = "btn secondary small";
+      edit.href = `/proxy-hosts/${h.id}/edit`;
       edit.textContent = "Edit";
-      edit.addEventListener("click", () => startEdit(h));
       const del = document.createElement("button");
       del.className = "danger small";
       del.textContent = "Delete";
@@ -302,34 +269,14 @@
       tr.appendChild(actions);
       body.appendChild(tr);
     }
-  }
-
-  function resetForm() {
-    document.getElementById("ph-form").reset();
-    document.getElementById("ph-id").value = "";
-    document.getElementById("form-title").textContent = "Add a proxy host";
-    document.getElementById("submit-btn").textContent = "Add";
-    document.getElementById("cancel-btn").hidden = true;
-  }
-
-  function startEdit(h) {
-    document.getElementById("ph-id").value = h.id;
-    document.getElementById("ph-hostname").value = h.hostname;
-    document.getElementById("ph-upstream").value = h.upstream;
-    document.getElementById("ph-provider").value = h.router_provider;
-    document.getElementById("ph-service").value = h.service_id ?? "";
-    document.getElementById("ph-wake-on-hit").checked = !!h.wake_on_hit;
-    document.getElementById("ph-extra").value =
-      h.extra && Object.keys(h.extra).length ? JSON.stringify(h.extra, null, 2) : "";
-    document.getElementById("form-title").textContent = `Edit ${h.hostname}`;
-    document.getElementById("submit-btn").textContent = "Save changes";
-    document.getElementById("cancel-btn").hidden = false;
-    setMsg("form-msg", "");
-    document.getElementById("ph-hostname").focus();
+    applyFilter();
   }
 
   async function removeHost(h) {
-    if (!confirm(`Delete the proxy host record for ${h.hostname}? (This does not touch Traefik.)`)) return;
+    const liveWarning = h.router_provider === "traefik"
+      ? "This also deletes the real route on Traefik Manager."
+      : "This does not touch any gateway.";
+    if (!confirm(`Delete the proxy host ${h.hostname}? ${liveWarning}`)) return;
     try {
       await apiFetch("DELETE", `/api/proxy-hosts/${h.id}`, undefined, { suppressToast: true });
     } catch (err) {
@@ -337,56 +284,17 @@
       return;
     }
     setMsg("registry-msg", `Deleted ${h.hostname}. Save to YAML to persist.`, "ok");
-    if (document.getElementById("ph-id").value === String(h.id)) resetForm();
     await loadHosts();
   }
 
-  document.getElementById("cancel-btn").addEventListener("click", () => {
-    resetForm();
-    setMsg("form-msg", "");
-  });
-
-  document.getElementById("ph-form").addEventListener("submit", async (ev) => {
-    ev.preventDefault();
-    const extraRaw = document.getElementById("ph-extra").value.trim();
-    let extra = {};
-    if (extraRaw) {
-      try {
-        extra = JSON.parse(extraRaw);
-      } catch (err) {
-        setMsg("form-msg", `Extra is not valid JSON: ${err.message}`, "error");
-        return;
-      }
-      if (extra === null || typeof extra !== "object" || Array.isArray(extra)) {
-        setMsg("form-msg", "Extra must be a JSON object, e.g. {\"key\": \"value\"}.", "error");
-        return;
-      }
+  // --- filter (hostname substring) -----------------------------------------
+  function applyFilter() {
+    const needle = document.getElementById("ph-filter").value.trim().toLowerCase();
+    for (const tr of document.querySelectorAll("#ph-rows tr[data-hostname]")) {
+      tr.hidden = needle !== "" && !tr.dataset.hostname.includes(needle);
     }
-    const serviceVal = document.getElementById("ph-service").value;
-    if (!serviceVal) {
-      setMsg("form-msg", "Select a service — every proxy host must be linked to one.", "error");
-      return;
-    }
-    const payload = {
-      hostname: document.getElementById("ph-hostname").value.trim(),
-      upstream: document.getElementById("ph-upstream").value.trim(),
-      router_provider: document.getElementById("ph-provider").value,
-      service_id: Number(serviceVal),
-      extra,
-      wake_on_hit: document.getElementById("ph-wake-on-hit").checked,
-    };
-    const id = document.getElementById("ph-id").value;
-    let saved;
-    try {
-      saved = await apiFetch(id ? "PUT" : "POST", id ? `/api/proxy-hosts/${id}` : "/api/proxy-hosts", payload, { suppressToast: true });
-    } catch (err) {
-      setMsg("form-msg", err.message, "error");
-      return;
-    }
-    setMsg("form-msg", `${id ? "Updated" : "Added"} ${saved.hostname}. Save to YAML to persist.`, "ok");
-    resetForm();
-    await loadHosts();
-  });
+  }
+  document.getElementById("ph-filter").addEventListener("input", applyFilter);
 
   loadHosts();
 </script>

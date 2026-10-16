@@ -58,6 +58,21 @@ class SyncEvent:
     details: dict[str, Any] = field(default_factory=dict)
 
 
+class ProxyRouteNotFound(Exception):
+    """Backend-neutral "this route reference no longer exists" signal.
+
+    :meth:`ProxyAdapter.update_route`/:meth:`ProxyAdapter.delete_route`
+    implementations raise this (instead of, or wrapping, whatever
+    backend-specific "not found" error they'd otherwise raise) so a caller
+    (``web/routers/proxy_hosts.py``) can catch exactly this one case —
+    "the route Traefik Manager was supposed to have is already gone" —
+    without importing a specific adapter implementation's exception
+    hierarchy. Every OTHER failure from these two methods should still be a
+    real, visible error (see their docstrings) — this is narrowly for the
+    one case a caller may reasonably treat as "already done".
+    """
+
+
 class ProxyAdapter(ABC):
     """All methods are async so callers stay non-blocking.
 
@@ -123,3 +138,45 @@ class ProxyAdapter(ABC):
         """The inverse of :meth:`ensure_maintenance_fallback` — called on a
         ``ProxyHost`` rename (old hostname), re-link (old service) or
         unlink/delete. Same idempotency and fail-open contract."""
+
+    # -- General route CRUD -------------------------------------------------
+    #
+    # Unlike the maintenance-fallback pair above (a quiet side effect of an
+    # unrelated edit, fail-open by design), these three ARE the explicit
+    # action the admin just took — creating, editing or deleting a
+    # ``ProxyHost`` whose ``router_provider`` is this backend's. A failure
+    # here must be visible to the caller, not swallowed: it RAISES on
+    # failure rather than degrading to ``None``/``[]``. See
+    # ``docs/proxy_hosts.md``'s "Live-managed proxy hosts" section.
+
+    @abstractmethod
+    async def create_route(self, *, hostname: str, upstream: str) -> str:
+        """Create a real route on this backend for ``hostname`` -> ``upstream``.
+
+        Returns an opaque, backend-specific reference (a route id) the
+        caller MUST persist (``ProxyHost.extra``) in order to target this
+        exact route again in a later :meth:`update_route`/
+        :meth:`delete_route` call — this adapter does not re-derive a route
+        from a hostname on its own. Raises on failure (network error,
+        backend rejected the request, etc.) rather than returning a
+        sentinel; the caller's create must fail visibly too.
+        """
+
+    @abstractmethod
+    async def update_route(self, route_ref: str, *, hostname: str, upstream: str) -> None:
+        """Update the route ``route_ref`` identifies to point at the given
+        ``hostname``/``upstream``. Raises on failure, including
+        :class:`ProxyRouteNotFound` if the backend no longer has a route
+        for that reference (the caller decides what to do about that; see
+        :meth:`delete_route`'s note on the same case)."""
+
+    @abstractmethod
+    async def delete_route(self, route_ref: str) -> None:
+        """Delete the route ``route_ref`` identifies.
+
+        Raises on failure — EXCEPT raises :class:`ProxyRouteNotFound`
+        specifically (not a generic failure) when the backend no longer has
+        a route for that reference, so a caller deleting its own local
+        record can choose to treat "already gone on the backend" as
+        success rather than blocking the local delete on it.
+        """

@@ -47,17 +47,28 @@ Failure handling, preserved exactly from the old split:
   just because Traefik Manager is unreachable (see ``docs/proxy_hosts.md``'s
   "Fail-open, by design"). Every failure is caught here, logged, and
   swallowed; the caller gets ``[]`` back, same as before.
+* :meth:`create_route`/:meth:`update_route`/:meth:`delete_route` (the
+  general route CRUD backing a live-managed ``ProxyHost``) are the
+  opposite: these ARE the explicit action an admin just took, so every
+  failure RAISES into the caller (``web/routers/proxy_hosts.py``) —
+  nothing here is caught or swallowed — except that a 404 from Traefik
+  Manager is re-raised as the backend-neutral
+  :class:`~orchestrator.adapters.proxy.base.ProxyRouteNotFound` rather than
+  :class:`TraefikManagerNotFound` directly, so that one call site doesn't
+  need to import this module's own exception hierarchy.
 """
 
 from __future__ import annotations
 
 import io
+import re
 from typing import Any
+from urllib.parse import urlsplit
 
 import httpx
 from ruamel.yaml import YAML
 
-from orchestrator.adapters.proxy.base import ProxyAdapter, RouteInfo, SyncEvent
+from orchestrator.adapters.proxy.base import ProxyAdapter, ProxyRouteNotFound, RouteInfo, SyncEvent
 from orchestrator.config import Settings
 from orchestrator.logging_setup import get_logger
 from orchestrator.registry.traefik_status import extract_hostnames
@@ -119,6 +130,39 @@ def maintenance_middleware_name(slug: str) -> str:
     """The stable, recognizable name a service's auto-managed maintenance
     middleware gets, e.g. ``maintenance-media-server``."""
     return f"maintenance-{slug}"
+
+
+def route_name_for_hostname(hostname: str) -> str:
+    """The Traefik Manager route (``serviceName``/router) name this adapter
+    creates for a ``ProxyHost``'s live-managed route, e.g.
+    ``orchestrator-app-example-com`` for ``app.example.com``.
+
+    Deterministic and derived from the hostname alone — never from the
+    ``ProxyHost.id`` — so it reads clearly in Traefik Manager's own UI and
+    so re-deriving it (e.g. for a backfill) needs no extra lookup. Prefixed
+    with ``orchestrator-`` so it can never collide with a hand-authored
+    router name. This IS the opaque reference :meth:`TraefikManagerProxyAdapter.
+    create_route` returns and that gets persisted to ``ProxyHost.extra``
+    (see ``docs/proxy_hosts.md``) — callers should treat it as opaque and
+    always use the stored value rather than recomputing this, since a
+    hostname rename does NOT rename the underlying route (see
+    :meth:`TraefikManagerProxyAdapter.update_route`).
+    """
+    slug = re.sub(r"[^a-z0-9]+", "-", hostname.strip().lower()).strip("-")
+    return f"orchestrator-{slug}" if slug else "orchestrator-route"
+
+
+def _split_host_port(url: str) -> tuple[str, str]:
+    """Split a ``scheme://host:port`` URL into ``(host, port)`` — shared by
+    the maintenance-fallback backend target and the general route CRUD
+    below. Returns ``("", "")`` for an unparseable/hostless URL; callers
+    decide whether that's acceptable."""
+    parsed = urlsplit(url)
+    host = parsed.hostname or ""
+    if not host:
+        return "", ""
+    port = str(parsed.port) if parsed.port else ("443" if parsed.scheme == "https" else "80")
+    return host, port
 
 
 def _routes_to_route_info(apps: Any) -> list[RouteInfo]:
@@ -287,6 +331,17 @@ class TraefikManagerProxyAdapter(ProxyAdapter):
         async with self._client() as client:
             await self._post_json(client, "/save", data=data, headers={"X-Requested-With": "fetch"})
 
+    async def _delete_route(self, route_id: str) -> None:
+        """``POST /delete/{route_id}`` — delete a route (router + its
+        service, unless another router still references it). Form-
+        urlencoded, per Traefik Manager's API docs. Raises
+        :class:`TraefikManagerNotFound` (via ``_raise_for``) on a 404 —
+        "no config file and no disabled-route record holds that router"."""
+        async with self._client() as client:
+            await self._post_json(
+                client, f"/delete/{route_id}", data={}, headers={"X-Requested-With": "fetch"}
+            )
+
     async def _save_middleware(
         self,
         name: str,
@@ -335,12 +390,7 @@ class TraefikManagerProxyAdapter(ProxyAdapter):
     def _public_target(self) -> tuple[str, str]:
         """Split ``ORCHESTRATOR_PUBLIC_URL`` into ``(host, port)`` for
         ``/save``'s ``targetIp``/``targetPort`` fields."""
-        from urllib.parse import urlsplit
-
-        parsed = urlsplit(self._settings.orchestrator_public_url)
-        host = parsed.hostname or ""
-        port = str(parsed.port) if parsed.port else ("443" if parsed.scheme == "https" else "80")
-        return host, port
+        return _split_host_port(self._settings.orchestrator_public_url)
 
     @staticmethod
     def _middleware_yaml(service_name: str, slug: str) -> str:
@@ -568,3 +618,62 @@ class TraefikManagerProxyAdapter(ProxyAdapter):
                 error=str(exc),
             )
             return []
+
+    # -- ProxyAdapter: general route CRUD -----------------------------------
+    #
+    # Unlike every write path above, these three RAISE on failure — see
+    # ``orchestrator.adapters.proxy.base.ProxyAdapter``'s docstring for why.
+    # Each route is created/edited via the same ``POST /save`` form
+    # endpoint the maintenance-fallback shared backend service already
+    # uses (see ``_save_route`` above), always with an explicit ``httpRule``
+    # (never ``subdomain``) so the rule written is pinned down regardless
+    # of Traefik Manager's own "configured domain(s)" settings. The route's
+    # name (``serviceName``/router id) is :func:`route_name_for_hostname`,
+    # derived from the hostname at CREATE time and then persisted by the
+    # caller (``ProxyHost.extra``) — a later rename does NOT rename the
+    # underlying route; :meth:`update_route` reuses the stored ``route_ref``
+    # as both ``serviceName`` and ``originalId`` and just rewrites its rule.
+
+    @staticmethod
+    def _target_or_raise(upstream: str) -> tuple[str, str]:
+        host, port = _split_host_port(upstream)
+        if not host:
+            raise ValueError(
+                f"upstream {upstream!r} is not a valid URL with a host "
+                "(expected e.g. http://10.0.0.5:8080)"
+            )
+        return host, port
+
+    async def create_route(self, *, hostname: str, upstream: str) -> str:
+        host, port = self._target_or_raise(upstream)
+        name = route_name_for_hostname(hostname)
+        await self._save_route(
+            service_name=name,
+            protocol="http",
+            target_ip=host,
+            target_port=port,
+            http_rule=f"Host(`{hostname}`)",
+            is_edit=False,
+        )
+        return name
+
+    async def update_route(self, route_ref: str, *, hostname: str, upstream: str) -> None:
+        host, port = self._target_or_raise(upstream)
+        try:
+            await self._save_route(
+                service_name=route_ref,
+                protocol="http",
+                target_ip=host,
+                target_port=port,
+                http_rule=f"Host(`{hostname}`)",
+                is_edit=True,
+                original_id=route_ref,
+            )
+        except TraefikManagerNotFound as exc:
+            raise ProxyRouteNotFound(str(exc)) from exc
+
+    async def delete_route(self, route_ref: str) -> None:
+        try:
+            await self._delete_route(route_ref)
+        except TraefikManagerNotFound as exc:
+            raise ProxyRouteNotFound(str(exc)) from exc

@@ -5,22 +5,28 @@ named router (`traefik`, `pangolin`, `npm`, `other`) — that fronts a service
 in the registry. The table is `proxy_host`; in `services.yaml` the records sit
 under each service's `proxy_hosts:` list.
 
-## What they are today: a manual reference
+## What they are today: live-managed when the backend supports it
 
-These records are **maintained by hand**. Creating, editing or deleting a
-proxy host here changes nothing on the gateway on its own, and
-`last_seen_at` is never set automatically. The orchestrator can optionally
-*read* the live router list to flag drift (below), and optionally poll
-Traefik's Prometheus metrics to show per-service/per-host traffic (see
-[traffic_metrics.md](traffic_metrics.md)) — both entirely read-only.
+A `ProxyHost` whose `router_provider` is `traefik` and has an `upstream` is
+**live-managed**: creating, editing or deleting it here creates, edits or
+deletes the real route on Traefik Manager, not just a local record you
+separately reconcile. This replaced the original "pure reference record,
+reconciled by a one-way Resync button" model — see
+["Live-managed proxy hosts"](#live-managed-proxy-hosts) below for the full
+write-through/rollback/backfill behaviour. A `traefik` host with no
+`upstream` yet, and every `pangolin`/`npm`/`other` host (no adapter exists
+for those backends yet), stay plain reference records: maintained by hand,
+nothing pushed to any gateway, same as every `ProxyHost` used to be.
+`last_seen_at` is still only ever set by Resync, never by a live-managed
+write.
 
-The one exception, now that Traefik Manager is installed on the gateway
-(see below): linking a `ProxyHost` to a `Service` also keeps a small,
+Separately, linking a `ProxyHost` to a `Service` also keeps a small,
 surgical maintenance-page fallback middleware in sync on the gateway —
 ["Maintenance-page fallback"](#maintenance-page-fallback-never-overwrite-an-existing-traefik-config)
-further down. Everything else in this file — Pangolin, NPM, and every
-other field on `ProxyHost` — is still never written anywhere outside this
-app's own database.
+further down. This is independent of live-managed route CRUD above (it
+predates it) and runs for ANY linked `ProxyHost` regardless of
+`router_provider`, fail-open by design (see that section) — unlike route
+CRUD, whose failures ARE visible (see below).
 
 That traffic poll can also, per-hostname, trigger a wake for a down
 service — this predates the maintenance-page fallback middleware below and
@@ -44,10 +50,27 @@ up "which hostname reaches which service, through what":
 | Where                           | Writes to          | Persisted how                         |
 |---------------------------------|--------------------|---------------------------------------|
 | `orchestrator-cli proxy add/list/remove` | `services.yaml` directly | Reconciled into the DB on next boot / Reset |
-| Dashboard → **Proxy hosts** (`/proxy-hosts`) | live DB only | **Save to YAML** writes it out; **Reset to saved** discards it |
-| Dashboard → a service's own page (`/services/{slug}`), **Proxy hosts** section | live DB only | same as above — a shortcut that calls the same create/delete endpoints with `service_id` pre-filled, for this one service's hosts |
-| `GET/POST/PUT/DELETE /api/proxy-hosts[/{id}]` | live DB only | same as the page — it's what both pages call |
+| Dashboard → **Proxy hosts** (`/proxy-hosts`) — list page | reads the live DB | **Save to YAML** writes it out; **Reset to saved** discards it; **Resync from Traefik** is the bulk-discovery/drift-catch-up path (see below) |
+| Dashboard → **Add a proxy host** (`/proxy-hosts/new`) / **Edit** (`/proxy-hosts/{id}/edit`) — dedicated pages | live DB, and (for a `traefik` host with an upstream) the real route | same underlying API as below; these are the normal way to create/edit one now |
+| Dashboard → a service's own page (`/services/{slug}`), **Proxy hosts** section | read-only list + a link to `/proxy-hosts/new?service_id=<id>` | same create/edit flow as above, pre-filled for this service |
+| `GET/POST/PUT/DELETE /api/proxy-hosts[/{id}]` | live DB, and (for a `traefik` host with an upstream) the real route | the API every page above calls — see ["Live-managed proxy hosts"](#live-managed-proxy-hosts) |
 | `orchestrator-cli proxy resync-maintenance` | nothing in the DB; re-syncs the gateway's maintenance middleware for every already-linked host | DB-only operation, no YAML involved — see ["Backfilling existing proxy hosts"](#backfilling-existing-proxy-hosts) below |
+
+**Dedicated add/edit pages, not an inline form.** Creating or editing a
+`ProxyHost` used to be a form bolted onto the bottom of `/proxy-hosts` (and
+a second, near-duplicate copy of it inline on a service's own page) — "the
+same edit on the same page everywhere" was explicitly the wrong pattern,
+and this is the first page fixed (more get the same treatment later, see
+`docs/roadmap.md`). `/proxy-hosts` is now list-only (hostnames, upstream,
+provider, live status, a hostname-substring filter box, an **Add** button
+and a per-row **Edit** link); `/proxy-hosts/new` and
+`/proxy-hosts/{id}/edit` are real, dedicated pages, not fragments, that
+submit to the same `POST`/`PUT /api/proxy-hosts[/{id}]` as before. The
+service page's own inline add-form is gone too — replaced with a link to
+`/proxy-hosts/new?service_id=<id>` (pre-filling the service picker) for
+consistency with the new pattern, since a second near-duplicate copy of
+the same form was exactly the problem being fixed; its own proxy-hosts
+list (and Delete) stay, now with an **Edit** link alongside **Delete**.
 
 `proxy_host` is YAML-owned ([architecture.md](architecture.md)), so web edits
 behave like any other dashboard registry edit: the "unsaved changes" badge
@@ -74,6 +97,70 @@ Validation: hostname is required and must be a bare DNS name (optionally
 `*.`-wildcarded; no scheme, port or path), lower-cased on save and unique
 across all proxy hosts; `service_id` is required and must reference a real
 service; `router_provider` must be one of the enum values above.
+
+## Live-managed proxy hosts
+
+`web/routers/proxy_hosts.py`'s create/update/delete endpoints write through
+to `adapters.proxy` (`ProxyAdapter.create_route`/`update_route`/
+`delete_route` — `orchestrator.adapters.proxy.base`) whenever **both**
+hold:
+
+* `router_provider` is `traefik` — the only backend with a real adapter
+  today (`TraefikManagerProxyAdapter`); `pangolin`/`npm`/`other` have none,
+  so those rows stay plain reference records, same as every `ProxyHost`
+  used to be — not blocked or errored, just skipped;
+* `upstream` is non-empty — a route cannot be created on Traefik Manager
+  with no backend target. A `traefik` host created/edited with a blank
+  `upstream` (a bare hostname reference filled in later, or imported via
+  Resync) stays local-only until an `upstream` is set.
+
+Unlike the maintenance-fallback middleware sync further down (a quiet side
+effect of an unrelated edit, fail-open by design), route CRUD **is** the
+explicit action the admin just took, so a failure is never swallowed:
+
+* **Create**: the `ProxyHost` row is written AND `create_route` is called.
+  The returned opaque route reference is stored in
+  `ProxyHost.extra["traefik_manager_route_id"]` — the key this app's own
+  code looks for; the value itself is `TraefikManagerProxyAdapter`-specific
+  (today, a deterministic name derived from the hostname, e.g.
+  `orchestrator-app-example-com` — see
+  `orchestrator.adapters.proxy.traefik_manager.route_name_for_hostname`).
+  **If `create_route` fails, the whole request fails** (`502`) and the
+  `ProxyHost` row is never committed — closing this session's DB
+  transaction without a commit rolls back the row the same way any other
+  failed request in this app already does, so there is no orphaned
+  local-only record pointing at nothing real.
+* **Update**: the real route is updated FIRST, using the stored
+  `extra["traefik_manager_route_id"]` as both the route's name and
+  `originalId` (a hostname rename does **not** rename the underlying
+  route — the reference is opaque and reused, never re-derived from the
+  new hostname). Only once that succeeds are the `ProxyHost` row's fields
+  changed; a failure (`502`) leaves both sides exactly as they were. If
+  `extra` has no stored reference yet — a host that predates this
+  feature, or one whose `router_provider` is only now switching onto
+  `traefik` — a route is **created** instead of erroring (same backfill
+  behaviour if the stored reference comes back `ProxyRouteNotFound`, e.g.
+  the route was deleted by hand on Traefik Manager since).
+* **Delete**: the real route is deleted first, via the stored reference,
+  then the `ProxyHost` row. A `ProxyRouteNotFound` (already gone on the
+  Traefik Manager side somehow) is logged and does **not** block deleting
+  the local record — the operator's intent ("this host should no longer
+  exist") is still satisfiable. Every other failure (`502`) blocks the
+  local delete.
+
+**Known gap**: switching `router_provider` away from `traefik` on an
+existing live-managed host does not delete the real route it created —
+the stale route is simply no longer touched or tracked (its reference in
+`extra` is dropped). There was no safe automatic choice here (the
+operator may want to keep the route and manage it by hand going forward),
+so this is left as a manual cleanup on Traefik Manager if the route truly
+should go away, the same kind of residual gap the "deleting the linked
+service" case above already documents.
+
+The maintenance-fallback middleware sync (further down) is **not**
+gated by any of this — it runs for any linked `ProxyHost` regardless of
+`router_provider`, same as before this feature, since it's a separate,
+independent, fail-open integration.
 
 ## Drift detection: Traefik Manager preferred, direct Traefik API as fallback
 
@@ -248,8 +335,20 @@ above), and it only ever runs when an admin clicks the **Resync from
 Traefik** button on `/proxy-hosts` (`POST /api/proxy-hosts/resync`).
 Nothing changes on a schedule, on page load, or as a side effect of any
 other request. This is unrelated to, and does not touch, the
-maintenance-page fallback middleware further down — that's a write to
-Traefik's own config, not to this database.
+maintenance-page fallback middleware further down, or live-managed route
+CRUD above — that's a write to Traefik's own config/routes, not to this
+database.
+
+**Resync's role, now that live-managed route CRUD exists above:** it used
+to be the *only* way to reach parity between the DB and Traefik — adding
+a `ProxyHost` never pushed anything to the gateway, so Resync's "pull
+Traefik's current state in" was the one bridge. That is no longer true:
+**Add a proxy host**/**Edit** now create/edit the real route directly.
+Resync is now the **bulk/catch-up path**: importing routes that exist on
+Traefik Manager but have no local `ProxyHost` yet (the "Discovered"
+table), and catching real drift — a local record whose `upstream` was
+changed by someone editing Traefik Manager directly, bypassing this app
+entirely. Nothing about what Resync itself does (below) changed.
 
 ### What it does
 
@@ -278,9 +377,14 @@ Traefik's own config, not to this database.
    that one response, never persisted.
 4. The dashboard renders `discovered` as its own table, each row with a
    service picker. Clicking **Add** on a row calls the *existing*
-   `POST /api/proxy-hosts` — the same endpoint the manual "Add a proxy
-   host" form uses — pre-filled with that row's hostname/upstream plus
-   whichever service was picked. There is no second creation endpoint.
+   `POST /api/proxy-hosts` directly — the same endpoint the dedicated
+   `/proxy-hosts/new` page uses — pre-filled with that row's
+   hostname/upstream plus whichever service was picked (this one row-level
+   action stays a direct API call rather than a navigation to that page,
+   since it's part of Resync's own bulk flow). There is no second creation
+   endpoint, and since `upstream` is already known here, this create IS
+   write-through for a `traefik`-provider discovered host (see
+   ["Live-managed proxy hosts"](#live-managed-proxy-hosts)).
 5. Every resync run is audit-logged (`proxy_host.resynced`) with
    `updated_count`, `discovered_count`, and the matching hostname lists —
    same `orchestrator.audit.log.record` mechanism as every other mutation
