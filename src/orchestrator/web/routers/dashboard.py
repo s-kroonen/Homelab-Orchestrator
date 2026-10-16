@@ -29,7 +29,14 @@ from sqlmodel import Session, col, select
 
 from orchestrator.audit import log as audit
 from orchestrator.config import get_settings
-from orchestrator.db.models import BackupPolicy, HealthScanSample, Node, Probe, Service
+from orchestrator.db.models import (
+    BackupPolicy,
+    HealthScanSample,
+    Node,
+    Probe,
+    ProxyHost,
+    Service,
+)
 from orchestrator.domain.enums import GuestKind, ProbeKind
 from orchestrator.domain.schemas import HttpProbeConfig, TcpProbeConfig
 from orchestrator.health.engine import HealthEngine
@@ -193,6 +200,31 @@ def _service_probes(session: Session, service: Service) -> list[Probe]:
     )
 
 
+def _service_proxy_hosts(session: Session, service: Service) -> list[ProxyHost]:
+    return list(
+        session.exec(
+            select(ProxyHost)
+            .where(ProxyHost.service_id == service.id)
+            .order_by(col(ProxyHost.hostname))
+        ).all()
+    )
+
+
+def _proxy_host_dict(ph: ProxyHost) -> dict[str, Any]:
+    # Deliberately NOT the full web/routers/proxy_hosts.py `_serialize` shape
+    # (no `live_status` — that needs an async Traefik poll this sync
+    # function has no business making just to render a service page). The
+    # service page's own JS calls `GET/POST/DELETE /api/proxy-hosts[/{id}]`
+    # for every mutation, so this only needs enough to list and delete.
+    return {
+        "id": ph.id,
+        "hostname": ph.hostname,
+        "upstream": ph.upstream,
+        "router_provider": ph.router_provider.value,
+        "wake_on_hit": ph.wake_on_hit,
+    }
+
+
 def service_detail(session: Session, svc: Service) -> dict[str, Any]:
     node = session.get(Node, svc.node_id) if svc.node_id is not None else None
     policy = (
@@ -224,6 +256,7 @@ def service_detail(session: Session, svc: Service) -> dict[str, Any]:
         # docs/architecture.md.
         "wake_unsupported": wake_is_unsupported(node),
         "probes": [_probe_dict(p) for p in _service_probes(session, svc)],
+        "proxy_hosts": [_proxy_host_dict(p) for p in _service_proxy_hosts(session, svc)],
         "created_at": svc.created_at.isoformat(),
         "updated_at": svc.updated_at.isoformat(),
     }

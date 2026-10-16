@@ -158,6 +158,7 @@ async def service_detail_page(
             "existing_groups": existing_groups,
             "guest_kinds": [k.value for k in GuestKind],
             "probe_kinds": probe_kinds,
+            "providers": [p.value for p in RouterProvider],
             "registry_dirty": diff.dirty,
             "yaml_path": diff.yaml_path,
         },

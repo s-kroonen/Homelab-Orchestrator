@@ -18,34 +18,37 @@ every other optional integration here. Once it's set:
    create.
 3. **Existing** `ProxyHost`s created before this was set do NOT get it
    retroactively — the sync only runs on create/update/delete/re-link, not on
-   a schedule. Each needs one edit+save to trigger it once, or a small
-   one-off backfill (loop every `ProxyHost`, call `sync_maintenance_middleware`
-   with its current `(hostname, service_slug)` as both old and new). Worth
-   adding as a tiny CLI command (`proxy resync-maintenance` or similar) rather
-   than a manual per-host edit — see Small features below.
+   a schedule. ~~Each needs one edit+save to trigger it once, or a small
+   one-off backfill~~ — **done**: `orchestrator-cli proxy resync-maintenance`
+   (see Small features below).
 
 ## Small features (each independently schedulable, no architecture decisions needed)
 
-- **Add a proxy host directly from the service page.** Today `ProxyHost`
-  management only lives on `/proxy-hosts`; `service_detail.html` just links
-  out to it. Add an inline "Add proxy host" form on the service page itself
-  (hostname, upstream, router_provider), calling the existing
-  `POST /api/proxy-hosts` with `service_id` pre-filled — no new endpoint,
-  just UI.
-- **Backfill command for the maintenance middleware** (see Quick fix above) —
-  a CLI command that re-runs `sync_maintenance_middleware` for every existing
-  `ProxyHost`, for use after `ORCHESTRATOR_PUBLIC_URL` is set for the first
-  time or after a Traefik Manager migration.
-- **Backups-per-service view.** The data already exists (`GET /api/runs`,
-  `GET /api/runs/{id}`, `GET /api/backups` in `web/routers/backup.py`) but
-  nothing on the service page surfaces it. Add a "Backups" section to
-  `service_detail.html`: recent runs for this service (status, started/
-  finished, error if failed), filtered from the existing endpoints (add a
-  `?service=` filter if they don't already support one — check first).
-- **Backup-policy logs/history view.** Similarly: a policy's own run history
-  across every service it covers, not just one service's. Likely a new page
-  (`/backup-policies/{id}`) or a section on the existing policies page —
-  check `docs/` for whatever that page already is before adding a new one.
+- ~~**Add a proxy host directly from the service page.**~~ **Done.** An
+  inline "Add proxy host" form (hostname, upstream, router_provider) plus
+  this service's own proxy hosts list now live on `service_detail.html`
+  itself, calling the existing `POST`/`DELETE /api/proxy-hosts[/{id}]` with
+  `service_id` pre-filled — no new endpoint. See
+  [proxy_hosts.md](proxy_hosts.md#where-to-edit-them).
+- ~~**Backfill command for the maintenance middleware**~~ **Done.**
+  `orchestrator-cli proxy resync-maintenance` re-runs
+  `sync_maintenance_middleware` for every `ProxyHost` with a linked
+  `service_id`, for use after `ORCHESTRATOR_PUBLIC_URL` is set for the
+  first time or after a Traefik Manager migration. See
+  [proxy_hosts.md](proxy_hosts.md#backfilling-existing-proxy-hosts).
+- ~~**Backups-per-service view.**~~ **Done.** A "Backups" section on
+  `service_detail.html` lists this service's recent `BackupRecord`s
+  (created, verified, protected, size, run), from the existing
+  `GET /api/backups?slug=` — no new endpoint needed, the filter already
+  existed.
+- ~~**Backup-policy logs/history view.**~~ **Done.** The existing
+  `/backup-policies` page gets a per-policy, lazily-loaded "History"
+  expander, backed by a new `?policy_id=` filter on `GET /api/runs`
+  (joined through `Service.backup_policy_id` — the same single source of
+  truth every other policy-membership query already uses, chosen over a
+  dedicated `BackupRecord`-based endpoint because `BackupRecord` only
+  covers backups that got as far as writing one, and a failed run is
+  exactly what this view most needs to surface).
 
 ## Architecture: generalize the adapter pattern
 

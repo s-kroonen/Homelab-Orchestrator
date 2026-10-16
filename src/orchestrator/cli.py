@@ -4,6 +4,7 @@
                 config show | edit SECT   change one section of .env
                 scaffold                  pull new/moved guests into services.yaml
     Registry    service | probe | proxy   edit entries in services.yaml
+                proxy resync-maintenance  backfill the Traefik maintenance middleware (DB, not YAML)
     Diagnose    check                     can I reach Proxmox and PBS?
                 transport check           is the host runner / ssh plumbing usable?
                 guests | snapshots        what do Proxmox and PBS see?

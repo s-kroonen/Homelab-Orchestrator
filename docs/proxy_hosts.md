@@ -45,7 +45,9 @@ up "which hostname reaches which service, through what":
 |---------------------------------|--------------------|---------------------------------------|
 | `orchestrator-cli proxy add/list/remove` | `services.yaml` directly | Reconciled into the DB on next boot / Reset |
 | Dashboard → **Proxy hosts** (`/proxy-hosts`) | live DB only | **Save to YAML** writes it out; **Reset to saved** discards it |
-| `GET/POST/PUT/DELETE /api/proxy-hosts[/{id}]` | live DB only | same as the page — it's what the page calls |
+| Dashboard → a service's own page (`/services/{slug}`), **Proxy hosts** section | live DB only | same as above — a shortcut that calls the same create/delete endpoints with `service_id` pre-filled, for this one service's hosts |
+| `GET/POST/PUT/DELETE /api/proxy-hosts[/{id}]` | live DB only | same as the page — it's what both pages call |
+| `orchestrator-cli proxy resync-maintenance` | nothing in the DB; re-syncs the gateway's maintenance middleware for every already-linked host | DB-only operation, no YAML involved — see ["Backfilling existing proxy hosts"](#backfilling-existing-proxy-hosts) below |
 
 `proxy_host` is YAML-owned ([architecture.md](architecture.md)), so web edits
 behave like any other dashboard registry edit: the "unsaved changes" badge
@@ -530,6 +532,55 @@ raised into that request: editing proxy hosts in the database must keep
 working even when the gateway integration is unreachable. An operator who
 needs to know whether a particular sync actually happened should check the
 audit log for the expected `middleware.*` entries, or the activity page.
+
+### Backfilling existing proxy hosts
+
+Because this sync only runs on a `ProxyHost` create/update/delete/re-link,
+two situations leave a host without the middleware, with no automatic way
+to notice or fix it:
+
+1. **The settings were just turned on.** `TRAEFIK_MANAGER_URL` and
+   `ORCHESTRATOR_PUBLIC_URL` were unset when a `ProxyHost` was created, and
+   got set later (see docs/roadmap.md's "Quick fix" entry) — every host
+   that already existed at that point never had a sync attempt made for
+   it, since the opt-in check short-circuited before anything else ran.
+2. **The host predates this feature entirely** — created before Traefik
+   Manager integration existed in this codebase at all.
+
+Either way, the fix is the same: re-run the sync for every already-linked
+host once, with its current `(hostname, service_slug)` as both the old and
+new value — the same no-op "re-sync" shape the create/update lifecycle
+hooks above already use for a host whose hostname and service haven't
+changed. Hand-editing every row once (an edit that doesn't actually change
+anything, just to re-trigger the hook) works, but doesn't scale past a
+couple of hosts, so there's a dedicated command instead:
+
+```bash
+orchestrator-cli proxy resync-maintenance
+```
+
+Loops every `ProxyHost` row with a linked `service_id`, calls
+`sync_maintenance_middleware` once per host (same as above — a no-op
+without `TRAEFIK_MANAGER_URL`/`ORCHESTRATOR_PUBLIC_URL`, printing a message
+saying so rather than doing anything), and prints what happened per host.
+Unlike `proxy add/list/remove`, this operates on the **live database**
+directly rather than `services.yaml` — there is nothing to reconcile or
+save afterwards, since nothing about a `ProxyHost` row itself changes; only
+the gateway's middleware config does.
+
+Every create/update/injection/removal this backfill performs is
+audit-logged exactly like the lifecycle-triggered sync above (same
+`middleware.*`/`backend_service.*` action names, same
+`orchestrator.audit.log.record` mechanism, target `traefik_manager:<name>`)
+— only the actor differs: `cli`, the same convention `backup`/`wake`
+already use for a CLI-triggered action, vs. the dashboard admin's username
+for a sync triggered by an edit there.
+
+Safe to run any time, including with nothing to backfill: a host whose
+middleware is already correctly injected gets a no-op pass (no write, no
+audit entry) — see the "Idempotent" notes on injection/removal above. Also
+safe to run repeatedly after a Traefik Manager migration, to make sure
+every linked host's middleware exists on the new instance.
 
 ### What this is not
 
