@@ -19,6 +19,7 @@ from typing import Any
 import click
 from sqlmodel import Session, col, select
 
+from orchestrator.adapters.factory import build_adapters
 from orchestrator.audit import log as audit
 from orchestrator.config import get_settings
 from orchestrator.db.models import ProxyHost, Service
@@ -33,7 +34,6 @@ from orchestrator.registry.probe_specs import (
     FieldSpec,
     kinds_by_menu_order,
 )
-from orchestrator.registry.traefik_manager_sync import sync_maintenance_middleware
 
 # ---------------------------------------------------------------------------
 # shared helpers
@@ -540,24 +540,27 @@ def proxy_remove(slug: str, hostname: str, path_override: str | None) -> None:
 def proxy_resync_maintenance() -> None:
     """Backfill the maintenance middleware for every linked proxy host.
 
-    ``sync_maintenance_middleware`` (``orchestrator.registry.traefik_manager_sync``)
+    ``ProxyAdapter.ensure_maintenance_fallback`` (``orchestrator.adapters.proxy``)
     only runs on a ``ProxyHost`` create/update/delete/re-link — see the
     lifecycle hooks in ``web/routers/proxy_hosts.py``. A host created before
     ``ORCHESTRATOR_PUBLIC_URL``/``TRAEFIK_MANAGER_URL`` were set, or before
     this feature existed at all, never gets the middleware injected until
     it is edited again. This command closes that gap in one pass: every
     ``ProxyHost`` with a linked ``service_id`` gets a no-op "re-sync" call
-    with its CURRENT ``(hostname, service_slug)`` as both the old and new
-    value — exactly the shape the create/update lifecycle hooks already use
-    for an unchanged host. See docs/proxy_hosts.md#maintenance-page-fallback.
+    for its CURRENT ``(hostname, service_slug)`` — exactly the shape the
+    create lifecycle hook already uses. See
+    docs/proxy_hosts.md#maintenance-page-fallback.
 
     This operates on the live DB directly, unlike ``proxy add/list/remove``
     above (which edit ``services.yaml``) — there is nothing to ``save()``
     here, and no YAML is touched.
 
     No-op, with a message, when ``TRAEFIK_MANAGER_URL`` or
-    ``ORCHESTRATOR_PUBLIC_URL`` is unset — same convention as the library
-    function itself.
+    ``ORCHESTRATOR_PUBLIC_URL`` is unset — same convention as the adapter
+    itself. Also a logged no-op (via ``DryRunProxyAdapter``) under
+    ``DRY_RUN=true`` or ``PROXY_ADAPTER=dry_run`` — same convention as every
+    other adapter-backed CLI command now that this goes through
+    ``build_adapters()`` instead of calling Traefik Manager directly.
     """
     configure_logging()
     build_engine()
@@ -567,7 +570,7 @@ def proxy_resync_maintenance() -> None:
         click.secho(
             "TRAEFIK_MANAGER_URL and ORCHESTRATOR_PUBLIC_URL must both be set — "
             "nothing to backfill without them (same no-op convention as "
-            "sync_maintenance_middleware itself). See "
+            "the adapter itself). See "
             "docs/proxy_hosts.md#maintenance-page-fallback-never-overwrite-an-existing-traefik-config.",
             fg="yellow",
         )
@@ -575,46 +578,51 @@ def proxy_resync_maintenance() -> None:
 
     async def _go() -> int:
         processed = 0
-        with Session(get_engine()) as session:
-            hosts = session.exec(
-                select(ProxyHost)
-                .where(col(ProxyHost.service_id).is_not(None))
-                .order_by(ProxyHost.hostname)
-            ).all()
-            if not hosts:
-                click.echo("No proxy hosts linked to a service — nothing to backfill.")
-                return 0
-            for ph in hosts:
-                svc = session.get(Service, ph.service_id) if ph.service_id else None
-                if svc is None:
-                    # service_id points at a row that no longer exists —
-                    # same orphaned-but-DB-only state docs/proxy_hosts.md
-                    # calls out elsewhere; nothing to sync for it.
-                    continue
-                events = await sync_maintenance_middleware(
-                    settings, hostname=ph.hostname, service_slug=svc.slug
-                )
-                processed += 1
-                click.secho(f"{ph.hostname} ({svc.slug})", bold=True)
-                if not events:
-                    click.echo("    (no change)")
-                for event in events:
-                    click.echo(f"    {event.action:<22} {event.name}")
-                    # Same audit mechanism and action vocabulary as the
-                    # web lifecycle hooks (web/routers/proxy_hosts.py's
-                    # _audit_maintenance_sync_events) — a CLI-triggered
-                    # resync is audited exactly like one triggered by an
-                    # edit in the dashboard, just with actor="cli", the
-                    # same convention `backup`/`wake` already use for a
-                    # CLI-triggered action.
-                    audit.record(
-                        session,
-                        actor="cli",
-                        action=event.action,
-                        target=f"traefik_manager:{event.name}",
-                        details=event.details,
+        adapters = build_adapters(settings)
+        await adapters.proxy.start()
+        try:
+            with Session(get_engine()) as session:
+                hosts = session.exec(
+                    select(ProxyHost)
+                    .where(col(ProxyHost.service_id).is_not(None))
+                    .order_by(ProxyHost.hostname)
+                ).all()
+                if not hosts:
+                    click.echo("No proxy hosts linked to a service — nothing to backfill.")
+                    return 0
+                for ph in hosts:
+                    svc = session.get(Service, ph.service_id) if ph.service_id else None
+                    if svc is None:
+                        # service_id points at a row that no longer exists —
+                        # same orphaned-but-DB-only state docs/proxy_hosts.md
+                        # calls out elsewhere; nothing to sync for it.
+                        continue
+                    events = await adapters.proxy.ensure_maintenance_fallback(
+                        hostname=ph.hostname, service_slug=svc.slug
                     )
-            session.commit()
+                    processed += 1
+                    click.secho(f"{ph.hostname} ({svc.slug})", bold=True)
+                    if not events:
+                        click.echo("    (no change)")
+                    for event in events:
+                        click.echo(f"    {event.action:<22} {event.name}")
+                        # Same audit mechanism and action vocabulary as the
+                        # web lifecycle hooks (web/routers/proxy_hosts.py's
+                        # _audit_maintenance_sync_events) — a CLI-triggered
+                        # resync is audited exactly like one triggered by an
+                        # edit in the dashboard, just with actor="cli", the
+                        # same convention `backup`/`wake` already use for a
+                        # CLI-triggered action.
+                        audit.record(
+                            session,
+                            actor="cli",
+                            action=event.action,
+                            target=f"traefik_manager:{event.name}",
+                            details=event.details,
+                        )
+                session.commit()
+        finally:
+            await adapters.proxy.stop()
         return processed
 
     processed = asyncio.run(_go())

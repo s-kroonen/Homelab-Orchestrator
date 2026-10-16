@@ -24,6 +24,7 @@ from orchestrator.adapters.pbs.base import Snapshot
 from orchestrator.adapters.pbs.dry_run import DryRunPbsAdapter
 from orchestrator.adapters.power.dry_run import DryRunPowerAdapter
 from orchestrator.adapters.proxmox.dry_run import DryRunProxmoxAdapter
+from orchestrator.adapters.proxy.dry_run import DryRunProxyAdapter
 from orchestrator.config import get_settings
 from orchestrator.db.models import (
     AuditEntry,
@@ -305,6 +306,7 @@ def _bundle(pbs: DryRunPbsAdapter | None = None) -> AdapterBundle:
         power=DryRunPowerAdapter(),
         proxmox=DryRunProxmoxAdapter(),
         pbs=pbs or DryRunPbsAdapter(),
+        proxy=DryRunProxyAdapter(),
         notifier=NullNotifier(),
     )
 

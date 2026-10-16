@@ -90,6 +90,12 @@ ENV_SECTIONS: tuple[EnvSection, ...] = (
             EnvKey("POWER_ADAPTER", "mqtt | dry_run — every adapter is dry_run while DRY_RUN=true"),
             EnvKey("PROXMOX_ADAPTER", "api | dry_run"),
             EnvKey("PBS_ADAPTER", "api | dry_run"),
+            EnvKey(
+                "PROXY_ADAPTER",
+                "traefik_manager | dry_run — live needs TRAEFIK_MANAGER_URL below too "
+                "(blank falls back to dry_run with a loud warning); see "
+                "docs/proxy_hosts.md.",
+            ),
             EnvKey("NOTIFIER_ADAPTER", "null — the only notifier until phase 9"),
             EnvKey(
                 "SCHEDULER_ENABLED",

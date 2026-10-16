@@ -54,6 +54,7 @@ class Settings(BaseSettings):
     power_adapter: str = "dry_run"
     proxmox_adapter: str = "dry_run"
     pbs_adapter: str = "dry_run"
+    proxy_adapter: str = "dry_run"
     notifier_adapter: str = "null"
 
     # ---- Web / API --------------------------------------------------------

@@ -28,14 +28,16 @@ adapters/           external systems, all mockable + dry-run
   power/{base,mqtt,dry_run}      # existing power manager, MQTT preferred
   proxmox/{base,api,dry_run}     # PVE API — guests, vzdump, task status
   pbs/{base,api,dry_run}         # PBS API — datastore, snapshots, verify, prune
+  proxy/{base,traefik_manager,dry_run}  # reverse proxy — Traefik Manager today
   notifier/{base,null}           # mailcow + ntfy (phase 9)
 db/                 SQLModel schema + engine
 domain/             enums + Pydantic DTOs shared across modules
 health/             probe engine (phase 4)
 pipelines/          wake (phase 3), backup (phase 2/6), restore (phase 8)
-registry/           YAML <-> DB reconcile + save/reset; also the Traefik
-                    (status/probes) and Traefik Manager (client/sync)
-                    integration modules
+registry/           YAML <-> DB reconcile + save/reset; also the direct-
+                    Traefik-API integration modules (status/probes) — the
+                    Traefik Manager client/sync logic lives in
+                    adapters/proxy/traefik_manager.py instead (see below)
 scheduler/          APScheduler wiring: backups (phase 6), Traefik traffic
                     polling, periodic health scanning (HealthScanner)
 web/                FastAPI app: health, maintenance, wake, dashboard
@@ -192,21 +194,26 @@ Until this phase, every Traefik integration in this app was read-only
 detection and the old Resync path). Traefik Manager
 (https://github.com/chr0nzz/traefik-manager) is now installed on the
 gateway alongside Traefik and is the stated source of truth for proxy
-routes; the orchestrator is a **client** of its REST API, the same
-relationship it already has with Proxmox/IPMI. See
-`src/orchestrator/registry/traefik_manager_client.py` (the thin HTTP
-client) and `traefik_manager_sync.py` (the maintenance-middleware feature
-built on top of it), and `docs/proxy_hosts.md` for the full design.
+routes; the orchestrator talks to it through a `ProxyAdapter`
+(`src/orchestrator/adapters/proxy/`), the same `dry_run`/live-implementation
+shape `adapters.{power,proxmox,pbs}` already use. See
+`src/orchestrator/adapters/proxy/traefik_manager.py`
+(`TraefikManagerProxyAdapter` — the REST calls and the maintenance-middleware
+feature built on top of them) and `docs/proxy_hosts.md` for the full
+design. This used to be two standalone modules under `orchestrator.registry`
+kept deliberately outside `orchestrator.adapters`; see `docs/roadmap.md`'s
+"generalize the adapter pattern" entry for why that changed.
 
-New settings, all empty/disabled by default:
+New settings:
 
-| Setting | Purpose |
-|---|---|
-| `TRAEFIK_MANAGER_URL` | Base URL. Empty disables the read-path swap AND the middleware-injection feature. |
-| `TRAEFIK_MANAGER_API_KEY` | `X-Api-Key` header, generated per-device in Traefik Manager's own UI. |
-| `TRAEFIK_MANAGER_VERIFY_TLS` | TLS verification for that connection. |
-| `TRAEFIK_MANAGER_TIMEOUT_S` | Short — runs synchronously from a dashboard-triggered request. |
-| `ORCHESTRATOR_PUBLIC_URL` | This orchestrator's own address as reachable FROM THE GATEWAY VM — the backend target for the maintenance-page fallback service. Separately gates the middleware-injection feature (the read-path swap only needs `TRAEFIK_MANAGER_URL`). |
+| Setting | Purpose | Default |
+|---|---|---|
+| `PROXY_ADAPTER` | `traefik_manager` \| `dry_run`. A live value with `TRAEFIK_MANAGER_URL` blank falls back to `dry_run`, loudly (same "substitute + warn" convention `MqttPowerAdapter.IMPLEMENTED` uses) — see `adapters/factory.py::build_adapters`. | `dry_run` |
+| `TRAEFIK_MANAGER_URL` | Base URL. Empty disables the read-path swap AND the middleware-injection feature AND forces `PROXY_ADAPTER` to `dry_run` regardless of its own setting. | `""` |
+| `TRAEFIK_MANAGER_API_KEY` | `X-Api-Key` header, generated per-device in Traefik Manager's own UI. | `""` |
+| `TRAEFIK_MANAGER_VERIFY_TLS` | TLS verification for that connection. | `true` |
+| `TRAEFIK_MANAGER_TIMEOUT_S` | Short — runs synchronously from a dashboard-triggered request. | `5.0` |
+| `ORCHESTRATOR_PUBLIC_URL` | This orchestrator's own address as reachable FROM THE GATEWAY VM — the backend target for the maintenance-page fallback service. Unlike `TRAEFIK_MANAGER_URL`, does NOT affect which adapter is selected — it only gates the middleware-injection feature itself (the read-path swap only needs `TRAEFIK_MANAGER_URL`). | `""` |
 
 No new DB tables or columns were needed for this — the middleware
 injection's state of record lives entirely in Traefik's own config files
