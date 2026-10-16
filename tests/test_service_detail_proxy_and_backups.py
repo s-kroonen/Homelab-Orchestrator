@@ -65,3 +65,42 @@ def test_service_page_renders_backups_section(client: TestClient) -> None:
     assert "Backups" in page.text
     assert "backups-body" in page.text
     assert f"/api/backups?slug={svc['slug']}" in page.text
+
+
+def test_service_page_has_manual_backup_trigger_button(client: TestClient) -> None:
+    """Template smoke test only — POST /api/backup/{slug} itself is already
+    tested in test_backup_pipeline.py / test_backup_api.py."""
+    node = _make_node(client)
+    svc = _make_service(client, node["id"], slug="media")
+
+    page = client.get(f"/services/{svc['slug']}")
+    assert page.status_code == 200, page.text
+    assert 'id="run-backup-btn"' in page.text
+    assert "/api/backup/${encodeURIComponent(SERVICE.slug)}?verify=true" in page.text
+
+
+def test_service_page_shows_guest_power_buttons_when_service_has_a_guest(
+    client: TestClient,
+) -> None:
+    node = _make_node(client)
+    svc = _make_service(client, node["id"], slug="media", guest_id=100)
+
+    page = client.get(f"/services/{svc['slug']}")
+    assert page.status_code == 200, page.text
+    assert 'id="guest-start-btn"' in page.text
+    assert 'id="guest-stop-btn"' in page.text
+    assert "/api/services/${encodeURIComponent(SERVICE.slug)}/guest/power" in page.text
+
+
+def test_service_page_hides_guest_power_row_when_service_has_no_guest(
+    client: TestClient,
+) -> None:
+    node = _make_node(client)
+    svc = _make_service(client, node["id"], slug="media", guest_kind="none")
+
+    page = client.get(f"/services/{svc['slug']}")
+    assert page.status_code == 200, page.text
+    # The buttons are still in the markup (hidden client-side by JS, same
+    # pattern as #wake-unsupported-banner) — this proves the hiding logic
+    # runs, not that the markup is absent.
+    assert 'guest-power-row").hidden = !hasGuest' in page.text

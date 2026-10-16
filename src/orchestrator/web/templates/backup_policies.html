@@ -16,18 +16,23 @@
       {% if registry_dirty %}<span class="dirty-badge">unsaved changes vs {{ yaml_path }}</span>{% endif %}
     </h2>
     <div class="row">
+      <a class="btn" href="/backup-policies/new">Add policy</a>
       <button id="save-btn">Save to YAML</button>
       <button class="secondary" id="reset-btn">Reset to saved</button>
       <span class="msg" id="registry-msg"></span>
+    </div>
+    <div class="row">
+      <label class="inline" for="bp-filter">Filter</label>
+      <input id="bp-filter" type="search" placeholder="policy name contains…">
     </div>
     <div class="table-scroll">
     <table>
       <thead>
         <tr><th>Policy</th><th>Schedule</th><th>Next run</th><th>Retention</th><th>Services</th><th></th></tr>
       </thead>
-      <tbody>
+      <tbody id="bp-rows">
         {% for p in policies %}
-        <tr>
+        <tr data-name="{{ p.name|lower }}">
           <td><code>{{ p.name }}</code><br><span class="muted">{{ p.mode }}</span></td>
           <td>{% if p.schedule_cron %}<code>{{ p.schedule_cron }}</code>{% else %}<span class="muted">manual only</span>{% endif %}</td>
           <td>
@@ -45,12 +50,12 @@
             {% if not p.services %}<span class="muted">none</span>{% endif %}
           </td>
           <td>
-            <button class="secondary small" data-edit="{{ p.name }}">Edit</button>
+            <a class="btn secondary small" href="/backup-policies/{{ p.name }}/edit">Edit</a>
             <button class="secondary small" data-history="{{ p.id }}">History</button>
             <button class="danger small" data-delete="{{ p.name }}">Delete</button>
           </td>
         </tr>
-        <tr class="history-row" data-history-for="{{ p.id }}" hidden>
+        <tr class="history-row" data-history-for="{{ p.id }}" data-history-owner="{{ p.name|lower }}" hidden>
           <td colspan="6">
             <p class="msg">
               Run history across every service this policy currently covers
@@ -76,66 +81,9 @@
     </table>
     </div>
   </section>
-
-  <section>
-    <h2 id="form-title">New policy</h2>
-    <form id="policy-form">
-      <div class="row">
-        <label>Name <input id="f-name" required placeholder="nightly"></label>
-        <label>Schedule (cron) <input id="f-cron" placeholder="0 3 * * *"></label>
-        <label>Mode
-          <select id="f-mode">
-            {% for m in modes %}<option value="{{ m }}">{{ m }}</option>{% endfor %}
-          </select>
-        </label>
-      </div>
-      <fieldset>
-        <legend>Retention (blank = not set)</legend>
-        <div class="row">
-          <label>keep_last <input type="number" min="0" id="f-keep_last"></label>
-          <label>keep_daily <input type="number" min="0" id="f-keep_daily"></label>
-          <label>keep_monthly <input type="number" min="0" id="f-keep_monthly"></label>
-          <label class="inline"><input type="checkbox" id="f-protect"> protect latest verified</label>
-        </div>
-      </fieldset>
-      <fieldset>
-        <legend>Target services</legend>
-        {% if groups %}
-        <div class="row" id="group-select-row">
-          <span class="muted">Select group:</span>
-          {% for g in groups %}
-          <button type="button" class="secondary small" data-select-group="{{ g }}">{{ g }}</button>
-          {% endfor %}
-          <button type="button" class="secondary small" data-select-group="">ungrouped</button>
-        </div>
-        {% endif %}
-        <div class="services">
-          {% for svc in services %}
-          <label class="inline"><input type="checkbox" name="svc" value="{{ svc.slug }}" data-group="{{ svc.group }}"> {{ svc.slug }}{% if svc.group %} <span class="muted">({{ svc.group }})</span>{% endif %}</label>
-          {% else %}<span class="muted">No services registered.</span>{% endfor %}
-        </div>
-      </fieldset>
-      <div class="row">
-        <button type="submit" id="submit-btn">Create policy</button>
-        <button type="button" class="secondary" id="cancel-btn" hidden>Cancel edit</button>
-        <span class="msg" id="form-msg"></span>
-      </div>
-    </form>
-  </section>
-{% endblock %}
-{% block extra_head %}
-<style>
-  .services { display: flex; flex-wrap: wrap; gap: 0.3rem 1rem; }
-  input[type=number] { width: 5rem; }
-  label { display: flex; flex-direction: column; gap: 0.25rem; }
-  label.inline { flex-direction: row; align-items: center; gap: 0.4rem; }
-</style>
 {% endblock %}
 {% block scripts %}
 <script>
-  const POLICIES = {{ policies|tojson }};
-  let editing = null;
-
   function setMsg(id, text, kind) {
     const el = document.getElementById(id);
     el.textContent = text;
@@ -160,84 +108,6 @@
       setMsg("registry-msg", "Reset failed: " + err.message, "error");
     }
   });
-
-  const KEEP = ["keep_last", "keep_daily", "keep_monthly"];
-
-  function fillForm(p) {
-    editing = p ? p.name : null;
-    const name = document.getElementById("f-name");
-    name.value = p ? p.name : "";
-    name.disabled = !!p;  // rename = delete + create; keeps the audit trail honest
-    document.getElementById("f-cron").value = p ? p.schedule_cron : "";
-    document.getElementById("f-mode").value = p ? p.mode : "snapshot";
-    for (const k of KEEP) {
-      const v = p && p.retention[k] !== undefined ? p.retention[k] : "";
-      document.getElementById("f-" + k).value = v;
-    }
-    document.getElementById("f-protect").checked = !!(p && p.retention.protect_latest_verified);
-    const attached = new Set(p && p.services ? p.services : []);
-    for (const cb of document.querySelectorAll("input[name=svc]")) cb.checked = attached.has(cb.value);
-    document.getElementById("form-title").textContent = p ? "Edit policy " + p.name : "New policy";
-    document.getElementById("submit-btn").textContent = p ? "Save changes" : "Create policy";
-    document.getElementById("cancel-btn").hidden = !p;
-    setMsg("form-msg", "");
-  }
-
-  function readForm() {
-    const retention = {};
-    for (const k of KEEP) {
-      const raw = document.getElementById("f-" + k).value.trim();
-      if (raw !== "") retention[k] = Number(raw);
-    }
-    if (document.getElementById("f-protect").checked) retention.protect_latest_verified = true;
-    const services = [...document.querySelectorAll("input[name=svc]:checked")].map((cb) => cb.value);
-    return {
-      schedule_cron: document.getElementById("f-cron").value.trim(),
-      mode: document.getElementById("f-mode").value,
-      retention,
-      services,
-    };
-  }
-
-  document.getElementById("policy-form").addEventListener("submit", async (ev) => {
-    ev.preventDefault();
-    const body = readForm();
-    try {
-      if (editing) {
-        await apiFetch("PUT", "/api/backup-policies/" + encodeURIComponent(editing), body, { suppressToast: true });
-      } else {
-        body.name = document.getElementById("f-name").value.trim();
-        await apiFetch("POST", "/api/backup-policies", body, { suppressToast: true });
-      }
-    } catch (err) {
-      setMsg("form-msg", err.message, "error");
-      return;
-    }
-    setMsg("form-msg", editing ? "Saved." : "Created.", "ok");
-    setTimeout(() => location.reload(), 500);
-  });
-
-  document.getElementById("cancel-btn").addEventListener("click", () => fillForm(null));
-
-  for (const btn of document.querySelectorAll("[data-edit]")) {
-    btn.addEventListener("click", () => {
-      fillForm(POLICIES.find((p) => p.name === btn.dataset.edit));
-      document.getElementById("policy-form").scrollIntoView({ behavior: "smooth" });
-    });
-  }
-  // "select group" buttons: pure client-side convenience. Toggling checks every
-  // checkbox for that group on if any are currently unchecked, else clears the
-  // whole group — the submitted payload is still the same flat services: [...]
-  // array the API already expects, nothing new server-side.
-  for (const btn of document.querySelectorAll("[data-select-group]")) {
-    btn.addEventListener("click", () => {
-      const grp = btn.dataset.selectGroup;
-      const boxes = [...document.querySelectorAll(`input[name=svc][data-group="${grp}"]`)];
-      if (!boxes.length) return;
-      const allChecked = boxes.every((cb) => cb.checked);
-      for (const cb of boxes) cb.checked = !allChecked;
-    });
-  }
 
   // --- per-policy run history (GET /api/runs?policy_id=, lazy-loaded) -----
   const STATUS_CLASS = { succeeded: "ok", failed: "failed" };
@@ -306,5 +176,21 @@
       location.reload();
     });
   }
+
+  // --- filter (policy-name substring) --------------------------------------
+  function applyFilter() {
+    const needle = document.getElementById("bp-filter").value.trim().toLowerCase();
+    for (const tr of document.querySelectorAll("#bp-rows tr[data-name]")) {
+      const match = needle === "" || tr.dataset.name.includes(needle);
+      tr.hidden = !match;
+      // Hide a visible history row too when its owner row is filtered out,
+      // so an expanded history panel doesn't linger under a hidden filter.
+      if (!match) {
+        const hist = document.querySelector(`tr.history-row[data-history-owner="${tr.dataset.name}"]`);
+        if (hist) hist.hidden = true;
+      }
+    }
+  }
+  document.getElementById("bp-filter").addEventListener("input", applyFilter);
 </script>
 {% endblock %}

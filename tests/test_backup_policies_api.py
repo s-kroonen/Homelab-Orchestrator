@@ -246,13 +246,14 @@ def test_policies_page_renders_policies_and_is_linked_from_dashboard(
     assert 'href="/backup-policies"' in dashboard.text
 
 
-def test_policies_page_offers_select_group_buttons(
+def test_new_policy_page_offers_select_group_buttons(
     app: Any, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The target-services checklist gets a "select group" button per group,
-    and each checkbox carries its service's group as a data attribute — the
-    bulk-select JS reads that, the submitted form still posts a flat
-    services: [...] list to the existing API."""
+    """The target-services checklist (on the dedicated add page — see
+    docs/adding_a_service.md's Groups section) gets a "select group" button
+    per group, and each checkbox carries its service's group as a data
+    attribute — the bulk-select JS reads that, the submitted form still
+    posts a flat services: [...] list to the existing API."""
     with Session(get_engine()) as s:
         alpha = s.exec(select(Service).where(Service.slug == "alpha")).one()
         alpha.group = "streaming"
@@ -261,10 +262,116 @@ def test_policies_page_offers_select_group_buttons(
 
     with TestClient(app) as client:
         _login(client, monkeypatch)
-        page = client.get("/backup-policies")
+        page = client.get("/backup-policies/new")
 
     assert page.status_code == 200
     assert 'data-select-group="streaming"' in page.text
     assert 'data-group="streaming"' in page.text
     # beta has no group — still listed, with an empty data-group, never hidden.
     assert 'value="beta" data-group=""' in page.text
+
+
+# ---------------------------------------------------------------------------
+# Dedicated add/edit pages (same pattern as /proxy-hosts/new + /{id}/edit)
+# ---------------------------------------------------------------------------
+
+
+def test_new_policy_page_renders(app: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    with TestClient(app) as client:
+        _login(client, monkeypatch)
+        r = client.get("/backup-policies/new")
+    assert r.status_code == 200
+    assert "New policy" in r.text
+    assert "alpha" in r.text and "beta" in r.text
+
+
+def test_new_policy_page_redirects_when_not_logged_in(app: Any) -> None:
+    with TestClient(app, follow_redirects=False) as anon:
+        r = anon.get("/backup-policies/new")
+    assert r.status_code == 303
+    assert r.headers["location"] == "/login?next=/backup-policies/new"
+
+
+def test_edit_policy_page_renders_prefilled(app: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    with TestClient(app) as client:
+        _login(client, monkeypatch)
+        created = client.post("/api/backup-policies", json=NIGHTLY).json()
+        assert created["name"] == "nightly"
+
+        r = client.get("/backup-policies/nightly/edit")
+    assert r.status_code == 200
+    assert "Edit nightly" in r.text
+    assert "0 3 * * *" in r.text
+    # name field locked on edit (rename = delete + create)
+    assert 'id="f-name"' in r.text
+    assert "disabled" in r.text
+    # the attached service's checkbox is pre-checked
+    assert 'value="alpha"' in r.text and "checked" in r.text
+
+
+def test_edit_policy_page_404s_for_unknown_name(app: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    with TestClient(app) as client:
+        _login(client, monkeypatch)
+        r = client.get("/backup-policies/does-not-exist/edit")
+    assert r.status_code == 404
+
+
+def test_edit_policy_page_redirects_when_not_logged_in(app: Any) -> None:
+    with TestClient(app, follow_redirects=False) as anon:
+        r = anon.get("/backup-policies/nightly/edit")
+    assert r.status_code == 303
+    assert r.headers["location"] == "/login?next=/backup-policies/nightly/edit"
+
+
+def test_policies_list_page_is_list_only_and_links_to_dedicated_pages(
+    app: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``/backup-policies`` no longer carries the bottom-of-page add/edit
+    form — it links out to the dedicated pages instead, same split as
+    ``/proxy-hosts``. The per-policy History expander (a different, already
+    lazily-loaded feature) is untouched."""
+    with TestClient(app) as client:
+        _login(client, monkeypatch)
+        client.post("/api/backup-policies", json=NIGHTLY)
+        page = client.get("/backup-policies")
+    assert page.status_code == 200
+    assert 'href="/backup-policies/new"' in page.text
+    assert 'href="/backup-policies/nightly/edit"' in page.text
+    assert 'data-history="' in page.text  # History expander still present
+    assert 'id="policy-form"' not in page.text  # inline form is gone
+    assert 'id="bp-filter"' in page.text  # name filter box
+
+
+def test_policies_list_page_filter_box_present_and_filters_by_name(
+    app: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    with TestClient(app) as client:
+        _login(client, monkeypatch)
+        client.post("/api/backup-policies", json=NIGHTLY)
+        page = client.get("/backup-policies")
+    assert page.status_code == 200
+    assert 'data-name="nightly"' in page.text
+
+
+def test_new_policy_page_create_flow(app: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The dedicated add page submits to the same existing API the old
+    inline form used — no backend change needed for this feature."""
+    with TestClient(app) as client:
+        _login(client, monkeypatch)
+        r = client.get("/backup-policies/new")
+        assert r.status_code == 200
+        created = client.post("/api/backup-policies", json=NIGHTLY)
+        assert created.status_code == 201
+        page = client.get("/backup-policies")
+    assert "nightly" in page.text
+
+
+def test_edit_policy_page_update_flow(app: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    with TestClient(app) as client:
+        _login(client, monkeypatch)
+        client.post("/api/backup-policies", json=NIGHTLY)
+        r = client.get("/backup-policies/nightly/edit")
+        assert r.status_code == 200
+        updated = client.put("/api/backup-policies/nightly", json={"schedule_cron": "0 4 * * *"})
+        assert updated.status_code == 200
+        assert updated.json()["schedule_cron"] == "0 4 * * *"

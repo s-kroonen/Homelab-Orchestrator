@@ -187,6 +187,46 @@ happens to have no `power_mgr_target` set also shows this page — a rare
 edge case, and arguably still correct: the data gap is real even if it
 hasn't bitten anyone yet.
 
+## Manual power actions: two raw actions, deliberately not the wake pipeline
+
+Two endpoints exist purely for an admin who wants a specific low-level
+action right now, bypassing the orchestration `POST /wake/{slug}` does
+(node power-on, a hold, guest start, health wait). Neither is used by the
+wake pipeline, the backup pipeline, or the maintenance page — they exist
+only for the dashboard buttons that call them.
+
+**`POST /api/infra/nodes/{name}/power`** (`web/routers/infra.py`) —
+`{"action": "wake" | "power_off" | "restart", "force": bool}` — calls
+`adapters.power.wake`/`power_off`/`restart` directly for the named `Node`
+(`node.power_mgr_target`, not the Proxmox node name itself — same
+distinction `WakePipeline` makes). `force` (default `false`) maps straight
+through to `PowerAdapter`'s own semantics — see
+`orchestrator/adapters/power/base.py`'s docstrings: `false` asks for a
+graceful shutdown/reset, `true` cuts power immediately (power_off) or does
+a full power-cycle (restart), with no chance for a clean shutdown. Only
+meaningful for `power_off`/`restart`; ignored for `wake`. Audit-logged as
+`node.power_action`. The dashboard's Nodes table (`dashboard.html`) gets
+Wake/Power off/Restart buttons plus a shared "force" checkbox; `power_off`/
+`restart` are gated behind a `confirm()` that spells out exactly what
+`force=true` means, `wake` is unconditional (harmless).
+
+**`POST /api/services/{slug}/guest/power`** (`web/routers/dashboard.py`) —
+`{"action": "start" | "stop"}` — calls `adapters.proxmox.start_guest`/
+`stop_guest` directly for the service's guest (`node`/`vmid`/`kind`
+resolved from the `Service`/`Node` rows the same way
+`WakePipeline._ensure_guest_running` does), with no node power-on, no hold,
+and no health wait layered on top — genuinely just "start/stop this
+guest". `stop` is refused (`409`) while a backup `PipelineRun` is currently
+`RUNNING` for that service (queried directly — `kind == BACKUP`,
+`status == RUNNING`, `service_id` match; no existing helper covers this,
+since `BackupPipeline.run_for_service` runs synchronously within one
+request, so this guard normally only matters for a genuinely concurrent
+request), so an admin can't yank the guest out from under a live `vzdump`.
+`start` has no such guard. Audit-logged as `service.guest_power_action`.
+`service_detail.html` gets Start/Stop guest buttons near the service's
+node/guest fields, hidden when the service has no guest configured; `stop`
+is gated behind a `confirm()`, `start` is not.
+
 ## Traefik Manager (write path)
 
 Until this phase, every Traefik integration in this app was read-only

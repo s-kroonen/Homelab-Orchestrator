@@ -70,6 +70,37 @@ every other optional integration here. Once it's set:
   dedicated `BackupRecord`-based endpoint because `BackupRecord` only
   covers backups that got as far as writing one, and a failed run is
   exactly what this view most needs to surface).
+- ~~**Backup policies: dedicated add/edit pages.**~~ **Done.** Same split as
+  proxy hosts: `/backup-policies` is now list-only (table + the History
+  expanders above + a name filter box); `/backup-policies/new` and
+  `/backup-policies/{name}/edit` are real, dedicated pages
+  (`backup_policy_form.html`) replacing the bottom-of-page inline form —
+  keyed by `name` rather than an id, since `BackupPolicy` has no id exposed
+  in the URL elsewhere. UI-only: reuses the existing
+  `POST`/`PUT /api/backup-policies[/{name}]`, no backend change. The
+  "select group" bulk-target buttons moved onto the form pages intact.
+- ~~**Manual backup trigger button.**~~ **Done**, UI-only. `service_detail.html`'s
+  Backups section gets a "Run backup now" button calling the existing
+  `POST /api/backup/{slug}?verify=true`, disabled for the duration of the
+  request (no confirm — an on-demand backup isn't destructive).
+- ~~**Manual node power actions.**~~ **Done.** New
+  `POST /api/infra/nodes/{name}/power` (`{"action": "wake"|"power_off"|
+  "restart", "force": bool}`) calls `adapters.power` directly — NOT the wake
+  pipeline — and audit-logs `node.power_action`. `force` maps straight
+  through to `PowerAdapter`'s own semantics (false = graceful, true =
+  immediate/power-cycle). Wake/Power off/Restart buttons + a shared force
+  checkbox added to the dashboard's existing Nodes table; power off/restart
+  are gated behind a `confirm()` spelling out what `force=true` means, wake
+  is unconditional.
+- ~~**Manual service guest start/stop.**~~ **Done.** New
+  `POST /api/services/{slug}/guest/power` (`{"action": "start"|"stop"}`)
+  calls `adapters.proxmox.start_guest`/`stop_guest` directly — deliberately
+  NOT `POST /wake/{slug}` (no node power-on, no hold, no health wait).
+  `stop` is refused (`409`) while a backup `PipelineRun` is currently
+  `RUNNING` for that service. Audit-logged as `service.guest_power_action`.
+  Start/Stop guest buttons added to `service_detail.html` near the service's
+  node/guest fields, hidden when the service has no guest configured; stop
+  is gated behind a `confirm()`.
 
 ## Done: shared template/CSS/JS foundation
 
@@ -86,12 +117,13 @@ now carry the chrome and the error-surfacing every page shares. This was
 scoped as foundation only — chrome + error handling, no change to any page's
 actual information architecture — so the deeper redesign (sub-tabs,
 dedicated add/edit pages, list filtering) mentioned below was still open at
-the time. **Proxy hosts got dedicated add/edit pages + list filtering
-first** (see the "Small features" entry above) — the other list pages
-(backup policies, services) still have the bolted-on-inline-form pattern
-and are candidates for the same treatment next. See "The big question:
-frontend direction" below for why this stays server-rendered Jinja2 rather
-than a SPA rewrite.
+the time. **Proxy hosts, then backup policies, got dedicated add/edit pages
++ list filtering** (see the "Small features" entries above) — the service
+page (`service_detail.html`) still edits a service inline on its own page
+(not a bolted-on-the-bottom list+form split like the other two, so it isn't
+the same kind of candidate) and remains open for a similar look if it grows
+unwieldy. See "The big question: frontend direction" below for why this
+stays server-rendered Jinja2 rather than a SPA rewrite.
 
 ## Architecture: generalize the adapter pattern
 

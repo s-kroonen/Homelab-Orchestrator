@@ -21,23 +21,25 @@ from __future__ import annotations
 import re
 from collections import Counter
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from sqlmodel import Session, col, select
 
+from orchestrator.adapters.errors import AdapterError
 from orchestrator.audit import log as audit
 from orchestrator.config import get_settings
 from orchestrator.db.models import (
     BackupPolicy,
     HealthScanSample,
     Node,
+    PipelineRun,
     Probe,
     ProxyHost,
     Service,
 )
-from orchestrator.domain.enums import GuestKind, ProbeKind
+from orchestrator.domain.enums import GuestKind, PipelineKind, PipelineStatus, ProbeKind
 from orchestrator.domain.schemas import HttpProbeConfig, TcpProbeConfig
 from orchestrator.health.engine import HealthEngine
 from orchestrator.pipelines.wake import wake_is_unsupported
@@ -49,7 +51,7 @@ from orchestrator.registry.loader import (
 )
 from orchestrator.registry.probe_specs import PROBE_SPECS
 from orchestrator.web.auth import CurrentAdmin, require_admin
-from orchestrator.web.deps import SessionDep, SettingsDep
+from orchestrator.web.deps import AdaptersDep, SessionDep, SettingsDep
 
 router = APIRouter(prefix="/api", tags=["dashboard"], dependencies=[Depends(require_admin)])
 
@@ -857,3 +859,102 @@ async def delete_probe(probe_id: int, session: SessionDep, admin: CurrentAdmin) 
     )
     session.commit()
     return {"status": "deleted", "id": probe_id}
+
+
+# ---------------------------------------------------------------------------
+# Manual guest power (raw start/stop, NOT the /wake pipeline)
+# ---------------------------------------------------------------------------
+
+
+class GuestPowerIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    action: Literal["start", "stop"]
+
+
+def _backup_currently_running(session: Session, service_id: int) -> bool:
+    """Is there a backup ``PipelineRun`` for this service that is currently
+    ``RUNNING``? No existing helper does this query elsewhere (the backup
+    pipeline runs synchronously within one request — see
+    ``pipelines/backup.py`` — so this normally only matches a *concurrent*
+    in-flight request), so this is the guardrail
+    :func:`service_guest_power` uses to refuse stopping a guest mid-backup."""
+    return (
+        session.exec(
+            select(PipelineRun.id)
+            .where(
+                PipelineRun.service_id == service_id,
+                PipelineRun.kind == PipelineKind.BACKUP,
+                PipelineRun.status == PipelineStatus.RUNNING,
+            )
+            .limit(1)
+        ).first()
+        is not None
+    )
+
+
+@router.post("/services/{slug}/guest/power")
+async def service_guest_power(
+    slug: str,
+    body: GuestPowerIn,
+    session: SessionDep,
+    adapters: AdaptersDep,
+    admin: CurrentAdmin,
+) -> dict[str, Any]:
+    """Raw, direct Proxmox guest start/stop for one service.
+
+    Deliberately NOT the same thing as ``POST /wake/{slug}`` (the full
+    orchestrated pipeline: node power, hold, guest start, health wait) — this
+    calls ``adapters.proxmox.start_guest``/``stop_guest`` straight through,
+    for when an admin wants exactly that and nothing else. The
+    node/vmid/kind resolution mirrors
+    :meth:`orchestrator.pipelines.wake.WakePipeline._ensure_guest_running`.
+
+    Guardrail: ``stop`` is refused (``409``) while a backup pipeline run is
+    currently ``RUNNING`` for this service — see
+    :func:`_backup_currently_running` — to avoid yanking the guest out from
+    under a live ``vzdump``. ``start`` has no such guard; there is no
+    equivalent hazard for starting a guest back up.
+    """
+    svc = session.exec(select(Service).where(Service.slug == slug)).one_or_none()
+    if svc is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, f"no service registered with slug {slug!r}")
+    if svc.guest_kind is GuestKind.NONE or svc.guest_id is None:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST, f"service {slug!r} has no guest configured"
+        )
+    node = session.get(Node, svc.node_id) if svc.node_id is not None else None
+    if node is None:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, f"service {slug!r} has no node")
+    assert svc.id is not None
+
+    if body.action == "stop" and _backup_currently_running(session, svc.id):
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            f"a backup is currently running for {slug!r} — refusing to stop its "
+            "guest mid-backup",
+        )
+
+    try:
+        if body.action == "start":
+            handle = await adapters.proxmox.start_guest(node.name, svc.guest_id, svc.guest_kind)
+        else:
+            handle = await adapters.proxmox.stop_guest(node.name, svc.guest_id, svc.guest_kind)
+    except AdapterError as exc:
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc)) from exc
+
+    audit.record(
+        session,
+        actor=admin.username,
+        action="service.guest_power_action",
+        target=f"service:{slug}",
+        details={
+            "action": body.action,
+            "node": node.name,
+            "vmid": svc.guest_id,
+            "guest_kind": svc.guest_kind.value,
+            "upid": handle.upid,
+        },
+    )
+    session.commit()
+    return {"status": "ok", "service": slug, "action": body.action, "upid": handle.upid}
