@@ -1,89 +1,6 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>homelab-orchestrator — dashboard</title>
-<style>
-  :root { color-scheme: light dark; }
-  body {
-    margin: 0; min-height: 100vh; padding: 2rem 1rem;
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-    background: #0b0e14; color: #e6e9ef;
-  }
-  .wrap { max-width: 56rem; margin: 0 auto; }
-  header { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 1.5rem; }
-  header h1 { font-size: 1.1rem; margin: 0; }
-  header .who { color: #9aa4b2; font-size: 0.85rem; }
-  header nav { display: flex; gap: 1rem; font-size: 0.85rem; }
-  header nav a { color: #9aa4b2; text-decoration: none; }
-  header nav a:hover, header nav a.current { color: #5b8def; }
-  button, a.btn {
-    padding: 0.4rem 0.9rem; background: #5b8def; color: #0b0e14; border: none;
-    border-radius: 0.4rem; font-weight: 600; cursor: pointer; font-size: 0.85rem;
-    text-decoration: none; display: inline-block;
-  }
-  button.secondary { background: #2a2f3a; color: #e6e9ef; }
-  button.logout { background: transparent; color: #9aa4b2; border: 1px solid #2a2f3a; }
-  table { width: 100%; border-collapse: collapse; margin-bottom: 1.5rem; }
-  th, td { text-align: left; padding: 0.5rem 0.6rem; border-bottom: 1px solid #1a1e27; font-size: 0.85rem; }
-  th { color: #9aa4b2; font-weight: 500; }
-  .badge { padding: 0.1rem 0.5rem; border-radius: 1rem; font-size: 0.75rem; }
-  .badge.healthy { background: #113b23; color: #3ecf6d; }
-  .badge.failed { background: #3b1414; color: #e5534b; }
-  .badge.unknown { background: #2a2f3a; color: #9aa4b2; }
-  .badge.disabled { background: #2a2f3a; color: #6b7280; }
-  section { margin-bottom: 2rem; }
-  section h2 { font-size: 0.95rem; margin: 0 0 0.75rem; }
-  .dirty-badge { background: #3b2e14; color: #e5a63e; padding: 0.2rem 0.6rem; border-radius: 0.4rem; font-size: 0.8rem; }
-  .row { display: flex; gap: 0.5rem; align-items: center; margin-bottom: 0.75rem; flex-wrap: wrap; }
-  input, select, textarea { padding: 0.4rem; background: #171b24; border: 1px solid #2a2f3a; border-radius: 0.4rem; color: #e6e9ef; font: inherit; font-size: 0.85rem; }
-  input[type=checkbox] { padding: 0; }
-  td a, td a:visited { color: #5b8def; text-decoration: none; }
-  td a:hover { text-decoration: underline; }
-  button.danger { background: transparent; color: #e5534b; border: 1px solid #2a2f3a; }
-  label.inline { color: #9aa4b2; font-size: 0.85rem; display: inline-flex; gap: 0.3rem; align-items: center; }
-  .msg { font-size: 0.85rem; color: #9aa4b2; }
-  .msg.ok { color: #3ecf6d; }
-  .msg.error { color: #e5534b; }
-  ul.invites, ul.devices { list-style: none; padding: 0; font-size: 0.85rem; }
-  ul.invites li, ul.devices li { padding: 0.3rem 0; border-bottom: 1px solid #1a1e27; color: #9aa4b2; }
-  code { background: #171b24; padding: 0.1rem 0.3rem; border-radius: 0.3rem; }
-  nav { display: flex; gap: 1rem; margin-bottom: 1.5rem; font-size: 0.85rem; }
-  nav a { color: #9aa4b2; text-decoration: none; }
-  nav a.current { color: #e6e9ef; border-bottom: 2px solid #5b8def; }
-  details summary { cursor: pointer; list-style: none; }
-  details summary::-webkit-details-marker { display: none; }
-  details.group { margin-bottom: 1rem; }
-  details.group summary { padding: 0.4rem 0; font-size: 0.9rem; }
-  details.group summary::before { content: "▸ "; color: #9aa4b2; }
-  details.group[open] summary::before { content: "▾ "; color: #9aa4b2; }
-  details.group .group-name { font-weight: 600; }
-  details.group table { margin-top: 0.5rem; }
-  /* Same step list as maintenance.html — one ✓/✗ vocabulary across pages. */
-  ol.steps { list-style: none; padding: 0; margin: 0.4rem 0 0; text-align: left; font-size: 0.8rem; }
-  ol.steps li { padding: 0.15rem 0; color: #9aa4b2; }
-  ol.steps li.ok::before { content: "✓ "; color: #3ecf6d; }
-  ol.steps li.failed::before, ol.steps li.indeterminate::before { content: "✗ "; color: #e5534b; }
-</style>
-</head>
-<body>
-<div class="wrap">
-  <header>
-    <h1>homelab-orchestrator</h1>
-    <nav>
-      <a href="/" class="current">Dashboard</a>
-      <a href="/backup-policies">Backup policies</a>
-      <a href="/proxy-hosts">Proxy hosts</a>
-      <a href="/traffic">Traffic</a>
-      <a href="/activity">Activity</a>
-    </nav>
-    <span class="who">
-      {{ admin.username }}
-      <button class="logout" id="logout-btn">Log out</button>
-    </span>
-  </header>
-
+{% extends "base.html" %}
+{% block title %}homelab-orchestrator — dashboard{% endblock %}
+{% block content %}
   <section>
     <h2>
       Services
@@ -198,9 +115,17 @@
     <p class="msg" id="invite-msg"></p>
     <ul class="invites" id="invites-list"></ul>
   </section>
-</div>
-
-<script src="/static/webauthn.js"></script>
+{% endblock %}
+{% block extra_head %}
+<style>
+  ul.invites, ul.devices { list-style: none; padding: 0; font-size: 0.85rem; }
+  ul.invites li, ul.devices li { padding: 0.3rem 0; border-bottom: 1px solid #1a1e27; color: #9aa4b2; }
+  td a, td a:visited { color: #5b8def; text-decoration: none; }
+  td a:hover { text-decoration: underline; }
+</style>
+{% endblock %}
+{% block webauthn_script %}<script src="/static/webauthn.js"></script>{% endblock %}
+{% block scripts %}
 <script>
   function setMsg(id, text, kind) {
     const el = document.getElementById(id);
@@ -208,25 +133,27 @@
     el.className = "msg" + (kind ? " " + kind : "");
   }
 
-  document.getElementById("logout-btn").addEventListener("click", async () => {
-    await fetch("/api/auth/logout", { method: "POST" });
-    location.href = "/login";
-  });
-
   document.getElementById("save-btn").addEventListener("click", async () => {
-    const r = await fetch("/api/registry/save", { method: "POST" });
-    setMsg("registry-msg", r.ok ? "Saved." : "Save failed.", r.ok ? "ok" : "error");
-    if (r.ok) setTimeout(() => location.reload(), 600);
+    try {
+      await apiFetch("POST", "/api/registry/save");
+      setMsg("registry-msg", "Saved.", "ok");
+      setTimeout(() => location.reload(), 600);
+    } catch (err) {
+      setMsg("registry-msg", "Save failed: " + err.message, "error");
+    }
   });
   document.getElementById("reset-btn").addEventListener("click", async () => {
-    const r = await fetch("/api/registry/reset", { method: "POST" });
-    setMsg("registry-msg", r.ok ? "Reset." : "Reset failed.", r.ok ? "ok" : "error");
-    if (r.ok) setTimeout(() => location.reload(), 600);
+    try {
+      await apiFetch("POST", "/api/registry/reset");
+      setMsg("registry-msg", "Reset.", "ok");
+      setTimeout(() => location.reload(), 600);
+    } catch (err) {
+      setMsg("registry-msg", "Reset failed: " + err.message, "error");
+    }
   });
 
   async function loadDevices() {
-    const resp = await fetch("/api/auth/credentials");
-    const creds = await resp.json();
+    const creds = await apiFetch("GET", "/api/auth/credentials");
     const list = document.getElementById("devices-list");
     list.innerHTML = creds.length ? "" : "<li>No devices yet.</li>";
     for (const c of creds) {
@@ -246,8 +173,7 @@
   });
 
   async function loadInvites() {
-    const resp = await fetch("/api/auth/invites");
-    const invites = await resp.json();
+    const invites = await apiFetch("GET", "/api/auth/invites");
     const list = document.getElementById("invites-list");
     list.innerHTML = invites.length ? "" : "<li>No invites yet.</li>";
     for (const inv of invites) {
@@ -259,37 +185,13 @@
   document.getElementById("invite-btn").addEventListener("click", async () => {
     const label = document.getElementById("invite-label").value.trim();
     try {
-      const resp = await fetch("/api/auth/invites", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ label }),
-      });
-      const data = await resp.json();
+      const data = await apiFetch("POST", "/api/auth/invites", { label }, { suppressToast: true });
       setMsg("invite-msg", `Link (valid once, expires ${data.expires_at}): ${data.url}`, "ok");
       await loadInvites();
     } catch (err) {
       setMsg("invite-msg", err.message, "error");
     }
   });
-
-  async function apiError(resp) {
-    try {
-      const data = await resp.json();
-      if (typeof data.detail === "string") return data.detail;
-      return JSON.stringify(data.detail ?? data);
-    } catch (_) {
-      return `HTTP ${resp.status}`;
-    }
-  }
-  async function sendJson(method, url, body) {
-    const resp = await fetch(url, {
-      method,
-      headers: { "Content-Type": "application/json" },
-      body: body === undefined ? undefined : JSON.stringify(body),
-    });
-    if (!resp.ok) throw new Error(await apiError(resp));
-    return resp.json();
-  }
 
   const newSvcBtn = document.getElementById("new-svc-btn");
   if (newSvcBtn) {
@@ -304,7 +206,7 @@
         group: document.getElementById("new-svc-group").value.trim(),
       };
       try {
-        const svc = await sendJson("POST", "/api/registry/services", body);
+        const svc = await apiFetch("POST", "/api/registry/services", body, { suppressToast: true });
         location.href = "/services/" + encodeURIComponent(svc.slug);
       } catch (err) {
         setMsg("new-svc-msg", err.message, "error");
@@ -346,7 +248,7 @@
         button("Delete", "danger", async () => {
           if (!confirm(`Delete node ${node.name}?`)) return;
           try {
-            await sendJson("DELETE", path);
+            await apiFetch("DELETE", path, undefined, { suppressToast: true });
             location.reload();
           } catch (err) { setMsg("nodes-msg", err.message, "error"); }
         }),
@@ -370,11 +272,11 @@
     actions.append(
       button("Save", "", async () => {
         try {
-          await sendJson("PUT", path, {
+          await apiFetch("PUT", path, {
             name: name.value.trim(), always_on: alwaysOn.checked,
             power_mgr_target: target.value.trim(), notes: notes.value,
             wake_on_hit_enabled: wakeOnHit.checked,
-          });
+          }, { suppressToast: true });
           location.reload();
         } catch (err) { setMsg("nodes-msg", err.message, "error"); }
       }), " ",
@@ -385,8 +287,7 @@
   }
 
   async function loadNodes() {
-    const resp = await fetch("/api/registry/nodes");
-    const nodes = await resp.json();
+    const nodes = await apiFetch("GET", "/api/registry/nodes");
     const body = document.getElementById("nodes-body");
     body.innerHTML = "";
     if (!nodes.length) {
@@ -398,13 +299,13 @@
 
   document.getElementById("new-node-btn").addEventListener("click", async () => {
     try {
-      await sendJson("POST", "/api/registry/nodes", {
+      await apiFetch("POST", "/api/registry/nodes", {
         name: document.getElementById("new-node-name").value.trim(),
         always_on: document.getElementById("new-node-always-on").checked,
         power_mgr_target: document.getElementById("new-node-target").value.trim(),
         notes: document.getElementById("new-node-notes").value,
         wake_on_hit_enabled: document.getElementById("new-node-wake-on-hit").checked,
-      });
+      }, { suppressToast: true });
       // Full reload: the "new service" node picker and the unsaved-changes
       // badge are both server-rendered.
       location.reload();
@@ -435,5 +336,4 @@
     if (!shouldSkipAutoReload()) location.reload();
   }, 60000);
 </script>
-</body>
-</html>
+{% endblock %}

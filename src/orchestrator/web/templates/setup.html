@@ -1,55 +1,12 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>homelab-orchestrator — setup</title>
-<style>
-  :root { color-scheme: light dark; }
-  body {
-    margin: 0; min-height: 100vh; padding: 2rem 1rem;
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-    background: #0b0e14; color: #e6e9ef;
-  }
-  .wrap { max-width: 44rem; margin: 0 auto; }
-  header { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 1rem; }
-  header h1 { font-size: 1.1rem; margin: 0; }
-  header .who { color: #9aa4b2; font-size: 0.85rem; }
-  p.intro { color: #9aa4b2; font-size: 0.85rem; line-height: 1.5; }
-  fieldset { border: 1px solid #2a2f3a; border-radius: 0.5rem; margin: 0 0 1.25rem; padding: 0.75rem 1rem 1rem; }
-  legend { font-size: 0.95rem; font-weight: 600; padding: 0 0.4rem; }
-  fieldset > p { color: #9aa4b2; font-size: 0.8rem; margin: 0 0 0.75rem; }
-  label.field { display: block; margin-bottom: 0.7rem; font-size: 0.85rem; }
-  label.field span.name { display: block; margin-bottom: 0.2rem; }
-  label.field span.req { color: #e5534b; }
-  label.check { display: flex; gap: 0.5rem; align-items: center; margin-bottom: 0.7rem; font-size: 0.85rem; }
-  small { display: block; color: #9aa4b2; font-size: 0.75rem; margin-top: 0.15rem; }
-  input[type=text], input[type=password], input[type=number], select {
-    width: 100%; box-sizing: border-box; padding: 0.4rem; background: #171b24;
-    border: 1px solid #2a2f3a; border-radius: 0.4rem; color: #e6e9ef;
-  }
-  button {
-    padding: 0.5rem 1.1rem; background: #5b8def; color: #0b0e14; border: none;
-    border-radius: 0.4rem; font-weight: 600; cursor: pointer; font-size: 0.9rem;
-  }
-  button:disabled { background: #2a2f3a; color: #9aa4b2; cursor: wait; }
-  .msg { font-size: 0.85rem; color: #9aa4b2; }
-  .msg.ok { color: #3ecf6d; }
-  .msg.error { color: #e5534b; }
-  code { background: #171b24; padding: 0.1rem 0.3rem; border-radius: 0.3rem; }
-  pre {
-    background: #171b24; border: 1px solid #2a2f3a; border-radius: 0.4rem; padding: 0.75rem;
-    font-size: 0.75rem; color: #9aa4b2; white-space: pre-wrap; overflow-wrap: anywhere;
-  }
-  #result ul { font-size: 0.85rem; color: #9aa4b2; }
-</style>
-</head>
-<body>
-<div class="wrap">
+{% extends "base.html" %}
+{% block title %}homelab-orchestrator — setup{% endblock %}
+{% block header %}
   <header>
     <h1>homelab-orchestrator — first-run setup</h1>
     <span class="who">{{ actor }}</span>
   </header>
+{% endblock %}
+{% block content %}
   <p class="intro">
     The web form of <code>orchestrator-cli init --non-interactive</code>: the same
     checks against your Proxmox and PBS, then <code>{{ env_path }}</code> and
@@ -121,8 +78,28 @@
 
   <div id="result"></div>
   <pre id="setup-log" hidden></pre>
-</div>
-
+{% endblock %}
+{% block extra_head %}
+<style>
+  .wrap { max-width: 44rem; }
+  p.intro { color: #9aa4b2; font-size: 0.85rem; line-height: 1.5; }
+  legend { font-size: 0.95rem; font-weight: 600; }
+  fieldset > p { color: #9aa4b2; font-size: 0.8rem; margin: 0 0 0.75rem; }
+  label.field { display: block; margin-bottom: 0.7rem; font-size: 0.85rem; }
+  label.field span.name { display: block; margin-bottom: 0.2rem; }
+  label.field span.req { color: #e5534b; }
+  label.check { display: flex; gap: 0.5rem; align-items: center; margin-bottom: 0.7rem; font-size: 0.85rem; }
+  small { display: block; color: #9aa4b2; font-size: 0.75rem; margin-top: 0.15rem; }
+  input[type=text], input[type=password], input[type=number], select { width: 100%; }
+  button:disabled { background: #2a2f3a; color: #9aa4b2; cursor: wait; }
+  pre {
+    background: #171b24; border: 1px solid #2a2f3a; border-radius: 0.4rem; padding: 0.75rem;
+    font-size: 0.75rem; color: #9aa4b2; white-space: pre-wrap; overflow-wrap: anywhere;
+  }
+  #result ul { font-size: 0.85rem; color: #9aa4b2; }
+</style>
+{% endblock %}
+{% block scripts %}
 <script>
   function setMsg(text, kind) {
     const el = document.getElementById("setup-msg");
@@ -187,5 +164,4 @@
     }
   });
 </script>
-</body>
-</html>
+{% endblock %}

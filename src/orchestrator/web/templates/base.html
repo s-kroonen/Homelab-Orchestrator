@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% block title %}homelab-orchestrator{% endblock %}</title>
+<link rel="stylesheet" href="/static/app.css">
+{% block extra_head %}{% endblock %}
+</head>
+<body>
+<div class="wrap">
+  {% block header %}
+  <header>
+    <h1><a href="/">homelab-orchestrator</a>{% block title_suffix %}{% endblock %}</h1>
+    {% block nav %}
+    {% set path = request.url.path %}
+    <nav>
+      <a href="/"{% if path == "/" or path.startswith("/services/") %} class="current"{% endif %}>Dashboard</a>
+      <a href="/backup-policies"{% if path.startswith("/backup-policies") %} class="current"{% endif %}>Backup policies</a>
+      <a href="/proxy-hosts"{% if path.startswith("/proxy-hosts") %} class="current"{% endif %}>Proxy hosts</a>
+      <a href="/traffic"{% if path.startswith("/traffic") %} class="current"{% endif %}>Traffic</a>
+      <a href="/activity"{% if path.startswith("/activity") %} class="current"{% endif %}>Activity</a>
+    </nav>
+    {% endblock %}
+    {% if admin %}
+    <span class="who">
+      {{ admin.username }}
+      <button class="logout" id="logout-btn">Log out</button>
+    </span>
+    {% endif %}
+  </header>
+  {% endblock %}
+
+  {% block content %}{% endblock %}
+</div>
+
+<script src="/static/app.js"></script>
+{% block webauthn_script %}{% endblock %}
+{% if admin %}
+<script>
+  const logoutBtn = document.getElementById("logout-btn");
+  if (logoutBtn) {
+    logoutBtn.addEventListener("click", async () => {
+      await fetch("/api/auth/logout", { method: "POST" });
+      location.href = "/login";
+    });
+  }
+</script>
+{% endif %}
+{% block scripts %}{% endblock %}
+</body>
+</html>
