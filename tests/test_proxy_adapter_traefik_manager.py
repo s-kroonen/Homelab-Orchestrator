@@ -27,11 +27,12 @@ from typing import Any
 import httpx
 import pytest
 
-from orchestrator.adapters.proxy.base import RouteInfo
+from orchestrator.adapters.proxy.base import ProxyRouteNotFound, RouteInfo
 from orchestrator.adapters.proxy.traefik_manager import (
     SHARED_BACKEND_SERVICE_NAME,
     TraefikManagerProxyAdapter,
     maintenance_middleware_name,
+    route_name_for_hostname,
 )
 from orchestrator.config import Settings
 
@@ -440,3 +441,138 @@ async def test_save_middleware_posts_form_with_fetch_header(
     assert "isMwEdit=false" in body
     assert "application/x-www-form-urlencoded" in state["save_middleware_content_type"]
     assert state["save_middleware_headers"]["x-requested-with"] == "fetch"
+
+
+# ---------------------------------------------------------------------------
+# General route CRUD — create_route/update_route/delete_route
+#
+# Unlike ensure/remove_maintenance_fallback above, these RAISE on failure —
+# this IS the explicit action an admin just took (see ProxyAdapter's
+# docstring and docs/proxy_hosts.md's "Live-managed proxy hosts" section).
+# ---------------------------------------------------------------------------
+
+
+async def test_create_route_request_shape(monkeypatch: pytest.MonkeyPatch) -> None:
+    save_calls: list[dict[str, str]] = []
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/save":
+            from urllib.parse import parse_qsl
+
+            save_calls.append(dict(parse_qsl(request.read().decode())))
+            return httpx.Response(200, json={"ok": True})
+        return httpx.Response(404, json={"ok": False})
+
+    _patch_transport(monkeypatch, handle)
+    adapter = TraefikManagerProxyAdapter(_settings())
+
+    ref = await adapter.create_route(hostname="app.example.com", upstream="http://10.0.0.9:8080")
+
+    assert ref == route_name_for_hostname("app.example.com")
+    assert len(save_calls) == 1
+    call = save_calls[0]
+    assert call["serviceName"] == ref
+    assert call["targetIp"] == "10.0.0.9"
+    assert call["targetPort"] == "8080"
+    assert call["httpRule"] == "Host(`app.example.com`)"
+    assert call["isEdit"] == "false"
+
+
+async def test_create_route_raises_on_invalid_upstream() -> None:
+    adapter = TraefikManagerProxyAdapter(_settings())
+    with pytest.raises(ValueError):
+        await adapter.create_route(hostname="app.example.com", upstream="not-a-url")
+
+
+async def test_create_route_raises_on_unreachable_backend(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def handle(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("refused")
+
+    _patch_transport(monkeypatch, handle)
+    adapter = TraefikManagerProxyAdapter(_settings())
+
+    from orchestrator.adapters.proxy.traefik_manager import TraefikManagerUnavailable
+
+    with pytest.raises(TraefikManagerUnavailable):
+        await adapter.create_route(hostname="app.example.com", upstream="http://10.0.0.9:80")
+
+
+async def test_update_route_request_shape(monkeypatch: pytest.MonkeyPatch) -> None:
+    save_calls: list[dict[str, str]] = []
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/save":
+            from urllib.parse import parse_qsl
+
+            save_calls.append(dict(parse_qsl(request.read().decode())))
+            return httpx.Response(200, json={"ok": True})
+        return httpx.Response(404, json={"ok": False})
+
+    _patch_transport(monkeypatch, handle)
+    adapter = TraefikManagerProxyAdapter(_settings())
+    ref = route_name_for_hostname("app.example.com")
+
+    await adapter.update_route(ref, hostname="new.example.com", upstream="http://10.0.0.5:9090")
+
+    assert len(save_calls) == 1
+    call = save_calls[0]
+    assert call["serviceName"] == ref
+    assert call["originalId"] == ref
+    assert call["isEdit"] == "true"
+    assert call["httpRule"] == "Host(`new.example.com`)"
+    assert call["targetIp"] == "10.0.0.5"
+    assert call["targetPort"] == "9090"
+
+
+async def test_update_route_raises_on_invalid_upstream() -> None:
+    adapter = TraefikManagerProxyAdapter(_settings())
+    with pytest.raises(ValueError):
+        await adapter.update_route("some-ref", hostname="app.example.com", upstream="")
+
+
+async def test_delete_route_posts_to_delete_endpoint(monkeypatch: pytest.MonkeyPatch) -> None:
+    delete_calls: list[str] = []
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/delete/orchestrator-app-example-com":
+            delete_calls.append(request.url.path)
+            assert request.headers.get("x-requested-with") == "fetch"
+            return httpx.Response(200, json={"ok": True})
+        return httpx.Response(404, json={"ok": False})
+
+    _patch_transport(monkeypatch, handle)
+    adapter = TraefikManagerProxyAdapter(_settings())
+
+    await adapter.delete_route("orchestrator-app-example-com")
+
+    assert delete_calls == ["/delete/orchestrator-app-example-com"]
+
+
+async def test_delete_route_raises_proxy_route_not_found_on_404(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def handle(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(404, json={"ok": False, "error": "not found"})
+
+    _patch_transport(monkeypatch, handle)
+    adapter = TraefikManagerProxyAdapter(_settings())
+
+    with pytest.raises(ProxyRouteNotFound):
+        await adapter.delete_route("gone-ref")
+
+
+async def test_delete_route_raises_on_unreachable_backend(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def handle(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("refused")
+
+    _patch_transport(monkeypatch, handle)
+    adapter = TraefikManagerProxyAdapter(_settings())
+
+    from orchestrator.adapters.proxy.traefik_manager import TraefikManagerUnavailable
+
+    with pytest.raises(TraefikManagerUnavailable):
+        await adapter.delete_route("some-ref")

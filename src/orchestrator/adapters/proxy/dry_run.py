@@ -54,3 +54,15 @@ class DryRunProxyAdapter(ProxyAdapter):
                 {"hostname": hostname, "dry_run": True},
             )
         ]
+
+    async def create_route(self, *, hostname: str, upstream: str) -> str:
+        log.info("proxy.dry_run.create_route", hostname=hostname, upstream=upstream)
+        return f"dry-run:{hostname}"
+
+    async def update_route(self, route_ref: str, *, hostname: str, upstream: str) -> None:
+        log.info(
+            "proxy.dry_run.update_route", route_ref=route_ref, hostname=hostname, upstream=upstream
+        )
+
+    async def delete_route(self, route_ref: str) -> None:
+        log.info("proxy.dry_run.delete_route", route_ref=route_ref)

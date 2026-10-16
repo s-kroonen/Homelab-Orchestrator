@@ -55,10 +55,10 @@ button, a.btn {
   display: inline-block;
 }
 button:disabled { opacity: 0.5; cursor: default; }
-button.secondary { background: #2a2f3a; color: #e6e9ef; }
-button.danger { background: transparent; color: #e5534b; border: 1px solid #2a2f3a; }
+button.secondary, a.btn.secondary { background: #2a2f3a; color: #e6e9ef; }
+button.danger, a.btn.danger { background: transparent; color: #e5534b; border: 1px solid #2a2f3a; }
 button.logout { background: transparent; color: #9aa4b2; border: 1px solid #2a2f3a; }
-button.small { padding: 0.2rem 0.6rem; font-size: 0.75rem; }
+button.small, a.btn.small { padding: 0.2rem 0.6rem; font-size: 0.75rem; }
 
 /* --- tables ------------------------------------------------------------ */
 table { width: 100%; border-collapse: collapse; margin-bottom: 1.5rem; }

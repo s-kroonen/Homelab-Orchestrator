@@ -170,9 +170,11 @@
   <section>
     <h2>Proxy hosts</h2>
     <p class="msg">
-      Reference records only — see <code>docs/proxy_hosts.md</code>. Full management,
-      including drift detection and Resync, lives on <a href="/proxy-hosts">/proxy-hosts</a>;
-      this is a shortcut for this service's own hosts.
+      A <code>router_provider: traefik</code> host here is live-managed — creating, editing or
+      deleting it also creates/edits/deletes the real route on Traefik Manager. See
+      <code>docs/proxy_hosts.md</code>. Full management, including drift detection and Resync,
+      lives on <a href="/proxy-hosts">/proxy-hosts</a>; this is a shortcut for this service's
+      own hosts.
     </p>
     <table>
       <thead>
@@ -180,21 +182,10 @@
       </thead>
       <tbody id="ph-body"></tbody>
     </table>
-
-    <form class="grid" id="ph-add-form" autocomplete="off">
-      <label for="ph-add-hostname">Hostname</label>
-      <input id="ph-add-hostname" required placeholder="app.example.com">
-      <label for="ph-add-upstream">Upstream</label>
-      <input id="ph-add-upstream" placeholder="http://10.0.0.12:8080">
-      <label for="ph-add-provider">Provider</label>
-      <select id="ph-add-provider">
-        {% for p in providers %}<option value="{{ p }}">{{ p }}</option>{% endfor %}
-      </select>
-      <div class="row">
-        <button type="submit" id="ph-add-btn">Add proxy host</button>
-        <span class="msg" id="ph-msg"></span>
-      </div>
-    </form>
+    <div class="row">
+      <a class="btn" href="/proxy-hosts/new?service_id={{ service.id }}">Add proxy host</a>
+      <span class="msg" id="ph-msg"></span>
+    </div>
   </section>
 
   <section>
@@ -608,11 +599,16 @@
         tr.appendChild(td);
       }
       const actions = document.createElement("td");
+      actions.className = "actions";
+      const edit = document.createElement("a");
+      edit.className = "btn secondary small";
+      edit.href = `/proxy-hosts/${h.id}/edit`;
+      edit.textContent = "Edit";
       const del = document.createElement("button");
-      del.className = "danger";
+      del.className = "danger small";
       del.textContent = "Delete";
       del.addEventListener("click", async () => {
-        if (!confirm(`Delete the proxy host record for ${h.hostname}? (This does not touch Traefik.)`)) return;
+        if (!confirm(`Delete the proxy host ${h.hostname}? ${h.router_provider === "traefik" ? "This also deletes the real route on Traefik Manager." : "This does not touch any gateway."}`)) return;
         try {
           await apiFetch("DELETE", "/api/proxy-hosts/" + h.id, undefined, { suppressToast: true });
           await reloadProxyHosts();
@@ -621,7 +617,7 @@
           setMsg("ph-msg", err.message, "error");
         }
       });
-      actions.appendChild(del);
+      actions.append(edit, " ", del);
       tr.appendChild(actions);
       body.appendChild(tr);
     }
@@ -632,25 +628,6 @@
     SERVICE.proxy_hosts = updated.proxy_hosts;
     renderProxyHosts();
   }
-
-  $("ph-add-form").addEventListener("submit", async (ev) => {
-    ev.preventDefault();
-    const hostname = $("ph-add-hostname").value.trim();
-    if (!hostname) return;
-    try {
-      await apiFetch("POST", "/api/proxy-hosts", {
-        hostname,
-        upstream: $("ph-add-upstream").value.trim(),
-        router_provider: $("ph-add-provider").value,
-        service_id: SERVICE.id,
-      }, { suppressToast: true });
-      $("ph-add-form").reset();
-      await reloadProxyHosts();
-      setMsg("ph-msg", `Added ${hostname}. Save to YAML to persist.`, "ok");
-    } catch (err) {
-      setMsg("ph-msg", err.message, "error");
-    }
-  });
 
   // --- backups (read-only; the existing ?slug= filter on GET /api/backups,
   // just not previously surfaced anywhere in the UI) -----------------------
@@ -745,11 +722,6 @@
     const active = document.activeElement;
     if (active && /^(INPUT|TEXTAREA|SELECT)$/.test(active.tagName)) return true;
     if (!$("probe-editor").hidden) return true;
-    // The proxy-host add form has no "hidden until opened" panel like the
-    // probe editor — it's always visible — so guard on it having unsaved
-    // input instead, the same way the active-element check above guards a
-    // half-filled probe field the admin has since clicked away from.
-    if ($("ph-add-hostname").value.trim() || $("ph-add-upstream").value.trim()) return true;
     return false;
   }
   setInterval(() => {

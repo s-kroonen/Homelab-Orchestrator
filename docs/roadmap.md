@@ -24,12 +24,33 @@ every other optional integration here. Once it's set:
 
 ## Small features (each independently schedulable, no architecture decisions needed)
 
-- ~~**Add a proxy host directly from the service page.**~~ **Done.** An
-  inline "Add proxy host" form (hostname, upstream, router_provider) plus
-  this service's own proxy hosts list now live on `service_detail.html`
-  itself, calling the existing `POST`/`DELETE /api/proxy-hosts[/{id}]` with
-  `service_id` pre-filled — no new endpoint. See
+- ~~**Add a proxy host directly from the service page.**~~ **Done**, now
+  superseded. An inline "Add proxy host" form used to live on
+  `service_detail.html` itself; it's been replaced by a link to the
+  dedicated `/proxy-hosts/new?service_id=<id>` page (see the next item) —
+  "the same edit on the same page everywhere" was explicitly the pattern
+  being fixed, so a second near-duplicate copy of the form was removed
+  rather than kept. This service's own proxy hosts list (read-only, now
+  with an **Edit** link alongside **Delete**) stays. See
   [proxy_hosts.md](proxy_hosts.md#where-to-edit-them).
+- ~~**Proxy hosts: live-managed route CRUD + dedicated add/edit pages.**~~
+  **Done.** Creating/editing/deleting a `ProxyHost` now creates/edits/
+  deletes the real route on Traefik Manager (when `router_provider` is
+  `traefik` and an `upstream` is given) — not just a local reference
+  record separately reconciled via Resync. New `ProxyAdapter.create_route`/
+  `update_route`/`delete_route` (`orchestrator.adapters.proxy.base`,
+  implemented in `TraefikManagerProxyAdapter` and faked in
+  `DryRunProxyAdapter`), write-through wired into
+  `web/routers/proxy_hosts.py`'s create/update/delete endpoints, with the
+  backend route reference persisted in
+  `ProxyHost.extra["traefik_manager_route_id"]`. `/proxy-hosts` is now
+  list-only (plus a filter box); `/proxy-hosts/new` and
+  `/proxy-hosts/{id}/edit` are real, dedicated pages — the first page to
+  get this treatment (more follow later; this was scoped to proxy hosts
+  only). Resync's role shifts from "the only way to reach parity" to the
+  bulk-discovery/drift-catch-up path. See
+  [proxy_hosts.md](proxy_hosts.md#live-managed-proxy-hosts) for the full
+  write-through/rollback/backfill behaviour.
 - ~~**Backfill command for the maintenance middleware**~~ **Done.**
   `orchestrator-cli proxy resync-maintenance` re-runs
   `sync_maintenance_middleware` for every `ProxyHost` with a linked
@@ -64,8 +85,11 @@ for any non-2xx response or network failure, replacing the bespoke
 now carry the chrome and the error-surfacing every page shares. This was
 scoped as foundation only — chrome + error handling, no change to any page's
 actual information architecture — so the deeper redesign (sub-tabs,
-dedicated add/edit pages, list filtering) mentioned below is still open and
-should build on this rather than duplicate it. See "The big question:
+dedicated add/edit pages, list filtering) mentioned below was still open at
+the time. **Proxy hosts got dedicated add/edit pages + list filtering
+first** (see the "Small features" entry above) — the other list pages
+(backup policies, services) still have the bolted-on-inline-form pattern
+and are candidates for the same treatment next. See "The big question:
 frontend direction" below for why this stays server-rendered Jinja2 rather
 than a SPA rewrite.
 
@@ -82,9 +106,12 @@ because at the time there was only one real backend to support.~~
 
 **Done** (proxy adapter): new `orchestrator.adapters.proxy` package —
 `ProxyAdapter` ABC (`list_routes`, `ensure_maintenance_fallback`,
-`remove_maintenance_fallback` — domain verbs, shaped from what the
-maintenance-fallback feature and drift detection actually need, not a
-passthrough of Traefik-Manager-specific REST shapes), `DryRunProxyAdapter`,
+`remove_maintenance_fallback`, and (added later, for live-managed proxy
+hosts — see [proxy_hosts.md](proxy_hosts.md#live-managed-proxy-hosts))
+`create_route`/`update_route`/`delete_route` — domain verbs, shaped from
+what the maintenance-fallback feature, drift detection and live route CRUD
+actually need, not a passthrough of Traefik-Manager-specific REST shapes),
+`DryRunProxyAdapter`,
 and `TraefikManagerProxyAdapter`, which is where the old
 `registry/traefik_manager_client.py` + `traefik_manager_sync.py` logic
 actually lives now (both deleted — no parallel implementation was kept).

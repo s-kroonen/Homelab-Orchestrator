@@ -110,7 +110,10 @@ def test_create_list_get_update_delete(client: TestClient, service: Service) -> 
     body = created.json()
     assert body["hostname"] == "thing.example.com"  # normalised
     assert body["service_slug"] == "thing"
-    assert body["extra"] == {"middlewares": ["auth"]}
+    # router_provider defaults to "traefik" (write-through), which stamps a
+    # backend route reference into extra alongside the operator-supplied keys.
+    assert body["extra"]["middlewares"] == ["auth"]
+    assert "traefik_manager_route_id" in body["extra"]
     ph_id = body["id"]
 
     listed = client.get("/api/proxy-hosts").json()
@@ -158,7 +161,9 @@ def test_update_audit_records_only_changed_fields(client: TestClient, service: S
         entry = s.exec(select(AuditEntry).where(AuditEntry.action == "proxy_host.updated")).one()
     assert entry.actor == "storm"
     assert entry.target == "proxy_host:a.example.com"
-    assert set(entry.details["changes"]) == {"upstream"}
+    # "extra" changes too: router_provider defaults to "traefik" (write-through),
+    # which stamps/updates the backend route reference alongside "upstream".
+    assert set(entry.details["changes"]) == {"upstream", "extra"}
 
 
 def test_wake_on_hit_defaults_false_and_round_trips_through_crud(
@@ -325,12 +330,12 @@ def test_page_renders_for_logged_in_admin(client: TestClient, service: Service) 
     r = client.get("/proxy-hosts")
     assert r.status_code == 200
     assert "storm" in r.text
-    assert "not synced with Traefik" in r.text
-    assert "Thing (thing)" in r.text  # service dropdown populated
+    assert "source of truth for routes" in r.text
+    assert 'href="/proxy-hosts/new"' in r.text  # dedicated add page, not an inline form
     assert "Resync from Traefik" in r.text
     assert (
         "Thing" in r.text and '"slug": "thing"' in r.text
-    )  # services passed to JS for discovery rows
+    )  # services passed to JS for the discovery section's per-row picker
 
 
 def test_dashboard_links_to_proxy_hosts_page(client: TestClient) -> None:
@@ -958,10 +963,14 @@ def test_resync_via_traefik_manager_updates_matched_host(
         monkeypatch, TRAEFIK_MANAGER_URL="http://tm.test:8080", TRAEFIK_MANAGER_API_KEY="key"
     )
 
+    # The create below now write-throughs to a real route (router_provider
+    # defaults to "traefik") — mock its /save call up front.
+    _patch_tm_transport(monkeypatch, lambda request: httpx.Response(200, json={"ok": True}))
     created = client.post(
         "/api/proxy-hosts",
         json={"hostname": "a.example.com", "upstream": "http://stale:9", "service_id": service.id},
-    ).json()
+    )
+    assert created.status_code == 201, created.text
 
     def handle(request: httpx.Request) -> httpx.Response:
         return httpx.Response(
@@ -989,7 +998,7 @@ def test_resync_via_traefik_manager_updates_matched_host(
     assert body["updated_count"] == 1
     assert body["updated"][0]["upstream"] == "http://10.0.0.5:8080"
 
-    refreshed = client.get(f"/api/proxy-hosts/{created['id']}").json()
+    refreshed = client.get(f"/api/proxy-hosts/{created.json()['id']}").json()
     assert refreshed["upstream"] == "http://10.0.0.5:8080"
 
 
@@ -1078,3 +1087,428 @@ def test_resync_via_traefik_manager_surfaces_503_when_unreachable(
     r = client.post("/api/proxy-hosts/resync")
     assert r.status_code == 503
     assert "traefik" in r.json()["detail"].lower()
+
+
+# ---------------------------------------------------------------------------
+# Write-through: create/update/delete a live-managed (router_provider:
+# traefik, with an upstream) ProxyHost actually creates/edits/deletes the
+# real route on Traefik Manager. See docs/proxy_hosts.md's "Live-managed
+# proxy hosts" section.
+# ---------------------------------------------------------------------------
+
+ROUTE_REF_KEY = "traefik_manager_route_id"
+
+
+def test_create_persists_the_backend_route_ref_in_extra(
+    service: Service, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    client = _tm_client(
+        monkeypatch, TRAEFIK_MANAGER_URL="http://tm.test:8080", TRAEFIK_MANAGER_API_KEY="key"
+    )
+    save_calls: list[dict[str, str]] = []
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/save":
+            from urllib.parse import parse_qsl
+
+            save_calls.append(dict(parse_qsl(request.read().decode())))
+        return httpx.Response(200, json={"ok": True})
+
+    _patch_tm_transport(monkeypatch, handle)
+
+    r = client.post(
+        "/api/proxy-hosts",
+        json={
+            "hostname": "live.example.com",
+            "upstream": "http://10.0.0.9:8080",
+            "service_id": service.id,
+        },
+    )
+    assert r.status_code == 201, r.text
+    body = r.json()
+    assert ROUTE_REF_KEY in body["extra"]
+    assert len(save_calls) == 1
+    assert save_calls[0]["httpRule"] == "Host(`live.example.com`)"
+
+
+def test_create_fails_and_does_not_persist_the_row_when_the_backend_call_fails(
+    service: Service, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    client = _tm_client(
+        monkeypatch, TRAEFIK_MANAGER_URL="http://tm.test:8080", TRAEFIK_MANAGER_API_KEY="key"
+    )
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("refused")
+
+    _patch_tm_transport(monkeypatch, handle)
+
+    r = client.post(
+        "/api/proxy-hosts",
+        json={
+            "hostname": "live.example.com",
+            "upstream": "http://10.0.0.9:8080",
+            "service_id": service.id,
+        },
+    )
+    assert r.status_code == 502, r.text
+
+    with Session(get_engine()) as s:
+        assert s.exec(select(ProxyHost)).all() == []
+
+
+def test_create_skips_write_through_when_provider_is_not_traefik(
+    service: Service, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Gated by router_provider — pangolin/npm/other never touch the adapter
+    at all, even when it's resolved to the real TraefikManagerProxyAdapter."""
+    client = _tm_client(
+        monkeypatch, TRAEFIK_MANAGER_URL="http://tm.test:8080", TRAEFIK_MANAGER_API_KEY="key"
+    )
+
+    # _live_hostnames/_sync_maintenance_fallback still poll /api/routes as
+    # part of the (unrelated, unchanged) maintenance-fallback/drift-status
+    # paths — only /save or /delete (route CRUD) must never be hit here.
+    write_calls: list[str] = []
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        if request.url.path in ("/save", "/delete") or request.url.path.startswith("/delete/"):
+            write_calls.append(request.url.path)
+        if request.url.path == "/api/routes":
+            return httpx.Response(
+                200,
+                json={
+                    "apps": [],
+                    "middlewares": [],
+                    "services": {"http": [], "tcp": [], "udp": []},
+                },
+            )
+        return httpx.Response(200, json={"ok": True})
+
+    _patch_tm_transport(monkeypatch, handle)
+
+    r = client.post(
+        "/api/proxy-hosts",
+        json={
+            "hostname": "pangolin.example.com",
+            "upstream": "http://10.0.0.9:8080",
+            "router_provider": "pangolin",
+            "service_id": service.id,
+        },
+    )
+    assert r.status_code == 201, r.text
+    assert ROUTE_REF_KEY not in r.json()["extra"]
+    assert write_calls == []
+
+
+def test_create_skips_write_through_when_upstream_is_blank(
+    service: Service, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A traefik-provider host with no upstream yet stays a local-only
+    reference record — a route can't be created with no backend target."""
+    client = _tm_client(
+        monkeypatch, TRAEFIK_MANAGER_URL="http://tm.test:8080", TRAEFIK_MANAGER_API_KEY="key"
+    )
+    write_calls: list[str] = []
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        if request.url.path in ("/save", "/delete") or request.url.path.startswith("/delete/"):
+            write_calls.append(request.url.path)
+        if request.url.path == "/api/routes":
+            return httpx.Response(
+                200,
+                json={
+                    "apps": [],
+                    "middlewares": [],
+                    "services": {"http": [], "tcp": [], "udp": []},
+                },
+            )
+        return httpx.Response(200, json={"ok": True})
+
+    _patch_tm_transport(monkeypatch, handle)
+
+    r = client.post(
+        "/api/proxy-hosts", json={"hostname": "bare.example.com", "service_id": service.id}
+    )
+    assert r.status_code == 201, r.text
+    assert ROUTE_REF_KEY not in r.json()["extra"]
+    assert write_calls == []
+
+
+def test_update_edits_the_real_route_using_the_stored_ref(
+    service: Service, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    client = _tm_client(
+        monkeypatch, TRAEFIK_MANAGER_URL="http://tm.test:8080", TRAEFIK_MANAGER_API_KEY="key"
+    )
+    save_calls: list[dict[str, str]] = []
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/save":
+            from urllib.parse import parse_qsl
+
+            save_calls.append(dict(parse_qsl(request.read().decode())))
+        return httpx.Response(200, json={"ok": True})
+
+    _patch_tm_transport(monkeypatch, handle)
+
+    created = client.post(
+        "/api/proxy-hosts",
+        json={
+            "hostname": "live.example.com",
+            "upstream": "http://10.0.0.9:8080",
+            "service_id": service.id,
+        },
+    ).json()
+    route_ref = created["extra"][ROUTE_REF_KEY]
+    save_calls.clear()
+
+    updated = client.put(
+        f"/api/proxy-hosts/{created['id']}",
+        json={
+            "hostname": "live.example.com",
+            "upstream": "http://10.0.0.9:9999",
+            "service_id": service.id,
+        },
+    )
+    assert updated.status_code == 200, updated.text
+    assert updated.json()["extra"][ROUTE_REF_KEY] == route_ref  # unchanged — reused, not re-created
+    assert len(save_calls) == 1
+    assert save_calls[0]["serviceName"] == route_ref
+    assert save_calls[0]["originalId"] == route_ref
+    assert save_calls[0]["isEdit"] == "true"
+    assert save_calls[0]["targetPort"] == "9999"
+
+
+def test_update_backfills_a_route_ref_for_a_pre_existing_host(
+    service: Service, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A ProxyHost created before this feature (or via a provider switch
+    onto traefik) has no stored ref yet — editing it CREATES one rather than
+    erroring."""
+    client = _tm_client(
+        monkeypatch, TRAEFIK_MANAGER_URL="http://tm.test:8080", TRAEFIK_MANAGER_API_KEY="key"
+    )
+    # Created with no upstream — stays local-only, no ref stored.
+    created = client.post(
+        "/api/proxy-hosts", json={"hostname": "legacy.example.com", "service_id": service.id}
+    ).json()
+    assert ROUTE_REF_KEY not in created["extra"]
+
+    _patch_tm_transport(monkeypatch, lambda request: httpx.Response(200, json={"ok": True}))
+
+    updated = client.put(
+        f"/api/proxy-hosts/{created['id']}",
+        json={
+            "hostname": "legacy.example.com",
+            "upstream": "http://10.0.0.9:8080",
+            "service_id": service.id,
+        },
+    )
+    assert updated.status_code == 200, updated.text
+    assert ROUTE_REF_KEY in updated.json()["extra"]
+
+
+def test_update_fails_and_leaves_the_row_unchanged_when_the_backend_call_fails(
+    service: Service, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    client = _tm_client(
+        monkeypatch, TRAEFIK_MANAGER_URL="http://tm.test:8080", TRAEFIK_MANAGER_API_KEY="key"
+    )
+    _patch_tm_transport(monkeypatch, lambda request: httpx.Response(200, json={"ok": True}))
+    created = client.post(
+        "/api/proxy-hosts",
+        json={
+            "hostname": "live.example.com",
+            "upstream": "http://10.0.0.9:8080",
+            "service_id": service.id,
+        },
+    ).json()
+
+    def fail(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("refused")
+
+    _patch_tm_transport(monkeypatch, fail)
+
+    updated = client.put(
+        f"/api/proxy-hosts/{created['id']}",
+        json={
+            "hostname": "live.example.com",
+            "upstream": "http://10.0.0.9:9999",
+            "service_id": service.id,
+        },
+    )
+    assert updated.status_code == 502, updated.text
+
+    refreshed = client.get(f"/api/proxy-hosts/{created['id']}")
+    assert refreshed.json()["upstream"] == "http://10.0.0.9:8080"
+
+
+def test_delete_deletes_the_real_route_using_the_stored_ref(
+    service: Service, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    client = _tm_client(
+        monkeypatch, TRAEFIK_MANAGER_URL="http://tm.test:8080", TRAEFIK_MANAGER_API_KEY="key"
+    )
+    _patch_tm_transport(monkeypatch, lambda request: httpx.Response(200, json={"ok": True}))
+    created = client.post(
+        "/api/proxy-hosts",
+        json={
+            "hostname": "live.example.com",
+            "upstream": "http://10.0.0.9:8080",
+            "service_id": service.id,
+        },
+    ).json()
+    route_ref = created["extra"][ROUTE_REF_KEY]
+
+    delete_calls: list[str] = []
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        if request.url.path.startswith("/delete/"):
+            delete_calls.append(request.url.path)
+        return httpx.Response(200, json={"ok": True})
+
+    _patch_tm_transport(monkeypatch, handle)
+
+    r = client.delete(f"/api/proxy-hosts/{created['id']}")
+    assert r.status_code == 200, r.text
+    assert delete_calls == [f"/delete/{route_ref}"]
+
+    with Session(get_engine()) as s:
+        assert s.exec(select(ProxyHost)).all() == []
+
+
+def test_delete_tolerates_a_route_already_gone_on_the_backend(
+    service: Service, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A 404 (ProxyRouteNotFound) on delete does not block the local
+    delete — the operator's intent is still satisfiable."""
+    client = _tm_client(
+        monkeypatch, TRAEFIK_MANAGER_URL="http://tm.test:8080", TRAEFIK_MANAGER_API_KEY="key"
+    )
+    _patch_tm_transport(monkeypatch, lambda request: httpx.Response(200, json={"ok": True}))
+    created = client.post(
+        "/api/proxy-hosts",
+        json={
+            "hostname": "live.example.com",
+            "upstream": "http://10.0.0.9:8080",
+            "service_id": service.id,
+        },
+    ).json()
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        if request.url.path.startswith("/delete/"):
+            return httpx.Response(404, json={"ok": False, "error": "not found"})
+        return httpx.Response(200, json={"ok": True})
+
+    _patch_tm_transport(monkeypatch, handle)
+
+    r = client.delete(f"/api/proxy-hosts/{created['id']}")
+    assert r.status_code == 200, r.text
+
+    with Session(get_engine()) as s:
+        assert s.exec(select(ProxyHost)).all() == []
+
+
+def test_delete_skips_write_through_when_provider_is_not_traefik(
+    service: Service, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    client = _tm_client(
+        monkeypatch, TRAEFIK_MANAGER_URL="http://tm.test:8080", TRAEFIK_MANAGER_API_KEY="key"
+    )
+    _patch_tm_transport(monkeypatch, lambda request: httpx.Response(200, json={"ok": True}))
+    created = client.post(
+        "/api/proxy-hosts",
+        json={
+            "hostname": "pangolin.example.com",
+            "upstream": "http://10.0.0.9:8080",
+            "router_provider": "pangolin",
+            "service_id": service.id,
+        },
+    ).json()
+
+    # remove_maintenance_fallback (unrelated, unchanged existing feature)
+    # still polls /api/routes on any delete regardless of router_provider —
+    # only /save or /delete (route CRUD) must never be hit for this host.
+    write_calls: list[str] = []
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        if request.url.path in ("/save", "/delete") or request.url.path.startswith("/delete/"):
+            write_calls.append(request.url.path)
+        if request.url.path == "/api/routes":
+            return httpx.Response(
+                200,
+                json={
+                    "apps": [],
+                    "middlewares": [],
+                    "services": {"http": [], "tcp": [], "udp": []},
+                },
+            )
+        return httpx.Response(200, json={"ok": True})
+
+    _patch_tm_transport(monkeypatch, handle)
+
+    r = client.delete(f"/api/proxy-hosts/{created['id']}")
+    assert r.status_code == 200, r.text
+    assert write_calls == []
+
+
+# ---------------------------------------------------------------------------
+# Dedicated add/edit pages
+# ---------------------------------------------------------------------------
+
+
+def test_new_proxy_host_page_renders(client: TestClient, service: Service) -> None:
+    r = client.get("/proxy-hosts/new")
+    assert r.status_code == 200
+    assert "Add a proxy host" in r.text
+    assert "Thing (thing)" in r.text
+
+
+def test_new_proxy_host_page_prefills_service_id_from_query_param(
+    client: TestClient, service: Service
+) -> None:
+    r = client.get(f"/proxy-hosts/new?service_id={service.id}")
+    assert r.status_code == 200
+    assert "selected" in r.text
+
+
+def test_new_proxy_host_page_redirects_when_not_logged_in(app: Any) -> None:
+    with TestClient(app, follow_redirects=False) as anon:
+        r = anon.get("/proxy-hosts/new")
+    assert r.status_code == 303
+    assert r.headers["location"] == "/login?next=/proxy-hosts/new"
+
+
+def test_edit_proxy_host_page_renders_prefilled(client: TestClient, service: Service) -> None:
+    created = client.post(
+        "/api/proxy-hosts",
+        json={
+            "hostname": "edit-me.example.com",
+            "upstream": "http://u:1",
+            "service_id": service.id,
+        },
+    ).json()
+
+    r = client.get(f"/proxy-hosts/{created['id']}/edit")
+    assert r.status_code == 200
+    assert "Edit edit-me.example.com" in r.text
+    assert "http://u:1" in r.text
+
+
+def test_edit_proxy_host_page_404s_for_unknown_id(client: TestClient) -> None:
+    r = client.get("/proxy-hosts/999999/edit")
+    assert r.status_code == 404
+
+
+def test_edit_proxy_host_page_redirects_when_not_logged_in(app: Any) -> None:
+    with TestClient(app, follow_redirects=False) as anon:
+        r = anon.get("/proxy-hosts/1/edit")
+    assert r.status_code == 303
+    assert r.headers["location"] == "/login?next=/proxy-hosts/1/edit"
+
+
+def test_proxy_hosts_list_page_links_to_new_page(client: TestClient, service: Service) -> None:
+    r = client.get("/proxy-hosts")
+    assert r.status_code == 200
+    assert 'href="/proxy-hosts/new"' in r.text

@@ -1,0 +1,131 @@
+{% extends "base.html" %}
+{% block title %}homelab-orchestrator — {{ "edit" if mode == "edit" else "add" }} proxy host{% endblock %}
+{% block content %}
+  <div class="row">
+    <a href="/proxy-hosts">&larr; Back to proxy hosts</a>
+  </div>
+
+  <section>
+    <h2>{{ "Edit " + proxy_host.hostname if mode == "edit" else "Add a proxy host" }}</h2>
+    <p class="msg">
+      A <code>traefik</code> host is <strong>live-managed</strong> once an upstream is given —
+      saving this form creates/edits the real route on Traefik Manager, not just a local
+      record. Leave <strong>Upstream</strong> blank to keep it a local-only reference for now.
+      <code>pangolin</code>/<code>npm</code>/<code>other</code> always stay local-only
+      reference records — no adapter exists for those backends yet. See
+      <code>docs/proxy_hosts.md</code>.
+    </p>
+
+    <form id="ph-form" autocomplete="off">
+      <label for="ph-hostname">Hostname</label>
+      <input id="ph-hostname" required placeholder="app.example.com"
+             value="{{ proxy_host.hostname if proxy_host else '' }}">
+
+      <label for="ph-upstream">Upstream</label>
+      <input id="ph-upstream" placeholder="http://10.0.0.12:8080"
+             value="{{ proxy_host.upstream if proxy_host else '' }}">
+
+      <label for="ph-provider">Provider</label>
+      <select id="ph-provider">
+        {% for p in providers %}
+        <option value="{{ p }}" {% if proxy_host and proxy_host.router_provider == p %}selected{% endif %}>{{ p }}</option>
+        {% endfor %}
+      </select>
+
+      <label for="ph-service">Linked service</label>
+      <select id="ph-service" required>
+        <option value="" disabled {% if not (proxy_host and proxy_host.service_id) and not initial_service_id %}selected{% endif %}>— select a service —</option>
+        {% for s in services %}
+        <option value="{{ s.id }}"
+          {% if proxy_host and proxy_host.service_id == s.id %}selected
+          {% elif not proxy_host and initial_service_id and initial_service_id == s.id %}selected{% endif %}>
+          {{ s.name }} ({{ s.slug }})
+        </option>
+        {% endfor %}
+      </select>
+
+      <label for="ph-wake-on-hit">Wake on hit</label>
+      <span><input id="ph-wake-on-hit" type="checkbox" {% if proxy_host and proxy_host.wake_on_hit %}checked{% endif %}></span>
+      <span class="full msg muted">
+        Stand-in for a real Traefik-side trigger (future work — see docs/traffic_metrics.md):
+        the traffic-metrics poller treats a hit on this hostname as a wake trigger for its
+        linked service, gated by that service's and its node's own "wake on hit" toggles too.
+        Up to one poll interval (<code>TRAEFIK_METRICS_POLL_INTERVAL_S</code>) of delay. Off by default.
+      </span>
+
+      <label class="full" for="ph-extra">Extra (JSON object, optional)</label>
+      <textarea class="full" id="ph-extra" placeholder='{"middlewares": ["auth"]}'>{{ (proxy_host.extra | tojson(indent=2)) if proxy_host and proxy_host.extra else "" }}</textarea>
+
+      <div class="row full">
+        <button type="submit" id="submit-btn">{{ "Save changes" if mode == "edit" else "Add" }}</button>
+        <a class="btn secondary" href="/proxy-hosts">Cancel</a>
+        <span class="msg" id="form-msg"></span>
+      </div>
+    </form>
+  </section>
+{% endblock %}
+{% block extra_head %}
+<style>
+  form#ph-form { display: grid; grid-template-columns: max-content 1fr; gap: 0.5rem 0.75rem; align-items: center; max-width: 40rem; }
+  form#ph-form label { color: #9aa4b2; font-size: 0.85rem; }
+  form#ph-form .full { grid-column: 1 / -1; }
+  form#ph-form textarea { box-sizing: border-box; min-height: 4rem; }
+  @media (max-width: 40rem) {
+    form#ph-form { grid-template-columns: 1fr; }
+  }
+</style>
+{% endblock %}
+{% block scripts %}
+<script>
+  function setMsg(id, text, kind) {
+    const el = document.getElementById(id);
+    el.textContent = text;
+    el.className = "msg" + (kind ? " " + kind : "");
+  }
+
+  const MODE = {{ mode | tojson }};
+  const PROXY_HOST_ID = {{ (proxy_host.id if proxy_host else None) | tojson }};
+
+  document.getElementById("ph-form").addEventListener("submit", async (ev) => {
+    ev.preventDefault();
+    const extraRaw = document.getElementById("ph-extra").value.trim();
+    let extra = {};
+    if (extraRaw) {
+      try {
+        extra = JSON.parse(extraRaw);
+      } catch (err) {
+        setMsg("form-msg", `Extra is not valid JSON: ${err.message}`, "error");
+        return;
+      }
+      if (extra === null || typeof extra !== "object" || Array.isArray(extra)) {
+        setMsg("form-msg", "Extra must be a JSON object, e.g. {\"key\": \"value\"}.", "error");
+        return;
+      }
+    }
+    const serviceVal = document.getElementById("ph-service").value;
+    if (!serviceVal) {
+      setMsg("form-msg", "Select a service — every proxy host must be linked to one.", "error");
+      return;
+    }
+    const payload = {
+      hostname: document.getElementById("ph-hostname").value.trim(),
+      upstream: document.getElementById("ph-upstream").value.trim(),
+      router_provider: document.getElementById("ph-provider").value,
+      service_id: Number(serviceVal),
+      extra,
+      wake_on_hit: document.getElementById("ph-wake-on-hit").checked,
+    };
+    try {
+      if (MODE === "edit") {
+        await apiFetch("PUT", `/api/proxy-hosts/${PROXY_HOST_ID}`, payload, { suppressToast: true });
+      } else {
+        await apiFetch("POST", "/api/proxy-hosts", payload, { suppressToast: true });
+      }
+    } catch (err) {
+      setMsg("form-msg", err.message, "error");
+      return;
+    }
+    location.href = "/proxy-hosts";
+  });
+</script>
+{% endblock %}

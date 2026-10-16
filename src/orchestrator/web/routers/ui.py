@@ -22,7 +22,14 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from sqlmodel import select
 
-from orchestrator.db.models import BackupPolicy, BackupRecord, Node, Service, ServiceState
+from orchestrator.db.models import (
+    BackupPolicy,
+    BackupRecord,
+    Node,
+    ProxyHost,
+    Service,
+    ServiceState,
+)
 from orchestrator.domain.enums import BackupMode, GuestKind, RouterProvider
 from orchestrator.registry.loader import compute_registry_diff
 from orchestrator.registry.probe_specs import PROBE_SPECS
@@ -169,9 +176,12 @@ async def service_detail_page(
 async def proxy_hosts_page(
     request: Request, session: SessionDep
 ) -> HTMLResponse | RedirectResponse:
-    """Proxy-host reference records. The table and forms are driven entirely
-    by ``/api/proxy-hosts`` via ``fetch``; this only supplies the page shell
-    plus the service list for the "linked service" dropdown."""
+    """List-only proxy-host page. Add/edit live on their own dedicated pages
+    (:func:`new_proxy_host_page`/:func:`edit_proxy_host_page`) — this page
+    is driven entirely by ``/api/proxy-hosts`` via ``fetch`` for the table,
+    plus Resync's bulk-discovery flow (see ``docs/proxy_hosts.md``). The
+    service list here is only for the "Discovered on Traefik" section's
+    per-row service picker."""
     admin = get_current_admin(request, session)
     if admin is None:
         return RedirectResponse("/login?next=/proxy-hosts", status_code=303)
@@ -187,6 +197,75 @@ async def proxy_hosts_page(
             "providers": [p.value for p in RouterProvider],
             "registry_dirty": diff.dirty,
             "yaml_path": diff.yaml_path,
+        },
+    )
+
+
+@router.get("/proxy-hosts/new", response_model=None)
+async def new_proxy_host_page(
+    request: Request, session: SessionDep, service_id: int | None = Query(None)
+) -> HTMLResponse | RedirectResponse:
+    """Dedicated add page (``docs/roadmap.md``'s "dedicated add/edit pages"
+    small feature) — replaces the bottom-of-page form that used to live on
+    ``/proxy-hosts`` and the inline one on a service's own page. Submits to
+    the existing ``POST /api/proxy-hosts``, now write-through for a
+    ``traefik`` host with an upstream (see ``web/routers/proxy_hosts.py``).
+    ``?service_id=`` pre-fills the service picker — used by the "Add proxy
+    host" link on a service's own detail page.
+    """
+    admin = get_current_admin(request, session)
+    if admin is None:
+        return RedirectResponse("/login?next=/proxy-hosts/new", status_code=303)
+
+    services = session.exec(select(Service).order_by(Service.slug)).all()
+    return _templates.TemplateResponse(
+        request,
+        "proxy_host_form.html",
+        {
+            "admin": admin,
+            "mode": "new",
+            "proxy_host": None,
+            "initial_service_id": service_id,
+            "services": [{"id": s.id, "slug": s.slug, "name": s.name} for s in services],
+            "providers": [p.value for p in RouterProvider],
+        },
+    )
+
+
+@router.get("/proxy-hosts/{proxy_host_id}/edit", response_model=None)
+async def edit_proxy_host_page(
+    proxy_host_id: int, request: Request, session: SessionDep
+) -> HTMLResponse | RedirectResponse:
+    """Dedicated edit page — see :func:`new_proxy_host_page`. Prefilled
+    server-side from the ``ProxyHost`` row directly (same pattern
+    ``service_detail_page`` already uses), not re-fetched client-side."""
+    admin = get_current_admin(request, session)
+    if admin is None:
+        return RedirectResponse(f"/login?next=/proxy-hosts/{proxy_host_id}/edit", status_code=303)
+
+    ph = session.get(ProxyHost, proxy_host_id)
+    if ph is None:
+        raise HTTPException(status_code=404, detail=f"proxy host {proxy_host_id} not found")
+
+    services = session.exec(select(Service).order_by(Service.slug)).all()
+    return _templates.TemplateResponse(
+        request,
+        "proxy_host_form.html",
+        {
+            "admin": admin,
+            "mode": "edit",
+            "proxy_host": {
+                "id": ph.id,
+                "hostname": ph.hostname,
+                "upstream": ph.upstream,
+                "router_provider": ph.router_provider.value,
+                "service_id": ph.service_id,
+                "wake_on_hit": ph.wake_on_hit,
+                "extra": ph.extra or {},
+            },
+            "initial_service_id": None,
+            "services": [{"id": s.id, "slug": s.slug, "name": s.name} for s in services],
+            "providers": [p.value for p in RouterProvider],
         },
     )
 

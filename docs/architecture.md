@@ -196,7 +196,13 @@ detection and the old Resync path). Traefik Manager
 gateway alongside Traefik and is the stated source of truth for proxy
 routes; the orchestrator talks to it through a `ProxyAdapter`
 (`src/orchestrator/adapters/proxy/`), the same `dry_run`/live-implementation
-shape `adapters.{power,proxmox,pbs}` already use. See
+shape `adapters.{power,proxmox,pbs}` already use. Its methods:
+`list_routes` (read path), `ensure_maintenance_fallback`/
+`remove_maintenance_fallback` (the maintenance-page fallback middleware,
+fail-open), and `create_route`/`update_route`/`delete_route` (general
+route CRUD backing live-managed proxy hosts — raises on failure, since
+that's the explicit action an admin just took; see
+`docs/proxy_hosts.md`'s "Live-managed proxy hosts" section). See
 `src/orchestrator/adapters/proxy/traefik_manager.py`
 (`TraefikManagerProxyAdapter` — the REST calls and the maintenance-middleware
 feature built on top of them) and `docs/proxy_hosts.md` for the full
