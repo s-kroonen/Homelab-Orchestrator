@@ -61,7 +61,7 @@ means a freshly scaffolded service will not back up until you add a probe.
   saved to services.yaml with the usual Save button.
 
 **Not yet built:** greenlight/revert (phase 8), notifier + Grafana metrics
-(phase 9).
+(phase 9). See [docs/roadmap.md](docs/roadmap.md) for the fuller backlog.
 
 See [docs/architecture.md](docs/architecture.md) for the full design,
 [docs/adding_a_service.md](docs/adding_a_service.md) for registering a service,
