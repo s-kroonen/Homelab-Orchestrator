@@ -182,6 +182,7 @@ def policy_to_dict(
     session: Session, policy: BackupPolicy, scheduler: BackupScheduler | None
 ) -> dict[str, Any]:
     return {
+        "id": policy.id,
         "name": policy.name,
         "schedule_cron": policy.schedule_cron,
         "mode": policy.mode.value,

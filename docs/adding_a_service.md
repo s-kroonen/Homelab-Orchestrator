@@ -71,6 +71,7 @@ Other commands:
 | `probe remove <slug> <name>` | remove one probe |
 | `probe-test <slug> <name>` | run one probe now and print its raw result (state, message, details) |
 | `proxy add/list/remove <slug>` | record Traefik / Pangolin routes |
+| `proxy resync-maintenance` | backfill the gateway's maintenance middleware for every already-linked proxy host — see [proxy_hosts.md](proxy_hosts.md#backfilling-existing-proxy-hosts) |
 
 Everything takes `--non-interactive` plus flags, so the same operations work from
 a script or an Ansible task:
@@ -86,6 +87,11 @@ Add `--file PATH` to edit a registry other than the configured one.
 These commands edit **`services.yaml`**, never the database. YAML is the saved
 source of truth and the DB is rehydrated from it on every boot, so a change
 written only to the DB would disappear on the next restart.
+
+The one exception is `proxy resync-maintenance`: it touches only the
+gateway's Traefik Manager config (via `sync_maintenance_middleware`), never
+`services.yaml` and never a `ProxyHost` row's own fields — there is nothing
+for it to write to the registry, so it ignores `--file` entirely.
 
 ---
 

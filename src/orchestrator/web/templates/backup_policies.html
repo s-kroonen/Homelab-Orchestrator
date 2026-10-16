@@ -115,7 +115,27 @@
           </td>
           <td>
             <button class="secondary small" data-edit="{{ p.name }}">Edit</button>
+            <button class="secondary small" data-history="{{ p.id }}">History</button>
             <button class="danger small" data-delete="{{ p.name }}">Delete</button>
+          </td>
+        </tr>
+        <tr class="history-row" data-history-for="{{ p.id }}" hidden>
+          <td colspan="6">
+            <p class="msg">
+              Run history across every service this policy currently covers
+              (<code>GET /api/runs?policy_id={{ p.id }}</code>) — not just one service's.
+              Membership reflects the <strong>current</strong> attachment list above, same
+              as the table itself; a run from before a service was attached or after it was
+              detached is not retroactively included/excluded.
+            </p>
+            <div class="table-scroll">
+              <table>
+                <thead>
+                  <tr><th>Started</th><th>Service</th><th>Kind</th><th>Status</th><th>Finished</th><th>Error</th></tr>
+                </thead>
+                <tbody data-history-body="{{ p.id }}"><tr><td colspan="6" class="muted">Loading…</td></tr></tbody>
+              </table>
+            </div>
           </td>
         </tr>
         {% else %}
@@ -291,6 +311,60 @@
       if (!boxes.length) return;
       const allChecked = boxes.every((cb) => cb.checked);
       for (const cb of boxes) cb.checked = !allChecked;
+    });
+  }
+
+  // --- per-policy run history (GET /api/runs?policy_id=, lazy-loaded) -----
+  const STATUS_CLASS = { succeeded: "ok", failed: "failed" };
+  function renderHistoryRows(body, runs) {
+    body.innerHTML = "";
+    if (!runs.length) {
+      body.innerHTML = '<tr><td colspan="6" class="muted">No runs recorded for this policy\'s services yet.</td></tr>';
+      return;
+    }
+    for (const r of runs) {
+      const tr = document.createElement("tr");
+      const cells = [
+        r.started_at || "—",
+        r.service_slug || (r.service_id != null ? "service #" + r.service_id : "—"),
+        r.kind,
+      ];
+      for (const text of cells) {
+        const td = document.createElement("td");
+        td.textContent = text;
+        tr.appendChild(td);
+      }
+      const statusTd = document.createElement("td");
+      const badge = document.createElement("span");
+      badge.className = "badge " + (STATUS_CLASS[r.status] || "unknown");
+      badge.textContent = r.status;
+      statusTd.appendChild(badge);
+      tr.appendChild(statusTd);
+      const finished = document.createElement("td");
+      finished.textContent = r.finished_at || "—";
+      tr.appendChild(finished);
+      const error = document.createElement("td");
+      error.textContent = r.error || "—";
+      tr.appendChild(error);
+      body.appendChild(tr);
+    }
+  }
+
+  for (const btn of document.querySelectorAll("[data-history]")) {
+    btn.addEventListener("click", async () => {
+      const id = btn.dataset.history;
+      const row = document.querySelector(`tr.history-row[data-history-for="${id}"]`);
+      if (!row) return;
+      row.hidden = !row.hidden;
+      if (row.hidden || row.dataset.loaded) return;
+      const body = row.querySelector(`[data-history-body="${id}"]`);
+      try {
+        const runs = await (await fetch("/api/runs?policy_id=" + encodeURIComponent(id) + "&limit=50")).json();
+        renderHistoryRows(body, runs);
+        row.dataset.loaded = "1";
+      } catch (_) {
+        body.innerHTML = '<tr><td colspan="6" class="msg error">Could not load run history.</td></tr>';
+      }
     });
   }
 

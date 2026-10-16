@@ -10,15 +10,21 @@ non-interactively from a script or an Ansible task.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import sys
 from pathlib import Path
 from typing import Any
 
 import click
+from sqlmodel import Session, col, select
 
+from orchestrator.audit import log as audit
 from orchestrator.config import get_settings
+from orchestrator.db.models import ProxyHost, Service
+from orchestrator.db.session import build_engine, get_engine
 from orchestrator.domain.enums import ProbeKind
+from orchestrator.logging_setup import configure_logging
 from orchestrator.registry.editor import RegistryEditError, RegistryEditor
 from orchestrator.registry.probe_specs import (
     PROBE_SPECS,
@@ -27,6 +33,7 @@ from orchestrator.registry.probe_specs import (
     FieldSpec,
     kinds_by_menu_order,
 )
+from orchestrator.registry.traefik_manager_sync import sync_maintenance_middleware
 
 # ---------------------------------------------------------------------------
 # shared helpers
@@ -527,6 +534,91 @@ def proxy_remove(slug: str, hostname: str, path_override: str | None) -> None:
     if not editor.remove_proxy_host(slug, hostname):
         raise click.ClickException(f"no proxy host {hostname!r} on {slug!r}")
     save(editor, f"proxy host {hostname!r} removed from {slug!r}")
+
+
+@proxy.command("resync-maintenance")
+def proxy_resync_maintenance() -> None:
+    """Backfill the maintenance middleware for every linked proxy host.
+
+    ``sync_maintenance_middleware`` (``orchestrator.registry.traefik_manager_sync``)
+    only runs on a ``ProxyHost`` create/update/delete/re-link — see the
+    lifecycle hooks in ``web/routers/proxy_hosts.py``. A host created before
+    ``ORCHESTRATOR_PUBLIC_URL``/``TRAEFIK_MANAGER_URL`` were set, or before
+    this feature existed at all, never gets the middleware injected until
+    it is edited again. This command closes that gap in one pass: every
+    ``ProxyHost`` with a linked ``service_id`` gets a no-op "re-sync" call
+    with its CURRENT ``(hostname, service_slug)`` as both the old and new
+    value — exactly the shape the create/update lifecycle hooks already use
+    for an unchanged host. See docs/proxy_hosts.md#maintenance-page-fallback.
+
+    This operates on the live DB directly, unlike ``proxy add/list/remove``
+    above (which edit ``services.yaml``) — there is nothing to ``save()``
+    here, and no YAML is touched.
+
+    No-op, with a message, when ``TRAEFIK_MANAGER_URL`` or
+    ``ORCHESTRATOR_PUBLIC_URL`` is unset — same convention as the library
+    function itself.
+    """
+    configure_logging()
+    build_engine()
+    settings = get_settings()
+
+    if not settings.traefik_manager_url.strip() or not settings.orchestrator_public_url.strip():
+        click.secho(
+            "TRAEFIK_MANAGER_URL and ORCHESTRATOR_PUBLIC_URL must both be set — "
+            "nothing to backfill without them (same no-op convention as "
+            "sync_maintenance_middleware itself). See "
+            "docs/proxy_hosts.md#maintenance-page-fallback-never-overwrite-an-existing-traefik-config.",
+            fg="yellow",
+        )
+        return
+
+    async def _go() -> int:
+        processed = 0
+        with Session(get_engine()) as session:
+            hosts = session.exec(
+                select(ProxyHost)
+                .where(col(ProxyHost.service_id).is_not(None))
+                .order_by(ProxyHost.hostname)
+            ).all()
+            if not hosts:
+                click.echo("No proxy hosts linked to a service — nothing to backfill.")
+                return 0
+            for ph in hosts:
+                svc = session.get(Service, ph.service_id) if ph.service_id else None
+                if svc is None:
+                    # service_id points at a row that no longer exists —
+                    # same orphaned-but-DB-only state docs/proxy_hosts.md
+                    # calls out elsewhere; nothing to sync for it.
+                    continue
+                events = await sync_maintenance_middleware(
+                    settings, hostname=ph.hostname, service_slug=svc.slug
+                )
+                processed += 1
+                click.secho(f"{ph.hostname} ({svc.slug})", bold=True)
+                if not events:
+                    click.echo("    (no change)")
+                for event in events:
+                    click.echo(f"    {event.action:<22} {event.name}")
+                    # Same audit mechanism and action vocabulary as the
+                    # web lifecycle hooks (web/routers/proxy_hosts.py's
+                    # _audit_maintenance_sync_events) — a CLI-triggered
+                    # resync is audited exactly like one triggered by an
+                    # edit in the dashboard, just with actor="cli", the
+                    # same convention `backup`/`wake` already use for a
+                    # CLI-triggered action.
+                    audit.record(
+                        session,
+                        actor="cli",
+                        action=event.action,
+                        target=f"traefik_manager:{event.name}",
+                        details=event.details,
+                    )
+            session.commit()
+        return processed
+
+    processed = asyncio.run(_go())
+    click.secho(f"\n{processed} linked proxy host(s) processed.", fg="green", bold=True)
 
 
 # ---------------------------------------------------------------------------

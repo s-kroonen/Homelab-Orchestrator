@@ -243,6 +243,51 @@
       </div>
     </div>
   </section>
+
+  <section>
+    <h2>Proxy hosts</h2>
+    <p class="msg">
+      Reference records only — see <code>docs/proxy_hosts.md</code>. Full management,
+      including drift detection and Resync, lives on <a href="/proxy-hosts">/proxy-hosts</a>;
+      this is a shortcut for this service's own hosts.
+    </p>
+    <table>
+      <thead>
+        <tr><th>Hostname</th><th>Upstream</th><th>Provider</th><th>Wake on hit</th><th></th></tr>
+      </thead>
+      <tbody id="ph-body"></tbody>
+    </table>
+
+    <form class="grid" id="ph-add-form" autocomplete="off">
+      <label for="ph-add-hostname">Hostname</label>
+      <input id="ph-add-hostname" required placeholder="app.example.com">
+      <label for="ph-add-upstream">Upstream</label>
+      <input id="ph-add-upstream" placeholder="http://10.0.0.12:8080">
+      <label for="ph-add-provider">Provider</label>
+      <select id="ph-add-provider">
+        {% for p in providers %}<option value="{{ p }}">{{ p }}</option>{% endfor %}
+      </select>
+      <div class="row">
+        <button type="submit" id="ph-add-btn">Add proxy host</button>
+        <span class="msg" id="ph-msg"></span>
+      </div>
+    </form>
+  </section>
+
+  <section>
+    <h2>Backups</h2>
+    <p class="msg">
+      Most recent first, from <code>GET /api/backups?slug={{ service.slug }}</code>
+      (same endpoint and default limit <a href="/api/backups?slug={{ service.slug }}">the API uses</a>).
+      Trigger one from the main <a href="/">dashboard</a>.
+    </p>
+    <table>
+      <thead>
+        <tr><th>Created</th><th>Verified</th><th>Protected</th><th>Size</th><th>Run</th></tr>
+      </thead>
+      <tbody id="backups-body"><tr><td colspan="5" class="muted">Loading…</td></tr></tbody>
+    </table>
+  </section>
 </div>
 
 <script>
@@ -614,6 +659,128 @@
     }
   });
 
+  // --- proxy hosts (shortcut for this service; full CRUD lives on
+  // /proxy-hosts) -----------------------------------------------------------
+  // Calls the EXISTING /api/proxy-hosts endpoints, pre-filling service_id to
+  // this service — no new backend route. SERVICE.proxy_hosts is the initial
+  // render; reloadProxyHosts() re-fetches just this service's rows after an
+  // add/delete, the same pattern reloadProbes() already uses for probes.
+  function renderProxyHosts() {
+    const body = $("ph-body");
+    body.innerHTML = "";
+    if (!SERVICE.proxy_hosts.length) {
+      body.innerHTML = '<tr><td colspan="5" class="muted">No proxy hosts linked to this service.</td></tr>';
+      return;
+    }
+    for (const h of SERVICE.proxy_hosts) {
+      const tr = document.createElement("tr");
+      const hostTd = document.createElement("td");
+      const code = document.createElement("code");
+      code.textContent = h.hostname;
+      hostTd.appendChild(code);
+      tr.appendChild(hostTd);
+      for (const text of [h.upstream || "—", h.router_provider, h.wake_on_hit ? "yes" : "no"]) {
+        const td = document.createElement("td");
+        td.textContent = text;
+        tr.appendChild(td);
+      }
+      const actions = document.createElement("td");
+      const del = document.createElement("button");
+      del.className = "danger";
+      del.textContent = "Delete";
+      del.addEventListener("click", async () => {
+        if (!confirm(`Delete the proxy host record for ${h.hostname}? (This does not touch Traefik.)`)) return;
+        try {
+          await sendJson("DELETE", "/api/proxy-hosts/" + h.id);
+          await reloadProxyHosts();
+          setMsg("ph-msg", `Deleted ${h.hostname}. Save to YAML to persist.`, "ok");
+        } catch (err) {
+          setMsg("ph-msg", err.message, "error");
+        }
+      });
+      actions.appendChild(del);
+      tr.appendChild(actions);
+      body.appendChild(tr);
+    }
+  }
+
+  async function reloadProxyHosts() {
+    const updated = await sendJson("GET", svcPath);
+    SERVICE.proxy_hosts = updated.proxy_hosts;
+    renderProxyHosts();
+  }
+
+  $("ph-add-form").addEventListener("submit", async (ev) => {
+    ev.preventDefault();
+    const hostname = $("ph-add-hostname").value.trim();
+    if (!hostname) return;
+    try {
+      await sendJson("POST", "/api/proxy-hosts", {
+        hostname,
+        upstream: $("ph-add-upstream").value.trim(),
+        router_provider: $("ph-add-provider").value,
+        service_id: SERVICE.id,
+      });
+      $("ph-add-form").reset();
+      await reloadProxyHosts();
+      setMsg("ph-msg", `Added ${hostname}. Save to YAML to persist.`, "ok");
+    } catch (err) {
+      setMsg("ph-msg", err.message, "error");
+    }
+  });
+
+  // --- backups (read-only; the existing ?slug= filter on GET /api/backups,
+  // just not previously surfaced anywhere in the UI) -----------------------
+  function fmtBytes(n) {
+    if (n === null || n === undefined) return "—";
+    let size = n;
+    for (const unit of ["B", "KiB", "MiB", "GiB", "TiB"]) {
+      if (size < 1024 || unit === "TiB") return `${size.toFixed(1)} ${unit}`;
+      size /= 1024;
+    }
+    return `${n} B`;
+  }
+
+  async function loadBackups() {
+    const body = $("backups-body");
+    try {
+      const records = await (await fetch("/api/backups?slug=" + encodeURIComponent(SERVICE.slug))).json();
+      body.innerHTML = "";
+      if (!records.length) {
+        body.innerHTML = '<tr><td colspan="5" class="muted">No backups recorded yet.</td></tr>';
+        return;
+      }
+      for (const r of records) {
+        const tr = document.createElement("tr");
+        const created = document.createElement("td");
+        created.textContent = r.created_at || "—";
+        tr.appendChild(created);
+        const verified = document.createElement("td");
+        verified.textContent = r.verified ? "yes" : "no";
+        tr.appendChild(verified);
+        const protected_ = document.createElement("td");
+        protected_.textContent = r.protected ? "yes" : "no";
+        tr.appendChild(protected_);
+        const size = document.createElement("td");
+        size.textContent = fmtBytes(r.size_bytes);
+        tr.appendChild(size);
+        const run = document.createElement("td");
+        if (r.pipeline_run_id) {
+          const a = document.createElement("a");
+          a.href = "/activity";
+          a.textContent = "run #" + r.pipeline_run_id;
+          run.appendChild(a);
+        } else {
+          run.textContent = "—";
+        }
+        tr.appendChild(run);
+        body.appendChild(tr);
+      }
+    } catch (_) {
+      body.innerHTML = '<tr><td colspan="5" class="msg error">Could not load backups.</td></tr>';
+    }
+  }
+
   // --- health history (compact ticks from the periodic HealthScanner) -----
   const HEALTH_CLASS = { healthy: "ok", failed: "failed", unknown: "indeterminate" };
   async function loadHealthHistory() {
@@ -638,6 +805,8 @@
 
   fillServiceForm(SERVICE);
   renderProbes();
+  renderProxyHosts();
+  loadBackups();
   loadHealthHistory();
   $("wake-unsupported-banner").hidden = !SERVICE.wake_unsupported;
 
@@ -653,6 +822,11 @@
     const active = document.activeElement;
     if (active && /^(INPUT|TEXTAREA|SELECT)$/.test(active.tagName)) return true;
     if (!$("probe-editor").hidden) return true;
+    // The proxy-host add form has no "hidden until opened" panel like the
+    // probe editor — it's always visible — so guard on it having unsaved
+    // input instead, the same way the active-element check above guards a
+    // half-filled probe field the admin has since clicked away from.
+    if ($("ph-add-hostname").value.trim() || $("ph-add-upstream").value.trim()) return true;
     return false;
   }
   setInterval(() => {

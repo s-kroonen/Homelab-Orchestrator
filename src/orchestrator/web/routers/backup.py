@@ -10,10 +10,10 @@ from __future__ import annotations
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlmodel import desc, select
+from sqlmodel import Session, col, desc, select
 
 from orchestrator.adapters.errors import AdapterError
-from orchestrator.db.models import BackupRecord, PipelineRun
+from orchestrator.db.models import BackupRecord, PipelineRun, Service
 from orchestrator.pipelines.backup import BackupError, BackupPipeline
 from orchestrator.web.auth import require_admin
 from orchestrator.web.deps import AdaptersDep, SessionDep, SettingsDep
@@ -21,18 +21,28 @@ from orchestrator.web.deps import AdaptersDep, SessionDep, SettingsDep
 router = APIRouter(prefix="/api", tags=["backup"], dependencies=[Depends(require_admin)])
 
 
-def _run_to_dict(run: PipelineRun) -> dict[str, Any]:
+def _run_to_dict(run: PipelineRun, service_slug: str | None = None) -> dict[str, Any]:
     return {
         "id": run.id,
         "kind": run.kind.value,
         "status": run.status.value,
         "correlation_id": run.correlation_id,
         "service_id": run.service_id,
+        "service_slug": service_slug,
         "started_at": run.started_at.isoformat() if run.started_at else None,
         "finished_at": run.finished_at.isoformat() if run.finished_at else None,
         "error": run.error,
         "steps": run.steps,
     }
+
+
+def _service_slugs(session: Session, service_ids: set[int]) -> dict[int, str]:
+    if not service_ids:
+        return {}
+    rows = session.exec(
+        select(Service.id, Service.slug).where(col(Service.id).in_(service_ids))
+    ).all()
+    return {sid: slug for sid, slug in rows if sid is not None}
 
 
 @router.post("/backup/{slug}")
@@ -55,11 +65,43 @@ async def trigger_backup(
 
 
 @router.get("/runs")
-async def list_runs(session: SessionDep, limit: int = 20) -> list[dict[str, Any]]:
-    runs = session.exec(
-        select(PipelineRun).order_by(desc(PipelineRun.started_at)).limit(limit)
-    ).all()
-    return [_run_to_dict(r) for r in runs]
+async def list_runs(
+    session: SessionDep,
+    limit: int = 20,
+    policy_id: int | None = Query(
+        None,
+        description=(
+            "Filter to runs for every service currently attached to this backup "
+            "policy (Service.backup_policy_id) — a policy's own run history "
+            "across every service it covers, not just one. Services that were "
+            "attached when a run happened but have since been moved or detached "
+            "are not retroactively included: this reflects CURRENT membership, "
+            "the same single source of truth backup_policies.py's "
+            "_attached_services uses, not a historical snapshot."
+        ),
+    ),
+) -> list[dict[str, Any]]:
+    stmt = select(PipelineRun).order_by(desc(PipelineRun.started_at)).limit(limit)
+    if policy_id is not None:
+        # PipelineRun has no policy_id of its own — only service_id — so this
+        # resolves "every service this policy currently covers"
+        # (Service.backup_policy_id, the same single source of truth
+        # backup_policies.py's _attached_services uses) to a set of ids
+        # first, rather than adding a policy_id column to PipelineRun that
+        # would need backfilling for every historical run. A dedicated
+        # BackupRecord-based endpoint was considered instead — BackupRecord
+        # already HAS policy_id — but it only covers successful backups
+        # that got as far as writing one, and a failed run is exactly what
+        # this view most needs to surface.
+        covered_ids = session.exec(
+            select(Service.id).where(Service.backup_policy_id == policy_id)
+        ).all()
+        stmt = stmt.where(col(PipelineRun.service_id).in_(covered_ids))
+    runs = session.exec(stmt).all()
+    slugs = _service_slugs(session, {r.service_id for r in runs if r.service_id is not None})
+    return [
+        _run_to_dict(r, slugs.get(r.service_id) if r.service_id is not None else None) for r in runs
+    ]
 
 
 @router.get("/runs/{run_id}")
