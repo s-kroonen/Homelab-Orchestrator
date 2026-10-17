@@ -101,6 +101,21 @@ every other optional integration here. Once it's set:
   Start/Stop guest buttons added to `service_detail.html` near the service's
   node/guest fields, hidden when the service has no guest configured; stop
   is gated behind a `confirm()`.
+- ~~**Left sidebar nav + dashboard pages for the three "no UI" infra
+  endpoints.**~~ **Done.** The flat five-link top `<nav>` in `base.html`
+  became a grouped left sidebar — **Overview** (Dashboard), **Networking**
+  (Proxy hosts, Traffic), **Backups** (Backup policies), **Monitoring**
+  (Activity, Connectivity, Guests, Snapshots) — same `request.url.path`
+  "current"-highlighting as before, collapsing back to a flat, wrapping top
+  bar under 40rem (see `static/app.css`). Pure chrome: no page's own content
+  moved, only its nav entry. Bundled into the same change: `GET
+  /api/infra/status`/`/api/infra/proxmox/guests`/`/api/infra/pbs/snapshots`
+  had working endpoints (`web/routers/infra.py`) but no dashboard page since
+  the day they were added — three new list-only pages (`/infra`,
+  `/infra/guests`, `/infra/snapshots`; `infra_status.html`/
+  `infra_guests.html`/`infra_snapshots.html`) are the dashboard equivalents
+  of `orchestrator-cli check`/`guests`/`snapshots`, client-rendered via the
+  existing `apiFetch` against those same endpoints — no new API.
 
 ## Done: shared template/CSS/JS foundation
 
@@ -122,7 +137,11 @@ the time. **Proxy hosts, then backup policies, got dedicated add/edit pages
 page (`service_detail.html`) still edits a service inline on its own page
 (not a bolted-on-the-bottom list+form split like the other two, so it isn't
 the same kind of candidate) and remains open for a similar look if it grows
-unwieldy. See "The big question: frontend direction" below for why this
+unwieldy. **The "sub-tabs" half of that deeper redesign is also done**, as a
+left sidebar with grouped headings rather than literal tabs (see the "Left
+sidebar nav" entry above) — grouping scales better than a flat row of tabs
+as more top-level pages (the three infra pages, also added in that entry)
+get added. See "The big question: frontend direction" below for why this
 stays server-rendered Jinja2 rather than a SPA rewrite.
 
 ## Architecture: generalize the adapter pattern

@@ -23,7 +23,8 @@ body {
 
 .wrap { max-width: 56rem; margin: 0 auto; }
 
-/* --- header / nav --------------------------------------------------- */
+/* --- header (unauthenticated pages: login/setup/maintenance override the
+   whole {% block header %} with a plain <header>, never the sidebar) ----- */
 header {
   display: flex;
   align-items: baseline;
@@ -36,10 +37,63 @@ header h1 { font-size: 1.1rem; margin: 0; }
 header h1 a { color: inherit; text-decoration: none; }
 header .who { color: #9aa4b2; font-size: 0.85rem; }
 
-nav { display: flex; gap: 1rem; font-size: 0.85rem; }
-nav a { color: #9aa4b2; text-decoration: none; }
-nav a:hover { color: #5b8def; }
-nav a.current { color: #e6e9ef; border-bottom: 2px solid #5b8def; }
+/* --- sidebar nav (admin pages only — base.html's {% block header %}) ---
+   Fixed to the left edge; .wrap gets a matching margin-left via the
+   body.has-sidebar hook below so it never needs a flex wrapper around
+   both. Collapses to a top bar, grouping headings hidden, at narrow
+   widths (see the media query, which also carries the pre-existing
+   narrow-viewport rules for header/table/toast-stack). */
+.sidebar {
+  position: fixed;
+  top: 0; left: 0; bottom: 0;
+  width: 15rem;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+  padding: 1.5rem 1rem;
+  background: #10141c;
+  border-right: 1px solid #1a1e27;
+  z-index: 10;
+}
+.sidebar .brand { font-size: 1.05rem; font-weight: 600; padding: 0 0.4rem; }
+.sidebar .brand a { color: inherit; text-decoration: none; }
+.sidebar nav { display: flex; flex-direction: column; gap: 1.4rem; flex: 1; font-size: 0.85rem; }
+.nav-group { display: flex; flex-direction: column; gap: 0.15rem; }
+.nav-heading {
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #6b7280;
+  margin: 0 0 0.3rem;
+  padding: 0 0.4rem;
+}
+.sidebar nav a {
+  color: #9aa4b2;
+  text-decoration: none;
+  padding: 0.3rem 0.4rem;
+  border-radius: 0.3rem;
+  border-left: 2px solid transparent;
+}
+.sidebar nav a:hover { color: #e6e9ef; background: #171b24; }
+.sidebar nav a.current {
+  color: #e6e9ef;
+  background: #171b24;
+  border-left-color: #5b8def;
+  font-weight: 600;
+}
+.sidebar .who {
+  color: #9aa4b2;
+  font-size: 0.8rem;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  border-top: 1px solid #1a1e27;
+  padding: 1rem 0.4rem 0;
+}
+
+body.has-sidebar { padding: 0; }
+body.has-sidebar .wrap { margin-left: 15rem; padding: 2rem 1.5rem; }
 
 /* --- buttons ---------------------------------------------------------- */
 button, a.btn {
@@ -198,4 +252,24 @@ details.group table { margin-top: 0.5rem; }
   header { flex-wrap: wrap; gap: 0.5rem; }
   table { display: block; overflow-x: auto; }
   #toast-stack { left: 1rem; right: 1rem; max-width: none; }
+
+  /* Sidebar collapses back to the old top-nav-like stacked bar: no longer
+     fixed/left, groups lay out as a wrapping row with headings hidden
+     (matching the flat single-row nav this replaced). */
+  .sidebar {
+    position: static;
+    width: auto;
+    flex-direction: row;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.75rem 1rem;
+    border-right: none;
+    border-bottom: 1px solid #1a1e27;
+  }
+  .sidebar nav { flex-direction: row; flex-wrap: wrap; gap: 0.75rem 1rem; }
+  .nav-group { flex-direction: row; align-items: baseline; gap: 0.5rem; }
+  .nav-heading { display: none; }
+  .sidebar .who { border-top: none; padding: 0; margin-left: auto; }
+
+  body.has-sidebar .wrap { margin-left: 0; padding: 1.5rem 1rem; }
 }

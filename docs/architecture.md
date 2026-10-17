@@ -227,6 +227,19 @@ request), so an admin can't yank the guest out from under a live `vzdump`.
 node/guest fields, hidden when the service has no guest configured; `stop`
 is gated behind a `confirm()`, `start` is not.
 
+## Infra inspection pages: dashboard equivalents of the CLI's read-only commands
+
+`web/routers/infra.py`'s other three endpoints — `GET /api/infra/status`,
+`GET /api/infra/proxmox/guests`, `GET /api/infra/pbs/snapshots` — predate the
+manual power actions above and map directly to `orchestrator-cli`'s
+`check`/`guests`/`snapshots` commands, but had no dashboard page of their
+own until the left-sidebar nav added one each: `/infra` (Connectivity),
+`/infra/guests`, `/infra/snapshots` (`web/routers/ui.py`,
+`infra_status.html`/`infra_guests.html`/`infra_snapshots.html`). Same
+pattern as every other list-only page: the server renders the shell only,
+the table is filled client-side by `apiFetch` against the existing
+endpoints — no new API surface, no mutation.
+
 ## Traefik Manager (write path)
 
 Until this phase, every Traefik integration in this app was read-only

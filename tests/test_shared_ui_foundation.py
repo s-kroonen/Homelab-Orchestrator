@@ -76,7 +76,34 @@ def client(app: Any, monkeypatch: pytest.MonkeyPatch) -> Any:
 
 # Every page an admin can reach once logged in. (login.html is covered
 # separately below since it's pre-auth.)
-ADMIN_PAGES = ["/", "/backup-policies", "/proxy-hosts", "/traffic", "/activity"]
+ADMIN_PAGES = [
+    "/",
+    "/backup-policies",
+    "/proxy-hosts",
+    "/traffic",
+    "/activity",
+    "/infra",
+    "/infra/guests",
+    "/infra/snapshots",
+]
+
+#: Every sidebar nav link, grouped the way base.html renders them — used to
+#: assert every page carries the full, grouped sidebar (not just its own
+#: link) and that nothing was dropped when the flat top-nav became this.
+NAV_GROUPS = [
+    ("Overview", [("/", "Dashboard")]),
+    ("Networking", [("/proxy-hosts", "Proxy hosts"), ("/traffic", "Traffic")]),
+    ("Backups", [("/backup-policies", "Backup policies")]),
+    (
+        "Monitoring",
+        [
+            ("/activity", "Activity"),
+            ("/infra", "Connectivity"),
+            ("/infra/guests", "Guests"),
+            ("/infra/snapshots", "Snapshots"),
+        ],
+    ),
+]
 
 
 @pytest.mark.parametrize("path", ADMIN_PAGES)
@@ -87,23 +114,31 @@ def test_admin_pages_link_shared_css_and_js(client: TestClient, path: str) -> No
     assert '<script src="/static/app.js"></script>' in r.text
 
 
-def test_admin_pages_share_one_nav(client: TestClient) -> None:
-    """Regression guard for the base.html migration: every admin page still
-    renders the same five nav links (previously duplicated verbatim in each
-    template's own <nav>), and the current page is marked with the shared
-    nav's "current" class rather than a per-page copy."""
+def test_admin_pages_share_one_grouped_sidebar(client: TestClient) -> None:
+    """Regression guard for the top-nav -> sidebar migration: every admin
+    page still renders the full, grouped sidebar — nothing dropped from
+    navigation — with the current page's own link marked "current" and no
+    other link marked current."""
     for path, current_href in [
-        ("/", 'href="/"'),
-        ("/backup-policies", 'href="/backup-policies"'),
-        ("/proxy-hosts", 'href="/proxy-hosts"'),
-        ("/traffic", 'href="/traffic"'),
-        ("/activity", 'href="/activity"'),
+        ("/", '/" class="current"'),
+        ("/backup-policies", '/backup-policies" class="current"'),
+        ("/proxy-hosts", '/proxy-hosts" class="current"'),
+        ("/traffic", '/traffic" class="current"'),
+        ("/activity", '/activity" class="current"'),
+        ("/infra", '/infra" class="current"'),
+        ("/infra/guests", '/infra/guests" class="current"'),
+        ("/infra/snapshots", '/infra/snapshots" class="current"'),
     ]:
         r = client.get(path)
         assert r.status_code == 200, r.text
-        for href in ["/", "/backup-policies", "/proxy-hosts", "/traffic", "/activity"]:
-            assert f'href="{href}"' in r.text
-        assert f'{current_href} class="current"' in r.text
+        assert '<aside class="sidebar">' in r.text
+        for heading, links in NAV_GROUPS:
+            assert f'<div class="nav-heading">{heading}</div>' in r.text
+            for href, label in links:
+                assert f'<a href="{href}"' in r.text
+                assert label in r.text
+        assert r.text.count('class="current"') == 1
+        assert current_href in r.text
 
 
 def test_login_page_links_shared_css_and_js(app: Any) -> None:
@@ -114,6 +149,24 @@ def test_login_page_links_shared_css_and_js(app: Any) -> None:
         assert '<script src="/static/app.js"></script>' in r.text
         # No admin session yet - the shared nav/logout button must not render.
         assert "logout-btn" not in r.text
+        # ...nor the admin sidebar itself (base.html's {% block header %} is
+        # fully overridden on unauthenticated pages — see login.html).
+        assert '<aside class="sidebar">' not in r.text
+        assert 'class="has-sidebar"' not in r.text
+
+
+def test_unauthenticated_pages_never_show_the_admin_sidebar(app: Any) -> None:
+    """setup.html/maintenance.html override {% block header %} with their
+    own plain <header>, not the sidebar — same contract as login.html, just
+    exercised through the maintenance page instead (setup.html needs no
+    extra fixture to reach, but the maintenance "unknown service" page
+    needs neither a registered service nor a services.yaml, so it is the
+    simplest unauthenticated page to exercise here)."""
+    with TestClient(app) as client:
+        r = client.get("/maintenance/does-not-exist")
+        assert r.status_code == 200, r.text
+        assert '<aside class="sidebar">' not in r.text
+        assert 'class="has-sidebar"' not in r.text
 
 
 def test_app_css_and_js_are_served(app: Any) -> None:
