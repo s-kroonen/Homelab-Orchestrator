@@ -48,3 +48,11 @@ async def test_create_route_refs_are_stable_but_not_required_to_be_shared() -> N
     ref1 = await adapter.create_route(hostname="a.example.com", upstream="http://x:1")
     ref2 = await adapter.create_route(hostname="b.example.com", upstream="http://x:1")
     assert ref1 != ref2
+
+
+async def test_tail_access_log_returns_none_and_never_raises() -> None:
+    """Unlike the write methods above, this never fabricates plausible-
+    looking log lines — see the adapter's own docstring for why."""
+    adapter = DryRunProxyAdapter()
+    assert await adapter.tail_access_log() is None
+    assert await adapter.tail_access_log(lines=1000) is None

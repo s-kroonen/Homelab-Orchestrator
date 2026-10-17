@@ -677,3 +677,32 @@ class TraefikManagerProxyAdapter(ProxyAdapter):
             await self._delete_route(route_ref)
         except TraefikManagerNotFound as exc:
             raise ProxyRouteNotFound(str(exc)) from exc
+
+    # -- ProxyAdapter: access-log read path (GeoIP traffic visibility) ------
+    #
+    # ``GET /api/traefik/logs?lines=N`` (max 1000 per Traefik Manager's own
+    # API docs) — Traefik Manager already tails Traefik's own access log for
+    # its own Logs tab; this reuses that exact read rather than this app
+    # gaining any new SSH/filesystem access of its own. Requires an access
+    # log path configured on the gateway (``ACCESS_LOG_PATH`` or Traefik
+    # Manager's Settings) — without one, Traefik Manager itself answers with
+    # no lines (never an error we need to special-case here beyond the usual
+    # degrade-to-None).
+
+    async def tail_access_log(self, lines: int = 200) -> list[str] | None:
+        if not self._settings.traefik_manager_url.strip():
+            return None
+        try:
+            async with self._client() as client:
+                response = await self._get_json(
+                    client, f"/api/traefik/logs?lines={max(1, int(lines))}"
+                )
+        except TraefikManagerNotConfigured:
+            return None
+        except TraefikManagerError as exc:
+            log.warning("traefik_manager.tail_access_log_failed", error=str(exc))
+            return None
+        raw_lines = response.get("lines") if isinstance(response, dict) else None
+        if not isinstance(raw_lines, list):
+            return []
+        return [line for line in raw_lines if isinstance(line, str)]

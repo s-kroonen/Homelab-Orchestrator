@@ -295,6 +295,40 @@ ENV_SECTIONS: tuple[EnvSection, ...] = (
         ),
     ),
     EnvSection(
+        "geoip",
+        "GeoIP traffic visibility (opt-in)",
+        (
+            EnvKey(
+                "GEOIP_ENABLED",
+                "Per-request client-IP/country visibility, sourced from Traefik's own\n"
+                "access log tailed THROUGH TRAEFIK MANAGER (needs TRAEFIK_MANAGER_URL\n"
+                "and an access log path configured on the gateway) — not a new direct\n"
+                "SSH/filesystem integration. false = disabled entirely, no-op. See\n"
+                "docs/geoip_traffic.md.",
+            ),
+            EnvKey(
+                "GEOIP_DB_PATH",
+                "Path to a MaxMind-format .mmdb file. Empty = auto-download and cache\n"
+                "the free DB-IP city-lite database under {STATE_DIR}/geoip/, the same\n"
+                "approach Traefik Manager's own GeoIP feature uses.",
+            ),
+            EnvKey(
+                "GEOIP_TRAFFIC_POLL_INTERVAL_S",
+                "How often the collector tails the access log and resolves new lines.",
+            ),
+            EnvKey(
+                "GEOIP_ACCESS_LOG_LINES",
+                "How many of the most recent access-log lines to request per poll\n"
+                "(Traefik Manager caps this at 1000).",
+            ),
+            EnvKey(
+                "GEOIP_TRAFFIC_RETENTION_DAYS",
+                "How long GeoTrafficSample rows are kept before being pruned.\n"
+                "Deliberately short — a monitoring trend view, not an audit trail.",
+            ),
+        ),
+    ),
+    EnvSection(
         "network",
         "Reaching guests (probes)",
         (
