@@ -1,0 +1,98 @@
+{% extends "base.html" %}
+{% block title %}homelab-orchestrator — guests{% endblock %}
+{% block content %}
+  <section>
+    <h2>Proxmox guests</h2>
+    <p class="msg">
+      The dashboard equivalent of <code>orchestrator-cli guests</code>: every guest
+      <code>/api/infra/proxmox/guests</code> can see on the cluster, whether or not it is
+      registered as a service here.
+    </p>
+    <div class="row">
+      <label class="inline" for="node-filter">Node</label>
+      <input id="node-filter" type="text" placeholder="e.g. eve1 — blank = every node">
+      <button class="secondary" id="refresh-btn">Refresh</button>
+      <span class="msg" id="guests-msg"></span>
+    </div>
+    <div class="table-scroll">
+    <table>
+      <thead>
+        <tr><th>VMID</th><th>Kind</th><th>Node</th><th>Status</th><th>Name</th></tr>
+      </thead>
+      <tbody id="guest-rows"><tr><td colspan="5">Loading…</td></tr></tbody>
+    </table>
+    </div>
+  </section>
+{% endblock %}
+{% block scripts %}
+<script>
+  function setMsg(text, kind) {
+    const el = document.getElementById("guests-msg");
+    el.textContent = text;
+    el.className = "msg" + (kind ? " " + kind : "");
+  }
+
+  function cell(text, cls) {
+    const td = document.createElement("td");
+    if (cls) td.className = cls;
+    td.textContent = text;
+    return td;
+  }
+
+  async function loadGuests() {
+    const body = document.getElementById("guest-rows");
+    const node = document.getElementById("node-filter").value.trim();
+    const url = "/api/infra/proxmox/guests" + (node ? "?node=" + encodeURIComponent(node) : "");
+    let rows;
+    try {
+      rows = await apiFetch("GET", url, undefined, { suppressToast: true });
+    } catch (err) {
+      body.innerHTML = "";
+      const tr = document.createElement("tr");
+      const td = cell(err.message);
+      td.colSpan = 5;
+      tr.appendChild(td);
+      body.appendChild(tr);
+      setMsg("Could not reach the orchestrator API.", "error");
+      return;
+    }
+
+    body.innerHTML = "";
+    if (!rows.length) {
+      const tr = document.createElement("tr");
+      const td = cell(
+        "No guests returned — /cluster/resources filters silently by VM.Audit, so this " +
+        "can mean the token lacks it rather than the cluster being empty."
+      );
+      td.colSpan = 5;
+      tr.appendChild(td);
+      body.appendChild(tr);
+      setMsg("");
+      return;
+    }
+    for (const g of rows) {
+      const tr = document.createElement("tr");
+      tr.appendChild(cell(g.vmid));
+      tr.appendChild(cell(g.kind));
+      tr.appendChild(cell(g.node));
+
+      const statusBadge = document.createElement("span");
+      statusBadge.className = "badge " + (g.status === "running" ? "healthy" : "unknown");
+      statusBadge.textContent = g.status;
+      const statusTd = document.createElement("td");
+      statusTd.appendChild(statusBadge);
+      tr.appendChild(statusTd);
+
+      tr.appendChild(cell(g.name));
+      body.appendChild(tr);
+    }
+    setMsg(`${rows.length} guest(s).`, "ok");
+  }
+
+  document.getElementById("refresh-btn").addEventListener("click", loadGuests);
+  document.getElementById("node-filter").addEventListener("keydown", (ev) => {
+    if (ev.key === "Enter") loadGuests();
+  });
+  loadGuests();
+</script>
+{% endblock %}

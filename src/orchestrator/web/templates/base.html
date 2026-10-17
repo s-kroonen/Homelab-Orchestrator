@@ -7,32 +7,57 @@
 <link rel="stylesheet" href="/static/app.css">
 {% block extra_head %}{% endblock %}
 </head>
-<body>
-<div class="wrap">
+<body{% if admin %} class="has-sidebar"{% endif %}>
   {% block header %}
-  <header>
-    <h1><a href="/">homelab-orchestrator</a>{% block title_suffix %}{% endblock %}</h1>
+  <aside class="sidebar">
+    <div class="brand"><a href="/">homelab-orchestrator</a>{% block title_suffix %}{% endblock %}</div>
     {% block nav %}
     {% set path = request.url.path %}
+    {% macro navlink(href, label, exact=False) -%}
+      {% if exact %}
+        {% set is_current = path == href %}
+      {% elif href == "/" %}
+        {% set is_current = path == "/" or path.startswith("/services/") %}
+      {% else %}
+        {% set is_current = path == href or path.startswith(href + "/") %}
+      {% endif %}
+      <a href="{{ href }}"{% if is_current %} class="current"{% endif %}>{{ label }}</a>
+    {%- endmacro %}
     <nav>
-      <a href="/"{% if path == "/" or path.startswith("/services/") %} class="current"{% endif %}>Dashboard</a>
-      <a href="/backup-policies"{% if path.startswith("/backup-policies") %} class="current"{% endif %}>Backup policies</a>
-      <a href="/proxy-hosts"{% if path.startswith("/proxy-hosts") %} class="current"{% endif %}>Proxy hosts</a>
-      <a href="/traffic"{% if path.startswith("/traffic") %} class="current"{% endif %}>Traffic</a>
-      <a href="/activity"{% if path.startswith("/activity") %} class="current"{% endif %}>Activity</a>
+      <div class="nav-group">
+        <div class="nav-heading">Overview</div>
+        {{ navlink("/", "Dashboard") }}
+      </div>
+      <div class="nav-group">
+        <div class="nav-heading">Networking</div>
+        {{ navlink("/proxy-hosts", "Proxy hosts") }}
+        {{ navlink("/traffic", "Traffic") }}
+      </div>
+      <div class="nav-group">
+        <div class="nav-heading">Backups</div>
+        {{ navlink("/backup-policies", "Backup policies") }}
+      </div>
+      <div class="nav-group">
+        <div class="nav-heading">Monitoring</div>
+        {{ navlink("/activity", "Activity") }}
+        {{ navlink("/infra", "Connectivity", exact=True) }}
+        {{ navlink("/infra/guests", "Guests", exact=True) }}
+        {{ navlink("/infra/snapshots", "Snapshots", exact=True) }}
+      </div>
     </nav>
     {% endblock %}
     {% if admin %}
-    <span class="who">
+    <div class="who">
       {{ admin.username }}
       <button class="logout" id="logout-btn">Log out</button>
-    </span>
+    </div>
     {% endif %}
-  </header>
+  </aside>
   {% endblock %}
 
-  {% block content %}{% endblock %}
-</div>
+  <div class="wrap">
+    {% block content %}{% endblock %}
+  </div>
 
 <script src="/static/app.js"></script>
 {% block webauthn_script %}{% endblock %}

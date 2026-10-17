@@ -396,6 +396,47 @@ async def traffic_page(
     )
 
 
+@router.get("/infra", response_model=None)
+async def infra_status_page(
+    request: Request, session: SessionDep
+) -> HTMLResponse | RedirectResponse:
+    """Connectivity check across Proxmox/PBS — the dashboard equivalent of
+    ``orchestrator-cli check``. Entirely client-rendered: the page just calls
+    the existing ``/api/infra/status`` via ``apiFetch``, same pattern as the
+    other list-only pages."""
+    admin = get_current_admin(request, session)
+    if admin is None:
+        return RedirectResponse("/login?next=/infra", status_code=303)
+
+    return _templates.TemplateResponse(request, "infra_status.html", {"admin": admin})
+
+
+@router.get("/infra/guests", response_model=None)
+async def infra_guests_page(
+    request: Request, session: SessionDep
+) -> HTMLResponse | RedirectResponse:
+    """Proxmox guests across the cluster — the dashboard equivalent of
+    ``orchestrator-cli guests``. Client-rendered via ``/api/infra/proxmox/guests``."""
+    admin = get_current_admin(request, session)
+    if admin is None:
+        return RedirectResponse("/login?next=/infra/guests", status_code=303)
+
+    return _templates.TemplateResponse(request, "infra_guests.html", {"admin": admin})
+
+
+@router.get("/infra/snapshots", response_model=None)
+async def infra_snapshots_page(
+    request: Request, session: SessionDep
+) -> HTMLResponse | RedirectResponse:
+    """PBS snapshots in the configured datastore — the dashboard equivalent of
+    ``orchestrator-cli snapshots``. Client-rendered via ``/api/infra/pbs/snapshots``."""
+    admin = get_current_admin(request, session)
+    if admin is None:
+        return RedirectResponse("/login?next=/infra/snapshots", status_code=303)
+
+    return _templates.TemplateResponse(request, "infra_snapshots.html", {"admin": admin})
+
+
 @router.get("/activity", response_model=None)
 async def activity_page(
     request: Request,

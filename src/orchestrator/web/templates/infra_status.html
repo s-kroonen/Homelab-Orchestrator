@@ -1,0 +1,131 @@
+{% extends "base.html" %}
+{% block title %}homelab-orchestrator — connectivity{% endblock %}
+{% block content %}
+  <section>
+    <h2>Connectivity</h2>
+    <p class="msg">
+      The dashboard equivalent of <code>orchestrator-cli check</code>: one call to
+      <code>/api/infra/status</code> that answers "can I reach everything?" for Proxmox and
+      PBS. This is deliberately separate from <code>/healthz</code> — that reports on the
+      orchestrator itself; this reports on what it can currently see of the cluster.
+    </p>
+    <div class="row">
+      <button class="secondary" id="refresh-btn">Refresh</button>
+      <span class="msg" id="status-msg"></span>
+    </div>
+    <dl class="kv" id="settings-kv" hidden>
+      <div><dt>dry run</dt><dd id="kv-dry-run"></dd></div>
+      <div><dt>PVE backup storage</dt><dd id="kv-pve-storage"></dd></div>
+      <div><dt>PBS datastore</dt><dd id="kv-pbs-datastore"></dd></div>
+    </dl>
+    <div class="table-scroll">
+    <table>
+      <thead>
+        <tr><th>Target</th><th>Reachable</th><th>OK</th><th>Detail</th></tr>
+      </thead>
+      <tbody id="status-rows"><tr><td colspan="4">Loading…</td></tr></tbody>
+    </table>
+    </div>
+  </section>
+{% endblock %}
+{% block extra_head %}
+<style>
+  dl.kv { display: flex; gap: 1.5rem; flex-wrap: wrap; margin: 0 0 1.25rem; font-size: 0.85rem; }
+  dl.kv > div { display: flex; gap: 0.4rem; }
+  dl.kv dt { color: #9aa4b2; }
+  dl.kv dd { margin: 0; }
+</style>
+{% endblock %}
+{% block scripts %}
+<script>
+  function setMsg(text, kind) {
+    const el = document.getElementById("status-msg");
+    el.textContent = text;
+    el.className = "msg" + (kind ? " " + kind : "");
+  }
+
+  function cell(text, cls) {
+    const td = document.createElement("td");
+    if (cls) td.className = cls;
+    td.textContent = text;
+    return td;
+  }
+
+  function describeResult(target, result) {
+    if (target === "proxmox" || target === "pbs") {
+      return `version ${result.version}${result.release ? " (" + result.release + ")" : ""}`;
+    }
+    if (target === "pbs_datastore") {
+      const pct = (result.used_fraction * 100).toFixed(1);
+      return `${result.name}: ${result.used_bytes} / ${result.total_bytes} bytes used (${pct}%)`;
+    }
+    return JSON.stringify(result);
+  }
+
+  async function loadStatus() {
+    const body = document.getElementById("status-rows");
+    let data;
+    try {
+      data = await apiFetch("GET", "/api/infra/status", undefined, { suppressToast: true });
+    } catch (err) {
+      body.innerHTML = "";
+      const tr = document.createElement("tr");
+      const td = cell(err.message);
+      td.colSpan = 4;
+      tr.appendChild(td);
+      body.appendChild(tr);
+      setMsg("Could not reach the orchestrator API.", "error");
+      return;
+    }
+
+    const kv = document.getElementById("settings-kv");
+    kv.hidden = false;
+    document.getElementById("kv-dry-run").textContent = data.dry_run ? "yes" : "no";
+    document.getElementById("kv-pve-storage").textContent = data.pve_backup_storage;
+    document.getElementById("kv-pbs-datastore").textContent = data.pbs_datastore;
+
+    body.innerHTML = "";
+    let failures = 0;
+    for (const check of data.checks) {
+      const tr = document.createElement("tr");
+      tr.appendChild(cell(check.target));
+
+      const reachBadge = document.createElement("span");
+      reachBadge.className = "badge " + (check.reachable ? "healthy" : "failed");
+      reachBadge.textContent = check.reachable ? "reachable" : "unreachable";
+      const reachTd = document.createElement("td");
+      reachTd.appendChild(reachBadge);
+      tr.appendChild(reachTd);
+
+      const okTd = document.createElement("td");
+      if (check.reachable) {
+        const okBadge = document.createElement("span");
+        okBadge.className = "badge " + (check.ok ? "healthy" : "failed");
+        okBadge.textContent = check.ok ? "ok" : "failed";
+        okTd.appendChild(okBadge);
+      } else {
+        okTd.textContent = "—";
+        okTd.className = "muted";
+      }
+      tr.appendChild(okTd);
+
+      const detail = check.ok
+        ? describeResult(check.target, check.result)
+        : (check.error || "");
+      tr.appendChild(cell(detail, check.ok ? "" : "muted"));
+
+      if (!check.ok) failures += 1;
+      body.appendChild(tr);
+    }
+
+    if (failures === 0) {
+      setMsg("All checks passed.", "ok");
+    } else {
+      setMsg(`${failures} check(s) failed.`, "error");
+    }
+  }
+
+  document.getElementById("refresh-btn").addEventListener("click", loadStatus);
+  loadStatus();
+</script>
+{% endblock %}
