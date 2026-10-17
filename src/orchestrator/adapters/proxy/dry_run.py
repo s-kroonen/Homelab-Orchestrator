@@ -66,3 +66,15 @@ class DryRunProxyAdapter(ProxyAdapter):
 
     async def delete_route(self, route_ref: str) -> None:
         log.info("proxy.dry_run.delete_route", route_ref=route_ref)
+
+    async def tail_access_log(self, lines: int = 200) -> list[str] | None:
+        # Deliberately ``None``, not a fabricated ``[]`` or fake log lines:
+        # unlike the write methods above (which fake a plausible SyncEvent so
+        # callers exercising the dry-run path see something), there is no
+        # real backend here with a real access log to stand in for, and
+        # fabricating IP/country-shaped data would be actively misleading
+        # for a feature whose whole point is "what real traffic looks like."
+        # Mirrors list_routes' "not configured" convention instead — never
+        # touches the network, never raises.
+        log.info("proxy.dry_run.tail_access_log")
+        return None

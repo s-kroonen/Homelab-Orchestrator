@@ -576,3 +576,65 @@ async def test_delete_route_raises_on_unreachable_backend(
 
     with pytest.raises(TraefikManagerUnavailable):
         await adapter.delete_route("some-ref")
+
+
+# ---------------------------------------------------------------------------
+# tail_access_log — the GeoIP-visibility read path
+# ---------------------------------------------------------------------------
+
+
+async def test_tail_access_log_returns_none_when_not_configured() -> None:
+    adapter = TraefikManagerProxyAdapter(_settings(traefik_manager_url=""))
+    assert await adapter.tail_access_log() is None
+
+
+async def test_tail_access_log_hits_the_documented_endpoint_with_lines(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seen: dict[str, Any] = {}
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        seen["path"] = request.url.path
+        seen["query"] = request.url.query.decode()
+        seen["api_key"] = request.headers.get("X-Api-Key")
+        return httpx.Response(200, json={"lines": ['10.0.0.1 - - [x]"GET / HTTP/1.1" 200 -']})
+
+    _patch_transport(monkeypatch, handle)
+    adapter = TraefikManagerProxyAdapter(_settings())
+
+    lines = await adapter.tail_access_log(lines=50)
+    assert seen["path"] == "/api/traefik/logs"
+    assert seen["query"] == "lines=50"
+    assert seen["api_key"] == "secret-key"
+    assert lines == ['10.0.0.1 - - [x]"GET / HTTP/1.1" 200 -']
+
+
+async def test_tail_access_log_drops_non_string_entries(monkeypatch: pytest.MonkeyPatch) -> None:
+    def handle(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"lines": ["ok-line", 123, None, {"nope": True}]})
+
+    _patch_transport(monkeypatch, handle)
+    adapter = TraefikManagerProxyAdapter(_settings())
+    assert await adapter.tail_access_log() == ["ok-line"]
+
+
+async def test_tail_access_log_returns_empty_list_on_unexpected_shape(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def handle(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"not_lines": []})
+
+    _patch_transport(monkeypatch, handle)
+    adapter = TraefikManagerProxyAdapter(_settings())
+    assert await adapter.tail_access_log() == []
+
+
+async def test_tail_access_log_returns_none_on_connection_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def handle(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("refused")
+
+    _patch_transport(monkeypatch, handle)
+    adapter = TraefikManagerProxyAdapter(_settings())
+    assert await adapter.tail_access_log() is None

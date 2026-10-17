@@ -271,6 +271,38 @@ for the auto-managed diagnostic probe. Exactly one new audit-action family
 `removed`) was added, following the existing `proxy_host.*`/`probe.*`
 naming convention.
 
+## GeoIP traffic visibility (opt-in)
+
+Per-request client-IP/country visibility, sourced from Traefik's **access
+log** (not its aggregate Prometheus counters `traffic_metrics.md` already
+covers — those have no per-request client IPs) — tailed through Traefik
+Manager's existing `GET /api/traefik/logs?lines=N`
+(`ProxyAdapter.tail_access_log`), never a new direct SSH/filesystem
+integration. Gated entirely by `GEOIP_ENABLED` (default `false`), and
+independent of `TRAEFIK_API_URL`/`TRAEFIK_METRICS_*` — it is a different
+feature with a different on/off switch and failure mode, same reasoning
+`TrafficCollector` and `HealthScanner` stay separate schedulers from each
+other. See `docs/geoip_traffic.md` for the full design (dedup/cursor
+strategy, the local-IP bucket, the GeoIP database). **The dashboard page
+for this is a deferred follow-up** — see `docs/roadmap.md`.
+
+New settings:
+
+| Setting | Purpose | Default |
+|---|---|---|
+| `GEOIP_ENABLED` | Gates the whole feature. | `false` |
+| `GEOIP_DB_PATH` | A ready-made `.mmdb` file. Empty = auto-download/cache the free DB-IP city-lite database under `{STATE_DIR}/geoip/`. | `""` |
+| `GEOIP_TRAFFIC_POLL_INTERVAL_S` | How often the collector tails the access log. | `60` |
+| `GEOIP_ACCESS_LOG_LINES` | Lines requested per poll (Traefik Manager caps this at 1000). | `200` |
+| `GEOIP_TRAFFIC_RETENTION_DAYS` | How long `GeoTrafficSample` rows are kept. | `14` |
+
+New modules: `orchestrator.registry.access_log` (the common/JSON
+access-log line parser), `orchestrator.registry.geoip` (the IP -> country
+lookup, wrapping `geoip2`), `orchestrator.scheduler.geo_traffic_collector`
+(the periodic collector + dedup cursor), one new read-only endpoint
+(`GET /api/traffic/geo`, `web/routers/geo_traffic.py`) — deliberately bare,
+no page template, no nav entry.
+
 ## YAML-owned vs DB-owned tables
 
 | Table                | Ownership | Reconciled from YAML on boot? |
@@ -292,6 +324,7 @@ naming convention.
 | `setting`            | **DB**    | No (uses two well-known keys for YAML load/save markers) |
 | `traffic_sample`     | **DB**    | No (telemetry — polled from Traefik, see docs/traffic_metrics.md) |
 | `health_scan_sample` | **DB**    | No (telemetry — periodic health-scan history, see "Periodic scanning" above) |
+| `geo_traffic_sample` | **DB**    | No (telemetry — GeoIP traffic visibility, see "GeoIP traffic visibility" above / docs/geoip_traffic.md) |
 
 ## FK cascade policies
 
@@ -305,6 +338,7 @@ Chosen so YAML edits stay safe and history stays intact:
 * `pipeline_run.service_id` → `SET NULL` (same reasoning).
 * `traffic_sample.proxy_host_id` → `CASCADE` (traffic history for a removed proxy host is not worth keeping as an orphan — unlike `backup_record`/`pipeline_run`, there is no slug to denormalise against).
 * `health_scan_sample.service_id` → `CASCADE` (same reasoning — a removed service's health-scan history is not worth keeping as an orphan).
+* `geo_traffic_sample.proxy_host_id` → `CASCADE` (same reasoning as `traffic_sample.proxy_host_id` — GeoIP traffic history for a removed proxy host is not worth keeping as an orphan).
 
 ## Boot sequence
 

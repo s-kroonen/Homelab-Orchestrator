@@ -240,6 +240,53 @@ class TrafficSample(SQLModel, table=True):
     by_code: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))
 
 
+class GeoTrafficSample(SQLModel, table=True):
+    """One aggregated count of hits from one (``client_ip``, ``proxy_host``,
+    interval) tuple, resolved to a country — the GeoIP companion to
+    :class:`TrafficSample`, sourced from Traefik's own access log (tailed
+    through Traefik Manager, see ``orchestrator.adapters.proxy.base
+    .ProxyAdapter.tail_access_log``) instead of its aggregate Prometheus
+    counters, since per-request client IPs only ever appear in the access
+    log.
+
+    Deliberately compact, same philosophy as :class:`HealthScanSample`: one
+    row per poll cycle per distinct ``(proxy_host_id, client_ip)`` pair seen
+    that cycle, with ``hit_count`` holding how many NEW access-log lines
+    (since the collector's own cursor) matched it — not one row per
+    request, which would grow unbounded on a busy homelab. This is a
+    monitoring trend view ("which countries/IPs hit us, how often, against
+    which service"), not a forensic per-request log — the raw lines
+    themselves already live in Traefik's own access log file; this does not
+    duplicate them. See ``orchestrator.scheduler.geo_traffic_collector`` and
+    ``docs/geoip_traffic.md``.
+
+    Only entries whose router resolves to an existing ``ProxyHost`` are
+    stored — same reasoning as ``TrafficSample``: a router with no matching
+    ``ProxyHost`` has no ``Service`` to attribute the hit to, so there is
+    nothing useful to keep.
+    """
+
+    __tablename__ = "geo_traffic_sample"
+
+    id: int | None = Field(default=None, primary_key=True)
+    proxy_host_id: int = Field(
+        sa_column=Column(ForeignKey("proxy_host.id", ondelete="CASCADE"), nullable=False),
+    )
+    sampled_at: datetime = Field(default_factory=_utcnow, index=True)
+    client_ip: str = Field(index=True)
+    # "local" | "country" | "unknown" — see orchestrator.registry.geoip.
+    bucket: str = "unknown"
+    country_code: str = ""
+    country_name: str = ""
+    city: str = ""
+    # Most recent status code observed for this tuple this cycle — enough to
+    # eyeball "is this country mostly 200s or mostly 404/403 probing," not a
+    # full per-code breakdown (that level of detail already exists per-host
+    # on TrafficSample.by_code).
+    status_code: int = 0
+    hit_count: int = Field(default=1)
+
+
 class HealthScanSample(SQLModel, table=True):
     """One periodic scan cycle's verdict for one service — the history
     :class:`ServiceState` does not keep (it only ever holds the LATEST verdict).

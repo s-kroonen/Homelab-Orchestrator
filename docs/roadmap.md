@@ -102,6 +102,18 @@ every other optional integration here. Once it's set:
   node/guest fields, hidden when the service has no guest configured; stop
   is gated behind a `confirm()`.
 
+- **GeoIP traffic dashboard page.** Deferred follow-up to the GeoIP
+  traffic-visibility feature (`docs/geoip_traffic.md`) — ingestion,
+  storage (`GeoTrafficSample`) and one bare read endpoint
+  (`GET /api/traffic/geo`) landed already; the actual `/traffic`-style
+  page (a map, a per-country/per-IP table, grouped like `/traffic`
+  already is) was deliberately scoped OUT to avoid colliding with the
+  concurrent nav redesign of `base.html`'s nav (a separate PR against
+  `dev`, in flight at the time this was written). Build it once that nav
+  redesign has landed, reading `GET /api/traffic/geo` the same way
+  `/traffic` reads `build_traffic_view` — no new backend work expected,
+  this is UI-only.
+
 ## Done: shared template/CSS/JS foundation
 
 ~~**Every page was a fully standalone HTML document** (own `<html><head>`,

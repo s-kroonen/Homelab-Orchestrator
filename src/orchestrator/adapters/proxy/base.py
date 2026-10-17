@@ -180,3 +180,26 @@ class ProxyAdapter(ABC):
         record can choose to treat "already gone on the backend" as
         success rather than blocking the local delete on it.
         """
+
+    # -- Access-log read path (GeoIP traffic visibility) --------------------
+
+    @abstractmethod
+    async def tail_access_log(self, lines: int = 200) -> list[str] | None:
+        """The most recent ``lines`` lines of Traefik's own access log, as
+        raw strings — one JSON or combined-format log line per entry,
+        whichever format Traefik itself is configured to write (see
+        ``orchestrator.registry.access_log`` for the parser).
+
+        This is a passive READ, same degrade convention as
+        :meth:`list_routes`: returns ``None`` — never raises — when this
+        backend is not configured, cannot be reached, or (for
+        :class:`~orchestrator.adapters.proxy.traefik_manager
+        .TraefikManagerProxyAdapter` specifically) has no access-log path
+        configured on the gateway. A caller (``orchestrator.scheduler
+        .geo_traffic_collector.GeoTrafficCollector``) treats ``None`` exactly
+        like an empty poll: log and skip, same fail-open philosophy as every
+        other optional integration here. There is no "since" parameter —
+        every poll re-fetches the same tail, and it is the caller's job to
+        dedupe against what it already processed (see that collector's
+        cursor).
+        """

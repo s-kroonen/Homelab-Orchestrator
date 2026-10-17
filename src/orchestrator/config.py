@@ -194,6 +194,38 @@ class Settings(BaseSettings):
     # same convention as PROBE_PROXY_BASE_URL above.
     orchestrator_public_url: str = ""
 
+    # ---- GeoIP traffic visibility (opt-in) ---------------------------------
+    # Per-request client-IP/country visibility, sourced from Traefik's own
+    # access log TAILED THROUGH TRAEFIK MANAGER (ProxyAdapter.tail_access_log,
+    # GET /api/traefik/logs?lines=N) — never direct SSH/filesystem access on
+    # this app's side. Gated on this flag AND on Traefik Manager's own
+    # ACCESS_LOG_PATH being configured on the gateway (tail_access_log
+    # degrades to None otherwise, same convention as list_routes). Off by
+    # default: this is a new, optional integration, same "empty/false
+    # disables it" convention as every other one in this app. See
+    # docs/geoip_traffic.md. NOTE: the dashboard page for this is a deferred
+    # follow-up (docs/roadmap.md) — this only gates ingestion/storage/the one
+    # read endpoint.
+    geoip_enabled: bool = False
+    # Path to a MaxMind-format (.mmdb) GeoIP database. Empty = auto-download
+    # and cache the free DB-IP city-lite database under
+    # ``{STATE_DIR}/geoip/`` — the same approach Traefik Manager's own docs
+    # describe for its own GeoIP feature (POST /api/geoip/update), rather
+    # than inventing a different one. A configured path that does not exist
+    # is logged and treated as "GeoIP unavailable" (never auto-downloaded
+    # over an explicit operator choice).
+    geoip_db_path: str = ""
+    # How often the collector tails the access log and resolves new entries.
+    geoip_traffic_poll_interval_s: int = 60
+    # How many of the most recent access-log lines to request per poll
+    # (passed straight through as tail_access_log's ``lines``; Traefik
+    # Manager caps this at 1000 — see docs/geoip_traffic.md).
+    geoip_access_log_lines: int = 200
+    # Deliberately short, same reasoning as HEALTH_HISTORY_RETENTION_DAYS /
+    # TRAEFIK_METRICS_RETENTION_DAYS: this is a monitoring trend view, not an
+    # audit trail.
+    geoip_traffic_retention_days: int = 14
+
     # ---- Probe transports (phase 4) ---------------------------------------
     # Defaults for SSH probes; a probe's own transport block can override them.
     # In Docker the key and known_hosts must be MOUNTED into the container —
