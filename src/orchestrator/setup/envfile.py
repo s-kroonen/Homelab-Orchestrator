@@ -295,6 +295,30 @@ ENV_SECTIONS: tuple[EnvSection, ...] = (
         ),
     ),
     EnvSection(
+        "access_log",
+        "Access-log traffic (via Traefik Manager)",
+        (
+            EnvKey(
+                "ACCESS_LOG_ENABLED",
+                "Tail Traefik's access log through Traefik Manager (GET\n"
+                "/api/traefik/logs) and roll it up per proxy host per minute for\n"
+                "/traffic. Runs whenever PROXY_ADAPTER is a live Traefik Manager;\n"
+                "TRAEFIK_API_URL is not needed. Traefik Manager's ACCESS_LOG_PATH must\n"
+                "point at Traefik's access log (JSON format recommended). See\n"
+                "docs/traffic_metrics.md.",
+            ),
+            EnvKey("ACCESS_LOG_POLL_INTERVAL_S", "How often the access log is tailed."),
+            EnvKey(
+                "ACCESS_LOG_LINES",
+                "Lines requested per poll (Traefik Manager caps this at 1000).",
+            ),
+            EnvKey(
+                "TRAFFIC_ROLLUP_RETENTION_DAYS",
+                "How long per-minute traffic rollups are kept before being pruned.",
+            ),
+        ),
+    ),
+    EnvSection(
         "geoip",
         "GeoIP traffic visibility (opt-in)",
         (
@@ -314,12 +338,12 @@ ENV_SECTIONS: tuple[EnvSection, ...] = (
             ),
             EnvKey(
                 "GEOIP_TRAFFIC_POLL_INTERVAL_S",
-                "How often the collector tails the access log and resolves new lines.",
+                "DEPRECATED alias for ACCESS_LOG_POLL_INTERVAL_S, used only when that\n"
+                "is not set. Leave empty.",
             ),
             EnvKey(
                 "GEOIP_ACCESS_LOG_LINES",
-                "How many of the most recent access-log lines to request per poll\n"
-                "(Traefik Manager caps this at 1000).",
+                "DEPRECATED alias for ACCESS_LOG_LINES, used only when that is not\nset. Leave empty.",
             ),
             EnvKey(
                 "GEOIP_TRAFFIC_RETENTION_DAYS",

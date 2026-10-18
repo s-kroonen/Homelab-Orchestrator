@@ -5,7 +5,15 @@ from __future__ import annotations
 
 import json
 
-from orchestrator.registry.access_log import parse_line, parse_lines
+import pytest
+
+from orchestrator.registry.access_log import (
+    normalize_host,
+    normalize_router_name,
+    parse_go_duration_ms,
+    parse_line,
+    parse_lines,
+)
 
 _COMMON_LINE = (
     '10.0.0.1 - - [10/Jun/2026:08:42:00 +0000] "GET /app HTTP/1.1" 200 1337 '
@@ -123,3 +131,94 @@ def test_parse_lines_skips_garbage_and_keeps_the_rest() -> None:
     assert len(entries) == 2
     assert entries[0].client_ip == "10.0.0.1"
     assert entries[1].client_ip == "203.0.113.5"
+
+
+# ---------------------------------------------------------------------------
+# request host, duration, router-name normalisation
+# ---------------------------------------------------------------------------
+
+
+def test_json_line_carries_request_host_without_port() -> None:
+    entry = parse_line(_json_line(RequestHost="App.Example.com:443"))
+    assert entry is not None
+    assert entry.host == "app.example.com"
+
+
+def test_json_line_without_router_name_is_still_parsed_for_host_attribution() -> None:
+    line = json.dumps(
+        {
+            "ClientHost": "203.0.113.5",
+            "StartUTC": "2026-06-10T08:42:00Z",
+            "RequestHost": "app.example.com",
+            "RequestPath": "/",
+            "DownstreamStatus": 404,
+        }
+    )
+    entry = parse_line(line)
+    assert entry is not None
+    assert entry.router == ""
+    assert entry.host == "app.example.com"
+
+
+def test_common_line_has_no_host() -> None:
+    entry = parse_line(_COMMON_LINE)
+    assert entry is not None
+    assert entry.host is None
+
+
+def test_json_duration_is_nanoseconds() -> None:
+    entry = parse_line(_json_line(Duration=12_500_000))
+    assert entry is not None
+    assert entry.duration_ms == pytest.approx(12.5)
+    missing = parse_line(_json_line())
+    assert missing is not None and missing.duration_ms is None
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("12ms", 12.0),
+        ("1.5s", 1500.0),
+        ("350µs", 0.35),
+        ("350us", 0.35),
+        ("800ns", 0.0008),
+        ("1m2.5s", 62_500.0),
+        ("-", None),
+        ("", None),
+        ("12 parsecs", None),
+        ("ms", None),
+    ],
+)
+def test_parse_go_duration_ms(text: str, expected: float | None) -> None:
+    got = parse_go_duration_ms(text)
+    if expected is None:
+        assert got is None
+    else:
+        assert got == pytest.approx(expected)
+
+
+def test_common_line_duration_is_parsed() -> None:
+    entry = parse_line(_COMMON_LINE.replace(" 1ms", " 1.5s"))
+    assert entry is not None
+    assert entry.duration_ms == pytest.approx(1500.0)
+
+
+@pytest.mark.parametrize(
+    ("name", "expected"),
+    [
+        ("my-router@docker", "my-router"),
+        ("my-router@file", "my-router"),
+        ("my-router", "my-router"),
+        ("  My-Router@docker ", "my-router"),
+    ],
+)
+def test_normalize_router_name(name: str, expected: str) -> None:
+    assert normalize_router_name(name) == expected
+
+
+def test_normalize_host() -> None:
+    assert normalize_host("Example.com:8443") == "example.com"
+    assert normalize_host("example.com.") == "example.com"
+    assert normalize_host("[::1]:443") == "[::1]"
+    assert normalize_host("") is None
+    assert normalize_host(None) is None

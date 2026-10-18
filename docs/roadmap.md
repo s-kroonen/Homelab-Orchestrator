@@ -127,6 +127,25 @@ every other optional integration here. Once it's set:
   only, no charting library. The sidebar entry ("Traffic by country") lands
   with the `base.html` restyle.
 
+- ~~**Traffic pages empty when Traefik Manager is the source of truth.**~~
+  **Done.** With `TRAEFIK_API_URL` cleared, `/traffic` (Prometheus via
+  Traefik's `/metrics`, which Traefik Manager does not proxy) and
+  `/traffic/geo` (router -> host lookup via the Traefik API) both stayed
+  silently empty. Now one `AccessLogCollector` tails the access log through
+  Traefik Manager and feeds per-minute `traffic_rollup` rows (`/traffic`)
+  and GeoIP samples (`/traffic/geo`); hosts are attributed by `RequestHost`
+  or by router name via Traefik Manager's `/api/traefik/routers` +
+  `/api/routes`. Traefik Manager's own "access log not found" error and
+  unmatched routers are surfaced in a status strip on both pages. Both pages
+  gained Grafana-style range/auto-refresh controls (URL-backed, no page
+  reloads), and `/traffic` gained hand-drawn SVG charts (requests by status
+  class, avg/max latency) and a clickable per-service table. See
+  `docs/traffic_metrics.md`.
+- **Follow-up: wake-on-hit from the access log.** The wake-on-hit stand-in
+  still rides on the Prometheus `TrafficCollector`, so it only works with
+  `TRAEFIK_API_URL` set. The access-log collector sees the same "new traffic
+  on a proxy host" signal and could drive it too.
+
 ## Done: shared template/CSS/JS foundation
 
 ~~**Every page was a fully standalone HTML document** (own `<html><head>`,

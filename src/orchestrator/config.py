@@ -10,7 +10,7 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Literal
 
-from pydantic import SecretStr, field_validator
+from pydantic import SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -203,9 +203,8 @@ class Settings(BaseSettings):
     # degrades to None otherwise, same convention as list_routes). Off by
     # default: this is a new, optional integration, same "empty/false
     # disables it" convention as every other one in this app. See
-    # docs/geoip_traffic.md. NOTE: the dashboard page for this is a deferred
-    # follow-up (docs/roadmap.md) — this only gates ingestion/storage/the one
-    # read endpoint.
+    # docs/geoip_traffic.md. Gates only the GeoIP half (samples, database,
+    # /api/traffic/geo); the access-log tail itself is ACCESS_LOG_ENABLED.
     geoip_enabled: bool = False
     # Path to a MaxMind-format (.mmdb) GeoIP database. Empty = auto-download
     # and cache the free DB-IP city-lite database under
@@ -215,16 +214,27 @@ class Settings(BaseSettings):
     # is logged and treated as "GeoIP unavailable" (never auto-downloaded
     # over an explicit operator choice).
     geoip_db_path: str = ""
-    # How often the collector tails the access log and resolves new entries.
-    geoip_traffic_poll_interval_s: int = 60
-    # How many of the most recent access-log lines to request per poll
-    # (passed straight through as tail_access_log's ``lines``; Traefik
-    # Manager caps this at 1000 — see docs/geoip_traffic.md).
-    geoip_access_log_lines: int = 200
+    # DEPRECATED aliases for ACCESS_LOG_POLL_INTERVAL_S / ACCESS_LOG_LINES
+    # (the GeoIP collector became the shared access-log collector). Honoured
+    # only when the new name is not set; empty = unused.
+    geoip_traffic_poll_interval_s: int | None = None
+    geoip_access_log_lines: int | None = None
     # Deliberately short, same reasoning as HEALTH_HISTORY_RETENTION_DAYS /
     # TRAEFIK_METRICS_RETENTION_DAYS: this is a monitoring trend view, not an
     # audit trail.
     geoip_traffic_retention_days: int = 14
+
+    # ---- Access-log ingestion (powers /traffic and /traffic/geo) -----------
+    # Traefik's access log, tailed through Traefik Manager (GET
+    # /api/traefik/logs). Runs whenever the proxy adapter is a live Traefik
+    # Manager; TRAEFIK_API_URL is NOT needed. GeoIP samples are additionally
+    # written only when GEOIP_ENABLED. See docs/traffic_metrics.md.
+    access_log_enabled: bool = True
+    access_log_poll_interval_s: int = 30
+    # Lines requested per poll; Traefik Manager caps this at 1000.
+    access_log_lines: int = 1000
+    # Per-minute traffic_rollup rows older than this are pruned each poll.
+    traffic_rollup_retention_days: int = 14
 
     # ---- Probe transports (phase 4) ---------------------------------------
     # Defaults for SSH probes; a probe's own transport block can override them.
@@ -302,6 +312,25 @@ class Settings(BaseSettings):
         if v is None or v == "":
             return None
         return Path(v).expanduser() if isinstance(v, str) else v
+
+    @field_validator("geoip_traffic_poll_interval_s", "geoip_access_log_lines", mode="before")
+    @classmethod
+    def _blank_is_unset(cls, v: object) -> object:
+        return None if isinstance(v, str) and not v.strip() else v
+
+    @model_validator(mode="after")
+    def _apply_deprecated_access_log_aliases(self) -> Settings:
+        """GEOIP_TRAFFIC_POLL_INTERVAL_S / GEOIP_ACCESS_LOG_LINES still work
+        when the new ACCESS_LOG_* name is not set explicitly."""
+        fields_set = self.model_fields_set
+        if (
+            "access_log_poll_interval_s" not in fields_set
+            and self.geoip_traffic_poll_interval_s is not None
+        ):
+            self.access_log_poll_interval_s = self.geoip_traffic_poll_interval_s
+        if "access_log_lines" not in fields_set and self.geoip_access_log_lines is not None:
+            self.access_log_lines = self.geoip_access_log_lines
+        return self
 
     def resolve_adapter(self, chosen: str) -> AdapterMode:
         """DRY_RUN=true forces dry_run regardless of the per-adapter value."""

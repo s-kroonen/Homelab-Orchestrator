@@ -45,6 +45,21 @@ class RouteInfo:
 
 
 @dataclass(frozen=True)
+class AccessLogTail:
+    """Result of :meth:`ProxyAdapter.fetch_access_log`.
+
+    ``lines`` is the raw tail (``None`` when nothing could be read at all);
+    ``error`` is a human-readable reason when the backend reported a problem
+    — for Traefik Manager, its own ``error`` text verbatim (e.g. "Access log
+    not found. Set ACCESS_LOG_PATH env var or configure the path in
+    Settings."), so the operator sees exactly what to fix.
+    """
+
+    lines: list[str] | None
+    error: str | None = None
+
+
+@dataclass(frozen=True)
 class SyncEvent:
     """One create/update/injection/removal a maintenance-fallback call
     performed, for the caller to audit-log. Mirrors the shape of the old
@@ -195,11 +210,41 @@ class ProxyAdapter(ABC):
         backend is not configured, cannot be reached, or (for
         :class:`~orchestrator.adapters.proxy.traefik_manager
         .TraefikManagerProxyAdapter` specifically) has no access-log path
-        configured on the gateway. A caller (``orchestrator.scheduler
-        .geo_traffic_collector.GeoTrafficCollector``) treats ``None`` exactly
-        like an empty poll: log and skip, same fail-open philosophy as every
-        other optional integration here. There is no "since" parameter —
+        configured on the gateway. The access-log collector (``orchestrator.scheduler
+        .access_log_collector``) uses :meth:`fetch_access_log` instead, which
+        also says WHY nothing came back; ``None`` here is the same signal,
+        never an exception. There is no "since" parameter —
         every poll re-fetches the same tail, and it is the caller's job to
         dedupe against what it already processed (see that collector's
         cursor).
         """
+
+    async def fetch_access_log(self, lines: int = 200) -> AccessLogTail:
+        """Like :meth:`tail_access_log`, but says WHY nothing came back.
+
+        The access-log collector uses this so a misconfiguration (no access
+        log path on the gateway, path refused, backend unreachable) is
+        visible in its status instead of looking exactly like "no traffic".
+        Never raises. The default wraps :meth:`tail_access_log` for backends
+        that cannot tell the two apart; Traefik Manager overrides it to
+        surface its own ``error`` text.
+        """
+        raw = await self.tail_access_log(lines=lines)
+        if raw is None:
+            return AccessLogTail(
+                lines=None, error="This proxy backend did not return an access log."
+            )
+        return AccessLogTail(lines=raw)
+
+    async def list_runtime_routers(self) -> list[RouteInfo] | None:
+        """Every LIVE router the reverse proxy itself is serving, across all
+        of its providers (file, docker, ...), named exactly as the proxy's
+        own access log names them (``name@provider`` for Traefik).
+
+        This is the read the access-log collector uses to resolve a log
+        line's router name to hostnames — :meth:`list_routes` only covers
+        the routes this backend manages itself (Traefik Manager: file
+        provider, bare names). ``upstream`` may be ``None``. Default:
+        ``None`` (backend has no such view); never raises.
+        """
+        return None

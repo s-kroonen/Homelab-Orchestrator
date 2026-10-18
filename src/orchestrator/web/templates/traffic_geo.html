@@ -1,10 +1,12 @@
 {% extends "base.html" %}
 {% block title %}homelab-orchestrator — traffic by country{% endblock %}
 {% block content %}
-  <div class="geo-head">
+  <div class="page-head">
     <h2>Traffic by country</h2>
-    <a class="geo-link" href="/traffic">&larr; Per-service traffic</a>
+    <a class="page-link" href="/traffic">&larr; Per-service traffic</a>
   </div>
+
+  {% include "_collector_status.html" %}
 
   {% if not view.enabled %}
   <div class="notice">
@@ -15,20 +17,27 @@
     <a href="https://github.com/s-kroonen/homelab-orchestrator/blob/dev/docs/geoip_traffic.md">docs/geoip_traffic.md</a>.
   </div>
   {% else %}
-  <form class="row geo-filter" method="get" action="/traffic/geo">
-    <label class="inline" for="geo-slug">Service</label>
-    <select id="geo-slug" name="slug" onchange="this.form.submit()">
-      <option value=""{% if not slug %} selected{% endif %}>All services</option>
-      {% for svc in services %}
-      <option value="{{ svc.slug }}"{% if svc.slug == slug %} selected{% endif %}>{{ svc.slug }}</option>
-      {% endfor %}
-    </select>
-    <noscript><button type="submit" class="secondary small">Apply</button></noscript>
-  </form>
+  <div class="toolbar-row">
+    {% include "_timecontrols.html" %}
+    <form class="geo-filter" method="get" action="/traffic/geo" data-geo-filter>
+      <label class="tc-field" for="geo-slug">
+        <span class="tc-label">Service</span>
+        <select id="geo-slug" name="slug">
+          <option value=""{% if not slug %} selected{% endif %}>All services</option>
+          {% for svc in services %}
+          <option value="{{ svc.slug }}"{% if svc.slug == slug %} selected{% endif %}>{{ svc.slug }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <input type="hidden" name="range" value="{{ range }}">
+      <noscript><button type="submit" class="secondary small">Apply</button></noscript>
+    </form>
+  </div>
 
+  <div id="geo-body" data-slug="{{ slug }}">
   {% if view.sample_count == 0 %}
   <div class="notice">
-    <strong>No GeoIP samples yet{% if slug %} for <code>{{ slug }}</code>{% endif %}.</strong>
+    <strong>No GeoIP samples in this range{% if slug %} for <code>{{ slug }}</code>{% endif %}.</strong>
     The collector tails Traefik's access log on each poll; rows appear here once
     requests reach a proxy host linked to a service.
   </div>
@@ -48,14 +57,14 @@
     <h2>Countries</h2>
     <div class="table-scroll">
       <table>
-        <thead><tr><th></th><th>Country</th><th>Hits</th><th>Share</th></tr></thead>
+        <thead><tr><th></th><th>Country</th><th class="num">Hits</th><th>Share</th></tr></thead>
         <tbody>
           {% for c in view.countries %}
           <tr>
             <td class="flag">{{ c.flag }}</td>
             <td>{% if c.bucket == "country" %}{{ c.label }}{% else %}<span class="muted">{{ c.label }}</span>{% endif %}</td>
-            <td>{{ c.hits }}</td>
-            <td>
+            <td class="num">{{ c.hits }}</td>
+            <td class="nowrap">
               <div class="pctbar"><span class="{{ 'local' if c.bucket == 'local' else '' }}" style="width: {{ c.pct }}%"></span></div>
               <span class="pct">{{ c.pct }}%</span>
             </td>
@@ -70,13 +79,13 @@
     <h2>Top client IPs</h2>
     <div class="table-scroll">
       <table>
-        <thead><tr><th>IP</th><th>Country</th><th>Hits</th></tr></thead>
+        <thead><tr><th>IP</th><th>Country</th><th class="num">Hits</th></tr></thead>
         <tbody>
           {% for i in view.top_ips %}
           <tr>
             <td class="ip"><code>{{ i.client_ip }}</code></td>
             <td class="nowrap">{% if i.flag %}<span class="flag">{{ i.flag }}</span> {% endif %}{% if i.bucket == "country" %}{{ i.label }}{% else %}<span class="muted">{{ i.label }}</span>{% endif %}</td>
-            <td>{{ i.hits }}</td>
+            <td class="num">{{ i.hits }}</td>
           </tr>
           {% endfor %}
         </tbody>
@@ -84,26 +93,30 @@
     </div>
   </section>
   {% endif %}
+  </div>
   {% endif %}
 {% endblock %}
 {% block extra_head %}
 <style>
-  .geo-head { display: flex; align-items: baseline; justify-content: space-between; gap: 0.75rem; flex-wrap: wrap; margin-bottom: 0.75rem; }
-  .geo-head h2 { margin: 0; }
-  .geo-link { font-size: 0.85rem; color: #5b8def; }
-  .geo-filter select { background: #171b24; color: inherit; border: 1px solid #2a2f3a; border-radius: 0.35rem; padding: 0.3rem 0.5rem; max-width: 100%; }
   .geo-summary { margin: 0 0 0.5rem; }
-  .geo-summary strong { color: #5b8def; }
-  .geo-split { display: flex; height: 0.4rem; border-radius: 0.2rem; overflow: hidden; background: #2a2f3a; margin-bottom: 1.5rem; }
+  .geo-summary strong { color: #e6e9ef; }
+  .geo-split { display: flex; gap: 2px; height: 0.4rem; border-radius: 0.2rem; overflow: hidden; margin-bottom: 1.5rem; }
   .geo-split .local, .pctbar .local { background: #9aa4b2; }
-  .geo-split .external { background: #5b8def; }
+  .geo-split .external { background: #3987e5; }
   td.flag, span.flag { font-size: 1.1rem; line-height: 1; }
   td.flag { width: 1.5rem; }
   td.ip code { word-break: break-all; }
   td.nowrap { white-space: nowrap; }
-  .pctbar { display: inline-block; vertical-align: middle; width: 6rem; height: 0.5rem; border-radius: 0.25rem; overflow: hidden; background: #2a2f3a; }
-  .pctbar span { display: block; height: 100%; background: #5b8def; }
-  .pct { font-size: 0.75rem; color: #9aa4b2; margin-left: 0.4rem; }
+  .pctbar { display: inline-block; vertical-align: middle; width: 6rem; height: 0.5rem; border-radius: 0.25rem; overflow: hidden; background: #1f2430; }
+  .pctbar span { display: block; height: 100%; background: #3987e5; border-radius: 0 0.25rem 0.25rem 0; }
+  .pct { font-size: 0.75rem; color: #9aa4b2; margin-left: 0.4rem; font-variant-numeric: tabular-nums; }
   @media (max-width: 40rem) { .pctbar { width: 3.5rem; } }
 </style>
+{% endblock %}
+{% block scripts %}
+{% if view.enabled %}
+<script src="/static/timecontrols.js"></script>
+<script src="/static/collector_status.js"></script>
+<script src="/static/traffic_geo.js"></script>
+{% endif %}
 {% endblock %}

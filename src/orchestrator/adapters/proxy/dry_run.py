@@ -6,7 +6,7 @@ Never makes a real HTTP call, never raises. Mirrors
 
 from __future__ import annotations
 
-from orchestrator.adapters.proxy.base import ProxyAdapter, RouteInfo, SyncEvent
+from orchestrator.adapters.proxy.base import AccessLogTail, ProxyAdapter, RouteInfo, SyncEvent
 from orchestrator.logging_setup import get_logger
 
 log = get_logger(__name__)
@@ -78,3 +78,13 @@ class DryRunProxyAdapter(ProxyAdapter):
         # touches the network, never raises.
         log.info("proxy.dry_run.tail_access_log")
         return None
+
+    async def fetch_access_log(self, lines: int = 200) -> AccessLogTail:
+        log.info("proxy.dry_run.fetch_access_log")
+        return AccessLogTail(
+            lines=None, error="Dry-run proxy adapter: there is no real access log to read."
+        )
+
+    async def list_runtime_routers(self) -> list[RouteInfo] | None:
+        log.info("proxy.dry_run.list_runtime_routers")
+        return []
