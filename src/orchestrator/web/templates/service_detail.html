@@ -19,6 +19,24 @@
     </span>
   </div>
 
+  {# Tabs: the Save to YAML / Reset bar and the wake banner above apply to
+     every tab. The active tab lives in location.hash (#probes,
+     #proxy-hosts, #backups; none/#overview = Overview) so it is linkable
+     and survives the 60s auto-reload below. #}
+  <div class="tabbar" role="tablist" aria-label="Service sections" id="svc-tabs">
+    <button type="button" role="tab" class="tab" id="tab-overview" data-tab="overview"
+            aria-controls="panel-overview" aria-selected="true" tabindex="0">Overview</button>
+    <button type="button" role="tab" class="tab" id="tab-probes" data-tab="probes"
+            aria-controls="panel-probes" aria-selected="false" tabindex="-1">Probes
+      <span class="tab-count" id="probes-count">{{ service.probes|length }}</span></button>
+    <button type="button" role="tab" class="tab" id="tab-proxy-hosts" data-tab="proxy-hosts"
+            aria-controls="panel-proxy-hosts" aria-selected="false" tabindex="-1">Proxy hosts
+      <span class="tab-count" id="proxy-hosts-count">{{ service.proxy_hosts|length }}</span></button>
+    <button type="button" role="tab" class="tab" id="tab-backups" data-tab="backups"
+            aria-controls="panel-backups" aria-selected="false" tabindex="-1">Backups</button>
+  </div>
+
+  <div class="tabpanel" role="tabpanel" id="panel-overview" aria-labelledby="tab-overview" tabindex="0">
   <section>
     <h2>Service</h2>
     <div class="grid">
@@ -87,7 +105,9 @@
     <p class="msg">Last 20 periodic scans (oldest → newest), one tick per cycle. Hover a tick for when and why.</p>
     <ol class="steps health-strip" id="health-strip"><li class="muted-tick">loading…</li></ol>
   </section>
+  </div>
 
+  <div class="tabpanel" role="tabpanel" id="panel-probes" aria-labelledby="tab-probes" tabindex="0" hidden>
   <section>
     <h2>Probes</h2>
     <table>
@@ -177,7 +197,9 @@
       </div>
     </div>
   </section>
+  </div>
 
+  <div class="tabpanel" role="tabpanel" id="panel-proxy-hosts" aria-labelledby="tab-proxy-hosts" tabindex="0" hidden>
   <section>
     <h2>Proxy hosts</h2>
     <p class="msg">
@@ -198,7 +220,9 @@
       <span class="msg" id="ph-msg"></span>
     </div>
   </section>
+  </div>
 
+  <div class="tabpanel" role="tabpanel" id="panel-backups" aria-labelledby="tab-backups" tabindex="0" hidden>
   <section>
     <h2>Backups</h2>
     <p class="msg">
@@ -216,12 +240,48 @@
       <tbody id="backups-body"><tr><td colspan="5" class="muted">Loading…</td></tr></tbody>
     </table>
   </section>
+  </div>
 {% endblock %}
 {% block extra_head %}
 <style>
-  .grid { display: grid; grid-template-columns: 11rem 1fr; gap: 0.6rem 1rem; align-items: center; margin-bottom: 1rem; }
+  /* minmax(0, 1fr) + min-width: 0 so a long control/hint can never force the
+     field column (and the page) wider than the viewport. */
+  .grid { display: grid; grid-template-columns: 11rem minmax(0, 1fr); gap: 0.6rem 1rem; align-items: center; margin-bottom: 1rem; }
+  .grid > * { min-width: 0; }
   .grid > label { color: #9aa4b2; font-size: 0.85rem; }
-  .grid .hint { grid-column: 2; color: #9aa4b2; font-size: 0.75rem; margin-top: -0.4rem; }
+  .grid > input:not([type=checkbox]), .grid > select, .grid > textarea { width: 100%; max-width: 100%; }
+  .grid .hint { grid-column: 2; color: #9aa4b2; font-size: 0.75rem; margin-top: -0.4rem; overflow-wrap: anywhere; }
+  @media (max-width: 40rem) {
+    .grid { grid-template-columns: minmax(0, 1fr); gap: 0.25rem; }
+    .grid > label { margin-top: 0.5rem; }
+    .grid .hint { grid-column: 1; margin-top: 0; }
+  }
+
+  /* --- tabs ---------------------------------------------------------------- */
+  .tabbar {
+    display: flex; gap: 0.25rem; margin: 0 0 1.25rem;
+    border-bottom: 1px solid #2a2f3a;
+    overflow-x: auto; overflow-y: hidden; scrollbar-width: thin;
+    -webkit-overflow-scrolling: touch;
+  }
+  .tabbar .tab {
+    flex: 0 0 auto; white-space: nowrap;
+    background: transparent; color: #9aa4b2;
+    border: none; border-bottom: 2px solid transparent; border-radius: 0;
+    padding: 0.55rem 0.9rem; margin-bottom: -1px;
+    font-weight: 500; font-size: 0.85rem;
+  }
+  .tabbar .tab:hover { color: #e6e9ef; }
+  .tabbar .tab[aria-selected="true"] { color: #e6e9ef; border-bottom-color: #5b8def; }
+  .tabbar .tab:focus-visible { outline: 2px solid #5b8def; outline-offset: -2px; }
+  .tab-count {
+    display: inline-block; min-width: 1.25rem; margin-left: 0.3rem; padding: 0 0.35rem;
+    border-radius: 1rem; background: #171b24; border: 1px solid #2a2f3a;
+    color: #9aa4b2; font-size: 0.7rem; line-height: 1.1rem; text-align: center;
+  }
+  .tab[aria-selected="true"] .tab-count { color: #e6e9ef; }
+  .tabpanel:focus { outline: none; }
+  .tabpanel:focus-visible { outline: 1px dashed #2a2f3a; outline-offset: 4px; }
   .checks { display: flex; flex-wrap: wrap; gap: 0.4rem 1rem; }
   textarea.json { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; min-height: 10rem; }
   .panel { border: 1px solid #2a2f3a; border-radius: 0.5rem; padding: 1rem; margin-bottom: 1rem; }
@@ -266,6 +326,14 @@
   });
 
   // --- service form -------------------------------------------------------
+  // Set on any edit, cleared on a successful save. Focus alone is not enough
+  // to guard the auto-reload any more: clicking a tab moves focus off the
+  // field while the unsaved edit is still sitting in the (hidden) form.
+  let svcFormDirty = false;
+  for (const ev of ["input", "change"]) {
+    document.querySelector("#panel-overview .grid").addEventListener(ev, () => { svcFormDirty = true; });
+  }
+
   function fillServiceForm(s) {
     $("f-name").value = s.name;
     $("f-description").value = s.description;
@@ -304,6 +372,7 @@
       const updated = await apiFetch("PUT", svcPath, body, { suppressToast: true });
       Object.assign(SERVICE, updated);
       fillServiceForm(SERVICE);
+      svcFormDirty = false;
       setMsg("svc-msg", "Saved to the live registry. Remember to Save to YAML.", "ok");
     } catch (err) {
       setMsg("svc-msg", err.message, "error");
@@ -335,6 +404,7 @@
   }
 
   function renderProbes() {
+    $("probes-count").textContent = String(SERVICE.probes.length);
     const body = $("probes-body");
     body.innerHTML = "";
     if (!SERVICE.probes.length) {
@@ -594,6 +664,7 @@
   // render; reloadProxyHosts() re-fetches just this service's rows after an
   // add/delete, the same pattern reloadProbes() already uses for probes.
   function renderProxyHosts() {
+    $("proxy-hosts-count").textContent = String(SERVICE.proxy_hosts.length);
     const body = $("ph-body");
     body.innerHTML = "";
     if (!SERVICE.proxy_hosts.length) {
@@ -770,6 +841,67 @@
   $("guest-start-btn").addEventListener("click", () => doGuestPower("start"));
   $("guest-stop-btn").addEventListener("click", () => doGuestPower("stop"));
 
+  // --- tabs ---------------------------------------------------------------
+  // WAI-ARIA tabs with automatic activation: click / Enter / Space select,
+  // Left/Right/Home/End move between tabs. The selection is mirrored into
+  // location.hash via history.replaceState (no scroll jump, no history spam),
+  // which is what makes a tab linkable AND survive location.reload().
+  const TABS = [...document.querySelectorAll('#svc-tabs [role="tab"]')];
+  const TAB_NAMES = TABS.map((t) => t.dataset.tab);
+
+  function selectTab(name, { focus = false, updateHash = true } = {}) {
+    if (!TAB_NAMES.includes(name)) name = "overview";
+    for (const tab of TABS) {
+      const on = tab.dataset.tab === name;
+      tab.setAttribute("aria-selected", on ? "true" : "false");
+      tab.tabIndex = on ? 0 : -1;
+      $(tab.getAttribute("aria-controls")).hidden = !on;
+      if (on && focus) tab.focus();
+    }
+    if (updateHash) {
+      const hash = name === "overview" ? "" : "#" + name;
+      if (location.hash !== hash) {
+        history.replaceState(history.state, "", location.pathname + location.search + hash);
+      }
+    }
+  }
+
+  // A hash names either a tab (#probes) or, for older/deep links, any
+  // element id on the page (#health-strip, #run-backup-btn): open the tab
+  // whose panel contains it.
+  function tabForHash(hash) {
+    const id = decodeURIComponent((hash || "").replace(/^#/, ""));
+    if (!id) return "overview";
+    if (TAB_NAMES.includes(id)) return id;
+    const target = document.getElementById(id);
+    const panel = target && target.closest('[role="tabpanel"]');
+    return panel ? panel.id.replace(/^panel-/, "") : "overview";
+  }
+
+  for (const tab of TABS) {
+    tab.addEventListener("click", () => selectTab(tab.dataset.tab));
+    tab.addEventListener("keydown", (e) => {
+      const i = TABS.indexOf(tab);
+      let next = null;
+      if (e.key === "ArrowRight") next = TABS[(i + 1) % TABS.length];
+      else if (e.key === "ArrowLeft") next = TABS[(i - 1 + TABS.length) % TABS.length];
+      else if (e.key === "Home") next = TABS[0];
+      else if (e.key === "End") next = TABS[TABS.length - 1];
+      if (!next) return;
+      e.preventDefault();
+      selectTab(next.dataset.tab, { focus: true });
+    });
+  }
+  window.addEventListener("hashchange", () => {
+    const name = tabForHash(location.hash);
+    // Keep a deep link to an element id in the URL as-is.
+    selectTab(name, { updateHash: TAB_NAMES.includes(location.hash.slice(1)) });
+  });
+  {
+    const initial = tabForHash(location.hash);
+    selectTab(initial, { updateHash: false });
+  }
+
   fillServiceForm(SERVICE);
   renderProbes();
   renderProxyHosts();
@@ -787,10 +919,13 @@
   // is a live edit form (service fields, the probe editor panel) with
   // nothing auto-saved, so a blind reload could silently discard an
   // in-progress edit — skip the reload whenever the admin is focused in a
-  // form field or the probe editor panel is open.
+  // form field, the service form has unsaved edits, or the probe editor
+  // panel is open (even while its tab is not the visible one). The active
+  // tab survives the reload: it is in location.hash, which reload() keeps.
   function shouldSkipAutoReload() {
     const active = document.activeElement;
     if (active && /^(INPUT|TEXTAREA|SELECT)$/.test(active.tagName)) return true;
+    if (svcFormDirty) return true;
     if (!$("probe-editor").hidden) return true;
     return false;
   }

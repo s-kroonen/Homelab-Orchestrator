@@ -104,3 +104,55 @@ def test_service_page_hides_guest_power_row_when_service_has_no_guest(
     # pattern as #wake-unsupported-banner) — this proves the hiding logic
     # runs, not that the markup is absent.
     assert 'guest-power-row").hidden = !hasGuest' in page.text
+
+
+def test_service_page_renders_tablist_and_four_panels_with_counts(client: TestClient) -> None:
+    node = _make_node(client)
+    svc = _make_service(client, node["id"], slug="media")
+    for name in ("web", "port"):
+        r = client.post(
+            f"/api/registry/services/{svc['slug']}/probes",
+            json={"name": name, "kind": "tcp", "config": {"host": "10.0.0.9", "port": 80}},
+        )
+        assert r.status_code == 201, r.text
+    r = client.post(
+        "/api/proxy-hosts",
+        json={
+            "hostname": "media.example.com",
+            "upstream": "http://10.0.0.9",
+            "service_id": svc["id"],
+        },
+    )
+    assert r.status_code == 201, r.text
+
+    page = client.get(f"/services/{svc['slug']}")
+    assert page.status_code == 200, page.text
+    html = page.text
+    assert 'role="tablist"' in html
+    for tab in ("overview", "probes", "proxy-hosts", "backups"):
+        assert f'id="tab-{tab}" data-tab="{tab}"' in html
+        assert f'aria-controls="panel-{tab}"' in html
+        assert f'role="tabpanel" id="panel-{tab}" aria-labelledby="tab-{tab}"' in html
+    assert html.count('role="tab" class="tab"') == 4
+    assert html.count('class="tabpanel" role="tabpanel"') == 4
+    assert '<span class="tab-count" id="probes-count">2</span>' in html
+    assert '<span class="tab-count" id="proxy-hosts-count">1</span>' in html
+    # Overview is selected server-side; the others start hidden until the JS
+    # reads location.hash.
+    assert 'aria-selected="true" tabindex="0">Overview' in html
+    assert 'id="panel-probes" aria-labelledby="tab-probes" tabindex="0" hidden' in html
+    # Each panel still carries its existing content.
+    assert 'id="svc-save-btn"' in html and 'id="health-strip"' in html
+    assert 'id="probe-add-btn"' in html and 'id="ph-body"' in html
+    assert 'id="run-backup-btn"' in html
+    # The tab survives the auto-reload via the hash; the guard still exists.
+    assert "history.replaceState" in html
+    assert "function shouldSkipAutoReload()" in html
+
+
+def test_service_page_tab_counts_are_zero_without_probes_or_hosts(client: TestClient) -> None:
+    node = _make_node(client)
+    svc = _make_service(client, node["id"], slug="media")
+    html = client.get(f"/services/{svc['slug']}").text
+    assert '<span class="tab-count" id="probes-count">0</span>' in html
+    assert '<span class="tab-count" id="proxy-hosts-count">0</span>' in html
