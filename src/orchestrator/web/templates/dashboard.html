@@ -14,15 +14,15 @@
     {% for grp in service_groups %}
     <details class="group" open>
       <summary><span class="group-name">{{ grp.name }}</span> <span class="msg">({{ grp.services|length }})</span>{% if grp.name != "Ungrouped" %} <a class="msg" href="/activity?group={{ grp.name }}">history</a>{% endif %}</summary>
-      <table>
+      <table class="services-table">
         <thead>
-          <tr><th>Service</th><th>Node</th><th>Health</th><th>Last backup</th></tr>
+          <tr><th>Service</th><th class="hide-phone">Node</th><th>Health</th><th>Last backup</th></tr>
         </thead>
         <tbody>
           {% for svc in grp.services %}
           <tr>
-            <td><a href="/services/{{ svc.slug }}">{{ svc.name }}</a> <code>{{ svc.slug }}</code></td>
-            <td>{{ svc.node }}</td>
+            <td><a href="/services/{{ svc.slug }}">{{ svc.name }}</a> <code class="hide-phone">{{ svc.slug }}</code></td>
+            <td class="hide-phone">{{ svc.node }}</td>
             <td>
               {% if not svc.enabled %}{% set badge %}<span class="badge disabled">disabled</span>{% endset %}
               {% elif svc.verdict == "healthy" %}{% set badge %}<span class="badge healthy">healthy</span>{% endset %}
@@ -38,7 +38,7 @@
                 </ol>
               </details>
               {% else %}{{ badge }}{% endif %}
-              <a class="msg" href="/activity?service={{ svc.slug }}">history</a>
+              <a class="msg hide-phone" href="/activity?service={{ svc.slug }}">history</a>
             </td>
             <td>
               {% if svc.last_backup_at %}
@@ -279,12 +279,12 @@
       }
 
       actions.append(
-        button("Edit", "secondary", () => tr.replaceWith(renderNodeRow(node, true))), " ",
+        button("Edit", "secondary small", () => tr.replaceWith(renderNodeRow(node, true))), " ",
         button("Wake", "secondary small", () => doPower("wake")), " ",
         button("Power off", "danger small", () => doPower("power_off")), " ",
         button("Restart", "danger small", () => doPower("restart")), " ",
         forceLabel, " ",
-        button("Delete", "danger", async () => {
+        button("Delete", "danger small", async () => {
           if (!confirm(`Delete node ${node.name}?`)) return;
           try {
             await apiFetch("DELETE", path, undefined, { suppressToast: true });

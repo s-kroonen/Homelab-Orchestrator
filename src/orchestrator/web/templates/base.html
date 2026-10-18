@@ -10,7 +10,10 @@
 <body{% if admin %} class="has-sidebar"{% endif %}>
   {% block header %}
   <aside class="sidebar">
-    <div class="brand"><a href="/">homelab-orchestrator</a>{% block title_suffix %}{% endblock %}</div>
+    <div class="brand">
+      <a href="/">homelab-orchestrator</a>{% block title_suffix %}{% endblock %}
+      <button type="button" class="nav-toggle" aria-label="Menu" aria-expanded="false" aria-controls="sidebar-nav">☰</button>
+    </div>
     {% block nav %}
     {% set path = request.url.path %}
     {% macro navlink(href, label, exact=False) -%}
@@ -23,7 +26,7 @@
       {% endif %}
       <a href="{{ href }}"{% if is_current %} class="current"{% endif %}>{{ label }}</a>
     {%- endmacro %}
-    <nav>
+    <nav id="sidebar-nav">
       <div class="nav-group">
         <div class="nav-heading">Overview</div>
         {{ navlink("/", "Dashboard") }}
@@ -31,7 +34,8 @@
       <div class="nav-group">
         <div class="nav-heading">Networking</div>
         {{ navlink("/proxy-hosts", "Proxy hosts") }}
-        {{ navlink("/traffic", "Traffic") }}
+        {{ navlink("/traffic", "Traffic", exact=True) }}
+        {{ navlink("/traffic/geo", "Traffic by country", exact=True) }}
       </div>
       <div class="nav-group">
         <div class="nav-heading">Backups</div>
@@ -60,6 +64,17 @@
   </div>
 
 <script src="/static/app.js"></script>
+<script>
+  (() => {
+    const sb = document.querySelector(".sidebar");
+    const btn = sb && sb.querySelector(".nav-toggle");
+    if (!btn) return;
+    btn.addEventListener("click", () => {
+      const open = sb.classList.toggle("open");
+      btn.setAttribute("aria-expanded", String(open));
+    });
+  })();
+</script>
 {% block webauthn_script %}{% endblock %}
 {% if admin %}
 <script>

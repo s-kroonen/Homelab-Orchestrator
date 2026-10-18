@@ -56,7 +56,12 @@ header .who { color: #9aa4b2; font-size: 0.85rem; }
   border-right: 1px solid #1a1e27;
   z-index: 10;
 }
-.sidebar .brand { font-size: 1.05rem; font-weight: 600; padding: 0 0.4rem; }
+.sidebar .brand {
+  font-size: 1.05rem; font-weight: 600; padding: 0 0.4rem;
+  display: flex; align-items: baseline; gap: 0.5rem; flex-wrap: wrap;
+}
+.sidebar .brand code { font-size: 0.8rem; font-weight: 400; }
+.nav-toggle { display: none; }
 .sidebar .brand a { color: inherit; text-decoration: none; }
 .sidebar nav { display: flex; flex-direction: column; gap: 1.4rem; flex: 1; font-size: 0.85rem; }
 .nav-group { display: flex; flex-direction: column; gap: 0.15rem; }
@@ -93,7 +98,7 @@ header .who { color: #9aa4b2; font-size: 0.85rem; }
 }
 
 body.has-sidebar { padding: 0; }
-body.has-sidebar .wrap { margin-left: 15rem; padding: 2rem 1.5rem; }
+body.has-sidebar .wrap { margin-left: 15rem; padding: 2rem 2rem; max-width: 84rem; }
 
 /* --- buttons ---------------------------------------------------------- */
 button, a.btn {
@@ -125,6 +130,7 @@ th, td {
 }
 th { color: #9aa4b2; font-weight: 500; }
 td.actions { white-space: nowrap; }
+td button, td a.btn { margin: 0.1rem 0; }
 .table-scroll { overflow-x: auto; margin-bottom: 1.5rem; }
 
 /* --- forms -------------------------------------------------------------- */
@@ -137,6 +143,7 @@ input, select, textarea {
   font: inherit;
   font-size: 0.85rem;
 }
+input, select, textarea { max-width: 100%; }
 input[type=checkbox] { padding: 0; }
 textarea { width: 100%; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
 label.inline { color: #9aa4b2; font-size: 0.85rem; display: inline-flex; gap: 0.3rem; align-items: center; }
@@ -174,6 +181,14 @@ section h2 { font-size: 0.95rem; margin: 0 0 0.75rem; }
 }
 .banner strong { color: #e5a63e; }
 .banner a { color: #e5a63e; }
+details.help {
+  font-size: 0.85rem; color: #9aa4b2; line-height: 1.45;
+  margin: 0 0 1rem; border: 1px solid #1a1e27; border-radius: 0.4rem; padding: 0.4rem 0.8rem;
+}
+details.help summary { color: #9aa4b2; }
+details.help summary::before { content: "ⓘ "; }
+details.help[open] summary { margin-bottom: 0.4rem; }
+details.help p { margin: 0 0 0.6rem; }
 .notice { padding: 0.5rem 0.8rem; border: 1px solid #2a2f3a; background: none; color: #9aa4b2; margin-bottom: 1rem; }
 
 code { background: #171b24; padding: 0.1rem 0.3rem; border-radius: 0.3rem; }
@@ -205,9 +220,10 @@ ol.health-strip li.muted-tick { color: #9aa4b2; width: auto; background: none; }
 details summary { cursor: pointer; list-style: none; }
 details summary::-webkit-details-marker { display: none; }
 details.group { margin-bottom: 1rem; }
-details.group summary { padding: 0.4rem 0; font-size: 0.9rem; }
-details.group summary::before { content: "▸ "; color: #9aa4b2; }
-details.group[open] summary::before { content: "▾ "; color: #9aa4b2; }
+details.group > summary { padding: 0.4rem 0; font-size: 0.9rem; }
+details.group > summary::before { content: "▸ "; color: #9aa4b2; }
+details.group[open] > summary::before { content: "▾ "; color: #9aa4b2; }
+details.probes { display: inline-block; vertical-align: top; margin-right: 0.4rem; }
 details.group .group-name { font-weight: 600; }
 details.group table { margin-top: 0.5rem; }
 
@@ -250,26 +266,45 @@ details.group table { margin-top: 0.5rem; }
 
 @media (max-width: 40rem) {
   header { flex-wrap: wrap; gap: 0.5rem; }
-  table { display: block; overflow-x: auto; }
   #toast-stack { left: 1rem; right: 1rem; max-width: none; }
 
-  /* Sidebar collapses back to the old top-nav-like stacked bar: no longer
-     fixed/left, groups lay out as a wrapping row with headings hidden
-     (matching the flat single-row nav this replaced). */
+  /* Tables scroll sideways instead of squashing every cell to one word
+     per line; the page itself never scrolls horizontally. */
+  table { display: block; overflow-x: auto; }
+  th, td { white-space: nowrap; }
+  td[colspan] { white-space: normal; }
+  .hide-phone { display: none !important; }
+  /* The dashboard's service list is the one table that must fit without
+     scrolling on a phone: health is what you open it for. */
+  table.services-table { display: table; }
+  table.services-table td { white-space: normal; }
+
+  /* Sidebar becomes a sticky top bar; the grouped nav opens as a drawer
+     under it from the ☰ toggle (base.html). */
   .sidebar {
-    position: static;
+    position: sticky;
     width: auto;
-    flex-direction: row;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: 0.75rem 1rem;
+    bottom: auto;
+    padding: 0.75rem 1rem;
+    gap: 0;
     border-right: none;
     border-bottom: 1px solid #1a1e27;
+    overflow: visible;
   }
-  .sidebar nav { flex-direction: row; flex-wrap: wrap; gap: 0.75rem 1rem; }
-  .nav-group { flex-direction: row; align-items: baseline; gap: 0.5rem; }
-  .nav-heading { display: none; }
-  .sidebar .who { border-top: none; padding: 0; margin-left: auto; }
+  .sidebar .brand { flex-wrap: nowrap; align-items: center; min-width: 0; }
+  .sidebar .brand > code { display: none; }
+  .sidebar .brand > a {
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0;
+  }
+  .nav-toggle {
+    display: inline-block; margin-left: auto; flex: none;
+    background: transparent; color: #e6e9ef; border: 1px solid #2a2f3a;
+    font-size: 1rem; padding: 0.25rem 0.6rem;
+  }
+  .sidebar nav, .sidebar .who { display: none; }
+  .sidebar.open nav { display: flex; padding-top: 1rem; gap: 1rem; font-size: 0.95rem; }
+  .sidebar.open .who { display: flex; margin-top: 1rem; }
+  .sidebar nav a { padding: 0.45rem 0.4rem; }
 
-  body.has-sidebar .wrap { margin-left: 0; padding: 1.5rem 1rem; }
+  body.has-sidebar .wrap { margin-left: 0; padding: 1.25rem 1rem; }
 }
