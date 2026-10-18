@@ -11,8 +11,19 @@ aggregate Prometheus counters.
 below (`build_geo_view` in `web/routers/geo_traffic.py`): a summary line
 (total hits, samples, countries, local vs external share), a countries table
 with flag + percentage bar (private/LAN addresses shown as "Local network"),
-the top client IPs, and a service filter (`?slug=`). With `GEOIP_ENABLED`
-off it shows a notice pointing here instead of empty tables.
+the top client IPs, a service filter (`?slug=`) and the same time controls
+as `/traffic` (range `?range=15m…14d`, default 24h; auto-refresh re-fetches
+`GET /api/traffic/geo` and redraws the tables in place). The access-log
+collector status strip sits on top (see
+[traffic_metrics.md](traffic_metrics.md#reading-the-collector-status)). With
+`GEOIP_ENABLED` off it shows a notice pointing here instead of empty tables.
+
+> **Since the access-log pipeline was unified**, GeoIP samples come from the
+> same `AccessLogCollector` that feeds `/traffic` — one tail, one cursor —
+> and `TRAEFIK_API_URL` is no longer needed for host attribution. The
+> sections below describe the GeoIP-specific parts; the shared ingestion
+> (gateway requirements, attribution, status) is documented once in
+> [traffic_metrics.md](traffic_metrics.md#primary-source-traefiks-access-log-through-traefik-manager).
 
 ## Why a separate feature from `traffic_metrics.md`
 
@@ -34,8 +45,10 @@ real network call) by `DryRunProxyAdapter`.
 
 ## Opt-in, and why
 
-`GEOIP_ENABLED` (default `false`) gates the whole feature — the collector,
-the GeoIP database, the read endpoint's real response. Off by default
+`GEOIP_ENABLED` (default `false`) gates the GeoIP half — writing
+`GeoTrafficSample` rows, the GeoIP database, the read endpoint's real
+response. The access-log tail itself runs regardless (it powers `/traffic`;
+see `ACCESS_LOG_ENABLED`). Off by default
 because:
 
 - It is a brand-new integration nobody has opted into yet, same "off by
@@ -48,8 +61,8 @@ because:
 - It downloads and caches a third-party GeoIP database (see below) the
   first time it runs — not something to do silently.
 
-With it off, `ProxyAdapter.tail_access_log` is simply never polled, and
-`GET /api/traffic/geo` answers `{"enabled": false, ...empty...}` without
+With it off, no GeoIP samples are written (the shared tail still feeds
+`/traffic`), and `GET /api/traffic/geo` answers `{"enabled": false, ...empty...}` without
 touching the database at all.
 
 ## Ingestion path
@@ -59,11 +72,15 @@ Traefik's access log file
         │  (tailed internally by Traefik Manager for its own Logs tab)
         ▼
 Traefik Manager  GET /api/traefik/logs?lines=N
-        │  (ProxyAdapter.tail_access_log)
+        │  (ProxyAdapter.fetch_access_log — surfaces TM's own "error" text)
         ▼
-orchestrator.scheduler.geo_traffic_collector.GeoTrafficCollector
+orchestrator.scheduler.access_log_collector.AccessLogCollector
         │  parse (orchestrator.registry.access_log)
         │  dedupe against a persisted cursor
+        │  attribute to a ProxyHost (RequestHost, else router name via
+        │    TM /api/traefik/routers + /api/routes, else TRAEFIK_API_URL)
+        ├──────────────────────────────► traffic_rollup (per minute, /traffic)
+        │  GEOIP_ENABLED only:
         │  resolve IP -> country (orchestrator.registry.geoip)
         │  aggregate by (proxy_host, client_ip)
         ▼
@@ -93,16 +110,20 @@ into otherwise. Supporting both turned out to cost about the same as
 supporting one (each parser is a handful of lines), so there was no reason
 to pick only one.
 
+JSON is recommended: it carries `RequestHost`, which attributes a line to a
+proxy host directly.
+
 A line that matches neither shape (truncated, a future/unknown format,
-blank, non-log noise) is reported back as `None`. The collector logs it at
-debug level and skips it — **a single garbled line never crashes the
+blank, non-log noise) is reported back as `None`. The collector counts it
+(`unparsable` in its status; a WARNING when nothing in a tail parses) and
+skips it — **a single garbled line never crashes the
 poll**, same fail-open philosophy as every other optional integration in
 this app.
 
 ## Dedup / cursor strategy
 
 `GET /api/traefik/logs` has **no native "since" parameter** — every poll
-re-fetches the same tail (the last `GEOIP_ACCESS_LOG_LINES` lines of the
+re-fetches the same tail (the last `ACCESS_LOG_LINES` lines of the
 *current* file), per Traefik Manager's own API docs. Re-polling therefore
 re-fetches lines this collector may already have counted; naively counting
 every fetched line every time would corrupt the aggregate numbers (the same
@@ -129,12 +150,12 @@ still keeps the cursor correct for the next one.
 
 Persisting it (rather than keeping it only in the collector's own memory)
 means a container restart does not re-count whatever is still sitting in
-the tail window — verified by `tests/test_geo_traffic_collector.py`'s
+the tail window — verified by `tests/test_access_log_collector.py`'s
 `test_cursor_is_persisted_in_the_setting_table`, and the double-counting
 regression itself by `test_repolling_the_same_tail_does_not_double_count` /
 `test_repolling_an_overlapping_but_grown_tail_only_counts_new_lines`.
 
-**Accepted gap, not a bug:** if more than `GEOIP_ACCESS_LOG_LINES` new
+**Accepted gap, not a bug:** if more than `ACCESS_LOG_LINES` new
 lines land between two polls, the oldest of them fall outside the tail
 entirely and are permanently missed — there is no way to recover them
 without reading the file directly, which is deliberately out of scope (see
@@ -191,11 +212,11 @@ observed for that pair this cycle. This is a monitoring trend view
 forensic per-request log — the raw lines already live in Traefik's own
 access-log file; this does not duplicate them.
 
-Only entries whose router resolves (via the same `fetch_router_details`
-hostname lookup `TrafficCollector` already uses) to an existing
-`ProxyHost` are stored — a router with no matching `ProxyHost` has no
-`Service` to attribute the hit to, same reasoning `TrafficCollector` gives
-for skipping those.
+Only entries that resolve to an existing `ProxyHost` are stored (request
+host, else router name through Traefik Manager, else `TRAEFIK_API_URL` —
+see [traffic_metrics.md](traffic_metrics.md#how-a-line-is-attributed-to-a-proxy-host))
+— a line with no matching `ProxyHost` has no `Service` to attribute the hit
+to. It is counted under its router in the collector status instead.
 
 Migration: `0008_geo_traffic_sample` (`down_revision =
 "0007_health_scan_sample"`, the actual current head at the time this was
@@ -214,26 +235,30 @@ got anything new.
 |---|---|---|
 | `GEOIP_ENABLED` | `false` | Gates the whole feature. |
 | `GEOIP_DB_PATH` | `""` | A ready-made `.mmdb` file. Empty = auto-download/cache the free DB-IP city-lite database. |
-| `GEOIP_TRAFFIC_POLL_INTERVAL_S` | `60` | How often the collector tails the access log. |
-| `GEOIP_ACCESS_LOG_LINES` | `200` | Lines requested per poll (Traefik Manager caps this at 1000). |
+| `GEOIP_TRAFFIC_POLL_INTERVAL_S` | empty | **Deprecated** alias for `ACCESS_LOG_POLL_INTERVAL_S` (default 30), used only when that is unset. |
+| `GEOIP_ACCESS_LOG_LINES` | empty | **Deprecated** alias for `ACCESS_LOG_LINES` (default 1000), used only when that is unset. |
 | `GEOIP_TRAFFIC_RETENTION_DAYS` | `14` | How long `GeoTrafficSample` rows are kept. |
 
 Also requires (already-existing settings, shared with
 [proxy_hosts.md](proxy_hosts.md)'s write path): `TRAEFIK_MANAGER_URL` +
 `TRAEFIK_MANAGER_API_KEY`, and an access-log path configured on the
-gateway side (Traefik Manager's `ACCESS_LOG_PATH` or Settings UI) — without
-either, `tail_access_log` degrades to `None` and the collector simply has
-nothing to poll, same convention as every other optional integration here.
+gateway side (Traefik Manager's `ACCESS_LOG_PATH` or Settings UI), plus
+`PROXY_ADAPTER=traefik_manager` with `DRY_RUN=false` and
+`ACCESS_LOG_ENABLED=true` (default). When the path is missing or refused,
+Traefik Manager's own message is shown on both traffic pages instead of an
+unexplained empty page.
 
 ## The one read endpoint
 
-`GET /api/traffic/geo?slug=<optional>` (admin-only, same
-`require_admin` gate as every other `/api/*` router) — aggregated recent
-country/IP counts:
+`GET /api/traffic/geo?range=<15m|1h|6h|24h|7d|14d>&slug=<optional>`
+(admin-only, same `require_admin` gate as every other `/api/*` router) —
+country/IP counts aggregated (in SQL) over samples whose `sampled_at` falls
+in the range (default `24h`):
 
 ```json
 {
   "enabled": true,
+  "range": "24h",
   "countries": [
     {"country_code": "US", "country_name": "United States", "bucket": "country", "hits": 42},
     {"country_code": "", "country_name": "", "bucket": "local", "hits": 17}
@@ -255,9 +280,10 @@ server-side (`build_geo_view`), so the page and the endpoint never disagree.
 Every step degrades, logs, and skips rather than raising or crashing the
 poll:
 
-- `tail_access_log` unconfigured/unreachable -> `None`, poll returns 0,
-  pruning still runs.
-- An unparsable line -> `None` from `parse_line`, logged at debug, skipped.
+- Access log unconfigured/unreachable, or Traefik Manager answers with an
+  `error` -> recorded in the collector status (shown on both pages, logged
+  at WARNING); pruning still runs.
+- An unparsable line -> `None` from `parse_line`, counted, skipped.
 - GeoIP database missing/unavailable -> every non-local IP resolves as
   `"unknown"`, never a raised exception.
 - A router with no matching `ProxyHost` -> that line's hit is simply not

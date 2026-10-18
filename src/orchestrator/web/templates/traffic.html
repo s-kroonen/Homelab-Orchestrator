@@ -1,109 +1,66 @@
 {% extends "base.html" %}
 {% block title %}homelab-orchestrator — traffic{% endblock %}
 {% block content %}
-  <p class="msg geo-link-row"><a href="/traffic/geo">By country &rarr;</a></p>
-  {% if not view.enabled %}
-  <div class="banner">
-    <strong>Traffic metrics are not configured.</strong> Set <code>TRAEFIK_API_URL</code>
-    (and start Traefik with <code>--metrics.prometheus=true</code>) to see per-service and
-    per-host traffic here. See <a href="https://github.com/s-kroonen/homelab-orchestrator/blob/dev/docs/traffic_metrics.md">docs/traffic_metrics.md</a>.
+  <div class="page-head">
+    <h2>Traffic</h2>
+    <a class="page-link" href="/traffic/geo">By country &rarr;</a>
   </div>
-  {% elif not view.has_samples %}
-  <div class="banner">
-    <strong>No traffic samples yet.</strong> The collector polls Traefik every
-    {{ poll_interval_s }}s; a rate needs at least two polls, so this fills in shortly
-    after startup. Samples older than {{ retention_days }} days are pruned automatically.
-  </div>
-  {% else %}
-  <div class="hero">
-    {% if view.overall.requests_per_min is not none %}
-    <span class="figure">{{ view.overall.requests_per_min }}</span>
-    <span class="unit">requests/min — overall, across every routed service</span>
-    {% else %}
-    <span class="figure muted" style="font-size:1.2rem;">—</span>
-    <span class="unit">no rate yet (need a second poll per host)</span>
-    {% endif %}
-    <span class="detail">{{ view.overall.hosts_with_rate }}/{{ view.overall.total_hosts }} hosts reporting a rate</span>
-  </div>
-  {% endif %}
 
-  {% if view.enabled %}
-  <section>
-    <h2>Traffic by service / host</h2>
-    {% for grp in view.groups %}
-    <details class="group" open>
-      <summary><span class="group-name">{{ grp.name }}</span> <span class="msg">({{ grp.hosts|length }})</span></summary>
-      <table>
-        <thead>
-          <tr><th>Host</th><th>Service</th><th>req/min</th><th>trend</th><th>status codes (last interval)</th></tr>
-        </thead>
-        <tbody>
-          {% for h in grp.hosts %}
-          <tr>
-            <td><code>{{ h.hostname }}</code></td>
-            <td>
-              {% if h.service_slug %}<a href="/services/{{ h.service_slug }}">{{ h.service_name }}</a>{% else %}<span class="muted">unlinked</span>{% endif %}
-            </td>
-            <td>
-              {% if h.rate_per_min is not none %}{{ h.rate_per_min }}
-              {% elif h.restarted %}<span class="badge unknown" title="Traefik's counters reset since the previous poll">restarted</span>
-              {% elif h.sample_count == 0 %}<span class="muted">no samples</span>
-              {% else %}<span class="muted">—</span>{% endif %}
-            </td>
-            <td>{% if h.sparkline %}{{ h.sparkline|safe }}{% else %}<span class="muted">—</span>{% endif %}</td>
-            <td>
-              {% if h.code_breakdown %}
-              {% set cb = h.code_breakdown %}
-              {% set total = cb['2xx'] + cb['3xx'] + cb['4xx'] + cb['5xx'] + cb['other'] %}
-              {% if total > 0 %}
-              <div class="codebar" title="2xx {{ cb['2xx'] }} · 3xx {{ cb['3xx'] }} · 4xx {{ cb['4xx'] }} · 5xx {{ cb['5xx'] }} · other {{ cb['other'] }}">
-                {% if cb['2xx'] %}<span class="c2xx" style="width: {{ (cb['2xx'] / total * 100)|round(1) }}%"></span>{% endif %}
-                {% if cb['3xx'] %}<span class="c3xx" style="width: {{ (cb['3xx'] / total * 100)|round(1) }}%"></span>{% endif %}
-                {% if cb['4xx'] %}<span class="c4xx" style="width: {{ (cb['4xx'] / total * 100)|round(1) }}%"></span>{% endif %}
-                {% if cb['5xx'] %}<span class="c5xx" style="width: {{ (cb['5xx'] / total * 100)|round(1) }}%"></span>{% endif %}
-                {% if cb['other'] %}<span class="cother" style="width: {{ (cb['other'] / total * 100)|round(1) }}%"></span>{% endif %}
-              </div>
-              <div class="code-counts">2xx {{ cb['2xx'] }} · 4xx {{ cb['4xx'] }} · 5xx {{ cb['5xx'] }}</div>
-              {% else %}<span class="muted">no requests this interval</span>{% endif %}
-              {% else %}<span class="muted">—</span>{% endif %}
-            </td>
-          </tr>
-          {% endfor %}
-        </tbody>
-      </table>
-    </details>
-    {% else %}
-    <p class="msg">No proxy hosts yet — add one on the <a href="/proxy-hosts">Proxy hosts</a> page.</p>
-    {% endfor %}
-  </section>
-  {% endif %}
-{% endblock %}
-{% block extra_head %}
-<style>
-  .hero { display: flex; align-items: baseline; gap: 0.75rem; background: #12161f; border: 1px solid #1a1e27; border-radius: 0.6rem; padding: 1.25rem 1.5rem; margin-bottom: 1.5rem; flex-wrap: wrap; }
-  .hero .figure { font-size: 2.2rem; font-weight: 700; color: #5b8def; line-height: 1; }
-  .hero .unit { font-size: 0.95rem; color: #9aa4b2; }
-  .hero .detail { color: #9aa4b2; font-size: 0.85rem; margin-left: auto; }
-  .geo-link-row { text-align: right; margin: 0 0 0.75rem; }
-  .sparkline { display: block; }
-  .codebar { display: flex; height: 0.5rem; width: 8rem; border-radius: 0.25rem; overflow: hidden; background: #1a1e27; }
-  .codebar span { height: 100%; }
-  .codebar .c2xx { background: #3ecf6d; }
-  .codebar .c3xx { background: #5b8def; }
-  .codebar .c4xx { background: #e5a63e; }
-  .codebar .c5xx { background: #e5534b; }
-  .codebar .cother { background: #6b7280; }
-  .code-counts { font-size: 0.75rem; color: #9aa4b2; }
-  @media (max-width: 40rem) { .hero .detail { margin-left: 0; } }
-</style>
+  {% include "_collector_status.html" %}
+  {% include "_timecontrols.html" %}
+
+  <div id="traffic-root" class="traffic-root" data-slug="{{ slug }}">
+    <p class="filter-chip-row" data-filter-row hidden>
+      <span class="filter-chip">Service: <strong data-filter-name></strong>
+        <button type="button" class="chip-clear" data-filter-clear aria-label="Show all services">&times;</button>
+      </span>
+    </p>
+
+    <div class="stat-tiles" data-tiles>
+      <div class="stat-tile"><div class="stat-label">Requests</div><div class="stat-value" data-stat="hits">—</div></div>
+      <div class="stat-tile"><div class="stat-label">Client errors (4xx)</div><div class="stat-value" data-stat="s4xx">—</div></div>
+      <div class="stat-tile"><div class="stat-label">Server errors (5xx)</div><div class="stat-value" data-stat="s5xx">—</div></div>
+      <div class="stat-tile"><div class="stat-label">Avg latency</div><div class="stat-value" data-stat="avg">—</div></div>
+    </div>
+
+    <section class="chart-card">
+      <div class="chart-head">
+        <h3>Requests by status</h3>
+        <div class="chart-legend" data-legend="requests"></div>
+      </div>
+      <div class="chart" data-chart="requests"><p class="chart-empty">Loading…</p></div>
+    </section>
+
+    <section class="chart-card">
+      <div class="chart-head">
+        <h3>Latency</h3>
+        <div class="chart-legend" data-legend="latency"></div>
+      </div>
+      <div class="chart" data-chart="latency"><p class="chart-empty">Loading…</p></div>
+    </section>
+
+    <section>
+      <h2>By service</h2>
+      <p class="msg table-hint">Click a row to scope the charts to that service.</p>
+      <div class="table-scroll">
+        <table class="host-table">
+          <thead>
+            <tr>
+              <th>Service</th><th>Hostname</th><th class="num">Hits</th>
+              <th class="num">4xx</th><th class="num">5xx</th>
+              <th class="num">Avg</th><th class="num">Max</th><th>Trend</th>
+            </tr>
+          </thead>
+          <tbody data-host-rows>
+            <tr><td colspan="8" class="muted">Loading…</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+  </div>
 {% endblock %}
 {% block scripts %}
-<script>
-  // This page only ever displays data the TrafficCollector already polled
-  // and stored (see routers/traffic.py) — nothing on it mutates state, so a
-  // plain reload is enough to pick up new samples. 30s: half the collector's
-  // default 60s poll interval, so a visitor usually sees a fresh point every
-  // other refresh without hammering the server.
-  setInterval(() => location.reload(), 30000);
-</script>
+<script src="/static/timecontrols.js"></script>
+<script src="/static/collector_status.js"></script>
+<script src="/static/traffic.js"></script>
 {% endblock %}

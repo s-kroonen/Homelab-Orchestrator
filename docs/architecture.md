@@ -299,22 +299,32 @@ other. See `docs/geoip_traffic.md` for the full design (dedup/cursor
 strategy, the local-IP bucket, the GeoIP database). **The dashboard page
 for this is a deferred follow-up** — see `docs/roadmap.md`.
 
-New settings:
+**Update — one access-log pipeline.** The GeoIP collector has since become
+`orchestrator.scheduler.access_log_collector.AccessLogCollector`, which tails
+the access log once per poll and feeds BOTH `traffic_rollup` (per-minute
+counters behind `/traffic`) and `geo_traffic_sample` (only when
+`GEOIP_ENABLED`). It runs whenever the proxy adapter is a live Traefik
+Manager (`ACCESS_LOG_ENABLED`, default `true`) and attributes lines to proxy
+hosts without `TRAEFIK_API_URL` (request host, else router names from
+Traefik Manager's `/api/traefik/routers` + `/api/routes`). Its last-poll
+status is persisted in the `access_log.status` setting and shown on both
+traffic pages. Settings: `ACCESS_LOG_ENABLED`, `ACCESS_LOG_POLL_INTERVAL_S`
+(30), `ACCESS_LOG_LINES` (1000), `TRAFFIC_ROLLUP_RETENTION_DAYS` (14);
+`GEOIP_TRAFFIC_POLL_INTERVAL_S` / `GEOIP_ACCESS_LOG_LINES` remain as
+deprecated aliases. See `docs/traffic_metrics.md`.
 
 | Setting | Purpose | Default |
 |---|---|---|
-| `GEOIP_ENABLED` | Gates the whole feature. | `false` |
+| `GEOIP_ENABLED` | Gates the GeoIP half (samples, database, endpoint). | `false` |
 | `GEOIP_DB_PATH` | A ready-made `.mmdb` file. Empty = auto-download/cache the free DB-IP city-lite database under `{STATE_DIR}/geoip/`. | `""` |
-| `GEOIP_TRAFFIC_POLL_INTERVAL_S` | How often the collector tails the access log. | `60` |
-| `GEOIP_ACCESS_LOG_LINES` | Lines requested per poll (Traefik Manager caps this at 1000). | `200` |
 | `GEOIP_TRAFFIC_RETENTION_DAYS` | How long `GeoTrafficSample` rows are kept. | `14` |
 
-New modules: `orchestrator.registry.access_log` (the common/JSON
-access-log line parser), `orchestrator.registry.geoip` (the IP -> country
-lookup, wrapping `geoip2`), `orchestrator.scheduler.geo_traffic_collector`
-(the periodic collector + dedup cursor), one new read-only endpoint
-(`GET /api/traffic/geo`, `web/routers/geo_traffic.py`) — deliberately bare,
-no page template, no nav entry.
+Modules: `orchestrator.registry.access_log` (the common/JSON access-log line
+parser), `orchestrator.registry.geoip` (the IP -> country lookup, wrapping
+`geoip2`), `orchestrator.scheduler.access_log_collector` (the periodic
+collector + dedup cursor), read endpoints `GET /api/traffic/geo`
+(`web/routers/geo_traffic.py`) and `GET /api/traffic/series` /
+`GET /api/traffic/collector-status` (`web/routers/traffic.py`).
 
 ## YAML-owned vs DB-owned tables
 
@@ -338,6 +348,7 @@ no page template, no nav entry.
 | `traffic_sample`     | **DB**    | No (telemetry — polled from Traefik, see docs/traffic_metrics.md) |
 | `health_scan_sample` | **DB**    | No (telemetry — periodic health-scan history, see "Periodic scanning" above) |
 | `geo_traffic_sample` | **DB**    | No (telemetry — GeoIP traffic visibility, see "GeoIP traffic visibility" above / docs/geoip_traffic.md) |
+| `traffic_rollup`     | **DB**    | No (telemetry — per-minute access-log rollups behind /traffic, see docs/traffic_metrics.md) |
 
 ## FK cascade policies
 
@@ -351,6 +362,7 @@ Chosen so YAML edits stay safe and history stays intact:
 * `pipeline_run.service_id` → `SET NULL` (same reasoning).
 * `traffic_sample.proxy_host_id` → `CASCADE` (traffic history for a removed proxy host is not worth keeping as an orphan — unlike `backup_record`/`pipeline_run`, there is no slug to denormalise against).
 * `health_scan_sample.service_id` → `CASCADE` (same reasoning — a removed service's health-scan history is not worth keeping as an orphan).
+* `traffic_rollup.proxy_host_id` → `CASCADE` (same reasoning as `traffic_sample.proxy_host_id`).
 * `geo_traffic_sample.proxy_host_id` → `CASCADE` (same reasoning as `traffic_sample.proxy_host_id` — GeoIP traffic history for a removed proxy host is not worth keeping as an orphan).
 
 ## Boot sequence

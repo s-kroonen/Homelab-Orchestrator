@@ -39,7 +39,11 @@ from orchestrator.web.routers.activity import build_feed
 from orchestrator.web.routers.backup_policies import policy_to_dict
 from orchestrator.web.routers.dashboard import service_detail
 from orchestrator.web.routers.geo_traffic import build_geo_view
-from orchestrator.web.routers.traffic import build_traffic_view
+from orchestrator.web.routers.traffic import (
+    DEFAULT_RANGE,
+    RANGES,
+    collector_status_payload,
+)
 
 router = APIRouter(tags=["ui"])
 _templates = Jinja2Templates(directory=str(Path(__file__).parent.parent / "templates"))
@@ -371,28 +375,35 @@ async def edit_backup_policy_page(
     )
 
 
+def _range_param(value: str | None) -> str:
+    return value if value in RANGES else DEFAULT_RANGE
+
+
 @router.get("/traffic", response_model=None)
 async def traffic_page(
-    request: Request, session: SessionDep, settings: SettingsDep
+    request: Request,
+    session: SessionDep,
+    settings: SettingsDep,
+    range: str | None = None,
+    slug: str | None = None,
 ) -> HTMLResponse | RedirectResponse:
-    """Per-service / per-host traffic, derived from the samples
-    ``orchestrator.scheduler.traffic_collector`` polls out of Traefik's
-    Prometheus ``/metrics`` endpoint. See ``docs/traffic_metrics.md``."""
+    """Requests / status classes / latency over time, rolled up from
+    Traefik's access log by ``orchestrator.scheduler.access_log_collector``.
+    The page is a shell: ``static/traffic.js`` fetches
+    ``/api/traffic/series`` and draws the charts; the collector status strip
+    is server-rendered for the first paint. See ``docs/traffic_metrics.md``."""
     admin = get_current_admin(request, session)
     if admin is None:
         return RedirectResponse("/login?next=/traffic", status_code=303)
-
-    traefik_enabled = bool(settings.traefik_api_url.strip())
-    view = build_traffic_view(session, traefik_enabled=traefik_enabled)
 
     return _templates.TemplateResponse(
         request,
         "traffic.html",
         {
             "admin": admin,
-            "view": view,
-            "poll_interval_s": settings.traefik_metrics_poll_interval_s,
-            "retention_days": settings.traefik_metrics_retention_days,
+            "collector": collector_status_payload(session, settings),
+            "range": _range_param(range),
+            "slug": (slug or "").strip(),
         },
     )
 
@@ -452,7 +463,11 @@ def _decorate_geo_view(view: dict[str, Any]) -> dict[str, Any]:
 
 @router.get("/traffic/geo", response_model=None)
 async def traffic_geo_page(
-    request: Request, session: SessionDep, settings: SettingsDep, slug: str | None = None
+    request: Request,
+    session: SessionDep,
+    settings: SettingsDep,
+    slug: str | None = None,
+    range: str | None = None,
 ) -> HTMLResponse | RedirectResponse:
     """Traffic by country / client IP — the dashboard page over
     :func:`orchestrator.web.routers.geo_traffic.build_geo_view` (the same
@@ -463,13 +478,23 @@ async def traffic_geo_page(
         return RedirectResponse("/login?next=/traffic/geo", status_code=303)
 
     slug = (slug or "").strip() or None
-    view = _decorate_geo_view(build_geo_view(session, enabled=settings.geoip_enabled, slug=slug))
+    range_key = _range_param(range)
+    view = _decorate_geo_view(
+        build_geo_view(session, enabled=settings.geoip_enabled, slug=slug, range_key=range_key)
+    )
     services = session.exec(select(Service).order_by(Service.slug)).all() if view["enabled"] else []
 
     return _templates.TemplateResponse(
         request,
         "traffic_geo.html",
-        {"admin": admin, "view": view, "services": services, "slug": slug or ""},
+        {
+            "admin": admin,
+            "view": view,
+            "services": services,
+            "slug": slug or "",
+            "range": range_key,
+            "collector": collector_status_payload(session, settings),
+        },
     )
 
 

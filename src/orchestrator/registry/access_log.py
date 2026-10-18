@@ -15,10 +15,16 @@ something this app controls or can detect in advance beyond sniffing each
 line, so :func:`parse_line` tries JSON first (a line starting with `{`) and
 falls back to the common-format regex.
 
+**JSON is the recommended format.** Only it carries ``RequestHost`` (the
+request's own ``Host`` header), which attributes a hit to a proxy host
+directly — the common format only names the router, which then has to be
+resolved to hostnames through Traefik Manager (see
+``orchestrator.scheduler.access_log_collector``).
+
 **Never raises.** A line that matches neither shape — a truncated line, a
 format this module doesn't recognise, a blank line, Traefik Manager's own
 non-log noise — is reported back as ``None`` so the caller (``orchestrator
-.scheduler.geo_traffic_collector.GeoTrafficCollector``) can log and skip it,
+.scheduler.access_log_collector.AccessLogCollector``) can count and skip it,
 the same fail-open philosophy as every other optional integration in this
 app. A single garbled line must never crash the collector or corrupt the
 rest of that poll's counts.
@@ -33,7 +39,9 @@ OriginStatus OriginContentSize "Referer" "User-Agent" RequestCount
 
 The JSON format carries the same information under Go field names, e.g.
 ``{"ClientHost":"10.0.0.1","StartUTC":"2026-06-10T08:42:00Z",
-"RouterName":"my-router@docker","RequestPath":"/","DownstreamStatus":200,...}``.
+"RouterName":"my-router@docker","RequestHost":"app.example.com",
+"RequestPath":"/","DownstreamStatus":200,"Duration":1234567,...}``
+(``Duration`` in nanoseconds).
 """
 
 from __future__ import annotations
@@ -53,11 +61,15 @@ class AccessLogEntry:
     """One parsed access-log line, backend/format-neutral.
 
     ``router`` is Traefik's router name (e.g. ``my-router@docker``) — the
-    same identifier :func:`orchestrator.registry.traefik_status
-    .fetch_router_details` resolves to a set of hostnames, which is how
-    :class:`~orchestrator.scheduler.geo_traffic_collector.GeoTrafficCollector`
-    attributes a hit to a ``ProxyHost``/``Service``, mirroring
-    ``TrafficCollector``'s own router -> hostname -> ProxyHost lookup.
+    name Traefik Manager's ``/api/traefik/routers`` reports, which is one
+    way :class:`~orchestrator.scheduler.access_log_collector
+    .AccessLogCollector` attributes a hit to a ``ProxyHost``/``Service``.
+
+    ``host`` is the request's own ``Host`` (JSON format's ``RequestHost``,
+    port stripped, lower-cased) — the most direct attribution there is, but
+    only the JSON format carries it; ``None`` for common-format lines.
+    ``duration_ms`` is the request's total duration in milliseconds
+    (``None`` when the line doesn't carry one).
     """
 
     client_ip: str
@@ -66,6 +78,63 @@ class AccessLogEntry:
     status: int
     path: str
     raw: str
+    host: str | None = None
+    duration_ms: float | None = None
+
+
+def normalize_router_name(name: str) -> str:
+    """``my-router@docker`` -> ``my-router``. Traefik's access log and its
+    runtime API name routers ``<name>@<provider>``; Traefik Manager's own
+    ``/api/routes`` lists file-provider routes by the bare name. Comparing
+    the stripped form on both sides is what lets the two meet."""
+    return name.strip().split("@", 1)[0].lower()
+
+
+def normalize_host(host: str | None) -> str | None:
+    """Lower-cased hostname with any ``:port`` stripped (bracketed IPv6
+    literals kept intact). ``None``/blank -> ``None``."""
+    if not host:
+        return None
+    h = host.strip().lower()
+    if h.startswith("["):
+        end = h.find("]")
+        h = h[: end + 1] if end != -1 else h
+    elif h.count(":") == 1:
+        h = h.split(":", 1)[0]
+    h = h.rstrip(".")
+    return h or None
+
+
+_UNIT_TO_MS = {
+    "ns": 1e-6,
+    "us": 1e-3,
+    "µs": 1e-3,
+    "μs": 1e-3,
+    "ms": 1.0,
+    "s": 1000.0,
+    "m": 60_000.0,
+    "h": 3_600_000.0,
+}
+_GO_DURATION_PART = re.compile(r"(\d+(?:\.\d+)?)(ns|us|µs|μs|ms|s|m|h)")
+
+
+def parse_go_duration_ms(text: str) -> float | None:
+    """A Go ``time.Duration`` string (Traefik's common-format last field:
+    ``12ms``, ``1.5s``, ``350µs``, ``1m2.5s``) -> milliseconds. ``None`` for
+    anything else (``-``, blank, garbage)."""
+    s = text.strip()
+    if not s or s == "-":
+        return None
+    total = 0.0
+    pos = 0
+    for m in _GO_DURATION_PART.finditer(s):
+        if m.start() != pos:
+            return None
+        total += float(m.group(1)) * _UNIT_TO_MS[m.group(2)]
+        pos = m.end()
+    if pos == 0 or pos != len(s):
+        return None
+    return total
 
 
 # -- common (extended CLF) ----------------------------------------------------
@@ -77,7 +146,7 @@ _COMMON_RE = re.compile(
     r'"(?P<method>\S+) (?P<path>\S+) \S+" '
     r"(?P<status>\d{3}) \S+ "
     r'"[^"]*" "[^"]*" \S+ '
-    r'"(?P<router>[^"]*)" "[^"]*" \S+$'
+    r'"(?P<router>[^"]*)" "[^"]*" (?P<duration>\S+)$'
 )
 
 # Apache/NCSA log timestamp, e.g. "10/Jun/2026:08:42:00 +0000".
@@ -99,6 +168,7 @@ def _parse_common(line: str) -> AccessLogEntry | None:
         status=int(m["status"]),
         path=m["path"],
         raw=line,
+        duration_ms=parse_go_duration_ms(m["duration"]),
     )
 
 
@@ -133,12 +203,26 @@ def _parse_json(line: str) -> AccessLogEntry | None:
         ts = ts.replace(tzinfo=UTC)
 
     router = obj.get("RouterName")
+    if router is None:
+        # A request no router matched (Traefik's own 404) carries no
+        # RouterName at all; it can still be attributed by RequestHost.
+        router = ""
     status = obj.get("DownstreamStatus")
     if status is None:
         status = obj.get("OriginStatus")
     path = obj.get("RequestPath")
     if not isinstance(router, str) or not isinstance(status, int) or not isinstance(path, str):
         return None
+
+    # JSON "Duration" is Go's time.Duration marshalled as an integer number
+    # of nanoseconds.
+    duration_raw = obj.get("Duration")
+    duration_ms = (
+        float(duration_raw) / 1e6
+        if isinstance(duration_raw, int | float) and not isinstance(duration_raw, bool)
+        else None
+    )
+    request_host = obj.get("RequestHost")
 
     return AccessLogEntry(
         client_ip=host,
@@ -147,12 +231,14 @@ def _parse_json(line: str) -> AccessLogEntry | None:
         status=status,
         path=path,
         raw=line,
+        host=normalize_host(request_host) if isinstance(request_host, str) else None,
+        duration_ms=duration_ms,
     )
 
 
 def parse_line(line: str) -> AccessLogEntry | None:
     """Parse one raw access-log line. ``None`` on anything that doesn't
-    match either known shape — never raises. Caller logs and skips."""
+    match either known shape — never raises. Caller counts and skips."""
     stripped = line.strip()
     if not stripped:
         return None
@@ -163,8 +249,9 @@ def parse_line(line: str) -> AccessLogEntry | None:
 
 def parse_lines(lines: list[str]) -> list[AccessLogEntry]:
     """Parse every line, silently dropping ones that don't match either
-    format (each dropped line is logged at debug level; a batch of garbage
-    must never raise, only shrink the result)."""
+    format (each dropped line is logged at debug level; the collector
+    reports the count in its status). A batch of garbage must never raise,
+    only shrink the result."""
     entries: list[AccessLogEntry] = []
     for line in lines:
         entry = parse_line(line)
@@ -176,4 +263,11 @@ def parse_lines(lines: list[str]) -> list[AccessLogEntry]:
     return entries
 
 
-__all__ = ["AccessLogEntry", "parse_line", "parse_lines"]
+__all__ = [
+    "AccessLogEntry",
+    "normalize_host",
+    "normalize_router_name",
+    "parse_go_duration_ms",
+    "parse_line",
+    "parse_lines",
+]

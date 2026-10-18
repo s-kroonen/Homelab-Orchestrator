@@ -19,7 +19,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import Column, ForeignKey
+from sqlalchemy import Column, ForeignKey, UniqueConstraint
 from sqlalchemy.types import JSON
 from sqlmodel import Field, SQLModel
 
@@ -257,7 +257,7 @@ class GeoTrafficSample(SQLModel, table=True):
     monitoring trend view ("which countries/IPs hit us, how often, against
     which service"), not a forensic per-request log — the raw lines
     themselves already live in Traefik's own access log file; this does not
-    duplicate them. See ``orchestrator.scheduler.geo_traffic_collector`` and
+    duplicate them. See ``orchestrator.scheduler.access_log_collector`` and
     ``docs/geoip_traffic.md``.
 
     Only entries whose router resolves to an existing ``ProxyHost`` are
@@ -285,6 +285,41 @@ class GeoTrafficSample(SQLModel, table=True):
     # on TrafficSample.by_code).
     status_code: int = 0
     hit_count: int = Field(default=1)
+
+
+class TrafficRollup(SQLModel, table=True):
+    """Per-minute request counters for one proxy host, rolled up from
+    Traefik's access log (tailed through Traefik Manager) by
+    ``orchestrator.scheduler.access_log_collector`` — what ``/traffic`` and
+    ``GET /api/traffic/series`` read.
+
+    One row per ``(proxy_host_id, bucket_start)``; ``bucket_start`` is the
+    UTC minute the requests STARTED in. A minute can straddle two polls, so
+    the collector upserts by ADDING into an existing row rather than
+    replacing it. Durations are kept as sum/count/max so any coarser bucket
+    (5 min, 1 h) can still be averaged exactly. Short retention
+    (``TRAFFIC_ROLLUP_RETENTION_DAYS``), CASCADE on proxy-host delete — same
+    reasoning as :class:`TrafficSample`.
+    """
+
+    __tablename__ = "traffic_rollup"
+    __table_args__ = (
+        UniqueConstraint("proxy_host_id", "bucket_start", name="uq_traffic_rollup_host_bucket"),
+    )
+
+    id: int | None = Field(default=None, primary_key=True)
+    proxy_host_id: int = Field(
+        sa_column=Column(ForeignKey("proxy_host.id", ondelete="CASCADE"), nullable=False),
+    )
+    bucket_start: datetime = Field(index=True)
+    hits: int = 0
+    s2xx: int = 0
+    s3xx: int = 0
+    s4xx: int = 0
+    s5xx: int = 0
+    duration_ms_sum: float = 0.0
+    duration_ms_count: int = 0
+    duration_ms_max: float | None = None
 
 
 class HealthScanSample(SQLModel, table=True):

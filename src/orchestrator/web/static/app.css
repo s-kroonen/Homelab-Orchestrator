@@ -308,3 +308,154 @@ details.group table { margin-top: 0.5rem; }
 
   body.has-sidebar .wrap { margin-left: 0; padding: 1.25rem 1rem; }
 }
+
+/* --- traffic dashboards (/traffic, /traffic/geo) ------------------------
+   Chart colours: one validated categorical set for the status-class stack
+   (2xx blue, 3xx aqua, 4xx yellow, 5xx magenta — adjacent pairs clear the
+   CVD/normal-vision floors on the #12161f card surface) and a blue/orange
+   pair for avg/max latency. Text never wears a series colour. */
+:root {
+  --viz-surface: #12161f;
+  --viz-2xx: #3987e5;
+  --viz-3xx: #199e70;
+  --viz-4xx: #c98500;
+  --viz-5xx: #d55181;
+  --viz-avg: #3987e5;
+  --viz-max: #d95926;
+  --viz-grid: #1d2230;
+  --viz-axis: #2f3542;
+  --viz-ink-muted: #8b94a3;
+}
+
+.page-head { display: flex; align-items: baseline; justify-content: space-between; gap: 0.75rem; flex-wrap: wrap; margin-bottom: 0.75rem; }
+.page-head h2 { margin: 0; font-size: 1.1rem; }
+.page-link { font-size: 0.85rem; }
+
+/* collector status: compact strip when healthy, notice otherwise */
+.collector-status { margin-bottom: 0.75rem; }
+.status-strip {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 0.25rem 0.5rem;
+  margin: 0; font-size: 0.8rem; color: #9aa4b2;
+}
+.status-strip > span + span::before { content: "·"; margin-right: 0.5rem; color: #4b5260; }
+.status-strip > .status-dot + span::before { content: none; }
+.status-dot { width: 0.5rem; height: 0.5rem; border-radius: 50%; background: #3ecf6d; flex: none; }
+.notice.notice-error, .notice.notice-warn, .notice.notice-off, .notice.notice-idle { color: #c3c9d3; line-height: 1.45; }
+.notice.notice-error { border-color: #5a2626; border-left: 3px solid #e5534b; background: #1c1214; }
+.notice.notice-warn { border-color: #4a3a17; border-left: 3px solid #e5a63e; background: #1b1710; }
+.notice.notice-off, .notice.notice-idle { border-left: 3px solid #5b8def; }
+.notice.notice-error strong, .notice.notice-warn strong { color: #e6e9ef; }
+.notice p { margin: 0.4rem 0 0; }
+.status-error {
+  margin: 0.45rem 0 0; padding: 0.35rem 0.6rem; border-left: 2px solid #4b5260;
+  background: #12161f; color: #e6e9ef; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.8rem; overflow-wrap: anywhere;
+}
+.unmatched-list { margin: 0.4rem 0 0; padding-left: 1.1rem; }
+.unmatched-list li { margin: 0.1rem 0; overflow-wrap: anywhere; }
+.status-meta { font-size: 0.75rem; color: #8b94a3; }
+
+/* time controls toolbar */
+.toolbar-row { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem 1rem; margin-bottom: 1rem; }
+.toolbar-row .timecontrols { margin-bottom: 0; }
+.timecontrols { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem 0.75rem; margin-bottom: 1rem; }
+.tc-field { display: inline-flex; align-items: center; gap: 0.4rem; font-size: 0.8rem; color: #9aa4b2; }
+.tc-label { white-space: nowrap; }
+.tc-field select { padding: 0.3rem 0.45rem; font-size: 0.8rem; }
+.tc-reload { font-size: 0.95rem; line-height: 1; padding: 0.3rem 0.55rem; }
+.tc-updated { font-size: 0.75rem; color: #8b94a3; font-variant-numeric: tabular-nums; }
+.timecontrols.tc-error .tc-updated { color: #e5534b; }
+.geo-filter { display: inline-flex; margin: 0; }
+body.tc-loading .chart, body.tc-loading .host-table, body.tc-loading #geo-body { opacity: 0.6; transition: opacity 0.15s; }
+
+.filter-chip-row { margin: 0 0 0.75rem; }
+.filter-chip {
+  display: inline-flex; align-items: center; gap: 0.4rem; font-size: 0.8rem; color: #9aa4b2;
+  background: #171b24; border: 1px solid #2a2f3a; border-radius: 1rem; padding: 0.15rem 0.3rem 0.15rem 0.7rem;
+}
+.filter-chip strong { color: #e6e9ef; font-weight: 600; }
+.chip-clear { background: transparent; color: #9aa4b2; padding: 0 0.35rem; font-size: 1rem; line-height: 1; }
+.chip-clear:hover { color: #e6e9ef; }
+
+/* stat tiles */
+.stat-tiles { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 0.75rem; margin-bottom: 1rem; }
+.stat-tile { background: var(--viz-surface); border: 1px solid #1a1e27; border-radius: 0.5rem; padding: 0.7rem 0.9rem; min-width: 0; }
+.stat-label { font-size: 0.75rem; color: #9aa4b2; margin-bottom: 0.25rem; }
+.stat-value { font-size: 1.35rem; font-weight: 600; color: #e6e9ef; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.stat-sub { font-size: 0.75rem; font-weight: 400; color: #9aa4b2; }
+
+/* chart cards */
+.chart-card { background: var(--viz-surface); border: 1px solid #1a1e27; border-radius: 0.5rem; padding: 0.8rem 0.9rem 0.6rem; margin-bottom: 1rem; }
+.chart-head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 0.25rem 1rem; margin-bottom: 0.4rem; }
+.chart-head h3 { margin: 0; font-size: 0.85rem; font-weight: 600; }
+.chart-legend { display: flex; flex-wrap: wrap; gap: 0.2rem 0.9rem; font-size: 0.75rem; color: #9aa4b2; }
+.legend-item { display: inline-flex; align-items: center; gap: 0.3rem; white-space: nowrap; }
+.legend-item strong { color: #e6e9ef; font-weight: 600; font-variant-numeric: tabular-nums; }
+.legend-swatch { width: 0.65rem; height: 0.65rem; border-radius: 2px; background: currentColor; }
+.legend-line { width: 0.9rem; height: 2px; border-radius: 1px; background: currentColor; }
+.chart { position: relative; min-height: 4rem; }
+.chart-svg { display: block; width: 100%; height: auto; overflow: visible; outline: none; }
+.chart-svg:focus-visible { outline: 1px solid #5b8def; outline-offset: 2px; }
+.chart-empty { margin: 0; padding: 2rem 0; text-align: center; font-size: 0.8rem; color: #8b94a3; }
+
+/* series colours: SVG fills/strokes + the matching HTML keys */
+.chart-svg .c-2xx { fill: var(--viz-2xx); }
+.chart-svg .c-3xx { fill: var(--viz-3xx); }
+.chart-svg .c-4xx { fill: var(--viz-4xx); }
+.chart-svg .c-5xx { fill: var(--viz-5xx); }
+.legend-swatch.c-2xx, .tip-key.c-2xx { color: var(--viz-2xx); }
+.legend-swatch.c-3xx, .tip-key.c-3xx { color: var(--viz-3xx); }
+.legend-swatch.c-4xx, .tip-key.c-4xx { color: var(--viz-4xx); }
+.legend-swatch.c-5xx, .tip-key.c-5xx { color: var(--viz-5xx); }
+.legend-line.c-avg, .tip-key.c-avg { color: var(--viz-avg); }
+.legend-line.c-max, .tip-key.c-max { color: var(--viz-max); }
+.chart-svg .line { fill: none; stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+.chart-svg .line.c-avg { stroke: var(--viz-avg); }
+.chart-svg .line.c-max { stroke: var(--viz-max); }
+.chart-svg .dot { stroke: var(--viz-surface); stroke-width: 2; }
+.chart-svg .dot.c-avg { fill: var(--viz-avg); }
+.chart-svg .dot.c-max { fill: var(--viz-max); }
+.chart-svg .grid { stroke: var(--viz-grid); stroke-width: 1; shape-rendering: crispEdges; }
+.chart-svg .baseline { stroke: var(--viz-axis); stroke-width: 1; shape-rendering: crispEdges; }
+.chart-svg .tick { fill: var(--viz-ink-muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+.chart-svg .empty { fill: var(--viz-ink-muted); font-size: 12px; }
+.chart-svg .hit { fill: transparent; cursor: crosshair; }
+.chart-svg .hover-band { fill: rgba(230, 233, 239, 0.07); }
+.chart-svg .crosshair { stroke: #6b7280; stroke-width: 1; shape-rendering: crispEdges; }
+
+/* tooltip */
+.chart-tip {
+  position: absolute; top: 0.25rem; z-index: 5; pointer-events: none;
+  background: #0b0e14; border: 1px solid #2a2f3a; border-radius: 0.4rem;
+  padding: 0.45rem 0.6rem; font-size: 0.75rem; color: #9aa4b2;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.45); min-width: 8.5rem; white-space: nowrap;
+}
+.tip-title { color: #c3c9d3; margin-bottom: 0.3rem; }
+.tip-row { display: flex; align-items: center; gap: 0.45rem; line-height: 1.5; }
+.tip-row strong { color: #e6e9ef; font-weight: 600; font-variant-numeric: tabular-nums; min-width: 3.2rem; text-align: right; }
+.tip-key { width: 0.75rem; height: 2px; border-radius: 1px; background: currentColor; flex: none; }
+.tip-key.tip-none { background: transparent; }
+
+/* per-service table */
+th.num, td.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.table-hint { margin: -0.4rem 0 0.5rem; font-size: 0.75rem; }
+.host-table td { vertical-align: middle; }
+.host-table td.host-cell code { overflow-wrap: anywhere; }
+.host-row.is-clickable { cursor: pointer; }
+.host-row.is-clickable:hover { background: #12161f; }
+.host-row.is-clickable:focus-visible { outline: 1px solid #5b8def; outline-offset: -1px; }
+.host-row.is-selected { background: #151b28; box-shadow: inset 2px 0 0 #5b8def; }
+.rate { font-size: 0.72rem; color: #8b94a3; }
+.sparkline { display: block; }
+.spark-line { fill: none; stroke: var(--viz-2xx); stroke-width: 1.5; stroke-linejoin: round; stroke-linecap: round; }
+.spark-area { fill: var(--viz-2xx); fill-opacity: 0.1; }
+.spark-flat { stroke: var(--viz-axis); stroke-width: 1; }
+
+@media (max-width: 40rem) {
+  .stat-tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.5rem; }
+  .stat-value { font-size: 1.1rem; }
+  .chart-card { padding: 0.7rem 0.6rem 0.5rem; }
+  /* The phone table rule above turns every table into a scroller; the
+     wrapping .table-scroll already does that here. */
+  .host-table { display: table; }
+}

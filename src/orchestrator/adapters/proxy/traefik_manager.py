@@ -68,7 +68,13 @@ from urllib.parse import urlsplit
 import httpx
 from ruamel.yaml import YAML
 
-from orchestrator.adapters.proxy.base import ProxyAdapter, ProxyRouteNotFound, RouteInfo, SyncEvent
+from orchestrator.adapters.proxy.base import (
+    AccessLogTail,
+    ProxyAdapter,
+    ProxyRouteNotFound,
+    RouteInfo,
+    SyncEvent,
+)
 from orchestrator.config import Settings
 from orchestrator.logging_setup import get_logger
 from orchestrator.registry.traefik_status import extract_hostnames
@@ -685,24 +691,88 @@ class TraefikManagerProxyAdapter(ProxyAdapter):
     # its own Logs tab; this reuses that exact read rather than this app
     # gaining any new SSH/filesystem access of its own. Requires an access
     # log path configured on the gateway (``ACCESS_LOG_PATH`` or Traefik
-    # Manager's Settings) — without one, Traefik Manager itself answers with
-    # no lines (never an error we need to special-case here beyond the usual
-    # degrade-to-None).
+    # Manager's Settings). Without one — or when the path is refused —
+    # Traefik Manager still answers 200 but with ``{"error": "...",
+    # "lines": []}``; :meth:`fetch_access_log` surfaces that ``error`` text
+    # verbatim so it never reads as "no traffic".
+
+    async def fetch_access_log(self, lines: int = 200) -> AccessLogTail:
+        if not self._settings.traefik_manager_url.strip():
+            return AccessLogTail(lines=None, error="TRAEFIK_MANAGER_URL is not set.")
+        n = min(max(1, int(lines)), 1000)
+        try:
+            async with self._client() as client:
+                response = await self._get_json(client, f"/api/traefik/logs?lines={n}")
+        except TraefikManagerNotConfigured as exc:
+            return AccessLogTail(lines=None, error=str(exc))
+        except TraefikManagerError as exc:
+            log.warning("traefik_manager.tail_access_log_failed", error=str(exc))
+            return AccessLogTail(lines=None, error=str(exc))
+        if not isinstance(response, dict):
+            return AccessLogTail(lines=None, error="Traefik Manager returned an unexpected body.")
+        error = response.get("error")
+        raw_lines = response.get("lines")
+        clean = (
+            [line for line in raw_lines if isinstance(line, str)]
+            if isinstance(raw_lines, list)
+            else []
+        )
+        if isinstance(error, str) and error.strip():
+            log.warning("traefik_manager.access_log_error", error=error)
+            return AccessLogTail(lines=clean or None, error=f"Traefik Manager: {error.strip()}")
+        return AccessLogTail(lines=clean)
 
     async def tail_access_log(self, lines: int = 200) -> list[str] | None:
+        tail = await self.fetch_access_log(lines=lines)
+        if tail.error is not None:
+            return None
+        return tail.lines
+
+    # -- ProxyAdapter: runtime routers (access-log attribution) -------------
+    #
+    # ``GET /api/traefik/routers`` — Traefik Manager proxies Traefik's own
+    # runtime ``/api/{http,tcp,udp}/routers`` (shape ``{"http": [...],
+    # "tcp": [...], "udp": [...], "reachable": bool, "complete": bool}``).
+    # Unlike ``/api/routes`` (only the file-provider routes Traefik Manager
+    # manages, bare names), this covers EVERY provider and uses the exact
+    # ``name@provider`` the access log writes — so it is the primary
+    # router-name -> hostname source for the access-log collector, without
+    # this app needing TRAEFIK_API_URL itself.
+
+    async def list_runtime_routers(self) -> list[RouteInfo] | None:
         if not self._settings.traefik_manager_url.strip():
             return None
         try:
             async with self._client() as client:
-                response = await self._get_json(
-                    client, f"/api/traefik/logs?lines={max(1, int(lines))}"
-                )
-        except TraefikManagerNotConfigured:
-            return None
+                response = await self._get_json(client, "/api/traefik/routers")
         except TraefikManagerError as exc:
-            log.warning("traefik_manager.tail_access_log_failed", error=str(exc))
+            log.warning("traefik_manager.runtime_routers_failed", error=str(exc))
             return None
-        raw_lines = response.get("lines") if isinstance(response, dict) else None
-        if not isinstance(raw_lines, list):
+        if not isinstance(response, dict):
+            return None
+        if response.get("reachable") is False:
+            log.warning("traefik_manager.runtime_routers_unreachable")
+            return None
+        routers = response.get("http")
+        if not isinstance(routers, list):
             return []
-        return [line for line in raw_lines if isinstance(line, str)]
+        infos: list[RouteInfo] = []
+        for router in routers:
+            if not isinstance(router, dict):
+                continue
+            name = router.get("name")
+            rule = router.get("rule")
+            if not isinstance(name, str) or not isinstance(rule, str):
+                continue
+            hostnames = extract_hostnames(rule)
+            if not hostnames:
+                continue
+            service = router.get("service")
+            infos.append(
+                RouteInfo(
+                    name=name,
+                    hostnames=hostnames,
+                    upstream=service if isinstance(service, str) else None,
+                )
+            )
+        return infos

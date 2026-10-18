@@ -56,3 +56,11 @@ async def test_tail_access_log_returns_none_and_never_raises() -> None:
     adapter = DryRunProxyAdapter()
     assert await adapter.tail_access_log() is None
     assert await adapter.tail_access_log(lines=1000) is None
+
+
+async def test_fetch_access_log_explains_itself_and_runtime_routers_are_empty() -> None:
+    adapter = DryRunProxyAdapter()
+    tail = await adapter.fetch_access_log(lines=10)
+    assert tail.lines is None
+    assert tail.error and "Dry-run" in tail.error
+    assert await adapter.list_runtime_routers() == []

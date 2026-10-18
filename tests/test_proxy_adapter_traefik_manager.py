@@ -638,3 +638,105 @@ async def test_tail_access_log_returns_none_on_connection_failure(
     _patch_transport(monkeypatch, handle)
     adapter = TraefikManagerProxyAdapter(_settings())
     assert await adapter.tail_access_log() is None
+
+
+_TM_NOT_FOUND = (
+    "Access log not found. Set ACCESS_LOG_PATH env var or configure the path in Settings."
+)
+
+
+async def test_fetch_access_log_surfaces_traefik_managers_error_text(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Traefik Manager answers 200 with {"error", "lines": []} when its
+    access log path is missing/refused — that must not look like "no
+    traffic"."""
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"error": _TM_NOT_FOUND, "lines": []})
+
+    _patch_transport(monkeypatch, handle)
+    adapter = TraefikManagerProxyAdapter(_settings())
+    tail = await adapter.fetch_access_log(lines=100)
+    assert tail.lines is None
+    assert tail.error is not None and _TM_NOT_FOUND in tail.error
+    # The legacy read degrades to None on the same response.
+    assert await adapter.tail_access_log() is None
+
+
+async def test_fetch_access_log_caps_lines_at_traefik_managers_maximum(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seen: dict[str, str] = {}
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        seen["query"] = request.url.query.decode()
+        return httpx.Response(200, json={"lines": ["a"]})
+
+    _patch_transport(monkeypatch, handle)
+    tail = await TraefikManagerProxyAdapter(_settings()).fetch_access_log(lines=5000)
+    assert seen["query"] == "lines=1000"
+    assert tail.lines == ["a"] and tail.error is None
+
+
+async def test_fetch_access_log_reports_connection_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def handle(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("refused")
+
+    _patch_transport(monkeypatch, handle)
+    tail = await TraefikManagerProxyAdapter(_settings()).fetch_access_log()
+    assert tail.lines is None
+    assert tail.error and "reach Traefik Manager" in tail.error
+
+
+async def test_list_runtime_routers_reads_traefik_managers_router_proxy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seen: dict[str, str] = {}
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        seen["path"] = request.url.path
+        return httpx.Response(
+            200,
+            json={
+                "http": [
+                    {
+                        "name": "app@docker",
+                        "rule": "Host(`app.example.com`) && PathPrefix(`/`)",
+                        "service": "app@docker",
+                        "provider": "docker",
+                    },
+                    {"name": "dashboard@internal", "rule": "PathPrefix(`/api`)"},
+                    "garbage",
+                ],
+                "tcp": [],
+                "udp": [],
+                "reachable": True,
+                "complete": True,
+            },
+        )
+
+    _patch_transport(monkeypatch, handle)
+    routers = await TraefikManagerProxyAdapter(_settings()).list_runtime_routers()
+    assert seen["path"] == "/api/traefik/routers"
+    assert routers == [
+        RouteInfo(name="app@docker", hostnames={"app.example.com"}, upstream="app@docker")
+    ]
+
+
+async def test_list_runtime_routers_none_when_traefik_unreachable_from_tm(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def handle(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200, json={"http": [], "tcp": [], "udp": [], "reachable": False, "complete": False}
+        )
+
+    _patch_transport(monkeypatch, handle)
+    assert await TraefikManagerProxyAdapter(_settings()).list_runtime_routers() is None
+    assert (
+        await TraefikManagerProxyAdapter(_settings(traefik_manager_url="")).list_runtime_routers()
+        is None
+    )

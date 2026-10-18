@@ -85,7 +85,7 @@ def _is_local(ip: str) -> bool:
 
 class GeoIP:
     """One instance per process (owned by
-    :class:`~orchestrator.scheduler.geo_traffic_collector.GeoTrafficCollector`).
+    :class:`~orchestrator.scheduler.access_log_collector.AccessLogCollector`).
     Not thread-safe-sensitive beyond what asyncio's single-threaded event
     loop already gives us — every call here runs on it."""
 

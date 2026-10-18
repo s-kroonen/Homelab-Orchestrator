@@ -9,7 +9,8 @@ Lifespan tasks in order:
     6. start the backup scheduler (if SCHEDULER_ENABLED)
     7. start the traffic collector (if TRAEFIK_API_URL is set)
     8. start the health scanner (if HEALTH_SCAN_ENABLED)
-    9. start the GeoIP traffic collector (if GEOIP_ENABLED)
+    9. start the access-log collector (if ACCESS_LOG_ENABLED and the proxy
+       adapter is live; also writes GeoIP samples when GEOIP_ENABLED)
 Shutdown reverses 9 then 8 then 7 then 6 then 5.
 """
 
@@ -31,7 +32,7 @@ from orchestrator.db.session import build_engine, session_scope
 from orchestrator.logging_setup import configure_logging, get_logger
 from orchestrator.registry.loader import RegistryPathError, reconcile_yaml_into_db
 from orchestrator.scheduler import BackupScheduler
-from orchestrator.scheduler.geo_traffic_collector import GeoTrafficCollector
+from orchestrator.scheduler.access_log_collector import AccessLogCollector
 from orchestrator.scheduler.health_scanner import HealthScanner
 from orchestrator.scheduler.traffic_collector import TrafficCollector
 from orchestrator.web.routers import (
@@ -46,6 +47,7 @@ from orchestrator.web.routers import (
     maintenance,
     proxy_hosts,
     setup,
+    traffic,
     ui,
     wake,
 )
@@ -189,29 +191,30 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.health_scanner = health_scanner
 
     # Same resilience rule as every other scheduler: a failure to start
-    # must not take the app down, and GEOIP_ENABLED=false (the default)
-    # makes this one an intentional no-op too — see docs/geoip_traffic.md.
-    geo_traffic_collector: GeoTrafficCollector | None = None
+    # must not take the app down. One access-log tail feeds both /traffic
+    # (per-minute rollups) and /traffic/geo (GeoIP samples, GEOIP_ENABLED
+    # only) — see docs/traffic_metrics.md.
+    access_log_collector: AccessLogCollector | None = None
     try:
-        geo_traffic_collector = GeoTrafficCollector(settings=settings, adapters=adapters)
-        geo_traffic_collector.start()
+        access_log_collector = AccessLogCollector(settings=settings, adapters=adapters)
+        access_log_collector.start()
     except Exception as exc:
         log.error(
-            "geo_traffic_collector.start.failed",
+            "access_log_collector.start.failed",
             error=str(exc),
             error_type=type(exc).__name__,
             traceback=traceback.format_exc(),
-            impact="No GeoIP traffic samples will be collected.",
+            impact="No access-log traffic will be collected; /traffic and /traffic/geo stay empty.",
         )
-        geo_traffic_collector = None
-    app.state.geo_traffic_collector = geo_traffic_collector
+        access_log_collector = None
+    app.state.access_log_collector = access_log_collector
 
     try:
         yield
     finally:
         log.info("orchestrator.stop")
-        if geo_traffic_collector is not None:
-            await geo_traffic_collector.shutdown()
+        if access_log_collector is not None:
+            await access_log_collector.shutdown()
         if health_scanner is not None:
             await health_scanner.shutdown()
         if traffic_collector is not None:
@@ -254,6 +257,7 @@ def create_app() -> FastAPI:
     app.include_router(proxy_hosts.router)
     app.include_router(activity.router)
     app.include_router(geo_traffic.router)
+    app.include_router(traffic.router)
     # Unauthenticated only while no admin exists AND nothing is configured —
     # see the gating notes at the top of routers/setup.py.
     app.include_router(setup.router)

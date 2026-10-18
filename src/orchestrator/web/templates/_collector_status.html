@@ -1,0 +1,38 @@
+{# Access-log collector status: a compact strip when healthy, an actionable
+   notice otherwise. `collector` is routers/traffic.collector_status_payload.
+   static/collector_status.js re-renders this same markup on refresh. #}
+{% set v = collector.view %}
+{% macro age(seconds) -%}
+  {%- if seconds is none -%}never
+  {%- elif seconds < 60 -%}{{ seconds|int }}s ago
+  {%- elif seconds < 3600 -%}{{ (seconds / 60)|int }}m ago
+  {%- elif seconds < 86400 -%}{{ (seconds / 3600)|int }}h ago
+  {%- else -%}{{ (seconds / 86400)|int }}d ago{%- endif -%}
+{%- endmacro %}
+<div id="collector-status" class="collector-status" data-level="{{ v.level }}">
+  {% if v.level == "ok" %}
+  <p class="status-strip">
+    <span class="status-dot" aria-hidden="true"></span>
+    <span>Last poll <time datetime="{{ v.last_poll_at }}" data-age>{{ age(v.age_s) }}</time></span>
+    <span>{{ v.lines }} lines</span>
+    <span>{{ v.matched }} matched</span>
+    {% if v.unmatched %}
+    <span class="muted" title="{% for u in v.unmatched %}{{ u.router }} ({{ u.hits }}){% if not loop.last %}, {% endif %}{% endfor %}">{{ v.unmatched|sum(attribute="hits") }} unmatched</span>
+    {% endif %}
+  </p>
+  {% else %}
+  <div class="notice notice-{{ v.level }}" role="status">
+    <strong>{{ v.headline }}</strong>
+    {% if v.error %}<blockquote class="status-error">{{ v.error }}</blockquote>{% endif %}
+    {% if v.unmatched and v.matched == 0 %}
+    <ul class="unmatched-list">
+      {% for u in v.unmatched %}<li><code>{{ u.router }}</code> <span class="muted">{{ u.hits }} {{ "hit" if u.hits == 1 else "hits" }}</span></li>{% endfor %}
+    </ul>
+    {% endif %}
+    {% if v.hint %}<p>{{ v.hint }}{% if v.unmatched and v.matched == 0 %} <a href="/proxy-hosts">Proxy hosts &rarr; Resync</a>{% endif %}</p>{% endif %}
+    {% if v.last_poll_at %}
+    <p class="status-meta">Last poll <time datetime="{{ v.last_poll_at }}" data-age>{{ age(v.age_s) }}</time> · {{ v.lines }} lines · {{ v.matched }} matched</p>
+    {% endif %}
+  </div>
+  {% endif %}
+</div>

@@ -1,13 +1,167 @@
 # Traffic metrics
 
-Per-service and per-host traffic — requests/min, a trend sparkline, and a
-2xx/3xx/4xx/5xx breakdown — on the dashboard's **Traffic** page
-(`/traffic`), sourced entirely from Traefik's own Prometheus metrics
-endpoint and stored in this app's own database. There is no external
-Prometheus or Grafana involved or assumed: this is fully self-contained in
-the orchestrator.
+Per-service and per-host traffic on the dashboard's **Traffic** page
+(`/traffic`): requests over time stacked by status class (2xx/3xx/4xx/5xx),
+average and maximum latency, and a per-service table with hits, error
+counts/rates, latency and a hits sparkline — all over a chosen time range.
+Everything is stored in this app's own database; there is no external
+Prometheus or Grafana involved.
 
-## Required on the Traefik side
+## Primary source: Traefik's access log, through Traefik Manager
+
+`/traffic` (and `/traffic/geo`, see [geoip_traffic.md](geoip_traffic.md))
+are fed by **one** ingestion pipeline: `AccessLogCollector`
+(`orchestrator/scheduler/access_log_collector.py`) tails Traefik's access log
+through Traefik Manager's `GET /api/traefik/logs?lines=N` every
+`ACCESS_LOG_POLL_INTERVAL_S`, dedupes it against a persisted cursor, attributes
+each line to a proxy host, and writes:
+
+- one `traffic_rollup` row per proxy host per UTC minute (hits, 2xx/3xx/4xx/5xx
+  counts, duration sum/count/max) — always; and
+- `geo_traffic_sample` rows — only when `GEOIP_ENABLED=true`.
+
+**`TRAEFIK_API_URL` is not needed.** Operators who run Traefik Manager as the
+source of truth and left `TRAEFIK_API_URL` empty get full traffic pages. (The
+older Prometheus collector still runs when it *is* set; see
+[below](#optional-prometheus-counters-traefik_api_url).)
+
+### What has to be true on the gateway
+
+1. **Traefik writes an access log.** In Traefik's static config:
+
+   ```yaml
+   accessLog:
+     filePath: /var/log/traefik/access.log
+     format: json        # recommended — see below
+   ```
+
+2. **Traefik Manager can read it.** Set `ACCESS_LOG_PATH` on the Traefik
+   Manager container (or the access-log path in its Settings) to that same
+   file, mounted read-only into the container. Traefik Manager's own Logs
+   tab should show lines once this is right.
+
+3. **This orchestrator talks to a live Traefik Manager:**
+   `PROXY_ADAPTER=traefik_manager`, `TRAEFIK_MANAGER_URL`,
+   `TRAEFIK_MANAGER_API_KEY`, `DRY_RUN=false`, and `ACCESS_LOG_ENABLED=true`
+   (the default).
+
+**JSON format is recommended.** Both Traefik formats parse, but only JSON
+carries `RequestHost` (the request's own `Host`) and a precise `Duration`
+(nanoseconds). The common format only names the router and ends with a Go
+duration string (`12ms`, `1.5s`, `350µs`), which is parsed too.
+
+### How a line is attributed to a proxy host
+
+In order, with the router map fetched at most once per poll:
+
+1. **Request host** — JSON `RequestHost` (port stripped) matched against
+   `ProxyHost.hostname`.
+2. **Router name** — the log's `RouterName` (e.g. `jellyfin@docker`) is
+   resolved to hostnames through Traefik Manager. Primary:
+   `GET /api/traefik/routers`, which proxies Traefik's *runtime* routers for
+   every provider (docker, file, …) under the exact `name@provider` names the
+   access log uses, with their rules. Also: `GET /api/routes`, the
+   file-provider routes Traefik Manager manages, listed by bare name. Names
+   are compared with the `@provider` suffix stripped on both sides.
+3. **Traefik API** — `fetch_router_details` against `TRAEFIK_API_URL`, only
+   when that is set.
+
+A line that matches no proxy host is counted (per router) in the collector
+status and otherwise dropped — a router with no proxy host has no service to
+attribute it to. Fix: add the proxy host, usually via **Proxy hosts →
+Resync**.
+
+### Configuration
+
+| Setting | Default | Meaning |
+|---|---|---|
+| `ACCESS_LOG_ENABLED` | `true` | Run the collector (only does anything with a live Traefik Manager proxy adapter). |
+| `ACCESS_LOG_POLL_INTERVAL_S` | `30` | How often the log is tailed. |
+| `ACCESS_LOG_LINES` | `1000` | Lines requested per poll (Traefik Manager's maximum). |
+| `TRAFFIC_ROLLUP_RETENTION_DAYS` | `14` | Per-minute rollups older than this are pruned each poll. |
+
+`GEOIP_TRAFFIC_POLL_INTERVAL_S` / `GEOIP_ACCESS_LOG_LINES` are deprecated
+aliases, honoured only when the `ACCESS_LOG_*` name is not set.
+
+If more than `ACCESS_LOG_LINES` new lines land between two polls, the oldest
+fall outside the tail and are missed — shorten the interval on a busy proxy.
+This is a trend view, not exact accounting.
+
+### Reading the collector status
+
+Both traffic pages show the last poll's outcome above the controls
+(also `GET /api/traffic/collector-status`, admin-only; persisted in the
+`access_log.status` setting after every poll):
+
+- **Strip** — `● Last poll 12s ago · 184 lines · 180 matched · 4 unmatched`:
+  healthy. "lines" is the fetched tail, "matched" how many of its parsed lines
+  resolved to a proxy host (hover "unmatched" for the routers).
+- **Red notice, "Traefik Manager could not provide the access log."** —
+  quotes Traefik Manager's own error, e.g. *Access log not found. Set
+  ACCESS_LOG_PATH env var or configure the path in Settings.* or *Access log
+  path refused: …*, or a connection error. Fix steps 1–3 above.
+- **Amber notice, "None of the N access-log lines matched a proxy host."** —
+  lists the router names seen; each needs a proxy host (**Proxy hosts →
+  Resync**).
+- **Amber, "could not be parsed"** — the lines are in neither Traefik format;
+  set `accessLog.format: json`.
+- **Amber, "came back empty"** — Traefik Manager found the file but it has no
+  lines; check that Traefik is writing it.
+- **Blue, "not running"** — the proxy adapter is dry-run or Traefik Manager is
+  not configured.
+
+The collector also logs at WARNING when Traefik Manager returns an error,
+when nothing in a non-empty tail parses, and when nothing matches.
+
+## The `/traffic` page
+
+- **Time controls** (shared with `/traffic/geo`, `static/timecontrols.js`):
+  range (last 15 m / 1 h / 6 h / 24 h / 7 d / 14 d), auto-refresh
+  (off / 10 s / 30 s / 1 m / 5 m), a ↻ button and "updated Xs ago". The state
+  lives in the URL (`?range=1h&refresh=30s`) so reloads and shared links keep
+  it; the browser remembers your last choice for bare visits. Refreshing
+  re-fetches JSON and redraws in place (never a page reload) and pauses
+  while the tab is hidden.
+- **Stat tiles**: requests, 4xx, 5xx (count and share), average latency.
+- **Requests by status** — stacked columns per bucket, 2xx (blue) / 3xx
+  (aqua) / 4xx (yellow) / 5xx (magenta), with the range totals in the legend.
+- **Latency** — average and maximum per bucket (gaps where nothing was timed).
+- Hover (or focus + arrow keys) shows the bucket's time span and values.
+- **By service** — every proxy host with hits, 4xx/5xx (count + rate),
+  avg/max latency and a hits sparkline. Click a row to scope the charts to
+  that service (`?slug=`); click it again or the chip's × to clear.
+
+Bucket size follows the range: ≤ 1 h → 1 min, 6 h → 5 min, 24 h → 15 min,
+7 d / 14 d → 1 h. Empty buckets are zero-filled.
+
+### `GET /api/traffic/series?range=1h&slug=`
+
+```json
+{
+  "enabled": true, "range": "1h", "slug": null, "step_s": 60,
+  "from": "…Z", "to": "…Z", "buckets": ["…Z", …],
+  "overall": {"hits": [], "s2xx": [], "s3xx": [], "s4xx": [], "s5xx": [],
+              "avg_ms": [number|null], "max_ms": [number|null]},
+  "totals": {"hits", "s2xx", "s3xx", "s4xx", "s5xx", "avg_ms", "max_ms"},
+  "hosts": [{"proxy_host_id", "hostname", "service_slug", "service_name",
+             "totals": {"hits", "s4xx", "s5xx", "avg_ms", "max_ms"},
+             "hits": [], "s5xx": []}]
+}
+```
+
+`slug` scopes `overall`/`totals`; `hosts` always lists every proxy host so the
+table can switch services. `enabled` says whether the collector is
+configured to run. Admin-only.
+
+## Optional: Prometheus counters (`TRAEFIK_API_URL`)
+
+The original collector, `TrafficCollector`, still runs when
+`TRAEFIK_API_URL` is set. Its samples are no longer what `/traffic` draws
+(the access-log rollups are), but it keeps feeding the wake-on-hit stand-in
+below. Traefik Manager does not proxy `/metrics`, so this path needs direct
+access to Traefik's API.
+
+### Required on the Traefik side
 
 Start Traefik with:
 
@@ -24,7 +178,7 @@ entrypoint is needed, and no separate credential: the same
 `TRAEFIK_API_VERIFY_TLS` / `TRAEFIK_API_USERNAME` / `TRAEFIK_API_PASSWORD` /
 `TRAEFIK_API_TIMEOUT_S` settings apply.
 
-## Configuration
+### Configuration
 
 Gated entirely by `TRAEFIK_API_URL` (empty = disabled, same as drift
 detection) — there is no separate on/off flag. Two more settings control the
@@ -35,7 +189,7 @@ collector:
 | `TRAEFIK_METRICS_POLL_INTERVAL_S` | `60` | How often the collector polls `{TRAEFIK_API_URL}/metrics`. |
 | `TRAEFIK_METRICS_RETENTION_DAYS` | `14` | How long samples are kept before being pruned. |
 
-## What gets collected, and how
+### What gets collected, and how
 
 Traefik's counters are **cumulative since the Traefik process last
 started** — a single snapshot only ever says "total requests so far," not a
@@ -69,45 +223,25 @@ On each poll:
 4. One `TrafficSample` row is written per matched router, holding the RAW
    counter values from that poll (`requests_total`, `duration_sum_s`,
    `duration_count`, and a `by_code` JSON map) — **never a precomputed
-   delta**. A reader (the `/traffic` page) computes a rate as
+   delta**. A reader (the wake-on-hit check below) computes a rate as
    `(b.requests_total - a.requests_total) / (b.sampled_at - a.sampled_at)`
    between any two samples it wants to compare, which is robust to a missed
    poll (a longer window, not wrong data) and needs no "first sample ever"
    special case.
 5. A decrease between two consecutive samples means Traefik's own counters
-   reset — it restarted. The page treats that as "no rate available," never
+   reset — it restarted. A reader treats that as "no rate available," never
    as negative traffic.
 
 A poll failure (Traefik down, unreachable, `/metrics` not enabled, timeout,
 malformed body) is logged and skipped — never raised — exactly like every
 other Traefik interaction in this app.
 
-## Retention
+### Retention
 
 Samples older than `TRAEFIK_METRICS_RETENTION_DAYS` are pruned as part of
 every poll (no separate schedule). Pruning runs even on a poll that could
 not reach Traefik at all, so a Traefik outage doesn't also stop old samples
 from being cleaned up.
-
-## The `/traffic` page
-
-Shows:
-
-- An overall figure: total requests/min across every host with a
-  computable rate right now (sum of each host's own two-most-recent-sample
-  delta, converted to req/min).
-- A per-service, per-host breakdown, grouped by `Service.group` (the same
-  grouping the main dashboard uses) — each host's current rate, a sparkline
-  of its last ~20 polls, and a 2xx/3xx/4xx/5xx bar for the most recent
-  interval.
-- Clear empty states: Traefik not configured at all; configured but no
-  samples yet (needs at least one more poll); a host with no samples or no
-  computable rate (just added, or Traefik restarted since its last sample).
-
-Nothing on this page talks to Traefik directly — it only reads what
-`TrafficCollector` has already stored, the same separation dashboard pages
-in this app already keep from their own background jobs.
-
 ## Wake-on-hit: a stand-in for a real Traefik-side trigger
 
 `POST /wake/{service_slug}` (`web/routers/wake.py`) was designed to be
