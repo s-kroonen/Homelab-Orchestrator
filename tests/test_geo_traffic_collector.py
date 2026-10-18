@@ -428,3 +428,120 @@ def test_geo_endpoint_requires_auth() -> None:
     with TestClient(app) as c:
         r = c.get("/api/traffic/geo")
     assert r.status_code in (401, 403)
+
+
+# ---------------------------------------------------------------------------
+# /traffic/geo page
+# ---------------------------------------------------------------------------
+
+
+def _seed_geo_samples() -> None:
+    with Session(get_engine()) as s:
+        alpha = Service(slug="alpha", name="Alpha")
+        beta = Service(slug="beta", name="Beta")
+        s.add(alpha)
+        s.add(beta)
+        s.commit()
+        s.refresh(alpha)
+        s.refresh(beta)
+        ph_a = ProxyHost(hostname="alpha.example.com", service_id=alpha.id)
+        ph_b = ProxyHost(hostname="beta.example.com", service_id=beta.id)
+        s.add(ph_a)
+        s.add(ph_b)
+        s.commit()
+        s.refresh(ph_a)
+        s.refresh(ph_b)
+        s.add(
+            GeoTrafficSample(
+                proxy_host_id=ph_a.id,
+                client_ip="8.8.8.8",
+                bucket="country",
+                country_code="US",
+                country_name="United States",
+                hit_count=3,
+            )
+        )
+        s.add(
+            GeoTrafficSample(
+                proxy_host_id=ph_a.id, client_ip="10.0.0.9", bucket="local", hit_count=1
+            )
+        )
+        s.add(
+            GeoTrafficSample(
+                proxy_host_id=ph_b.id,
+                client_ip="145.1.2.3",
+                bucket="country",
+                country_code="NL",
+                country_name="Netherlands",
+                hit_count=4,
+            )
+        )
+        s.commit()
+
+
+def test_geo_page_requires_login(app: Any) -> None:
+    with TestClient(app) as anon:
+        r = anon.get("/traffic/geo", follow_redirects=False)
+    assert r.status_code == 303
+    assert r.headers["location"].startswith("/login")
+
+
+def test_geo_page_disabled_notice(client: TestClient) -> None:
+    r = client.get("/traffic/geo")
+    assert r.status_code == 200
+    assert "GEOIP_ENABLED" in r.text
+    assert "geoip_traffic.md" in r.text
+    assert "<table" not in r.text
+
+
+def test_geo_page_renders_countries_and_ips(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("GEOIP_ENABLED", "true")
+    config_module.reset_settings_cache()
+    _seed_geo_samples()
+
+    r = client.get("/traffic/geo")
+    assert r.status_code == 200
+    text = r.text
+    assert "United States" in text
+    assert "Netherlands" in text
+    assert "Local network" in text
+    assert "\U0001f1fa\U0001f1f8" in text  # US flag
+    assert "\U0001f1f3\U0001f1f1" in text  # NL flag
+    assert "<code>8.8.8.8</code>" in text
+    assert "<code>10.0.0.9</code>" in text
+    assert "<strong>8</strong> hits" in text
+    assert "local 12.5% / external 87.5%" in text
+    assert 'value="alpha"' in text and 'value="beta"' in text
+    assert 'class="table-scroll"' in text
+
+
+def test_geo_page_slug_filter(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("GEOIP_ENABLED", "true")
+    config_module.reset_settings_cache()
+    _seed_geo_samples()
+
+    r = client.get("/traffic/geo?slug=beta")
+    assert r.status_code == 200
+    assert "Netherlands" in r.text
+    assert "United States" not in r.text
+    assert "8.8.8.8" not in r.text
+    assert '<option value="beta" selected>' in r.text
+
+    # Empty slug (the "All services" option) means no filter.
+    r = client.get("/traffic/geo?slug=")
+    assert "United States" in r.text and "Netherlands" in r.text
+
+
+def test_flag_emoji_helper() -> None:
+    from orchestrator.web.routers.ui import _flag_emoji
+
+    assert _flag_emoji("nl") == "\U0001f1f3\U0001f1f1"
+    assert _flag_emoji("") == ""
+    assert _flag_emoji("XYZ") == ""
+
+
+def test_traffic_pages_link_to_each_other(client: TestClient) -> None:
+    assert 'href="/traffic/geo"' in client.get("/traffic").text
+    assert 'href="/traffic"' in client.get("/traffic/geo").text

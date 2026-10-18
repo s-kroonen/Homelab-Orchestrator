@@ -38,6 +38,7 @@ from orchestrator.web.deps import SessionDep, SettingsDep
 from orchestrator.web.routers.activity import build_feed
 from orchestrator.web.routers.backup_policies import policy_to_dict
 from orchestrator.web.routers.dashboard import service_detail
+from orchestrator.web.routers.geo_traffic import build_geo_view
 from orchestrator.web.routers.traffic import build_traffic_view
 
 router = APIRouter(tags=["ui"])
@@ -393,6 +394,82 @@ async def traffic_page(
             "poll_interval_s": settings.traefik_metrics_poll_interval_s,
             "retention_days": settings.traefik_metrics_retention_days,
         },
+    )
+
+
+def _flag_emoji(country_code: str) -> str:
+    """ISO 3166-1 alpha-2 -> flag emoji via regional-indicator symbols
+    ("NL" -> U+1F1F3 U+1F1F1). Blank for anything that is not exactly two
+    ASCII letters (local/unknown buckets carry an empty code)."""
+    code = (country_code or "").strip().upper()
+    if len(code) != 2 or not code.isascii() or not code.isalpha():
+        return ""
+    return "".join(chr(0x1F1E6 + ord(ch) - ord("A")) for ch in code)
+
+
+def _geo_label(bucket: str, country_name: str, country_code: str) -> str:
+    if bucket == "local":
+        return "Local network"
+    return country_name or country_code or "Unknown"
+
+
+def _decorate_geo_view(view: dict[str, Any]) -> dict[str, Any]:
+    """Add the page-only presentation bits (flag, label, share-of-total
+    percentage, local/external summary) on top of :func:`build_geo_view`'s
+    API-shaped dict, leaving the original keys untouched."""
+    total = sum(c["hits"] for c in view["countries"])
+    local = sum(c["hits"] for c in view["countries"] if c["bucket"] == "local")
+    countries = [
+        {
+            **c,
+            "flag": "" if c["bucket"] == "local" else _flag_emoji(c["country_code"]),
+            "label": _geo_label(c["bucket"], c["country_name"], c["country_code"]),
+            "pct": round(c["hits"] / total * 100, 1) if total else 0.0,
+        }
+        for c in view["countries"]
+    ]
+    names = {c["country_code"]: c["country_name"] for c in view["countries"] if c["country_code"]}
+    top_ips = [
+        {
+            **i,
+            "flag": "" if i["bucket"] == "local" else _flag_emoji(i["country_code"]),
+            "label": _geo_label(i["bucket"], names.get(i["country_code"], ""), i["country_code"]),
+        }
+        for i in view["top_ips"]
+    ]
+    return {
+        **view,
+        "countries": countries,
+        "top_ips": top_ips,
+        "total_hits": total,
+        "local_hits": local,
+        "external_hits": total - local,
+        "local_pct": round(local / total * 100, 1) if total else 0.0,
+        "external_pct": round((total - local) / total * 100, 1) if total else 0.0,
+        "country_count": sum(1 for c in view["countries"] if c["bucket"] == "country"),
+    }
+
+
+@router.get("/traffic/geo", response_model=None)
+async def traffic_geo_page(
+    request: Request, session: SessionDep, settings: SettingsDep, slug: str | None = None
+) -> HTMLResponse | RedirectResponse:
+    """Traffic by country / client IP — the dashboard page over
+    :func:`orchestrator.web.routers.geo_traffic.build_geo_view` (the same
+    aggregation ``GET /api/traffic/geo`` returns). Server-rendered like
+    ``/traffic``. See ``docs/geoip_traffic.md``."""
+    admin = get_current_admin(request, session)
+    if admin is None:
+        return RedirectResponse("/login?next=/traffic/geo", status_code=303)
+
+    slug = (slug or "").strip() or None
+    view = _decorate_geo_view(build_geo_view(session, enabled=settings.geoip_enabled, slug=slug))
+    services = session.exec(select(Service).order_by(Service.slug)).all() if view["enabled"] else []
+
+    return _templates.TemplateResponse(
+        request,
+        "traffic_geo.html",
+        {"admin": admin, "view": view, "services": services, "slug": slug or ""},
     )
 
 

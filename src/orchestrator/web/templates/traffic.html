@@ -1,6 +1,7 @@
 {% extends "base.html" %}
 {% block title %}homelab-orchestrator — traffic{% endblock %}
 {% block content %}
+  <p class="msg geo-link-row"><a href="/traffic/geo">By country &rarr;</a></p>
   {% if not view.enabled %}
   <div class="banner">
     <strong>Traffic metrics are not configured.</strong> Set <code>TRAEFIK_API_URL</code>
@@ -83,6 +84,7 @@
   .hero .figure { font-size: 2.2rem; font-weight: 700; color: #5b8def; line-height: 1; }
   .hero .unit { font-size: 0.95rem; color: #9aa4b2; }
   .hero .detail { color: #9aa4b2; font-size: 0.85rem; margin-left: auto; }
+  .geo-link-row { text-align: right; margin: 0 0 0.75rem; }
   .sparkline { display: block; }
   .codebar { display: flex; height: 0.5rem; width: 8rem; border-radius: 0.25rem; overflow: hidden; background: #1a1e27; }
   .codebar span { height: 100%; }
