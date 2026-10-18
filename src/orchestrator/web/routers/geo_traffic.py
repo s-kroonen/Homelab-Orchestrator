@@ -1,10 +1,8 @@
 """Read-only JSON hook for the GeoIP traffic-visibility feature.
 
-Deliberately bare: one endpoint, no page template, no dashboard nav entry.
-The dashboard page for this (grouping, a map, whatever the operator wants)
-is an explicit, deferred follow-up — see docs/roadmap.md and
-docs/geoip_traffic.md — scoped out of this change to avoid colliding with a
-concurrent nav redesign. This endpoint is the hook that follow-up calls.
+One endpoint plus :func:`build_geo_view`, the aggregation it shares with the
+``/traffic/geo`` dashboard page (``ui.py`` / ``templates/traffic_geo.html``).
+See docs/geoip_traffic.md.
 """
 
 from __future__ import annotations
@@ -12,7 +10,7 @@ from __future__ import annotations
 from typing import Any
 
 from fastapi import APIRouter, Depends
-from sqlmodel import col, select
+from sqlmodel import Session, col, select
 
 from orchestrator.db.models import GeoTrafficSample, ProxyHost, Service
 from orchestrator.web.auth import require_admin
@@ -51,7 +49,16 @@ async def get_geo_traffic(
     ``GeoTrafficSample`` at all when ``GEOIP_ENABLED`` is false — same
     empty-state convention as ``build_traffic_view``.
     """
-    if not settings.geoip_enabled:
+    return build_geo_view(session, enabled=settings.geoip_enabled, slug=slug, limit=limit)
+
+
+def build_geo_view(
+    session: Session, *, enabled: bool, slug: str | None = None, limit: int = DEFAULT_LIMIT
+) -> dict[str, Any]:
+    """The aggregation behind both ``GET /api/traffic/geo`` and the
+    ``/traffic/geo`` dashboard page (``ui.py``) — one implementation so the
+    page and the JSON hook can never disagree. Same shape as the endpoint."""
+    if not enabled:
         return {"enabled": False, "countries": [], "top_ips": [], "sample_count": 0}
 
     limit = max(1, min(limit, 5000))
@@ -102,4 +109,4 @@ async def get_geo_traffic(
     }
 
 
-__all__ = ["router"]
+__all__ = ["DEFAULT_LIMIT", "build_geo_view", "router"]

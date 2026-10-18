@@ -6,11 +6,13 @@ against which service — an opt-in companion to
 sourced from a different place: Traefik's own **access log**, not its
 aggregate Prometheus counters.
 
-**The dashboard page for this is a deferred follow-up** — see
-[roadmap.md](roadmap.md#small-features-each-independently-schedulable-no-architecture-decisions-needed).
-This change is ingestion + storage + one bare JSON read endpoint only,
-deliberately scoped to avoid colliding with a concurrent nav redesign (see
-that roadmap entry for why).
+**Dashboard page: `/traffic/geo`** ("Traffic by country", linked from
+`/traffic`) — server-rendered over the same aggregation as the read endpoint
+below (`build_geo_view` in `web/routers/geo_traffic.py`): a summary line
+(total hits, samples, countries, local vs external share), a countries table
+with flag + percentage bar (private/LAN addresses shown as "Local network"),
+the top client IPs, and a service filter (`?slug=`). With `GEOIP_ENABLED`
+off it shows a notice pointing here instead of empty tables.
 
 ## Why a separate feature from `traffic_metrics.md`
 
@@ -68,7 +70,7 @@ orchestrator.scheduler.geo_traffic_collector.GeoTrafficCollector
 GeoTrafficSample rows
         │
         ▼
-GET /api/traffic/geo  (read-only; the deferred dashboard page's hook)
+GET /api/traffic/geo  (read-only; same aggregation as the /traffic/geo page)
 ```
 
 Nothing here is a new SSH, filesystem, or direct-Traefik-API integration —
@@ -245,10 +247,8 @@ country/IP counts:
 
 `?slug=` narrows to one service's proxy hosts; omitted, every proxy host's
 samples are summed. `{"enabled": false, ...empty...}` when `GEOIP_ENABLED`
-is off. Deliberately bare — no page, no dashboard nav entry (the sibling
-nav-redesign PR currently in flight against `dev` touches `base.html`'s
-nav; a second page/entry right now would collide with it) — this is the
-hook the deferred dashboard follow-up calls.
+is off. The `/traffic/geo` dashboard page renders this same aggregation
+server-side (`build_geo_view`), so the page and the endpoint never disagree.
 
 ## Failure handling
 

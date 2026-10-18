@@ -1,0 +1,109 @@
+{% extends "base.html" %}
+{% block title %}homelab-orchestrator — traffic by country{% endblock %}
+{% block content %}
+  <div class="geo-head">
+    <h2>Traffic by country</h2>
+    <a class="geo-link" href="/traffic">&larr; Per-service traffic</a>
+  </div>
+
+  {% if not view.enabled %}
+  <div class="notice">
+    <strong>GeoIP traffic visibility is off.</strong> It is opt-in: set
+    <code>GEOIP_ENABLED=true</code> (with Traefik access logging reachable through
+    Traefik Manager; the DB-IP database downloads automatically unless
+    <code>GEOIP_DB_PATH</code> is set) to see which countries and client IPs hit your services. See
+    <a href="https://github.com/s-kroonen/homelab-orchestrator/blob/dev/docs/geoip_traffic.md">docs/geoip_traffic.md</a>.
+  </div>
+  {% else %}
+  <form class="row geo-filter" method="get" action="/traffic/geo">
+    <label class="inline" for="geo-slug">Service</label>
+    <select id="geo-slug" name="slug" onchange="this.form.submit()">
+      <option value=""{% if not slug %} selected{% endif %}>All services</option>
+      {% for svc in services %}
+      <option value="{{ svc.slug }}"{% if svc.slug == slug %} selected{% endif %}>{{ svc.slug }}</option>
+      {% endfor %}
+    </select>
+    <noscript><button type="submit" class="secondary small">Apply</button></noscript>
+  </form>
+
+  {% if view.sample_count == 0 %}
+  <div class="notice">
+    <strong>No GeoIP samples yet{% if slug %} for <code>{{ slug }}</code>{% endif %}.</strong>
+    The collector tails Traefik's access log on each poll; rows appear here once
+    requests reach a proxy host linked to a service.
+  </div>
+  {% else %}
+  <p class="msg geo-summary">
+    <strong>{{ view.total_hits }}</strong> hits
+    · {{ view.sample_count }} samples
+    · {{ view.country_count }} {{ "country" if view.country_count == 1 else "countries" }}
+    · local {{ view.local_pct }}% / external {{ view.external_pct }}%
+  </p>
+  <div class="geo-split" title="local {{ view.local_hits }} · external {{ view.external_hits }}">
+    {% if view.local_hits %}<span class="local" style="width: {{ view.local_pct }}%"></span>{% endif %}
+    {% if view.external_hits %}<span class="external" style="width: {{ view.external_pct }}%"></span>{% endif %}
+  </div>
+
+  <section>
+    <h2>Countries</h2>
+    <div class="table-scroll">
+      <table>
+        <thead><tr><th></th><th>Country</th><th>Hits</th><th>Share</th></tr></thead>
+        <tbody>
+          {% for c in view.countries %}
+          <tr>
+            <td class="flag">{{ c.flag }}</td>
+            <td>{% if c.bucket == "country" %}{{ c.label }}{% else %}<span class="muted">{{ c.label }}</span>{% endif %}</td>
+            <td>{{ c.hits }}</td>
+            <td>
+              <div class="pctbar"><span class="{{ 'local' if c.bucket == 'local' else '' }}" style="width: {{ c.pct }}%"></span></div>
+              <span class="pct">{{ c.pct }}%</span>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section>
+    <h2>Top client IPs</h2>
+    <div class="table-scroll">
+      <table>
+        <thead><tr><th>IP</th><th>Country</th><th>Hits</th></tr></thead>
+        <tbody>
+          {% for i in view.top_ips %}
+          <tr>
+            <td class="ip"><code>{{ i.client_ip }}</code></td>
+            <td class="nowrap">{% if i.flag %}<span class="flag">{{ i.flag }}</span> {% endif %}{% if i.bucket == "country" %}{{ i.label }}{% else %}<span class="muted">{{ i.label }}</span>{% endif %}</td>
+            <td>{{ i.hits }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </section>
+  {% endif %}
+  {% endif %}
+{% endblock %}
+{% block extra_head %}
+<style>
+  .geo-head { display: flex; align-items: baseline; justify-content: space-between; gap: 0.75rem; flex-wrap: wrap; margin-bottom: 0.75rem; }
+  .geo-head h2 { margin: 0; }
+  .geo-link { font-size: 0.85rem; color: #5b8def; }
+  .geo-filter select { background: #171b24; color: inherit; border: 1px solid #2a2f3a; border-radius: 0.35rem; padding: 0.3rem 0.5rem; max-width: 100%; }
+  .geo-summary { margin: 0 0 0.5rem; }
+  .geo-summary strong { color: #5b8def; }
+  .geo-split { display: flex; height: 0.4rem; border-radius: 0.2rem; overflow: hidden; background: #2a2f3a; margin-bottom: 1.5rem; }
+  .geo-split .local, .pctbar .local { background: #9aa4b2; }
+  .geo-split .external { background: #5b8def; }
+  td.flag, span.flag { font-size: 1.1rem; line-height: 1; }
+  td.flag { width: 1.5rem; }
+  td.ip code { word-break: break-all; }
+  td.nowrap { white-space: nowrap; }
+  .pctbar { display: inline-block; vertical-align: middle; width: 6rem; height: 0.5rem; border-radius: 0.25rem; overflow: hidden; background: #2a2f3a; }
+  .pctbar span { display: block; height: 100%; background: #5b8def; }
+  .pct { font-size: 0.75rem; color: #9aa4b2; margin-left: 0.4rem; }
+  @media (max-width: 40rem) { .pctbar { width: 3.5rem; } }
+</style>
+{% endblock %}

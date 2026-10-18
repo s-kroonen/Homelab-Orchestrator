@@ -117,17 +117,15 @@ every other optional integration here. Once it's set:
   of `orchestrator-cli check`/`guests`/`snapshots`, client-rendered via the
   existing `apiFetch` against those same endpoints — no new API.
 
-- **GeoIP traffic dashboard page.** Deferred follow-up to the GeoIP
-  traffic-visibility feature (`docs/geoip_traffic.md`) — ingestion,
-  storage (`GeoTrafficSample`) and one bare read endpoint
-  (`GET /api/traffic/geo`) landed already; the actual `/traffic`-style
-  page (a map, a per-country/per-IP table, grouped like `/traffic`
-  already is) was deliberately scoped OUT to avoid colliding with the
-  concurrent nav redesign of `base.html`'s nav (a separate PR against
-  `dev`, in flight at the time this was written). Build it once that nav
-  redesign has landed, reading `GET /api/traffic/geo` the same way
-  `/traffic` reads `build_traffic_view` — no new backend work expected,
-  this is UI-only.
+- ~~**GeoIP traffic dashboard page.**~~ **Done.** `/traffic/geo`
+  (`traffic_geo.html`), server-rendered over `build_geo_view` — the
+  aggregation `GET /api/traffic/geo` now shares — with a summary line
+  (hits, samples, countries, local vs external share), a countries table
+  (flag emoji + CSS percentage bar, LAN traffic as "Local network"), the top
+  client IPs and a `?slug=` service filter; a disabled-state notice when
+  `GEOIP_ENABLED` is off. Linked to and from `/traffic`. No map — tables
+  only, no charting library. The sidebar entry ("Traffic by country") lands
+  with the `base.html` restyle.
 
 ## Done: shared template/CSS/JS foundation
 
