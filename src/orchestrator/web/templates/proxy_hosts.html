@@ -1,34 +1,37 @@
 {% extends "base.html" %}
 {% block title %}homelab-orchestrator — proxy hosts{% endblock %}
 {% block content %}
-  <div class="banner" role="note">
-    <strong>Traefik Manager is the source of truth for routes.</strong>
-    A <code>router_provider: traefik</code> host below is live-managed: adding, editing or
-    deleting it also adds/edits/deletes the real route on Traefik Manager (an upstream is
-    required for that — a blank one keeps it a local-only reference for now).
-    <code>pangolin</code>/<code>npm</code>/<code>other</code> hosts stay local-only reference
-    records, since no adapter exists for those backends yet. See
-    <code>docs/proxy_hosts.md</code>.
-  </div>
-
   <section>
     <h2>
       Proxy hosts
       {% if registry_dirty %}<span class="dirty-badge">unsaved changes vs {{ yaml_path }}</span>{% endif %}
     </h2>
-    <p class="msg">
-      Edits here change the live DB (and, for a live-managed host, the real route) — nothing
-      is written to <code>services.yaml</code> until you <strong>Save to YAML</strong>, or
-      discarded until you <strong>Reset to saved</strong>. A host with no linked service cannot
-      be written to YAML (proxy hosts are nested under services there), so it stays DB-only.
-    </p>
-    <p class="msg">
-      <strong>Traefik</strong> column: <span class="badge healthy">matched</span> a live Traefik
-      router covers this hostname right now; <span class="badge failed">missing</span> Traefik is
-      reachable but has no matching router (typo, drift, or never added); <span class="badge
-      unknown">unknown</span> either Traefik Manager/Traefik is not configured, or the last poll
-      failed — this is NOT the same as "missing". See <code>docs/proxy_hosts.md</code>.
-    </p>
+    <details class="help">
+      <summary>How this page works</summary>
+      <p>
+        <strong>Traefik Manager is the source of truth for routes.</strong>
+        A <code>router_provider: traefik</code> host is live-managed: adding, editing or deleting
+        it also adds/edits/deletes the real route on Traefik Manager (an upstream is required for
+        that — a blank one keeps it a local-only reference). <code>pangolin</code>/<code>npm</code>/<code>other</code>
+        hosts stay local-only reference records, since no adapter exists for those backends yet.
+      </p>
+      <p>
+        Edits change the live DB (and, for a live-managed host, the real route) — nothing is
+        written to <code>services.yaml</code> until you <strong>Save to YAML</strong>, or discarded
+        until you <strong>Reset to saved</strong>. A host with no linked service stays DB-only.
+      </p>
+      <p>
+        <strong>Traefik</strong> column: <span class="badge healthy">matched</span> a live router
+        covers this hostname; <span class="badge failed">missing</span> Traefik is reachable but
+        has no matching router; <span class="badge unknown">unknown</span> Traefik Manager is not
+        configured or the last poll failed — not the same as "missing".
+      </p>
+      <p>
+        <strong>Resync</strong> pulls Traefik Manager's current routes into the DB: it imports
+        routes with no local record yet ("Discovered" below) and catches drift on linked hosts.
+        See <code>docs/proxy_hosts.md</code>.
+      </p>
+    </details>
     <div class="row">
       <a class="btn" href="/proxy-hosts/new">Add proxy host</a>
       <button id="save-btn">Save to YAML</button>
@@ -40,19 +43,15 @@
       <label class="inline" for="ph-filter">Filter</label>
       <input id="ph-filter" type="search" placeholder="hostname contains…">
     </div>
-    <p class="msg" id="resync-msg">
-      Resync pulls Traefik Manager's/Traefik's current routes into the DB — it imports routes
-      that exist there but have no local record yet (below, "Discovered"), and catches drift on
-      an already-linked host (e.g. its upstream changed on the gateway side). It's the bulk/
-      catch-up path now, not the only way to reach parity — <strong>Add proxy host</strong>
-      above creates a real route directly.
-    </p>
+    <p class="msg" id="resync-msg"></p>
+    <div class="table-scroll">
     <table>
       <thead>
         <tr><th>Hostname</th><th>Upstream</th><th>Provider</th><th>Service</th><th>Traefik</th><th>Last seen</th><th>Wake on hit</th><th></th></tr>
       </thead>
       <tbody id="ph-rows"><tr><td colspan="8">Loading…</td></tr></tbody>
     </table>
+    </div>
   </section>
 
   <section id="discovered-section" hidden>
