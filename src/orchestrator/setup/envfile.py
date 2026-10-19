@@ -300,7 +300,7 @@ ENV_SECTIONS: tuple[EnvSection, ...] = (
             EnvKey(
                 "TRAEFIK_REDIRECT_MIDDLEWARE",
                 "Name of the Traefik middleware that redirects plain HTTP to HTTPS. A proxy\n"
-                "host's \"Redirect HTTP to HTTPS\" option adds a router on the `web` entry\n"
+                'host\'s "Redirect HTTP to HTTPS" option adds a router on the `web` entry\n'
                 "point using it, so it must already exist (e.g. a shared redirectScheme\n"
                 "middleware). See docs/proxy_hosts.md.",
             ),
