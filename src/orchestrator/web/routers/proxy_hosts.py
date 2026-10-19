@@ -27,7 +27,7 @@ a proxy host with no service would silently never reach the saved YAML.
 from __future__ import annotations
 
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
 
@@ -36,7 +36,12 @@ from pydantic import BaseModel, Field, field_validator
 from sqlmodel import Session, select
 
 from orchestrator.adapters.factory import AdapterBundle
-from orchestrator.adapters.proxy.base import ProxyRouteNotFound, RouteInfo, SyncEvent
+from orchestrator.adapters.proxy.base import (
+    ProxyRouteNotFound,
+    RouteInfo,
+    RouteOptions,
+    SyncEvent,
+)
 from orchestrator.adapters.proxy.traefik_manager import is_plain_http_entrypoint
 from orchestrator.adapters.proxy.verify import (
     ERROR,
@@ -229,6 +234,10 @@ class ProxyHostIn(BaseModel):
     wake_on_hit: bool = False
     entry_points: list[str] | None = None
     cert_resolver: str | None = None
+    #: See adapters.proxy.base.RouteOptions. ``None`` = keep what is stored
+    #: (an edit) or use the defaults (a create): pass the Host header through,
+    #: verify the upstream's TLS, no wildcard domains, no HTTP -> HTTPS router.
+    route_options: dict[str, Any] | None = None
     #: Record a route Traefik Manager ALREADY has (Resync's "Discovered") without
     #: writing to it. Never creates, never overwrites.
     adopt: bool = False
@@ -301,6 +310,7 @@ def _serialize(
         "wake_on_hit": ph.wake_on_hit,
         "entry_points": list(ph.entry_points or []),
         "cert_resolver": ph.cert_resolver or "",
+        "route_options": RouteOptions.from_dict(ph.route_options).to_dict(),
         # Empty list = created before entry points were stored; the edit form
         # then pre-selects from `traefik.entry_points` (what the route has).
         "entry_points_stored": bool(ph.entry_points),
@@ -381,6 +391,7 @@ async def _write_through_create(
     upstream: str,
     entry_points: Sequence[str],
     cert_resolver: str,
+    options: RouteOptions | None = None,
 ) -> str:
     """Create the real route on Traefik Manager for a new, live-managed
     (``router_provider == traefik``) ``ProxyHost``. Raises a ``502`` — the
@@ -392,6 +403,7 @@ async def _write_through_create(
             upstream=upstream,
             entry_points=entry_points,
             cert_resolver=cert_resolver,
+            options=options,
         )
     except HTTPException:  # pragma: no cover - defensive, adapters don't raise this
         raise
@@ -411,6 +423,7 @@ async def _write_through_update(
     upstream: str,
     entry_points: Sequence[str],
     cert_resolver: str,
+    options: RouteOptions | None = None,
 ) -> tuple[str, bool]:
     """Live-managed update write-through for ``PUT``. Returns ``(route_ref,
     created)``.
@@ -432,6 +445,8 @@ async def _write_through_update(
                 upstream=upstream,
                 entry_points=entry_points,
                 cert_resolver=cert_resolver,
+                options=options,
+                previous_options=RouteOptions.from_dict(ph.route_options),
             )
             return str(existing_ref), False
         except ProxyRouteNotFound:
@@ -452,11 +467,14 @@ async def _write_through_update(
         upstream=upstream,
         entry_points=entry_points,
         cert_resolver=cert_resolver,
+        options=options,
     )
     return ref, True
 
 
-async def _write_through_delete(adapters: AdapterBundle, route_ref: str) -> None:
+async def _write_through_delete(
+    adapters: AdapterBundle, route_ref: str, *, with_redirect: bool = False
+) -> None:
     """Delete the real route for a live-managed ``ProxyHost`` being deleted.
 
     A :class:`ProxyRouteNotFound` (the route is already gone on the
@@ -464,7 +482,7 @@ async def _write_through_delete(adapters: AdapterBundle, route_ref: str) -> None
     should no longer exist") is still satisfiable from the local side.
     Every other failure raises a ``502`` and blocks the local delete."""
     try:
-        await adapters.proxy.delete_route(route_ref)
+        await adapters.proxy.delete_route(route_ref, with_redirect=with_redirect)
     except ProxyRouteNotFound:
         log.info("proxy_host.live_route_already_gone", route_ref=route_ref)
     except Exception as exc:
@@ -516,6 +534,7 @@ class Prepared:
     cert_resolver: str
     live_managed: bool
     catalog: ProxyCatalog | None
+    route_options: dict[str, Any] = field(default_factory=dict)
     adopt_ref: str | None = None
     warnings: list[str] | None = None
 
@@ -630,6 +649,16 @@ async def _prepare(
                 cert_resolver = "" if all_plain else catalog.default_cert_resolver
     cert_resolver = (cert_resolver or "").strip()
 
+    # Route options: what the body says, else what is stored, else defaults.
+    if body.route_options is not None:
+        raw_options: dict[str, Any] = dict(body.route_options)
+    else:
+        raw_options = dict((existing.route_options if existing else None) or {})
+    options = RouteOptions.from_dict(raw_options)
+    # All-defaults is stored as {} so the YAML / DB copies of an untouched host
+    # stay empty.
+    route_options = {} if options == RouteOptions() else options.to_dict()
+
     # The hostname was checked above; a placeholder keeps its message out of
     # this second pass when it was already invalid.
     errors.update(
@@ -641,8 +670,18 @@ async def _prepare(
             live_managed=live_managed,
             known_entry_points=catalog.entrypoints if catalog else None,
             known_cert_resolvers=catalog.cert_resolvers if catalog else None,
+            route_options=raw_options,
         )
     )
+    if live_managed and options.http_redirect and "http_redirect" not in errors:
+        wanted = (settings.traefik_redirect_middleware or "redirect-to-https").strip()
+        have = await adapters.proxy.list_middlewares()
+        if have is not None and wanted not in {bare_router_name(m) for m in have}:
+            errors["http_redirect"] = (
+                f'The redirect middleware "{wanted}" does not exist in Traefik. Create it once '
+                "(a redirectScheme middleware with scheme https, e.g. in your shared config) or set "
+                "TRAEFIK_REDIRECT_MIDDLEWARE to the name you use."
+            )
 
     if live_managed and "hostname" not in errors:
         from orchestrator.adapters.proxy.traefik_manager import route_name_for_hostname
@@ -668,6 +707,7 @@ async def _prepare(
         cert_resolver=cert_resolver,
         live_managed=live_managed,
         catalog=catalog,
+        route_options=route_options,
         adopt_ref=adopt_ref,
     )
 
@@ -707,11 +747,13 @@ def _verification_warning(verification: RouteVerification) -> str | None:
     return None
 
 
-async def _rollback_created_route(adapters: AdapterBundle, route_ref: str, hostname: str) -> None:
+async def _rollback_created_route(
+    adapters: AdapterBundle, route_ref: str, hostname: str, *, with_redirect: bool = False
+) -> None:
     """Best effort: remove the route we just created so a rejected create
     leaves nothing broken behind on Traefik Manager."""
     try:
-        await adapters.proxy.delete_route(route_ref)
+        await adapters.proxy.delete_route(route_ref, with_redirect=with_redirect)
     except ProxyRouteNotFound:
         pass
     except Exception as exc:
@@ -779,6 +821,7 @@ async def create_proxy_host(
         wake_on_hit=body.wake_on_hit,
         entry_points=list(prep.entry_points),
         cert_resolver=prep.cert_resolver,
+        route_options=dict(prep.route_options),
     )
     if prep.adopt_ref:
         ph.extra = {**ph.extra, TRAEFIK_MANAGER_ROUTE_REF_KEY: prep.adopt_ref}
@@ -798,6 +841,7 @@ async def create_proxy_host(
             upstream=ph.upstream,
             entry_points=prep.entry_points,
             cert_resolver=prep.cert_resolver,
+            options=RouteOptions.from_dict(prep.route_options),
         )
         # Did Traefik actually accept it? Traefik Manager happily writes a
         # router Traefik then refuses (unknown entry point, ...).
@@ -805,7 +849,12 @@ async def create_proxy_host(
             adapters, route_ref=route_ref, hostname=ph.hostname, entry_points=prep.entry_points
         )
         if verification.state == ERROR:
-            await _rollback_created_route(adapters, route_ref, ph.hostname)
+            await _rollback_created_route(
+                adapters,
+                route_ref,
+                ph.hostname,
+                with_redirect=RouteOptions.from_dict(prep.route_options).http_redirect,
+            )
             log.warning(
                 "proxy_host.create_rejected_by_traefik",
                 hostname=ph.hostname,
@@ -830,6 +879,7 @@ async def create_proxy_host(
             "service": svc.slug,
             "entry_points": list(ph.entry_points),
             "cert_resolver": ph.cert_resolver,
+            "route_options": dict(ph.route_options or {}),
         },
     )
     probe_events = sync_traefik_probe(
@@ -984,6 +1034,7 @@ async def update_proxy_host(
         "wake_on_hit": ph.wake_on_hit,
         "entry_points": list(ph.entry_points or []),
         "cert_resolver": ph.cert_resolver or "",
+        "route_options": dict(ph.route_options or {}),
     }
 
     # Write-through: a live-managed (traefik) ProxyHost's update actually
@@ -1003,6 +1054,7 @@ async def update_proxy_host(
             upstream=body.upstream,
             entry_points=prep.entry_points,
             cert_resolver=prep.cert_resolver,
+            options=RouteOptions.from_dict(prep.route_options),
         )
         new_extra[TRAEFIK_MANAGER_ROUTE_REF_KEY] = route_ref
         verification = await _verify_written(
@@ -1011,7 +1063,12 @@ async def update_proxy_host(
         if verification.state == ERROR:
             if created:
                 # We just made this route (no previous one to keep): take it back.
-                await _rollback_created_route(adapters, route_ref, prep.hostname)
+                await _rollback_created_route(
+                    adapters,
+                    route_ref,
+                    prep.hostname,
+                    with_redirect=RouteOptions.from_dict(prep.route_options).http_redirect,
+                )
                 raise _rejected_by_traefik(verification, rolled_back=True)
             # An edit: the new configuration IS on Traefik Manager now and we
             # cannot safely guess the previous one, so keep it, record it, and
@@ -1033,6 +1090,8 @@ async def update_proxy_host(
     if prep.live_managed or body.entry_points is not None:
         ph.entry_points = list(prep.entry_points)
         ph.cert_resolver = prep.cert_resolver
+    if prep.live_managed or body.route_options is not None:
+        ph.route_options = dict(prep.route_options)
     after = {
         "hostname": ph.hostname,
         "upstream": ph.upstream,
@@ -1042,6 +1101,7 @@ async def update_proxy_host(
         "wake_on_hit": ph.wake_on_hit,
         "entry_points": list(ph.entry_points or []),
         "cert_resolver": ph.cert_resolver or "",
+        "route_options": dict(ph.route_options or {}),
     }
     changes = {k: {"from": before[k], "to": after[k]} for k in after if before[k] != after[k]}
 
@@ -1107,7 +1167,11 @@ async def delete_proxy_host(
     # and the local row is never touched. See docs/proxy_hosts.md.
     route_ref = (ph.extra or {}).get(TRAEFIK_MANAGER_ROUTE_REF_KEY)
     if ph.router_provider is RouterProvider.TRAEFIK and route_ref:
-        await _write_through_delete(adapters, str(route_ref))
+        await _write_through_delete(
+            adapters,
+            str(route_ref),
+            with_redirect=RouteOptions.from_dict(ph.route_options).http_redirect,
+        )
 
     probe_events = sync_traefik_probe(
         session,

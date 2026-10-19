@@ -222,6 +222,12 @@ class ProxyHost(SQLModel, table=True):
     # list on a row means "not stored yet" (created before this existed).
     entry_points: list[str] = Field(default_factory=list, sa_column=Column(JSON))
     cert_resolver: str = ""
+    # How the live route is built beyond hostname/upstream/entry points - see
+    # adapters.proxy.base.RouteOptions: pass_host_header (default True),
+    # skip_upstream_tls_verify, tls_main / tls_sans (a wildcard or multi-name
+    # certificate request), http_redirect (companion HTTP -> HTTPS router).
+    # Empty = "use the defaults" (every row that predates this).
+    route_options: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))
 
 
 # ---------------------------------------------------------------------------

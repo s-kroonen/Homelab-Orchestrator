@@ -13,6 +13,7 @@ from orchestrator.adapters.proxy.base import (
     EntryPointInfo,
     ProxyAdapter,
     RouteInfo,
+    RouteOptions,
     SyncEvent,
 )
 from orchestrator.logging_setup import get_logger
@@ -75,6 +76,7 @@ class DryRunProxyAdapter(ProxyAdapter):
         upstream: str,
         entry_points: Sequence[str],
         cert_resolver: str = "",
+        options: RouteOptions | None = None,
     ) -> str:
         log.info(
             "proxy.dry_run.create_route",
@@ -82,6 +84,7 @@ class DryRunProxyAdapter(ProxyAdapter):
             upstream=upstream,
             entry_points=list(entry_points),
             cert_resolver=cert_resolver,
+            options=(options or RouteOptions()).to_dict(),
         )
         ref = f"dry-run:{hostname}"
         self._remember(ref, hostname, upstream, entry_points, cert_resolver)
@@ -95,6 +98,8 @@ class DryRunProxyAdapter(ProxyAdapter):
         upstream: str,
         entry_points: Sequence[str],
         cert_resolver: str = "",
+        options: RouteOptions | None = None,
+        previous_options: RouteOptions | None = None,
     ) -> None:
         log.info(
             "proxy.dry_run.update_route",
@@ -137,7 +142,13 @@ class DryRunProxyAdapter(ProxyAdapter):
         log.info("proxy.dry_run.list_cert_resolvers")
         return ["letsencrypt"]
 
-    async def delete_route(self, route_ref: str) -> None:
+    async def list_domains(self) -> list[str] | None:
+        return ["example.com"]
+
+    async def list_middlewares(self) -> list[str] | None:
+        return ["redirect-to-https@file"]
+
+    async def delete_route(self, route_ref: str, *, with_redirect: bool = True) -> None:
         log.info("proxy.dry_run.delete_route", route_ref=route_ref)
         self._routes.pop(route_ref, None)
 

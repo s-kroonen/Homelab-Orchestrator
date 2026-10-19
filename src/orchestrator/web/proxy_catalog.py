@@ -22,6 +22,13 @@ class ProxyCatalog:
     cert_resolvers: list[str] | None
     default_entrypoints: list[str] = field(default_factory=list)
     default_cert_resolver: str = ""
+    #: Base domains the operator serves (Traefik Manager's settings) - the form
+    #: offers ``domain`` + ``*.domain`` as a ready-made wildcard certificate.
+    domains: list[str] = field(default_factory=list)
+    #: Name of the HTTP -> HTTPS redirect middleware, and whether Traefik has it
+    #: (``None`` = could not tell).
+    redirect_middleware: str = "redirect-to-https"
+    redirect_available: bool | None = None
 
     @property
     def source(self) -> str:
@@ -34,6 +41,9 @@ class ProxyCatalog:
             "cert_resolvers_known": self.cert_resolvers is not None,
             "default_entrypoints": self.default_entrypoints,
             "default_cert_resolver": self.default_cert_resolver,
+            "domains": list(self.domains),
+            "redirect_middleware": self.redirect_middleware,
+            "redirect_available": self.redirect_available,
             "source": self.source,
         }
 
@@ -60,6 +70,9 @@ async def get_catalog(settings: Any, proxy: ProxyAdapter, *, refresh: bool = Fal
     configured_resolver = (settings.traefik_default_cert_resolver or "").strip()
     if configured_resolver and resolvers is not None and configured_resolver not in resolvers:
         configured_resolver = ""
+    domains = await proxy.list_domains()
+    middlewares = await proxy.list_middlewares()
+    redirect_name = (settings.traefik_redirect_middleware or "redirect-to-https").strip()
     catalog = ProxyCatalog(
         entrypoints=entrypoints,
         cert_resolvers=resolvers,
@@ -67,6 +80,13 @@ async def get_catalog(settings: Any, proxy: ProxyAdapter, *, refresh: bool = Fal
             settings.default_entry_points_list, entrypoints
         ),
         default_cert_resolver=configured_resolver,
+        domains=list(domains or []),
+        redirect_middleware=redirect_name,
+        redirect_available=(
+            None
+            if middlewares is None
+            else redirect_name in {m.split("@", 1)[0] for m in middlewares}
+        ),
     )
     # An unreadable answer is not worth remembering: retry on the next call.
     if entrypoints is not None:

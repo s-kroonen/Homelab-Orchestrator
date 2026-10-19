@@ -215,6 +215,47 @@ so ("not stored yet — saving will set it") and pre-selects from what Traefik
 Manager actually has on the route (runtime router list), else the default rule.
 The list shows such a host's live entry points with "not stored yet".
 
+### Route options — Host header, certificate, redirect, upstream TLS
+
+Per host, stored as `ProxyHost.route_options` (YAML: `route_options:`; empty =
+defaults) and set in the form's **Certificate** and **Behaviour** sections:
+
+| Option | Default | What it does |
+|---|---|---|
+| `pass_host_header` | **true** | The backend receives the hostname the visitor typed. With `false` Traefik sends the *upstream's own address* as `Host`; any backend that builds redirects or absolute links from it (Proxmox, PBS, most web UIs) then sends the browser to a raw LAN IP such as `http://192.168.100.18:8007`. |
+| `skip_upstream_tls_verify` | false | For an `https://` upstream with a self-signed certificate (Proxmox, PBS). Only valid with an `https://` upstream. |
+| `tls_main` / `tls_sans` | none | Request **one certificate for several names** instead of one per host, e.g. `example.com` + `*.example.com`. The form offers a ready-made wildcard for each base domain Traefik Manager is configured with, or custom names. Needs a cert resolver (a wildcard needs one with a DNS challenge) and a TLS entry point. This is also how a *new* certificate gets generated: the resolver issues it on first use. |
+| `http_redirect` | off (new hosts: on when the middleware exists) | Adds a companion router `<route>-redirect` on the plain-HTTP entry point (`web`, never `traefik`), with the redirect middleware, sharing the main route's service — the same pair a hand-written `proxmox-redirect` / `proxmox` setup has. Needs an HTTPS entry point selected and the middleware to exist in Traefik. |
+
+The redirect middleware is **not created by the orchestrator** (a duplicate of
+one defined in your shared config would clash). Define it once, e.g.
+
+```yaml
+http:
+  middlewares:
+    redirect-to-https:
+      redirectScheme:
+        scheme: https
+```
+
+or set `TRAEFIK_REDIRECT_MIDDLEWARE` to the name you already use. The form warns
+when Traefik does not have it, and the API refuses the option (`422`,
+`http_redirect`).
+
+Two more things the adapter now gets right on every write:
+
+* **The upstream scheme is sent.** An `https://` upstream used to reach Traefik
+  Manager without a `scheme` and was written as plain `http://`.
+* **`passHostHeader` is always sent explicitly.** Traefik Manager writes
+  `passHostHeader: false` whenever the form field is absent — which was every
+  route this orchestrator created. Re-saving an older host (Edit → Save) fixes
+  it. The maintenance-page backend service deliberately keeps `false`.
+
+Editing keeps what is stored when the request omits `route_options`; turning
+`http_redirect` off removes the companion router, deleting the host removes
+both, and a failed redirect write takes the main route back so there is never a
+half-made pair.
+
 ### Validation — before anything is written
 
 One validator module (`orchestrator.registry.proxy_validation`) is used by the
@@ -230,6 +271,7 @@ renders each message next to its field *and* as a toast, the CLI prints
 | `upstream` | `http://` or `https://` + host + port (friendly messages for a missing port / scheme); required for a live-managed host |
 | `entry_points` | non-empty; each must exist on the live Traefik when it can be read (`Entry point "https" does not exist on this Traefik. Available: web, websecure, traefik`); the internal `traefik` entry point (API/dashboard) is refused |
 | `cert_resolver` | when given and the known list is available, must be in it |
+| `route_options` | `skip_upstream_tls_verify` needs an `https://` upstream; `tls_sans` needs `tls_main`; certificate names must be valid hostnames (`*.` allowed) and need a cert resolver and a TLS entry point; `http_redirect` needs an HTTPS entry point selected and the redirect middleware to exist in Traefik |
 | conflict (create, or a hostname change) | refused if Traefik Manager (or any other Traefik provider) already has a router for that hostname, or a route with the name we would create — it names the existing router and suggests Resync to adopt it. A route this orchestrator did not create is never silently overwritten |
 
 When the live entry-point list cannot be read only the *shape* is checked and
@@ -260,6 +302,10 @@ The list's **Traefik** column shows the router's own verdict for every host:
 loaded` or `router unverified`.
 
 ### Fixing an already-broken route
+
+*Redirects to the raw LAN IP* (`passHostHeader: false`, written by routes created
+before route options existed): **Edit** the host and **Save** — `Pass the visitor's
+Host header` is on by default and is now written explicitly.
 
 A route that already shows `entryPoint "https" doesn't exist` (created before
 this change) is fixed from the dashboard: **Edit** the host, tick the entry point

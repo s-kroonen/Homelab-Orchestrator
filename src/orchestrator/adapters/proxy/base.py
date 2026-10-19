@@ -64,6 +64,54 @@ class EntryPointInfo:
 
 
 @dataclass(frozen=True)
+class RouteOptions:
+    """How a live route is built beyond hostname/upstream/entry points.
+
+    The defaults are the safe ones for a typical reverse-proxied app:
+
+    * ``pass_host_header`` True: the backend sees the hostname the visitor
+      typed. With False the proxy sends the upstream's own address as ``Host``,
+      so any backend that builds redirects or absolute links from it (Proxmox,
+      PBS, most web UIs) bounces the browser to a raw LAN IP.
+    * ``skip_upstream_tls_verify``: only meaningful for an ``https://``
+      upstream with a self-signed certificate (PBS, Proxmox).
+    * ``tls_main`` / ``tls_sans``: request one certificate covering these names
+      (e.g. ``kroon-en.nl`` + ``*.kroon-en.nl``) instead of one per host.
+      Needs a cert resolver able to do it (DNS challenge for a wildcard).
+    * ``http_redirect``: also answer plain HTTP and redirect it to HTTPS.
+    """
+
+    pass_host_header: bool = True
+    skip_upstream_tls_verify: bool = False
+    tls_main: str = ""
+    tls_sans: tuple[str, ...] = ()
+    http_redirect: bool = False
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any] | None) -> RouteOptions:
+        data = data or {}
+        sans = data.get("tls_sans") or ()
+        if isinstance(sans, str):
+            sans = [s for s in sans.replace(",", "\n").splitlines()]
+        return cls(
+            pass_host_header=bool(data.get("pass_host_header", True)),
+            skip_upstream_tls_verify=bool(data.get("skip_upstream_tls_verify", False)),
+            tls_main=str(data.get("tls_main") or "").strip(),
+            tls_sans=tuple(s.strip() for s in sans if str(s).strip()),
+            http_redirect=bool(data.get("http_redirect", False)),
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "pass_host_header": self.pass_host_header,
+            "skip_upstream_tls_verify": self.skip_upstream_tls_verify,
+            "tls_main": self.tls_main,
+            "tls_sans": list(self.tls_sans),
+            "http_redirect": self.http_redirect,
+        }
+
+
+@dataclass(frozen=True)
 class AccessLogTail:
     """Result of :meth:`ProxyAdapter.fetch_access_log`.
 
@@ -191,6 +239,7 @@ class ProxyAdapter(ABC):
         upstream: str,
         entry_points: Sequence[str],
         cert_resolver: str = "",
+        options: RouteOptions | None = None,
     ) -> str:
         """Create a real route on this backend for ``hostname`` -> ``upstream``,
         bound to exactly ``entry_points`` (never empty - an implementation
@@ -215,6 +264,8 @@ class ProxyAdapter(ABC):
         upstream: str,
         entry_points: Sequence[str],
         cert_resolver: str = "",
+        options: RouteOptions | None = None,
+        previous_options: RouteOptions | None = None,
     ) -> None:
         """Update the route ``route_ref`` identifies to point at the given
         ``hostname``/``upstream``/``entry_points``/``cert_resolver`` (all of
@@ -225,7 +276,7 @@ class ProxyAdapter(ABC):
         :meth:`delete_route`'s note on the same case)."""
 
     @abstractmethod
-    async def delete_route(self, route_ref: str) -> None:
+    async def delete_route(self, route_ref: str, *, with_redirect: bool = True) -> None:
         """Delete the route ``route_ref`` identifies.
 
         Raises on failure — EXCEPT raises :class:`ProxyRouteNotFound`
@@ -297,4 +348,17 @@ class ProxyAdapter(ABC):
     async def list_cert_resolvers(self) -> list[str] | None:
         """Certificate resolver names this backend knows about, or ``None``
         when it cannot say (the caller then offers a free-text field)."""
+        return None
+
+    async def list_domains(self) -> list[str] | None:
+        """Base domains the operator serves (Traefik Manager's configured
+        domains, e.g. ``kroon-en.nl``) - the form offers ``domain`` +
+        ``*.domain`` as a ready-made wildcard certificate. ``None`` = unknown."""
+        return None
+
+    async def list_middlewares(self) -> list[str] | None:
+        """Names of the HTTP middlewares the proxy currently has (with their
+        ``@provider`` suffix, e.g. ``redirect-to-https@file``), or ``None``
+        when it cannot say. Used to refuse "redirect HTTP to HTTPS" when the
+        redirect middleware does not exist."""
         return None
