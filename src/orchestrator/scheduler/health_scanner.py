@@ -62,6 +62,7 @@ from datetime import UTC, datetime, timedelta
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from sqlmodel import Session, select
 
+from orchestrator.adapters.factory import AdapterBundle
 from orchestrator.config import Settings
 from orchestrator.db.models import HealthScanSample, Service
 from orchestrator.db.session import session_scope
@@ -84,9 +85,14 @@ class HealthScanner:
     dependency cache per cycle, store one HealthScanSample per slug touched,
     prune old samples."""
 
-    def __init__(self, *, settings: Settings) -> None:
+    def __init__(self, *, settings: Settings, adapters: AdapterBundle | None = None) -> None:
         self._settings = settings
-        self._engine = HealthEngine(settings=settings)
+        # The Proxmox adapter feeds the guest gate (node online? guest
+        # running?). The app always passes the bundle; a bare
+        # HealthScanner(settings=) scans without the guest gate.
+        self._engine = HealthEngine(
+            settings=settings, proxmox=adapters.proxmox if adapters is not None else None
+        )
         self._scheduler = AsyncIOScheduler()
 
     # -- lifecycle -----------------------------------------------------------
@@ -133,6 +139,10 @@ class HealthScanner:
         APScheduler job is logged by APScheduler and then forgotten, so every
         failure mode is caught and logged here instead."""
         cache: dict[str, ServiceVerdict] = {}
+        # One Proxmox read of nodes + guests for the whole cycle, same idea as
+        # ``cache``: every service is judged against the same moment's
+        # cluster state, and N services cost two API calls, not 2N.
+        guest_cache = self._engine.new_guest_cache()
         try:
             with session_scope() as session:
                 stmt = select(Service).order_by(Service.slug)
@@ -151,7 +161,9 @@ class HealthScanner:
                         # defeating the "once per cycle" guarantee.
                         continue
                     try:
-                        await self._engine.scan(session, svc, _cache=cache)
+                        await self._engine.scan(
+                            session, svc, _cache=cache, _guest_cache=guest_cache
+                        )
                     except Exception as exc:  # pragma: no cover - defensive
                         # One service's probe blowing up must not stop the
                         # rest of the cycle — same philosophy as every other

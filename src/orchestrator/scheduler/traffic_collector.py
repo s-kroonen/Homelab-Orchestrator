@@ -303,11 +303,14 @@ class TrafficCollector:
         with whether the node is actually off, which is a much higher-cost
         mistake here than for the backup gate UNKNOWN already serves (no
         backup vs. an unwanted power-on + guest start).
+
+        DOWN (the guest gate: node offline or guest not running) counts too —
+        it is the most direct evidence there is that a wake is what's needed.
         """
         state = session.get(ServiceState, service.id)
         if state is None:
             return True
-        return state.last_verdict is HealthState.FAILED
+        return state.last_verdict in (HealthState.FAILED, HealthState.DOWN)
 
     def _prune(self, session: Session) -> None:
         """Delete samples older than ``TRAEFIK_METRICS_RETENTION_DAYS``. Run as

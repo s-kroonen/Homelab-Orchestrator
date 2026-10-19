@@ -6,18 +6,28 @@ from enum import StrEnum
 
 
 class HealthState(StrEnum):
-    """Three-state health model — drives the backup gate and maintenance page.
+    """Health model — drives the backup gate and maintenance page.
 
-    HEALTHY -- Proxmox boot ok AND all *required* probes pass. Only state that backs up.
+    HEALTHY -- Node online, guest running AND all *required* probes pass.
+               The only state that backs up.
     FAILED  -- A definitive negative (unit failed, container exited, HTTP 5xx).
                Skip backup, alert, mark as a restore candidate.
     UNKNOWN -- Indeterminate (probe timed out, node unreachable). Fail closed:
                skip backup, alert only, no restore action taken automatically.
+    DOWN    -- The guest gate: the service's node is offline or its guest is
+               not running, so no probe was run. Skip backup, but this is NOT
+               FAILED — a stopped VM is not evidence of corrupt data and must
+               never look like a restore candidate. See ``health/guest_gate.py``.
+
+    Persisted by NAME through SQLAlchemy's non-native ``Enum`` into a plain
+    string column (see alembic 0001/0007), so adding a member needs no
+    migration.
     """
 
     HEALTHY = "healthy"
     FAILED = "failed"
     UNKNOWN = "unknown"
+    DOWN = "down"
 
 
 class PowerState(StrEnum):

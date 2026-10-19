@@ -27,6 +27,7 @@
               {% if not svc.enabled %}{% set badge %}<span class="badge disabled">disabled</span>{% endset %}
               {% elif svc.verdict == "healthy" %}{% set badge %}<span class="badge healthy">healthy</span>{% endset %}
               {% elif svc.verdict == "failed" %}{% set badge %}<span class="badge failed">failed</span>{% endset %}
+              {% elif svc.verdict == "down" %}{% set badge %}<span class="badge down" title="{{ svc.verdict_reason }}">{{ svc.down_label }}</span>{% endset %}
               {% else %}{% set badge %}<span class="badge unknown">unknown</span>{% endset %}{% endif %}
               {% if svc.enabled and svc.probes %}
               <details class="probes">

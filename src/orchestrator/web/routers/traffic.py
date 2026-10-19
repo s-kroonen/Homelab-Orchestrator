@@ -23,7 +23,7 @@ from fastapi import APIRouter, Depends
 from sqlmodel import Session, col, select
 
 from orchestrator.config import Settings
-from orchestrator.db.models import ProxyHost, Service, TrafficRollup
+from orchestrator.db.models import ProxyHost, Service, ServiceState, TrafficRollup
 from orchestrator.scheduler.access_log_collector import access_log_configured, load_status
 from orchestrator.web.auth import require_admin
 from orchestrator.web.deps import SessionDep, SettingsDep
@@ -96,6 +96,9 @@ def build_series(
     n = RANGES[range_key] // step
 
     services = {s.id: s for s in session.exec(select(Service)).all() if s.id is not None}
+    # Each service's last verdict, so a host whose guest is stopped (DOWN) is
+    # read in that light: its failing requests are explained, not a mystery.
+    states = {st.service_id: st for st in session.exec(select(ServiceState)).all()}
     hosts = [h for h in session.exec(select(ProxyHost)).all() if h.id is not None]
     in_scope = {
         h.id
@@ -179,12 +182,17 @@ def build_series(
         assert h.id is not None
         svc = services.get(h.service_id) if h.service_id is not None else None
         ph = per_host[h.id]
+        st = states.get(svc.id) if svc is not None else None
         host_rows.append(
             {
                 "proxy_host_id": h.id,
                 "hostname": h.hostname,
                 "service_slug": svc.slug if svc else None,
                 "service_name": svc.name if svc else None,
+                # The service's last health verdict (healthy/failed/unknown/
+                # down); None for an unlinked host or a never-scanned service.
+                "service_state": st.last_verdict.value if st is not None else None,
+                "service_state_reason": (st.notes or "") if st is not None else None,
                 "totals": {
                     "hits": ph["t_hits"],
                     "s4xx": ph["t_s4xx"],
