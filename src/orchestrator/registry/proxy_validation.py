@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Iterable, Sequence
+from typing import Any
 from urllib.parse import urlsplit
 
 from orchestrator.adapters.proxy.base import EntryPointInfo
@@ -199,6 +200,58 @@ def resolve_default_entry_points(
 # ---------------------------------------------------------------------------
 
 
+def validate_route_options(
+    options: dict[str, Any] | None,
+    *,
+    upstream: str,
+    entry_points: Sequence[str],
+    cert_resolver: str,
+    known_entry_points: Sequence[EntryPointInfo] | None = None,
+) -> dict[str, str]:
+    """Problems with a host's route options, keyed by option name."""
+    from orchestrator.adapters.proxy.base import RouteOptions
+    from orchestrator.adapters.proxy.traefik_manager import is_plain_http_entrypoint
+
+    errors: dict[str, str] = {}
+    unknown = set(options or {}) - set(RouteOptions().to_dict())
+    if unknown:
+        errors["route_options"] = f"unknown option(s): {', '.join(sorted(unknown))}"
+    opts = RouteOptions.from_dict(options)
+    addresses = {e.name: e.address for e in known_entry_points or []}
+    plain = [n for n in entry_points if is_plain_http_entrypoint(n, addresses.get(n, ""))]
+    secure = [n for n in entry_points if n not in plain]
+
+    if opts.skip_upstream_tls_verify and not upstream.strip().lower().startswith("https://"):
+        errors["skip_upstream_tls_verify"] = (
+            "Only applies to an https:// upstream (a self-signed Proxmox / PBS, say)."
+        )
+    if opts.tls_sans and not opts.tls_main:
+        errors["tls_main"] = "Set the main domain too - the extra names (SANs) belong to it."
+    if opts.tls_main:
+        for field_name, value in (
+            ("tls_main", opts.tls_main),
+            *(("tls_sans", s) for s in opts.tls_sans),
+        ):
+            try:
+                normalize_hostname(value)
+            except ValueError as exc:
+                errors[field_name] = f"{value!r}: {exc}"
+        if not cert_resolver.strip():
+            errors["tls_main"] = errors.get("tls_main") or (
+                "A certificate for specific domains needs a certificate resolver to issue it - "
+                "pick one above."
+            )
+        if not secure:
+            errors["tls_main"] = errors.get("tls_main") or (
+                "Certificate domains only apply to a TLS entry point (websecure)."
+            )
+    if opts.http_redirect and not secure:
+        errors["http_redirect"] = (
+            "There is nothing to redirect to: select an HTTPS entry point (websecure) as well."
+        )
+    return errors
+
+
 def validate_proxy_host(
     *,
     hostname: str,
@@ -209,6 +262,7 @@ def validate_proxy_host(
     known_entry_points: Sequence[EntryPointInfo] | None = None,
     known_cert_resolvers: Sequence[str] | None = None,
     taken_hostnames: Iterable[str] = (),
+    route_options: dict[str, Any] | None = None,
 ) -> dict[str, str]:
     """Every problem with a proxy host, keyed by field name; ``{}`` = valid.
 
@@ -236,6 +290,15 @@ def validate_proxy_host(
         msg = validate_cert_resolver(cert_resolver, known_cert_resolvers)
         if msg:
             errors["cert_resolver"] = msg
+        errors.update(
+            validate_route_options(
+                route_options,
+                upstream=upstream,
+                entry_points=entry_points,
+                cert_resolver=cert_resolver,
+                known_entry_points=known_entry_points,
+            )
+        )
     return errors
 
 

@@ -191,6 +191,11 @@ class Settings(BaseSettings):
     # blind default. See docs/proxy_hosts.md.
     traefik_default_entrypoints: str = ""
     traefik_default_cert_resolver: str = ""
+    # Name of the HTTP middleware that redirects plain HTTP to HTTPS - the
+    # "Redirect HTTP to HTTPS" option on a proxy host puts a companion router
+    # on the plain-HTTP entry point with this middleware. Must already exist
+    # in Traefik (e.g. a shared ``redirect-to-https`` defined once).
+    traefik_redirect_middleware: str = "redirect-to-https"
 
     # The orchestrator's own base URL, as REACHABLE FROM THE GATEWAY VM (e.g.
     # http://10.0.0.5:8000) — not necessarily the same as anything a browser

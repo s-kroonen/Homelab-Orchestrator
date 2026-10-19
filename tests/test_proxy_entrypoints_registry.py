@@ -332,3 +332,40 @@ def test_cli_list_shows_entry_points(registry: Path) -> None:
     )  # fmt: skip
     result = CliRunner().invoke(cli, ["proxy", "list", "--file", str(registry)])
     assert "ep=websecure" in result.output and "resolver=letsencrypt" in result.output
+
+
+def test_route_options_survive_save_and_reload(session: Session) -> None:
+    path = get_settings().services_yaml_path
+    shutil.copy(EXAMPLE, path)
+    reconcile_yaml_into_db(session, path)
+    session.commit()
+    # The example turns on the HTTP -> HTTPS redirect for media only.
+    media = session.exec(select(ProxyHost).where(ProxyHost.hostname == "media.example.lan")).one()
+    assert media.route_options["http_redirect"] is True
+    cloud = session.exec(select(ProxyHost).where(ProxyHost.hostname == "cloud.example.lan")).one()
+    assert cloud.route_options == {}  # untouched = defaults, stored as empty
+
+    home = session.exec(select(ProxyHost).where(ProxyHost.hostname == "home.example.lan")).one()
+    home.route_options = {
+        "pass_host_header": True,
+        "skip_upstream_tls_verify": True,
+        "tls_main": "example.com",
+        "tls_sans": ["*.example.com"],
+        "http_redirect": False,
+    }
+    session.add(home)
+    session.commit()
+    assert compute_registry_diff(session).dirty is True
+
+    save_registry_to_yaml(session, path, actor="test")
+    session.commit()
+    assert compute_registry_diff(session).dirty is False
+    saved = yaml.safe_load(path.read_text(encoding="utf-8"))
+    hosts = {h["hostname"]: h for svc in saved["services"] for h in svc.get("proxy_hosts") or []}
+    assert hosts["home.example.lan"]["route_options"]["tls_main"] == "example.com"
+
+    reconcile_yaml_into_db(session, path)
+    session.commit()
+    again = session.exec(select(ProxyHost).where(ProxyHost.hostname == "home.example.lan")).one()
+    assert again.route_options["skip_upstream_tls_verify"] is True
+    assert again.route_options["tls_sans"] == ["*.example.com"]

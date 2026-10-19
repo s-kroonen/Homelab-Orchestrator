@@ -213,6 +213,19 @@ services:
         # then pre-selects from the route and saving writes them.
         entry_points: [websecure]
         cert_resolver: letsencrypt
+        # How the route is built beyond that (all optional; omitted = defaults):
+        #   pass_host_header: true      the backend sees the hostname the visitor typed.
+        #                               NEVER turn this off for an app that builds redirects
+        #                               from Host (Proxmox, PBS, most web UIs): it would send
+        #                               the browser to the backend's raw LAN address.
+        #   skip_upstream_tls_verify    only for an https:// upstream with a self-signed cert
+        #   tls_main / tls_sans         one certificate for several names, e.g.
+        #                               tls_main: example.com, tls_sans: ["*.example.com"]
+        #                               (a wildcard needs a resolver with a DNS challenge)
+        #   http_redirect: true         also answer plain HTTP and redirect it to HTTPS
+        #                               (needs the TRAEFIK_REDIRECT_MIDDLEWARE middleware)
+        route_options:
+          http_redirect: true
 
   # --- Example cloud service (VM) with a MariaDB integrity check -----------
   - slug: example-cloud

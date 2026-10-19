@@ -60,6 +60,7 @@ Failure handling, preserved exactly from the old split:
 
 from __future__ import annotations
 
+import contextlib
 import io
 import re
 from collections.abc import Sequence
@@ -75,6 +76,7 @@ from orchestrator.adapters.proxy.base import (
     ProxyAdapter,
     ProxyRouteNotFound,
     RouteInfo,
+    RouteOptions,
     SyncEvent,
 )
 from orchestrator.config import Settings
@@ -219,6 +221,22 @@ def _split_host_port(url: str) -> tuple[str, str]:
         return "", ""
     port = str(parsed.port) if parsed.port else ("443" if parsed.scheme == "https" else "80")
     return host, port
+
+
+def _split_upstream(url: str) -> tuple[str, str, str]:
+    """``scheme://host:port`` -> ``(scheme, host, port)``. Unlike
+    :func:`_split_host_port` this keeps the scheme: an ``https://`` upstream
+    (Proxmox, PBS) must reach Traefik Manager as ``scheme=https``, or the
+    route is written as plain ``http://`` and the backend refuses it."""
+    host, port = _split_host_port(url)
+    scheme = urlsplit(url).scheme.lower()
+    return (scheme if scheme in {"http", "https"} else "http"), host, port
+
+
+def redirect_route_id(route_ref: str) -> str:
+    """The id of the companion plain-HTTP -> HTTPS router for ``route_ref``.
+    Derived, so no second reference needs persisting."""
+    return f"{route_ref}-redirect"
 
 
 def _routes_to_route_info(apps: Any) -> list[RouteInfo]:
@@ -376,6 +394,12 @@ class TraefikManagerProxyAdapter(ProxyAdapter):
         is_edit: bool = False,
         original_id: str = "",
         config_file: str = "",
+        scheme: str = "http",
+        pass_host_header: bool = True,
+        skip_verify: bool = False,
+        tls_main: str = "",
+        tls_sans: Sequence[str] = (),
+        service_ref: str = "",
     ) -> None:
         """``POST /save`` — create or update a route (router + service).
 
@@ -387,6 +411,11 @@ class TraefikManagerProxyAdapter(ProxyAdapter):
         Traefik Manager's ``/save`` turns an empty ``entryPoints`` into its
         default ``https`` and an empty ``certResolver`` into the first
         configured resolver, neither of which the operator chose.
+
+        ``passHostHeader`` is posted explicitly too: when it is absent Traefik
+        Manager writes ``passHostHeader: false``, which makes the proxy send the
+        upstream's own address as ``Host`` and bounces browsers to a raw LAN IP
+        whenever the backend builds a redirect from it.
         """
         if protocol == "http" and not entry_points.strip():
             raise ValueError("entry_points must not be empty (Traefik Manager would default it)")
@@ -405,7 +434,17 @@ class TraefikManagerProxyAdapter(ProxyAdapter):
             "isEdit": "true" if is_edit else "false",
             "originalId": original_id,
             "configFile": config_file,
+            "scheme": scheme,
+            "passHostHeader": "true" if pass_host_header else "false",
         }
+        if skip_verify:
+            data["insecureSkipVerify"] = "true"
+        if tls_main:
+            data["tlsWildcardMain"] = tls_main
+            if tls_sans:
+                data["tlsWildcardSans"] = "\n".join(tls_sans)
+        if service_ref:
+            data["serviceRef"] = service_ref
         async with self._client() as client:
             await self._post_json(client, "/save", data=data, headers={"X-Requested-With": "fetch"})
 
@@ -527,6 +566,7 @@ class TraefikManagerProxyAdapter(ProxyAdapter):
             http_rule=f"Host(`{_DUMMY_ROUTER_HOSTNAME}`)",
             entry_points=entry_point,
             cert_resolver=CERT_RESOLVER_DISABLED,
+            pass_host_header=False,
         )
         return SyncEvent(
             "backend_service.created",
@@ -737,14 +777,14 @@ class TraefikManagerProxyAdapter(ProxyAdapter):
     # as both ``serviceName`` and ``originalId`` and just rewrites its rule.
 
     @staticmethod
-    def _target_or_raise(upstream: str) -> tuple[str, str]:
-        host, port = _split_host_port(upstream)
+    def _target_or_raise(upstream: str) -> tuple[str, str, str]:
+        scheme, host, port = _split_upstream(upstream)
         if not host:
             raise ValueError(
                 f"upstream {upstream!r} is not a valid URL with a host "
                 "(expected e.g. http://10.0.0.5:8080)"
             )
-        return host, port
+        return scheme, host, port
 
     async def _route_fields(
         self, entry_points: Sequence[str], cert_resolver: str
@@ -758,6 +798,62 @@ class TraefikManagerProxyAdapter(ProxyAdapter):
         known = await self.list_entrypoints() if not cert_resolver.strip() else None
         return ",".join(eps), cert_resolver_form_value(cert_resolver, eps, known)
 
+    async def _plain_http_entrypoints(self) -> list[str]:
+        """Entry points a plain-HTTP -> HTTPS redirect router should listen on
+        (``web`` / ``:80``). Never the internal ``traefik`` one."""
+        known = await self.list_entrypoints()
+        if known is None:
+            return ["web"]
+        found = [
+            ep.name
+            for ep in known
+            if ep.name != "traefik" and is_plain_http_entrypoint(ep.name, ep.address)
+        ]
+        if not found:
+            raise ValueError(
+                "cannot add an HTTP -> HTTPS redirect: Traefik has no plain-HTTP "
+                "entry point (web / :80) to redirect from"
+            )
+        return found
+
+    async def _save_redirect_route(self, route_ref: str, *, hostname: str, create: bool) -> None:
+        """The companion router on the plain-HTTP entry point that redirects to
+        HTTPS and shares the main route's service - the pair every hand-written
+        ``<name>-redirect`` / ``<name>`` setup has."""
+        rid = redirect_route_id(route_ref)
+        await self._save_route(
+            service_name=rid,
+            protocol="http",
+            http_rule=f"Host(`{hostname}`)",
+            entry_points=",".join(await self._plain_http_entrypoints()),
+            cert_resolver=CERT_RESOLVER_DISABLED,
+            middlewares=self._settings.traefik_redirect_middleware.strip() or "redirect-to-https",
+            service_ref=f"{route_ref}-service",
+            is_edit=not create,
+            original_id="" if create else rid,
+        )
+
+    async def _sync_redirect_route(
+        self,
+        route_ref: str,
+        *,
+        hostname: str,
+        want: bool,
+        previous: RouteOptions | None,
+    ) -> None:
+        if want:
+            try:
+                await self._save_redirect_route(route_ref, hostname=hostname, create=False)
+            except TraefikManagerNotFound:
+                await self._save_redirect_route(route_ref, hostname=hostname, create=True)
+            return
+        # Only take a redirect router away when there may be one: the host
+        # had it enabled before (or that is unknown) - never a blind delete on
+        # every edit.
+        if previous is None or previous.http_redirect:
+            with contextlib.suppress(TraefikManagerNotFound):
+                await self._delete_route(redirect_route_id(route_ref))
+
     async def create_route(
         self,
         *,
@@ -765,8 +861,10 @@ class TraefikManagerProxyAdapter(ProxyAdapter):
         upstream: str,
         entry_points: Sequence[str],
         cert_resolver: str = "",
+        options: RouteOptions | None = None,
     ) -> str:
-        host, port = self._target_or_raise(upstream)
+        opts = options or RouteOptions()
+        scheme, host, port = self._target_or_raise(upstream)
         eps, resolver = await self._route_fields(entry_points, cert_resolver)
         name = route_name_for_hostname(hostname)
         await self._save_route(
@@ -778,7 +876,23 @@ class TraefikManagerProxyAdapter(ProxyAdapter):
             entry_points=eps,
             cert_resolver=resolver,
             is_edit=False,
+            scheme=scheme,
+            pass_host_header=opts.pass_host_header,
+            skip_verify=opts.skip_upstream_tls_verify,
+            tls_main=opts.tls_main,
+            tls_sans=opts.tls_sans,
         )
+        if opts.http_redirect:
+            try:
+                await self._save_redirect_route(name, hostname=hostname, create=True)
+            except Exception:
+                # Never leave a half-made pair behind: the caller treats this
+                # create as failed and keeps no record of it.
+                try:
+                    await self._delete_route(name)
+                except Exception as exc:  # pragma: no cover - best effort
+                    log.warning("traefik_manager.redirect_rollback_failed", error=str(exc))
+                raise
         return name
 
     async def update_route(
@@ -789,8 +903,11 @@ class TraefikManagerProxyAdapter(ProxyAdapter):
         upstream: str,
         entry_points: Sequence[str],
         cert_resolver: str = "",
+        options: RouteOptions | None = None,
+        previous_options: RouteOptions | None = None,
     ) -> None:
-        host, port = self._target_or_raise(upstream)
+        opts = options or RouteOptions()
+        scheme, host, port = self._target_or_raise(upstream)
         eps, resolver = await self._route_fields(entry_points, cert_resolver)
         try:
             await self._save_route(
@@ -803,15 +920,55 @@ class TraefikManagerProxyAdapter(ProxyAdapter):
                 cert_resolver=resolver,
                 is_edit=True,
                 original_id=route_ref,
+                scheme=scheme,
+                pass_host_header=opts.pass_host_header,
+                skip_verify=opts.skip_upstream_tls_verify,
+                tls_main=opts.tls_main,
+                tls_sans=opts.tls_sans,
             )
         except TraefikManagerNotFound as exc:
             raise ProxyRouteNotFound(str(exc)) from exc
+        await self._sync_redirect_route(
+            route_ref, hostname=hostname, want=opts.http_redirect, previous=previous_options
+        )
 
-    async def delete_route(self, route_ref: str) -> None:
+    async def delete_route(self, route_ref: str, *, with_redirect: bool = True) -> None:
+        # The companion redirect router first (it shares the main route's
+        # service), then the route itself.
+        if with_redirect:
+            with contextlib.suppress(TraefikManagerNotFound):
+                await self._delete_route(redirect_route_id(route_ref))
         try:
             await self._delete_route(route_ref)
         except TraefikManagerNotFound as exc:
             raise ProxyRouteNotFound(str(exc)) from exc
+
+    async def list_domains(self) -> list[str] | None:
+        if not self._settings.traefik_manager_url.strip():
+            return None
+        try:
+            async with self._client() as client:
+                response = await self._get_json(client, "/api/settings")
+        except TraefikManagerError as exc:
+            log.warning("traefik_manager.settings_failed", error=str(exc))
+            return None
+        raw = response.get("domains") if isinstance(response, dict) else None
+        parts = raw if isinstance(raw, list) else str(raw or "").split(",")
+        return [str(d).strip() for d in parts if str(d).strip()]
+
+    async def list_middlewares(self) -> list[str] | None:
+        if not self._settings.traefik_manager_url.strip():
+            return None
+        try:
+            async with self._client() as client:
+                response = await self._get_json(client, "/api/traefik/middlewares")
+        except TraefikManagerError as exc:
+            log.warning("traefik_manager.middlewares_failed", error=str(exc))
+            return None
+        http = response.get("http") if isinstance(response, dict) else None
+        if not isinstance(http, list):
+            return None
+        return [m["name"] for m in http if isinstance(m, dict) and isinstance(m.get("name"), str)]
 
     # -- ProxyAdapter: access-log read path (GeoIP traffic visibility) ------
     #

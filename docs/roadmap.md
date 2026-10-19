@@ -274,3 +274,8 @@ but it should be made after hitting a concrete wall, not ahead of one.
    to avoid a rewrite.
 4. Re-evaluate a dedicated SPA/rewrite only if (3) proves insufficient for a
    concrete, named reason.
+
+- [x] Proxy host route options: Host header passthrough (fixes redirects to the raw LAN IP), https upstream scheme, wildcard / multi-name certificate domains, skip upstream TLS verify, companion HTTP -> HTTPS redirect router. See docs/proxy_hosts.md.
+- [ ] Proxy hosts: middlewares picker (auth, headers, rate limit) from Traefik's list.
+- [ ] Proxy hosts: show/edit a route's raw YAML from the orchestrator (TM `/api/routes/{id}/raw`) for options this form doesn't cover.
+

@@ -177,6 +177,9 @@ def test_entrypoints_endpoint_shape(service: Service, monkeypatch: pytest.Monkey
         "cert_resolvers_known": True,
         "default_entrypoints": ["websecure"],
         "default_cert_resolver": "",
+        "domains": [],
+        "redirect_middleware": "redirect-to-https",
+        "redirect_available": None,
         "source": "traefik_manager",
     }
 

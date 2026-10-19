@@ -189,6 +189,7 @@ def _spec_from_db(session: Session) -> RegistryFile:
                         wake_on_hit=ph.wake_on_hit,
                         entry_points=list(ph.entry_points or []),
                         cert_resolver=ph.cert_resolver or "",
+                        route_options=dict(ph.route_options or {}),
                     )
                     for ph in proxy_hosts
                 ],
@@ -483,6 +484,7 @@ def reconcile_yaml_into_db(session: Session, path: Path) -> RegistryFile:
                     wake_on_hit=phspec.wake_on_hit,
                     entry_points=list(phspec.entry_points),
                     cert_resolver=phspec.cert_resolver,
+                    route_options=dict(phspec.route_options),
                 )
             )
 

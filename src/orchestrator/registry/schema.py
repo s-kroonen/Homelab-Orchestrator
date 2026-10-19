@@ -85,6 +85,25 @@ class ProxyHostSpec(BaseModel):
     #: See ProxyHost.entry_points / cert_resolver. Empty = not stored.
     entry_points: list[str] = Field(default_factory=list)
     cert_resolver: str = ""
+    #: See ProxyHost.route_options. Empty = defaults.
+    route_options: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("route_options", mode="before")
+    @classmethod
+    def _normalise_route_options(cls, value: Any) -> Any:
+        # Same normalisation as the API, so a YAML spelling hashes equal to
+        # the DB copy; an all-defaults mapping collapses to {}.
+        from orchestrator.adapters.proxy.base import RouteOptions
+
+        if not value:
+            return {}
+        if not isinstance(value, dict):
+            return value
+        unknown = set(value) - set(RouteOptions().to_dict())
+        if unknown:
+            raise ValueError(f"unknown route_options key(s): {', '.join(sorted(unknown))}")
+        normal = RouteOptions.from_dict(value).to_dict()
+        return {} if normal == RouteOptions().to_dict() else normal
 
     @field_validator("entry_points", mode="before")
     @classmethod

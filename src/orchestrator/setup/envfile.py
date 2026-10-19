@@ -298,6 +298,13 @@ ENV_SECTIONS: tuple[EnvSection, ...] = (
                 "(e.g. letsencrypt). Blank = none.",
             ),
             EnvKey(
+                "TRAEFIK_REDIRECT_MIDDLEWARE",
+                "Name of the Traefik middleware that redirects plain HTTP to HTTPS. A proxy\n"
+                'host\'s "Redirect HTTP to HTTPS" option adds a router on the `web` entry\n'
+                "point using it, so it must already exist (e.g. a shared redirectScheme\n"
+                "middleware). See docs/proxy_hosts.md.",
+            ),
+            EnvKey(
                 "ORCHESTRATOR_PUBLIC_URL",
                 "This orchestrator's own base URL AS REACHABLE FROM THE GATEWAY VM, e.g.\n"
                 "http://10.0.0.5:8000 — not necessarily what a browser uses. Backend\n"

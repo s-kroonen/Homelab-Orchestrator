@@ -64,6 +64,41 @@
         <div class="field-error" data-error-for="cert_resolver" role="alert"></div>
       </div>
 
+      <label for="ph-cert-mode" class="ep-row">Certificate</label>
+      <div class="field ep-row">
+        <select id="ph-cert-mode"></select>
+        <div id="cert-custom" hidden>
+          <input id="tls-main" placeholder="main domain, e.g. example.com">
+          <textarea id="tls-sans" rows="2" placeholder="extra names, one per line, e.g. *.example.com"></textarea>
+        </div>
+        <div class="msg" id="cert-note"></div>
+        <div class="field-error" data-error-for="tls_main" role="alert"></div>
+        <div class="field-error" data-error-for="tls_sans" role="alert"></div>
+      </div>
+
+      <label class="ep-row">Behaviour</label>
+      <div class="field ep-row ep-checks">
+        <label class="check">
+          <input type="checkbox" id="opt-pass-host">
+          <span><strong>Pass the visitor's Host header</strong> to the backend. Leave this on:
+            with it off the backend is told its own LAN address, and anything that builds
+            redirects from it (Proxmox, PBS, most web UIs) sends the browser to a raw IP.</span>
+        </label>
+        <label class="check">
+          <input type="checkbox" id="opt-skip-verify">
+          <span><strong>Don't verify the backend's TLS certificate</strong> — for an
+            <code>https://</code> upstream with a self-signed certificate (Proxmox, PBS).</span>
+        </label>
+        <div class="field-error" data-error-for="skip_upstream_tls_verify" role="alert"></div>
+        <label class="check">
+          <input type="checkbox" id="opt-redirect">
+          <span><strong>Redirect plain HTTP to HTTPS</strong> — adds a companion router on the
+            <code>web</code> entry point using the <code id="redirect-mw">redirect-to-https</code> middleware.</span>
+        </label>
+        <div class="msg" id="redirect-note"></div>
+        <div class="field-error" data-error-for="http_redirect" role="alert"></div>
+      </div>
+
       <label for="ph-service">Linked service</label>
       <div class="field">
         <select id="ph-service" required>
@@ -120,6 +155,12 @@
   .ep-item.unknown { border-color: #e5534b; }
   .ep-item.unknown .addr { color: #e5534b; }
   .ep-item.internal { opacity: 0.7; }
+  form#ph-form label.check { display: flex; gap: 0.55rem; align-items: flex-start; color: #e6e9ef; padding: 0.25rem 0; font-size: 0.85rem; line-height: 1.4; }
+  form#ph-form label.check input { margin-top: 0.2rem; flex: none; }
+  form#ph-form label.check span { min-width: 0; color: #c3cad5; }
+  .ep-checks { display: flex; flex-direction: column; gap: 0.1rem; }
+  #cert-custom { display: flex; flex-direction: column; gap: 0.4rem; margin-top: 0.4rem; }
+  #cert-custom input, #cert-custom textarea { width: 100%; box-sizing: border-box; }
   .ep-tools { display: flex; gap: 0.6rem; align-items: center; flex-wrap: wrap; margin-bottom: 0.4rem; }
   #ep-warning { margin-bottom: 0.5rem; background: #3b2e14; color: #e5a63e; padding: 0.5rem 0.7rem; border-radius: 0.4rem; font-size: 0.85rem; line-height: 1.4; }
   @media (max-width: 40rem) {
@@ -142,6 +183,7 @@
     "entry_points": proxy_host.entry_points if proxy_host else [],
     "cert_resolver": proxy_host.cert_resolver if proxy_host else "",
     "stored": proxy_host.entry_points_stored if proxy_host else False,
+    "route_options": proxy_host.route_options if proxy_host else None,
   }) | tojson }};
 
   // --- inline errors -------------------------------------------------------
@@ -259,6 +301,92 @@
     return document.getElementById("ph-resolver-text").value.trim();
   }
 
+  // --- certificate / behaviour options --------------------------------------
+  const opts = { mode: "host", main: "", sans: "" };
+
+  function certModeFromOptions(o, domains) {
+    if (!o || !o.tls_main) return { mode: "host", main: "", sans: "" };
+    const sans = o.tls_sans || [];
+    if (domains.includes(o.tls_main) && sans.length === 1 && sans[0] === "*." + o.tls_main) {
+      return { mode: "wild:" + o.tls_main, main: o.tls_main, sans: sans.join("\n") };
+    }
+    return { mode: "custom", main: o.tls_main, sans: sans.join("\n") };
+  }
+
+  function renderCertModes() {
+    const sel = document.getElementById("ph-cert-mode");
+    const domains = (state.catalog && state.catalog.domains) || [];
+    sel.innerHTML = "";
+    sel.add(new Option("One certificate for this host (issued by the resolver)", "host"));
+    for (const d of domains) sel.add(new Option(`Wildcard: ${d} + *.${d}`, "wild:" + d));
+    sel.add(new Option("Custom domains…", "custom"));
+    if (![...sel.options].some((o) => o.value === opts.mode)) opts.mode = "custom";
+    sel.value = opts.mode;
+    document.getElementById("tls-main").value = opts.main;
+    document.getElementById("tls-sans").value = opts.sans;
+    syncCert();
+  }
+
+  function syncCert() {
+    const mode = document.getElementById("ph-cert-mode").value;
+    document.getElementById("cert-custom").hidden = mode !== "custom";
+    const note = document.getElementById("cert-note");
+    if (mode === "host") {
+      note.textContent = "The resolver requests a certificate for this hostname on first use.";
+    } else if (mode.startsWith("wild:")) {
+      note.textContent = "Requests (or reuses) one certificate covering the base domain and all " +
+        "its subdomains. A wildcard needs a resolver that can do the DNS challenge.";
+    } else {
+      note.textContent = "Requests a certificate for exactly these names. Wildcards need a " +
+        "resolver that can do the DNS challenge.";
+    }
+  }
+
+  function currentTls() {
+    const mode = document.getElementById("ph-cert-mode").value;
+    if (mode.startsWith("wild:")) {
+      const d = mode.slice(5);
+      return { tls_main: d, tls_sans: ["*." + d] };
+    }
+    if (mode === "custom") {
+      return {
+        tls_main: document.getElementById("tls-main").value.trim(),
+        tls_sans: document.getElementById("tls-sans").value.split("\n").map((s) => s.trim()).filter(Boolean),
+      };
+    }
+    return { tls_main: "", tls_sans: [] };
+  }
+
+  function currentRouteOptions() {
+    return {
+      pass_host_header: document.getElementById("opt-pass-host").checked,
+      skip_upstream_tls_verify: document.getElementById("opt-skip-verify").checked,
+      http_redirect: document.getElementById("opt-redirect").checked,
+      ...currentTls(),
+    };
+  }
+
+  function initRouteOptions() {
+    const cat = state.catalog || {};
+    const o = INITIAL.route_options;
+    const stored = !!(o && MODE === "edit");
+    Object.assign(opts, certModeFromOptions(stored ? o : null, cat.domains || []));
+    // A new host mirrors the usual hand-written pair: pass Host, redirect HTTP -> HTTPS
+    // when that middleware exists.
+    document.getElementById("opt-pass-host").checked = stored ? o.pass_host_header !== false : true;
+    document.getElementById("opt-skip-verify").checked = stored ? !!o.skip_upstream_tls_verify : false;
+    document.getElementById("opt-redirect").checked = stored
+      ? !!o.http_redirect
+      : cat.redirect_available === true;
+    document.getElementById("redirect-mw").textContent = cat.redirect_middleware || "redirect-to-https";
+    document.getElementById("redirect-note").textContent = cat.redirect_available === false
+      ? `The "${cat.redirect_middleware}" middleware was not found in Traefik — create it once, ` +
+        "or set TRAEFIK_REDIRECT_MIDDLEWARE, before enabling this."
+      : "";
+    renderCertModes();
+  }
+  document.getElementById("ph-cert-mode").addEventListener("change", syncCert);
+
   function syncVisibility() {
     const traefik = document.getElementById("ph-provider").value === "traefik";
     document.querySelectorAll(".ep-row").forEach((el) => { el.hidden = !traefik; });
@@ -272,7 +400,8 @@
       );
     } catch (err) {
       state.catalog = { source: "unavailable", entrypoints: [], cert_resolvers: [],
-                        cert_resolvers_known: false, default_entrypoints: [], default_cert_resolver: "" };
+                        cert_resolvers_known: false, default_entrypoints: [], default_cert_resolver: "",
+                        domains: [], redirect_middleware: "redirect-to-https", redirect_available: null };
     }
   }
 
@@ -310,6 +439,7 @@
     }
     state.initialised = true;
     renderEntryPoints();
+    initRouteOptions();
   }
 
   document.getElementById("ep-text").addEventListener("input", (ev) => { ev.target.dataset.touched = "1"; });
@@ -322,6 +452,7 @@
     document.getElementById("ep-source").textContent = "Refreshing…";
     await loadCatalog(true);
     renderEntryPoints();
+    renderCertModes();
     toast(state.catalog.source === "unavailable"
       ? "Traefik Manager did not answer — entry points are unavailable."
       : "Entry points refreshed.", state.catalog.source === "unavailable" ? "error" : "ok");
@@ -364,6 +495,7 @@
       // Always sent explicitly — the server never lets Traefik Manager default them.
       payload.entry_points = currentEntryPoints();
       payload.cert_resolver = currentResolver();
+      payload.route_options = currentRouteOptions();
     }
     const btn = document.getElementById("submit-btn");
     btn.disabled = true;

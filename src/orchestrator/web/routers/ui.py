@@ -22,6 +22,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from sqlmodel import Session, select
 
+from orchestrator.adapters.proxy.base import RouteOptions
 from orchestrator.db.models import (
     BackupPolicy,
     BackupRecord,
@@ -295,6 +296,7 @@ async def edit_proxy_host_page(
                 "entry_points": list(ph.entry_points or []),
                 "cert_resolver": ph.cert_resolver or "",
                 "entry_points_stored": bool(ph.entry_points),
+                "route_options": RouteOptions.from_dict(ph.route_options).to_dict(),
             },
             "initial_service_id": None,
             "services": [{"id": s.id, "slug": s.slug, "name": s.name} for s in services],
