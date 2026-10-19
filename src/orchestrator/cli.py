@@ -10,7 +10,8 @@
                 guests | snapshots        what do Proxmox and PBS see?
                 scan SLUG | --all         what will the backup gate decide?
                 probe-test SLUG NAME      run one probe now, show its raw result
-    Operate     backup SLUG               run one backup end to end
+    Operate     backup SLUG               wake what it needs, then run one backup end to end
+                backup plan SLUG          preview what a backup would wake (exit 1 on a blocker)
                 wake SLUG                 wake the node, start the guest, wait until healthy
     Recover     admin reset               break-glass: wipe admins/passkeys, reopen signup
 
@@ -29,6 +30,7 @@ from sqlmodel import Session, select
 
 from orchestrator.adapters.errors import AdapterError, AdapterTlsError, AdapterUnreachable
 from orchestrator.adapters.factory import build_adapters
+from orchestrator.cli_config import policy as policy_group
 from orchestrator.cli_config import probe, proxy
 from orchestrator.cli_config import service as service_group
 from orchestrator.cli_setup import config_group, init, scaffold
@@ -298,7 +300,29 @@ def snapshots(backup_type: str | None, backup_id: str | None) -> None:
     _run(_go())
 
 
-@cli.command()
+class _BackupGroup(click.Group):
+    """``backup SLUG`` keeps working exactly as before; ``backup plan SLUG`` is a
+    subcommand. Anything that is not a subcommand name is routed to ``run`` with
+    its arguments intact, so options may still precede the slug. (A service
+    literally slugged ``plan`` must be backed up with ``backup run plan``.)"""
+
+    def resolve_command(
+        self, ctx: click.Context, args: list[str]
+    ) -> tuple[str | None, click.Command | None, list[str]]:
+        if args and args[0] in self.commands:
+            return super().resolve_command(ctx, args)
+        return "run", self.commands["run"], args
+
+
+@cli.group(
+    cls=_BackupGroup,
+    context_settings={"ignore_unknown_options": True, "allow_interspersed_args": False},
+)
+def backup() -> None:
+    """Run a backup (`backup SLUG`) or preview what it would wake (`backup plan SLUG`)."""
+
+
+@backup.command("run")
 @click.argument("slug")
 @click.option("--no-verify", is_flag=True, help="Skip the PBS verify step.")
 @click.option(
@@ -306,11 +330,21 @@ def snapshots(backup_type: str | None, backup_id: str | None) -> None:
     is_flag=True,
     help="Bypass the integrity gate. Takes a backup WITHOUT verifying health first.",
 )
-def backup(slug: str, no_verify: bool, no_gate: bool) -> None:
+@click.option(
+    "--no-wake",
+    is_flag=True,
+    help=(
+        "Skip the wake phase: do not wake the backup's prerequisites or the service "
+        "itself. Use when you have brought everything up by hand. Recorded in the audit log."
+    ),
+)
+def backup_run(slug: str, no_verify: bool, no_gate: bool, no_wake: bool) -> None:
     """Run a backup for SLUG end to end.
 
-    The integrity gate runs first: only a HEALTHY verdict proceeds. Use
-    `orchestrator-cli scan SLUG` to see what the gate will decide.
+    First it wakes what the backup needs (its policy's and its own `requires`,
+    then the service itself; see `backup plan SLUG`) and holds those nodes awake
+    until it finishes. Then the integrity gate runs: only a HEALTHY verdict
+    proceeds. Use `orchestrator-cli scan SLUG` to see what the gate will decide.
     """
     _bootstrap()
     settings = get_settings()
@@ -325,17 +359,34 @@ def backup(slug: str, no_verify: bool, no_gate: bool) -> None:
             fg="red",
             bold=True,
         )
+    if no_wake:
+        click.secho(
+            "WARNING: --no-wake skips waking prerequisites and the service. The backup "
+            "fails if anything it needs is off. Recorded in the audit log.",
+            fg="red",
+            bold=True,
+        )
 
     async def _go() -> None:
         await adapters.start_all()
         try:
-            pipeline = BackupPipeline(proxmox=adapters.proxmox, pbs=adapters.pbs, settings=settings)
+            pipeline = BackupPipeline(
+                proxmox=adapters.proxmox,
+                pbs=adapters.pbs,
+                settings=settings,
+                power=adapters.power,
+            )
             with Session(get_engine()) as session:
                 if settings.services_yaml_path.exists():
                     reconcile_yaml_into_db(session, settings.services_yaml_path)
                     session.commit()
                 run = await pipeline.run_for_service(
-                    session, slug, actor="cli", verify=not no_verify, gate=not no_gate
+                    session,
+                    slug,
+                    actor="cli",
+                    verify=not no_verify,
+                    gate=not no_gate,
+                    wake=not no_wake,
                 )
                 click.echo("")
                 click.secho(f"Run #{run.id} — {run.status.value}", fg="green", bold=True)
@@ -349,6 +400,69 @@ def backup(slug: str, no_verify: bool, no_gate: bool) -> None:
     except (BackupError, AdapterError) as exc:
         click.secho(f"\nBackup failed: {exc}", fg="red", bold=True)
         raise SystemExit(1) from exc
+
+
+@backup.command("plan")
+@click.argument("slug")
+@click.option(
+    "--policy",
+    "policy_name",
+    default=None,
+    help="Preview under this policy instead of the service's own.",
+)
+def backup_plan_cmd(slug: str, policy_name: str | None) -> None:
+    """Print what a backup of SLUG would wake, in order.
+
+    Nothing is woken. Exits non-zero if any step could never be woken (its node
+    has no power target and is not marked always-on) so a script or a pre-flight
+    check can refuse to schedule it.
+    """
+    from orchestrator.db.models import BackupPolicy
+    from orchestrator.registry.backup_plan import resolve_backup_plan
+
+    _bootstrap()
+    settings = get_settings()
+    with Session(get_engine()) as session:
+        if settings.services_yaml_path.exists():
+            reconcile_yaml_into_db(session, settings.services_yaml_path)
+            session.commit()
+        service = session.exec(select(Service).where(Service.slug == slug)).one_or_none()
+        if service is None:
+            raise click.ClickException(f"no service registered with slug {slug!r}")
+        if policy_name is not None:
+            policy = session.exec(
+                select(BackupPolicy).where(BackupPolicy.name == policy_name)
+            ).one_or_none()
+            if policy is None:
+                raise click.ClickException(f"no backup policy named {policy_name!r}")
+        else:
+            policy = (
+                session.get(BackupPolicy, service.backup_policy_id)
+                if service.backup_policy_id
+                else None
+            )
+        plan = resolve_backup_plan(session, service, policy)
+
+    click.secho(f"Backup plan for {slug} (policy: {plan.policy or 'none'})", bold=True)
+    if not plan.steps:
+        click.echo("  nothing to wake (wake_before_backup is off and there are no prerequisites)")
+    for i, step in enumerate(plan.steps, 1):
+        line = (
+            f"  {i}. {step.slug:<22} node {step.node or '?':<12} "
+            f"{step.reason:<21} power: {step.node_power}"
+        )
+        click.secho(line, fg="red" if step.blocker else None)
+        if step.blocker:
+            click.secho(f"       BLOCKER: {step.blocker}", fg="red")
+    if plan.blockers:
+        click.secho(
+            "\nThis backup would fail at the wake step. Give those nodes a power target "
+            "or mark them always on.",
+            fg="red",
+            bold=True,
+        )
+        raise SystemExit(1)
+    click.echo("\nOK — everything in the plan can be woken." if plan.will_wake else "\nOK.")
 
 
 @cli.command()
@@ -674,6 +788,7 @@ cli.add_command(scaffold)
 cli.add_command(probe)
 cli.add_command(proxy)
 cli.add_command(service_group, name="service")
+cli.add_command(policy_group, name="policy")
 cli.add_command(transport)
 cli.add_command(admin_group, name="admin")
 

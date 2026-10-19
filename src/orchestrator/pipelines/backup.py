@@ -1,25 +1,31 @@
 """Backup pipeline.
 
-    resolve service -> preflight PBS -> INTEGRITY GATE -> vzdump -> poll task
+    resolve service -> WAKE prerequisites + target (hold their nodes)
+    -> preflight PBS -> INTEGRITY GATE -> vzdump -> poll task
     -> locate snapshot -> record it -> PBS verify -> update record
+    -> release the holds (always, even on failure)
 
 The gate is the reason this project exists. Only a HEALTHY verdict proceeds;
 FAILED and UNKNOWN both abort with the last known-good backup untouched. See
 :meth:`BackupPipeline._run_gate`.
 
-Power orchestration (waking the storage node / PBS before a run, asserting
-holds) is phase 3/6 and remains a marked seam.
+The wake phase comes BEFORE the PBS preflight because the PBS datastore may live
+on storage (a TrueNAS VM on a normally-off node) that has to be up first. It
+resolves what to wake from :mod:`orchestrator.registry.backup_plan` and does the
+waking through :class:`WakePipeline` — see :mod:`orchestrator.pipelines.backup_wake`
+and docs/backup_wake.md. A wake that fails fails the run at that step: the gate
+and the dump never run, exactly like a gate refusal.
 """
 
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from typing import Any
 
 from sqlmodel import Session, select
 
 from orchestrator.adapters.errors import AdapterError, AdapterUnreachable, TaskTimeout
 from orchestrator.adapters.pbs.base import PbsAdapter, Snapshot
+from orchestrator.adapters.power.base import PowerAdapter
 from orchestrator.adapters.proxmox.base import ProxmoxAdapter
 from orchestrator.audit import log as audit
 from orchestrator.config import Settings
@@ -34,6 +40,16 @@ from orchestrator.domain.enums import (
 )
 from orchestrator.health.engine import HealthEngine
 from orchestrator.logging_setup import get_logger, new_correlation_id
+from orchestrator.pipelines.backup_wake import BackupWaker, WakeContext
+from orchestrator.pipelines.steps import BackupError, StepRecorder
+from orchestrator.pipelines.wake import WakePipeline
+from orchestrator.registry.backup_plan import (
+    BackupPlan,
+    resolve_backup_plan,
+    resolve_policy_prerequisites,
+)
+
+__all__ = ["BackupError", "BackupPipeline", "StepRecorder", "WakeContext"]
 
 log = get_logger(__name__)
 
@@ -44,44 +60,6 @@ _KIND_TO_PBS_TYPE: dict[GuestKind, str] = {
 }
 
 
-class BackupError(Exception):
-    """Raised when a backup run cannot proceed or did not succeed."""
-
-
-class StepRecorder:
-    """Accumulates per-step timing into ``PipelineRun.steps``.
-
-    Steps are flushed to the DB as they complete so the dashboard (and a
-    restart) can see progress mid-run rather than only at the end.
-    """
-
-    def __init__(self, session: Session, run: PipelineRun) -> None:
-        self._session = session
-        self._run = run
-
-    def record(
-        self,
-        name: str,
-        status: str,
-        *,
-        detail: dict[str, Any] | None = None,
-        started_at: datetime | None = None,
-    ) -> None:
-        now = datetime.now(UTC)
-        entry = {
-            "name": name,
-            "status": status,
-            "started_at": (started_at or now).isoformat(),
-            "finished_at": now.isoformat(),
-            "detail": detail or {},
-        }
-        # Reassign (not append) so SQLAlchemy sees the JSON column as dirty.
-        self._run.steps = [*self._run.steps, entry]
-        self._session.add(self._run)
-        self._session.commit()
-        log.info("pipeline.step", run_id=self._run.id, step=name, status=status, **(detail or {}))
-
-
 class BackupPipeline:
     def __init__(
         self,
@@ -90,6 +68,8 @@ class BackupPipeline:
         pbs: PbsAdapter,
         settings: Settings,
         health: HealthEngine | None = None,
+        power: PowerAdapter | None = None,
+        wake_pipeline: WakePipeline | None = None,
     ) -> None:
         self._proxmox = proxmox
         self._pbs = pbs
@@ -97,6 +77,16 @@ class BackupPipeline:
         # Injected so tests can drive the gate deterministically. Defaults to a
         # real engine — the gate must be on unless someone explicitly opts out.
         self._health = health or HealthEngine(settings=settings)
+        # The wake phase needs the power adapter. Every real entry point (API,
+        # CLI, scheduler) passes it; without one there is nothing to wake WITH,
+        # so the phase is skipped (and logged) rather than guessed at — which
+        # keeps a bare BackupPipeline(proxmox=, pbs=, settings=) behaving as it
+        # did before backups could wake anything.
+        if wake_pipeline is None and power is not None:
+            wake_pipeline = WakePipeline(
+                power=power, proxmox=proxmox, settings=settings, health=self._health
+            )
+        self._waker = BackupWaker(wake_pipeline, settings) if wake_pipeline else None
 
     async def run_for_service(
         self,
@@ -106,12 +96,22 @@ class BackupPipeline:
         actor: str = "system",
         verify: bool = True,
         gate: bool = True,
+        wake: bool = True,
+        prepared: WakeContext | None = None,
     ) -> PipelineRun:
         """Back up one service. Returns the completed :class:`PipelineRun`.
 
         ``gate=False`` bypasses the integrity gate. It exists for deliberate
         operator override and is audited as such — it is never the default, and
         the caller has to ask for it explicitly.
+
+        ``wake=False`` skips the wake phase (prerequisites AND target) — for an
+        operator who has brought everything up by hand. Recorded as a skipped
+        step and audited as an explicit override, like ``gate=False``.
+
+        ``prepared`` is a :class:`WakeContext` from :meth:`prepare_policy`: the
+        policy-level prerequisites a scheduled batch already woke and holds, which
+        this run must not wake (or release) again.
         """
         correlation_id = new_correlation_id()
         service, node, policy = self._resolve(session, slug)
@@ -137,7 +137,20 @@ class BackupPipeline:
         )
         session.commit()
 
+        wake_ctx = WakeContext()
         try:
+            await self._wake_phase(
+                session,
+                steps,
+                service,
+                policy,
+                wake=wake,
+                shared=prepared,
+                ctx=wake_ctx,
+                actor=actor,
+                correlation_id=correlation_id,
+                run_id=run.id,
+            )
             await self._preflight(steps)
             await self._run_gate(session, steps, service, gate=gate)
             snapshot = await self._dump_and_locate(steps, service, node, policy)
@@ -148,6 +161,7 @@ class BackupPipeline:
             else:
                 steps.record("pbs_verify", "skipped", detail={"reason": "verify=False"})
 
+            await self._release_wake(session, steps, wake_ctx)
             self._finish(session, run, PipelineStatus.SUCCEEDED)
             audit.record(
                 session,
@@ -165,6 +179,7 @@ class BackupPipeline:
             # a bad backup — label them so phase 4's gate logic and the operator
             # can tell "we don't know" from "it failed".
             indeterminate = isinstance(exc, AdapterUnreachable | TaskTimeout)
+            await self._release_wake(session, steps, wake_ctx)
             steps.record(
                 "aborted",
                 "indeterminate" if indeterminate else "failed",
@@ -186,6 +201,120 @@ class BackupPipeline:
             )
             session.commit()
             raise
+        finally:
+            # Whatever happened — including an exception this method does not
+            # handle or a cancelled request — never leave a node pinned awake.
+            # Idempotent: the paths above already released on their way out.
+            await self._release_wake(session, steps, wake_ctx)
+
+    # -- wake phase ----------------------------------------------------------
+
+    async def _wake_phase(
+        self,
+        session: Session,
+        steps: StepRecorder,
+        service: Service,
+        policy: BackupPolicy | None,
+        *,
+        wake: bool,
+        shared: WakeContext | None,
+        ctx: WakeContext,
+        actor: str,
+        correlation_id: str,
+        run_id: int | None,
+    ) -> None:
+        plan = resolve_backup_plan(session, service, policy)
+        if not plan.steps:
+            return
+        if not wake:
+            self._record_wake_skipped(session, steps, service, plan, actor, correlation_id, run_id)
+            return
+        if self._waker is None:
+            log.info("backup.wake.unavailable", service=service.slug, reason="no power adapter")
+            return
+        await self._waker.run(
+            session,
+            plan.steps,
+            ctx,
+            steps,
+            actor=actor,
+            hold_reason=f"backup:{service.slug}",
+            ttl_s=self._waker.hold_ttl_s(),
+            shared=shared,
+        )
+
+    @staticmethod
+    def _record_wake_skipped(
+        session: Session,
+        steps: StepRecorder,
+        service: Service,
+        plan: BackupPlan,
+        actor: str,
+        correlation_id: str,
+        run_id: int | None,
+    ) -> None:
+        # Explicit operator override, like gate=False: loud, recorded, audited.
+        would_wake = [s.slug for s in plan.steps]
+        log.warning(
+            "backup.wake.skipped",
+            service=service.slug,
+            impact="Nothing was woken; the backup runs against whatever is up.",
+        )
+        steps.record(
+            "wake_prerequisites",
+            "skipped",
+            detail={"reason": "caller passed wake=False", "would_wake": would_wake},
+        )
+        audit.record(
+            session,
+            actor=actor,
+            action="backup.wake_skipped",
+            target=f"service:{service.slug}",
+            correlation_id=correlation_id,
+            details={"run_id": run_id, "would_wake": would_wake},
+        )
+        session.commit()
+
+    async def _release_wake(self, session: Session, steps: StepRecorder, ctx: WakeContext) -> None:
+        if self._waker is not None and ctx.held:
+            await self._waker.release(session, ctx, steps)
+
+    async def prepare_policy(
+        self, session: Session, policy: BackupPolicy, *, actor: str = "scheduler", services: int = 1
+    ) -> WakeContext:
+        """Wake a policy's own prerequisites ONCE for a whole scheduled batch and
+        hold them until :meth:`release_prepared`. Never raises: a failure is kept
+        on the returned context, and every per-service run handed that context
+        fails at that step with the same clear error (and none re-fires the wake).
+        """
+        ctx = WakeContext()
+        if self._waker is None:
+            return ctx
+        entries = resolve_policy_prerequisites(session, policy)
+        if not entries:
+            return ctx
+        try:
+            await self._waker.run(
+                session,
+                entries,
+                ctx,
+                None,
+                actor=actor,
+                hold_reason=f"backup-policy:{policy.name}",
+                ttl_s=self._waker.hold_ttl_s(services),
+            )
+        except BackupError as exc:
+            log.error(
+                "backup.policy.prerequisites_failed",
+                policy=policy.name,
+                error=str(exc),
+                impact="Every backup in this policy run fails at the wake step.",
+            )
+        return ctx
+
+    async def release_prepared(self, session: Session, ctx: WakeContext) -> None:
+        if self._waker is not None and ctx.held:
+            await self._waker.release(session, ctx, None)
 
     # -- steps ---------------------------------------------------------------
 

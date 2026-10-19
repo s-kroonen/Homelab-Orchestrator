@@ -34,6 +34,36 @@
           <label class="inline"><input type="checkbox" id="f-protect" {% if policy and policy.retention.protect_latest_verified %}checked{% endif %}> protect latest verified</label>
         </div>
       </fieldset>
+      <fieldset id="wake-fieldset">
+        <legend>Waking before a backup</legend>
+        <p class="msg muted help">
+          <strong>Services that must be up for this policy's backups.</strong> They are woken
+          first (before PBS is even checked) and held awake until the backup finishes, so the
+          power manager's idle shutdown cannot pull them mid-dump. Typical choice: the storage
+          VM (e.g. TrueNAS) hosting the NFS the PBS datastore lives on. Each is woken through
+          its own node only &mdash; what <em>it</em> needs is not followed. This is not
+          <code>depends_on</code> (a health-gate dependency that never wakes anything).
+        </p>
+        <div class="services" id="requires-list">
+          {% for r in requirable %}
+          <label class="inline"><input type="checkbox" name="req" value="{{ r.slug }}"
+            data-blocker="{{ r.blocker or '' }}"
+            {% if policy and r.slug in policy.requires %}checked{% endif %}> {{ r.slug }}
+            <span class="muted">({{ r.node or "no node" }})</span>
+            {% if r.blocker %}<span class="badge failed" title="{{ r.blocker }}">cannot be woken</span>{% endif %}</label>
+          {% else %}<span class="muted">No services registered.</span>{% endfor %}
+        </div>
+        <p class="msg error" id="req-warning" role="alert" hidden></p>
+        <label class="inline wake-toggle"><input type="checkbox" id="f-wake-before"
+          {% if not policy or policy.wake_before_backup %}checked{% endif %}>
+          Wake the services being backed up first</label>
+        <p class="msg muted help">
+          Powers the node on and starts the guest of each service this policy backs up, and waits
+          until it is healthy, right before its backup. Turn off only if those nodes are always on
+          or you bring them up yourself. The cron time is when the wake <em>starts</em>: leave boot
+          time headroom.
+        </p>
+      </fieldset>
       <fieldset>
         <legend>Target services</legend>
         {% if groups %}
@@ -65,7 +95,10 @@
   .services { display: flex; flex-wrap: wrap; gap: 0.3rem 1rem; }
   input[type=number] { width: 5rem; }
   form#policy-form label { display: flex; flex-direction: column; gap: 0.25rem; color: #9aa4b2; font-size: 0.85rem; }
-  form#policy-form label.inline { flex-direction: row; align-items: center; gap: 0.4rem; }
+  form#policy-form label.inline { flex-direction: row; align-items: center; gap: 0.4rem; flex-wrap: wrap; }
+  #wake-fieldset .help { margin: 0.2rem 0 0.6rem; line-height: 1.45; overflow-wrap: anywhere; }
+  #wake-fieldset .wake-toggle { margin-top: 0.8rem; color: #e6e9ef; }
+  #req-warning { margin: 0.5rem 0 0; overflow-wrap: anywhere; }
 </style>
 {% endblock %}
 {% block scripts %}
@@ -88,7 +121,10 @@
     }
     if (document.getElementById("f-protect").checked) retention.protect_latest_verified = true;
     const services = [...document.querySelectorAll("input[name=svc]:checked")].map((cb) => cb.value);
+    const requires = [...document.querySelectorAll("input[name=req]:checked")].map((cb) => cb.value);
     return {
+      requires,
+      wake_before_backup: document.getElementById("f-wake-before").checked,
       schedule_cron: document.getElementById("f-cron").value.trim(),
       mode: document.getElementById("f-mode").value,
       retention,
@@ -112,6 +148,21 @@
     }
     location.href = "/backup-policies";
   });
+
+  // Warn early about a required service whose node can never be woken (no power
+  // target, not always on): the backup would fail at the wake step.
+  function updateRequiresWarning() {
+    const bad = [...document.querySelectorAll("input[name=req]:checked")].filter((cb) => cb.dataset.blocker);
+    const el = document.getElementById("req-warning");
+    el.hidden = bad.length === 0;
+    el.textContent = bad.length
+      ? bad.map((cb) => cb.value).join(", ") +
+        ": node has no power target \u2014 cannot be woken. Backups under this policy fail at the " +
+        "wake step unless it is already up. Set the node's power target or mark it always on."
+      : "";
+  }
+  for (const cb of document.querySelectorAll("input[name=req]")) cb.addEventListener("change", updateRequiresWarning);
+  updateRequiresWarning();
 
   // "select group" buttons: pure client-side convenience, same as the
   // service-detail/dashboard pattern — toggles every checkbox for that

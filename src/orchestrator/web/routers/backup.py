@@ -1,8 +1,13 @@
 """Manual backup trigger + pipeline run inspection.
 
-Phase 2 runs the backup **synchronously** so the caller sees the real outcome —
-this is a testing surface. Phase 6's scheduler will drive the same pipeline in
+The backup runs **synchronously** so the caller sees the real outcome. That now
+includes the wake phase (a cold storage node can take minutes), so the run row is
+created up front and every step — wake steps included — is committed as it
+happens: a client that wants progress polls ``GET /api/runs?slug=…&limit=1``
+while its ``POST`` is still in flight. The scheduler drives the same pipeline in
 the background; the run rows are identical either way.
+
+``GET /api/backup/plan`` is the dry preview of what a backup would wake.
 """
 
 from __future__ import annotations
@@ -13,8 +18,9 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlmodel import Session, col, desc, select
 
 from orchestrator.adapters.errors import AdapterError
-from orchestrator.db.models import BackupRecord, PipelineRun, Service
+from orchestrator.db.models import BackupPolicy, BackupRecord, PipelineRun, Service
 from orchestrator.pipelines.backup import BackupError, BackupPipeline
+from orchestrator.registry.backup_plan import resolve_backup_plan
 from orchestrator.web.auth import require_admin
 from orchestrator.web.deps import AdaptersDep, SessionDep, SettingsDep
 
@@ -45,6 +51,32 @@ def _service_slugs(session: Session, service_ids: set[int]) -> dict[int, str]:
     return {sid: slug for sid, slug in rows if sid is not None}
 
 
+@router.get("/backup/plan")
+async def backup_plan(
+    session: SessionDep,
+    slug: str = Query(..., description="Service to preview the backup for"),
+    policy: str | None = Query(
+        None, description="Preview under this policy instead of the service's own"
+    ),
+) -> dict[str, Any]:
+    """What a backup of ``slug`` would wake, in order, and what could never be
+    woken. Pure DB read — wakes nothing."""
+    service = session.exec(select(Service).where(Service.slug == slug)).one_or_none()
+    if service is None:
+        raise HTTPException(status_code=404, detail=f"no service registered with slug {slug!r}")
+    if policy is not None:
+        pol = session.exec(select(BackupPolicy).where(BackupPolicy.name == policy)).one_or_none()
+        if pol is None:
+            raise HTTPException(status_code=404, detail=f"no backup policy named {policy!r}")
+    else:
+        pol = (
+            session.get(BackupPolicy, service.backup_policy_id)
+            if service.backup_policy_id
+            else None
+        )
+    return resolve_backup_plan(session, service, pol).as_dict()
+
+
 @router.post("/backup/{slug}")
 async def trigger_backup(
     slug: str,
@@ -52,10 +84,19 @@ async def trigger_backup(
     adapters: AdaptersDep,
     settings: SettingsDep,
     verify: bool = Query(True, description="Run a PBS verify after the dump"),
+    wake: bool = Query(
+        True,
+        description=(
+            "Wake the backup's prerequisites and target first. false skips the wake "
+            "phase (recorded and audited as an explicit override)."
+        ),
+    ),
 ) -> dict[str, Any]:
-    pipeline = BackupPipeline(proxmox=adapters.proxmox, pbs=adapters.pbs, settings=settings)
+    pipeline = BackupPipeline(
+        proxmox=adapters.proxmox, pbs=adapters.pbs, settings=settings, power=adapters.power
+    )
     try:
-        run = await pipeline.run_for_service(session, slug, actor="api", verify=verify)
+        run = await pipeline.run_for_service(session, slug, actor="api", verify=verify, wake=wake)
     except BackupError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except AdapterError as exc:
@@ -68,6 +109,7 @@ async def trigger_backup(
 async def list_runs(
     session: SessionDep,
     limit: int = 20,
+    slug: str | None = Query(None, description="Only runs for this service"),
     policy_id: int | None = Query(
         None,
         description=(
@@ -97,6 +139,10 @@ async def list_runs(
             select(Service.id).where(Service.backup_policy_id == policy_id)
         ).all()
         stmt = stmt.where(col(PipelineRun.service_id).in_(covered_ids))
+    if slug is not None:
+        stmt = stmt.where(
+            col(PipelineRun.service_id).in_(select(Service.id).where(Service.slug == slug))
+        )
     runs = session.exec(stmt).all()
     slugs = _service_slugs(session, {r.service_id for r in runs if r.service_id is not None})
     return [

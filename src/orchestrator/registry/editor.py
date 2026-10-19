@@ -184,6 +184,26 @@ class RegistryEditor:
         self.doc["backup_policies"].append(entry)
         return True
 
+    def get_policy(self, name: str) -> CommentedMap | None:
+        for policy in self.doc.get("backup_policies", []):
+            if policy.get("name") == name:
+                return policy
+        return None
+
+    def require_policy(self, name: str) -> CommentedMap:
+        policy = self.get_policy(name)
+        if policy is None:
+            known = ", ".join(sorted(self.policy_names())) or "(none)"
+            raise RegistryEditError(f"no backup policy {name!r} in {self.path}. Known: {known}")
+        return policy
+
+    def update_policy(self, name: str, fields: dict[str, Any]) -> None:
+        """Set only the given keys on an existing policy, in place, so comments
+        and the other keys survive. Lists go in as ruamel sequences."""
+        policy = self.require_policy(name)
+        for key, value in fields.items():
+            policy[key] = _to_commented(value)
+
     # -- services -----------------------------------------------------------
 
     def service_slugs(self) -> list[str]:

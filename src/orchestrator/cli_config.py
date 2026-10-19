@@ -1,4 +1,4 @@
-"""Interactive config builders — the `probe`, `proxy` and `service` CLI groups.
+"""Interactive config builders — the `probe`, `proxy`, `service` and `policy` CLI groups.
 
 Goal: an operator should never have to hand-edit ``services.yaml``. Everything
 these commands write is validated before it touches disk, and every edit is
@@ -634,6 +634,39 @@ def proxy_resync_maintenance() -> None:
 # ---------------------------------------------------------------------------
 
 
+def _effective_requires(editor: RegistryEditor, svc: Any) -> list[str]:
+    """Prerequisites of a service's backup: its policy's `requires`, then its own
+    `backup_requires` (de-duplicated, in plan order)."""
+    out: list[str] = []
+    policy = editor.get_policy(str(svc.get("backup_policy"))) if svc.get("backup_policy") else None
+    from_policy: list[Any] = list(policy.get("requires") or []) if policy is not None else []
+    for slug in [*from_policy, *(svc.get("backup_requires") or [])]:
+        if slug not in out:
+            out.append(str(slug))
+    return out
+
+
+def _unwakeable_slugs(editor: RegistryEditor) -> set[str]:
+    """Services whose node has no power target and is not always on — the same
+    predicate the wake pipeline refuses on (`wake_is_unsupported`)."""
+    nodes = {str(n.get("name")): n for n in editor.doc.get("nodes") or []}
+    out: set[str] = set()
+    for svc in editor.doc.get("services") or []:
+        node = nodes.get(str(svc.get("node")))
+        if node is None or (not node.get("always_on") and not node.get("power_mgr_target")):
+            out.add(str(svc.get("slug")))
+    return out
+
+
+def _split_slugs(raw: str) -> list[str]:
+    out: list[str] = []
+    for part in raw.split(","):
+        slug = part.strip()
+        if slug and slug not in out:
+            out.append(slug)
+    return out
+
+
 @click.group()
 def service() -> None:
     """Add, update and remove services."""
@@ -655,20 +688,29 @@ def service_list(path_override: str | None) -> None:
         click.echo("(no services)")
         return
 
-    click.echo(f"{'SLUG':<24} {'NODE':<10} {'GUEST':<10} {'BACKUP':<10} PROBES")
+    unwakeable = _unwakeable_slugs(editor)
+    click.echo(f"{'SLUG':<24} {'NODE':<10} {'GUEST':<10} {'BACKUP':<10} {'PROBES':<14} NEEDS")
     for svc in services:
         probes = svc.get("probes") or []
         gating = sum(1 for p in probes if p.get("required", True))
         guest = f"{svc.get('guest_kind', '?')}/{svc.get('guest_id', '?')}"
+        needs = _effective_requires(editor, svc)
+        stuck = [n for n in needs if n in unwakeable]
         if svc.get("backup_excluded"):
             backup, colour = "EXCLUDED", "yellow"
         elif gating == 0:
             backup, colour = "blocked", "yellow"  # no gating probes -> UNKNOWN
+        elif stuck:
+            backup, colour = "blocked", "red"  # a prerequisite can never be woken
         else:
             backup, colour = "eligible", None
+        probe_col = f"{len(probes)} ({gating} gating)"
+        needs_col = ",".join(needs) if needs else "-"
+        if stuck:
+            needs_col += f"  (cannot wake: {','.join(stuck)} - no power target)"
         click.secho(
             f"{svc.get('slug', '?'):<24} {svc.get('node', '?'):<10} {guest:<10} "
-            f"{backup:<10} {len(probes)} ({gating} gating)",
+            f"{backup:<10} {probe_col:<14} {needs_col}",
             fg=colour,
         )
 
@@ -693,6 +735,15 @@ def service_list(path_override: str | None) -> None:
         "never FAILED."
     ),
 )
+@click.option(
+    "--backup-requires",
+    default=None,
+    help=(
+        "Comma-separated slugs that must be UP (woken and held) before THIS service's "
+        "backup, on top of its policy's `requires` - e.g. its database service. "
+        "Pass '' to clear. Not the same as --depends-on (a health-gate dependency)."
+    ),
+)
 @click.option("--name", default=None)
 @click.option("--description", default=None)
 @click.option(
@@ -708,6 +759,7 @@ def service_update(
     reason: str | None,
     backup_policy: str | None,
     depends_on: str | None,
+    backup_requires: str | None,
     name: str | None,
     description: str | None,
     group: str | None,
@@ -734,6 +786,8 @@ def service_update(
         fields["backup_policy"] = backup_policy
     if depends_on is not None:
         fields["depends_on"] = [d.strip() for d in depends_on.split(",") if d.strip()]
+    if backup_requires is not None:
+        fields["backup_requires"] = _split_slugs(backup_requires)
     if name is not None:
         fields["name"] = name
     if description is not None:
@@ -746,6 +800,99 @@ def service_update(
 
     editor.upsert_service(slug, fields)
     save(editor, f"service {slug!r} updated ({', '.join(sorted(fields))})")
+
+
+# ---------------------------------------------------------------------------
+# policy group
+# ---------------------------------------------------------------------------
+
+
+@click.group()
+def policy() -> None:
+    """Show and edit backup policies' wake settings."""
+
+
+@policy.command("list")
+@click.option("--file", "path_override", default=None)
+def policy_list(path_override: str | None) -> None:
+    """Show every backup policy: schedule, what it requires, whether it wakes targets."""
+    editor = open_editor(path_override)
+    try:
+        editor.validate()
+    except RegistryEditError as exc:
+        click.secho(f"{editor.path} will NOT load: {exc}", fg="red")
+    policies = editor.doc.get("backup_policies") or []
+    if not policies:
+        click.echo("(no backup policies)")
+        return
+    unwakeable = _unwakeable_slugs(editor)
+    click.echo(f"{'POLICY':<22} {'SCHEDULE':<14} {'WAKE TARGETS':<13} {'REQUIRES':<24} SERVICES")
+    for pol in policies:
+        name = str(pol.get("name"))
+        requires = [str(r) for r in pol.get("requires") or []]
+        members = [
+            str(s.get("slug"))
+            for s in editor.doc.get("services") or []
+            if s.get("backup_policy") == name
+        ]
+        stuck = [r for r in requires if r in unwakeable]
+        req_col = ",".join(requires) if requires else "-"
+        if stuck:
+            req_col += f"  (cannot wake: {','.join(stuck)})"
+        click.secho(
+            f"{name:<22} {(pol.get('schedule_cron') or 'manual'):<14} "
+            f"{'yes' if pol.get('wake_before_backup', True) else 'no':<13} {req_col:<24} "
+            f"{','.join(members) or '-'}",
+            fg="red" if stuck else None,
+        )
+
+
+@policy.command("update")
+@click.argument("name")
+@click.option(
+    "--requires",
+    default=None,
+    help=(
+        "Comma-separated service slugs that must be UP before any backup under this "
+        "policy (e.g. the TrueNAS VM hosting the PBS datastore's NFS). They are woken "
+        "first and held until the backup finishes. Pass '' to clear."
+    ),
+)
+@click.option("--clear-requires", is_flag=True, help="Same as --requires ''.")
+@click.option(
+    "--wake-before-backup/--no-wake-before-backup",
+    default=None,
+    help="Wake the services this policy backs up (node on, guest running) before each backup.",
+)
+@click.option("--file", "path_override", default=None)
+def policy_update(
+    name: str,
+    requires: str | None,
+    clear_requires: bool,
+    wake_before_backup: bool | None,
+    path_override: str | None,
+) -> None:
+    """Update a policy's wake settings. Only the flags you pass are touched."""
+    if requires is not None and clear_requires:
+        raise click.UsageError("--requires and --clear-requires are mutually exclusive")
+    editor = open_editor(path_override)
+    try:
+        editor.require_policy(name)
+    except RegistryEditError as exc:
+        raise click.ClickException(str(exc)) from exc
+
+    fields: dict[str, Any] = {}
+    if clear_requires:
+        fields["requires"] = []
+    elif requires is not None:
+        fields["requires"] = _split_slugs(requires)
+    if wake_before_backup is not None:
+        fields["wake_before_backup"] = wake_before_backup
+    if not fields:
+        raise click.UsageError("nothing to change — pass at least one option")
+
+    editor.update_policy(name, fields)
+    save(editor, f"policy {name!r} updated ({', '.join(sorted(fields))})")
 
 
 @service.command("remove")

@@ -229,10 +229,44 @@
       Most recent first, from <code>GET /api/backups?slug={{ service.slug }}</code>
       (same endpoint and default limit <a href="/api/backups?slug={{ service.slug }}">the API uses</a>).
     </p>
+    <div class="panel" id="backup-plan-panel">
+      <h3>Backup plan</h3>
+      <p class="msg muted">
+        What a backup of this service wakes first, in order (from
+        <code>GET /api/backup/plan?slug={{ service.slug }}</code>). Each is woken before PBS
+        is checked and held awake until the backup finishes.
+      </p>
+      <ol class="plan" id="plan-list"><li class="muted">Loading…</li></ol>
+      <p class="msg error" id="plan-blockers" role="alert" hidden></p>
+    </div>
+
+    <div class="panel" id="backup-requires-panel">
+      <h3>Extra requirements for this service's backup</h3>
+      <p class="msg muted">
+        Services that must also be up for <em>this</em> service's backup (e.g. its database
+        service), on top of the ones its backup policy requires. Woken first and held until the
+        backup finishes. Not the same as <em>Depends on</em> (a health-gate dependency that
+        never wakes anything).
+      </p>
+      <div class="checks" id="f-backup-requires">
+        {% for r in requirable %}
+        <label class="inline"><input type="checkbox" value="{{ r.slug }}"> {{ r.slug }}
+          <span class="muted">({{ r.node or "no node" }})</span>
+          {% if r.blocker %}<span class="badge failed" title="{{ r.blocker }}">cannot be woken</span>{% endif %}</label>
+        {% else %}<span class="muted">No other services.</span>{% endfor %}
+      </div>
+      <div class="row">
+        <button class="secondary" id="req-save-btn">Save requirements</button>
+        <span class="msg" id="req-msg"></span>
+      </div>
+    </div>
+
     <div class="row">
-      <button class="secondary" id="run-backup-btn">Run backup now</button>
+      <button class="secondary" id="run-backup-btn" title="Wakes what the backup plan lists first, then backs up">Run backup now</button>
       <span class="msg" id="backup-trigger-msg"></span>
     </div>
+    <p class="msg muted" id="run-backup-hint"></p>
+    <ol class="steps" id="backup-live-steps" aria-live="polite" hidden></ol>
     <table>
       <thead>
         <tr><th>Created</th><th>Verified</th><th>Protected</th><th>Size</th><th>Run</th></tr>
@@ -287,6 +321,24 @@
   .panel { border: 1px solid #2a2f3a; border-radius: 0.5rem; padding: 1rem; margin-bottom: 1rem; }
   .panel h3 { font-size: 0.9rem; margin: 0 0 0.75rem; }
   .yes { color: #3ecf6d; }
+
+  /* --- backup plan (Backups tab) ----------------------------------------- */
+  ol.plan { list-style: none; padding: 0; margin: 0 0 0.5rem; counter-reset: plan; }
+  ol.plan li {
+    counter-increment: plan; display: flex; flex-wrap: wrap; align-items: baseline;
+    gap: 0.25rem 0.75rem; padding: 0.5rem 0.7rem; margin-bottom: 0.4rem;
+    border: 1px solid #2a2f3a; border-radius: 0.4rem; background: #171b24;
+    overflow-wrap: anywhere;
+  }
+  ol.plan li::before { content: counter(plan) "."; color: #9aa4b2; min-width: 1.2rem; }
+  ol.plan li.blocked { border-color: #5a2626; background: #1c1214; }
+  ol.plan li .blocker { flex-basis: 100%; color: #e5534b; font-size: 0.8rem; padding-left: 1.9rem; }
+  ol.plan li .why { color: #9aa4b2; font-size: 0.8rem; }
+  #backup-requires-panel .row { margin-top: 0.9rem; }
+  #backup-live-steps { margin: 0.4rem 0 1rem; }
+  #backup-live-steps li { overflow-wrap: anywhere; }
+  #backup-live-steps li.skipped::before, #backup-live-steps li.bypassed::before { content: "– "; color: #9aa4b2; }
+  #backup-live-steps li .detail { color: #6b7280; font-size: 0.75rem; }
 </style>
 {% endblock %}
 {% block scripts %}
@@ -731,12 +783,74 @@
   // it a button. Not destructive (an on-demand backup, unlike a restore),
   // so no confirm() — but the button IS disabled for the duration of the
   // request so a double-click can't fire two runs at once.
+  //
+  // The POST stays one synchronous call (as it always was). It can now take
+  // minutes because the first phase wakes the backup's prerequisites, so while
+  // it is pending we poll GET /api/runs?slug=… for the run it created and show
+  // its steps live. backupInFlight also keeps the 60s auto-reload from yanking
+  // the page away mid-run.
+  let backupInFlight = false;
+  const PLAIN_STATUS = ["ok", "failed", "indeterminate"];
+
+  function stepDetail(step) {
+    const d = step.detail || {};
+    const bits = [];
+    for (const key of ["reason", "node", "error"]) if (d[key]) bits.push(`${key}: ${d[key]}`);
+    if (d.already_up) bits.push("already up");
+    if (d.woke) bits.push("woken");
+    if (d.shared) bits.push("shared with the policy run");
+    return bits.join(" · ");
+  }
+
+  function renderSteps(steps) {
+    const list = $("backup-live-steps");
+    list.hidden = false;
+    list.innerHTML = "";
+    for (const step of steps) {
+      const li = document.createElement("li");
+      li.className = step.status;
+      li.textContent = step.name + (PLAIN_STATUS.includes(step.status) ? "" : ` (${step.status})`);
+      const detail = stepDetail(step);
+      if (detail) {
+        const span = document.createElement("span");
+        span.className = "detail";
+        span.textContent = " " + detail;
+        li.appendChild(span);
+      }
+      list.appendChild(li);
+    }
+  }
+
+  async function latestRun() {
+    const runs = await apiFetch(
+      "GET", `/api/runs?slug=${encodeURIComponent(SERVICE.slug)}&limit=1`, undefined, { suppressToast: true },
+    );
+    return runs.length ? runs[0] : null;
+  }
+
   $("run-backup-btn").addEventListener("click", async () => {
     const btn = $("run-backup-btn");
     btn.disabled = true;
-    setMsg("backup-trigger-msg", "Running…");
+    backupInFlight = true;
+    $("backup-live-steps").hidden = true;
+    setMsg("backup-trigger-msg", "Running… waking what the plan lists can take several minutes.");
+    let baseId = 0;
+    try { baseId = (await latestRun())?.id ?? 0; } catch (_) { /* progress is best-effort */ }
+    let polling = true;
+    const poller = (async () => {
+      while (polling) {
+        await new Promise((r) => setTimeout(r, 2000));
+        if (!polling) break;
+        try {
+          const run = await latestRun();
+          if (run && run.id > baseId) renderSteps(run.steps);
+        } catch (_) { /* keep polling */ }
+      }
+    })();
     try {
       const run = await apiFetch("POST", `/api/backup/${encodeURIComponent(SERVICE.slug)}?verify=true`);
+      polling = false;
+      renderSteps(run.steps);
       setMsg(
         "backup-trigger-msg",
         `Backup ${run.status}${run.error ? ": " + run.error : ""} (run #${run.id}).`,
@@ -744,9 +858,102 @@
       );
       await loadBackups();
     } catch (err) {
+      polling = false;
       setMsg("backup-trigger-msg", err.message, "error");
+      // A refused backup (a wake that failed, the gate) still has a run with steps.
+      try {
+        const run = await latestRun();
+        if (run && run.id > baseId) renderSteps(run.steps);
+      } catch (_) { /* nothing more to show */ }
     } finally {
+      polling = false;
+      await poller;
+      backupInFlight = false;
       btn.disabled = false;
+    }
+  });
+
+  // --- backup plan (what this backup wakes first) + extra requirements ----
+  function renderPlan(plan) {
+    const list = $("plan-list");
+    list.innerHTML = "";
+    if (!plan.steps.length) {
+      list.innerHTML = '<li class="muted">Nothing is woken before this backup (the policy has wake-before-backup off and there are no prerequisites).</li>';
+    }
+    for (const step of plan.steps) {
+      const li = document.createElement("li");
+      if (step.blocker) li.className = "blocked";
+      const slug = document.createElement("code");
+      slug.textContent = step.slug;
+      const name = document.createElement("span");
+      name.textContent = step.name !== step.slug ? step.name : "";
+      const node = document.createElement("span");
+      node.className = "why";
+      node.textContent = "node " + (step.node || "?");
+      const power = document.createElement("span");
+      const up = step.node_power === "on" || step.node_power === "always_on";
+      power.className = "badge " + (up ? "ok" : "unknown");
+      power.textContent = step.node_power === "always_on" ? "always on" : step.node_power;
+      const why = document.createElement("span");
+      why.className = "why";
+      why.textContent = step.reason;
+      li.append(slug, name, node, power, why);
+      if (step.blocker) {
+        const b = document.createElement("span");
+        b.className = "blocker";
+        b.textContent = step.blocker;
+        li.appendChild(b);
+      }
+      list.appendChild(li);
+    }
+    const warn = $("plan-blockers");
+    warn.hidden = !plan.blockers.length;
+    warn.textContent = plan.blockers.length
+      ? "A backup would fail at the wake step unless these are already up: " +
+        plan.blockers.join("; ") + ". Set the node's power target or mark it always on."
+      : "";
+    const names = plan.steps.map((s) => s.slug);
+    const wakes = plan.steps.filter((s) => s.node_power !== "always_on");
+    $("run-backup-btn").title = names.length
+      ? `Wakes first, in order: ${names.join(", ")} — and holds them awake until the backup finishes`
+      : "Backs up without waking anything";
+    $("run-backup-hint").textContent = wakes.length
+      ? `Run backup now will wake, in order: ${names.join(" → ")} (nodes already on are left alone).`
+      : "";
+  }
+
+  async function loadPlan() {
+    try {
+      renderPlan(await apiFetch("GET", `/api/backup/plan?slug=${encodeURIComponent(SERVICE.slug)}`, undefined, { suppressToast: true }));
+    } catch (err) {
+      $("plan-list").innerHTML = "";
+      setMsg("plan-blockers", `Could not load the backup plan: ${err.message}`, "error");
+      $("plan-blockers").hidden = false;
+    }
+  }
+
+  // Dirty tracking for the requirements checklist, same role as svcFormDirty:
+  // an unsaved tick must not be reloaded away.
+  let reqFormDirty = false;
+  $("f-backup-requires").addEventListener("change", () => { reqFormDirty = true; });
+
+  function fillRequirements(s) {
+    for (const cb of $("f-backup-requires").querySelectorAll("input[type=checkbox]")) {
+      cb.checked = (s.backup_requires || []).includes(cb.value);
+    }
+  }
+
+  $("req-save-btn").addEventListener("click", async () => {
+    const backup_requires = [...$("f-backup-requires").querySelectorAll("input:checked")].map((cb) => cb.value);
+    try {
+      const updated = await apiFetch("PUT", svcPath, { backup_requires }, { suppressToast: true });
+      Object.assign(SERVICE, updated);
+      fillRequirements(SERVICE);
+      reqFormDirty = false;
+      setMsg("req-msg", "Saved to the live registry. Remember to Save to YAML.", "ok");
+      await loadPlan();
+    } catch (err) {
+      setMsg("req-msg", err.message, "error");
     }
   });
 
@@ -903,6 +1110,8 @@
   }
 
   fillServiceForm(SERVICE);
+  fillRequirements(SERVICE);
+  loadPlan();
   renderProbes();
   renderProxyHosts();
   loadBackups();
@@ -925,7 +1134,8 @@
   function shouldSkipAutoReload() {
     const active = document.activeElement;
     if (active && /^(INPUT|TEXTAREA|SELECT)$/.test(active.tagName)) return true;
-    if (svcFormDirty) return true;
+    if (svcFormDirty || reqFormDirty) return true;
+    if (backupInFlight) return true;
     if (!$("probe-editor").hidden) return true;
     return false;
   }
