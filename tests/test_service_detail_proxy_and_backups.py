@@ -119,7 +119,7 @@ def test_service_page_renders_tablist_and_four_panels_with_counts(client: TestCl
         "/api/proxy-hosts",
         json={
             "hostname": "media.example.com",
-            "upstream": "http://10.0.0.9",
+            "upstream": "http://10.0.0.9:80",
             "service_id": svc["id"],
         },
     )

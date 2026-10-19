@@ -184,6 +184,13 @@ class Settings(BaseSettings):
     # run synchronously from a dashboard-triggered proxy-host mutation, not a
     # background job.
     traefik_manager_timeout_s: float = 5.0
+    # Pre-selected entry points / certificate resolver for a NEW live-managed
+    # proxy host (comma list; blank = pick from the live Traefik: `websecure`
+    # if it exists, else the first entry point that is not `traefik`). Only a
+    # pre-selection - the operator's choice is what gets written, never a
+    # blind default. See docs/proxy_hosts.md.
+    traefik_default_entrypoints: str = ""
+    traefik_default_cert_resolver: str = ""
 
     # The orchestrator's own base URL, as REACHABLE FROM THE GATEWAY VM (e.g.
     # http://10.0.0.5:8000) — not necessarily the same as anything a browser
@@ -331,6 +338,11 @@ class Settings(BaseSettings):
         if "access_log_lines" not in fields_set and self.geoip_access_log_lines is not None:
             self.access_log_lines = self.geoip_access_log_lines
         return self
+
+    @property
+    def default_entry_points_list(self) -> list[str]:
+        """``TRAEFIK_DEFAULT_ENTRYPOINTS`` split on commas, blanks dropped."""
+        return [p.strip() for p in self.traefik_default_entrypoints.split(",") if p.strip()]
 
     def resolve_adapter(self, chosen: str) -> AdapterMode:
         """DRY_RUN=true forces dry_run regardless of the per-adapter value."""

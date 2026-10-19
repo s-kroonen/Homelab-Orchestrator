@@ -40,6 +40,7 @@ from orchestrator.db.models import (
 from orchestrator.domain.enums import RouterProvider
 from orchestrator.logging_setup import get_logger
 from orchestrator.registry.backup_plan import clean_slug_list, requires_problems
+from orchestrator.registry.proxy_validation import validate_cert_resolver, validate_entry_points
 from orchestrator.registry.schema import (
     BackupPolicySpec,
     NodeSpec,
@@ -186,6 +187,8 @@ def _spec_from_db(session: Session) -> RegistryFile:
                         router_provider=ph.router_provider.value,
                         extra=ph.extra,
                         wake_on_hit=ph.wake_on_hit,
+                        entry_points=list(ph.entry_points or []),
+                        cert_resolver=ph.cert_resolver or "",
                     )
                     for ph in proxy_hosts
                 ],
@@ -312,6 +315,18 @@ def validate_references(parsed: RegistryFile) -> None:
                 f"{svc.backup_policy!r}, which this file does not define. "
                 f"Policies defined here: {known}"
             )
+
+    # Proxy-host entry points / cert resolver: shape only here (the live
+    # Traefik is not consulted at load time) - same validator as the API/CLI.
+    for svc in parsed.services:
+        for ph in svc.proxy_hosts:
+            if ph.entry_points:
+                msg = validate_entry_points(ph.entry_points, None)
+                if msg:
+                    problems.append(f"service {svc.slug!r} proxy host {ph.hostname!r}: {msg}")
+            msg = validate_cert_resolver(ph.cert_resolver, None)
+            if msg:
+                problems.append(f"service {svc.slug!r} proxy host {ph.hostname!r}: {msg}")
 
     cycle = _find_dependency_cycle({s.slug: list(s.depends_on) for s in parsed.services})
     if cycle:
@@ -466,6 +481,8 @@ def reconcile_yaml_into_db(session: Session, path: Path) -> RegistryFile:
                     router_provider=RouterProvider(phspec.router_provider),
                     extra=phspec.extra,
                     wake_on_hit=phspec.wake_on_hit,
+                    entry_points=list(phspec.entry_points),
+                    cert_resolver=phspec.cert_resolver,
                 )
             )
 

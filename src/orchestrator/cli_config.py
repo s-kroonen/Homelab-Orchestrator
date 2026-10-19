@@ -34,6 +34,12 @@ from orchestrator.registry.probe_specs import (
     FieldSpec,
     kinds_by_menu_order,
 )
+from orchestrator.registry.proxy_validation import (
+    normalize_hostname,
+    parse_entry_points,
+    resolve_default_entry_points,
+    validate_proxy_host,
+)
 
 # ---------------------------------------------------------------------------
 # shared helpers
@@ -462,11 +468,82 @@ def proxy() -> None:
     """Add, list and remove proxy hosts (Traefik / Pangolin routes)."""
 
 
+def _live_catalog() -> tuple[list[Any] | None, list[str] | None]:
+    """The proxy's entry points and cert resolvers, via the configured proxy
+    adapter (dry-run under DRY_RUN). ``(None, None)`` when unreadable - the
+    caller then validates the shape only."""
+    settings = get_settings()
+
+    async def _go() -> tuple[list[Any] | None, list[str] | None]:
+        adapters = build_adapters(settings)
+        await adapters.proxy.start()
+        try:
+            return (
+                await adapters.proxy.list_entrypoints(),
+                await adapters.proxy.list_cert_resolvers(),
+            )
+        finally:
+            await adapters.proxy.stop()
+
+    try:
+        return asyncio.run(_go())
+    except Exception:  # never let a catalog read break a YAML edit
+        return None, None
+
+
+@proxy.command("entrypoints")
+def proxy_entrypoints() -> None:
+    """List the entry points (and cert resolvers) the proxy reports.
+
+    Exits 1 with a message when the proxy cannot be read (Traefik Manager not
+    configured, or Traefik behind it unreachable) so scripts can tell.
+    """
+    configure_logging()
+    settings = get_settings()
+    eps, resolvers = _live_catalog()
+    if eps is None:
+        click.secho(
+            "Entry points unavailable: Traefik Manager is not configured "
+            "(TRAEFIK_MANAGER_URL) or could not be reached.",
+            fg="yellow",
+            err=True,
+        )
+        raise SystemExit(1)
+    click.secho("Entry points:", bold=True)
+    for ep in eps:
+        note = "  (Traefik's internal API/dashboard - not usable for routers)"
+        click.echo(f"    {ep.name:<16} {ep.address}{note if ep.name == 'traefik' else ''}")
+    click.secho("Certificate resolvers:", bold=True)
+    if resolvers is None:
+        click.echo("    (unknown - the manager does not report them)")
+    elif not resolvers:
+        click.echo("    (none configured)")
+    else:
+        for name in resolvers:
+            click.echo(f"    {name}")
+    default = resolve_default_entry_points(settings.default_entry_points_list, eps)
+    click.echo(
+        f"Default for a new host: {', '.join(default) if default else '(none - choose one)'}"
+    )
+
+
 @proxy.command("add")
 @click.argument("slug")
 @click.option("--hostname", default=None)
 @click.option("--upstream", default=None)
 @click.option("--provider", "router_provider", default=None)
+@click.option(
+    "--entry-point",
+    "entry_points",
+    multiple=True,
+    help="Traefik entry point to bind to (repeatable, e.g. --entry-point websecure). "
+    "See `proxy entrypoints`.",
+)
+@click.option(
+    "--cert-resolver",
+    default=None,
+    help="Certificate resolver for the route's TLS (blank/omitted = none).",
+)
 @click.option("--file", "path_override", default=None)
 @click.option("--non-interactive", is_flag=True, help="Never prompt. For scripts.")
 def proxy_add(
@@ -474,10 +551,18 @@ def proxy_add(
     hostname: str | None,
     upstream: str | None,
     router_provider: str | None,
+    entry_points: tuple[str, ...],
+    cert_resolver: str | None,
     path_override: str | None,
     non_interactive: bool,
 ) -> None:
-    """Attach a proxy host to SLUG."""
+    """Attach a proxy host to SLUG (or update it, if the hostname is already there).
+
+    Validated before anything is written: hostname, upstream (http(s)://host:port),
+    entry points (must exist on the live Traefik when it can be read, and never the
+    internal `traefik` one) and cert resolver. This edits services.yaml only; the
+    route itself is created through the dashboard / API.
+    """
     set_non_interactive(non_interactive)
     editor = open_editor(path_override)
     editor.require_service(slug)
@@ -496,6 +581,67 @@ def proxy_add(
         {"hostname": hostname, "upstream": upstream, "router_provider": router_provider},
         interactive=interactive,
     )
+
+    settings = get_settings()
+    live_managed = entry.get("router_provider", "traefik") == "traefik" and bool(
+        entry.get("upstream")
+    )
+    chosen = parse_entry_points(list(entry_points))
+    resolver = (cert_resolver or "").strip()
+    known_eps: list[Any] | None = None
+    known_resolvers: list[str] | None = None
+    if live_managed:
+        known_eps, known_resolvers = _live_catalog()
+        if not chosen:
+            default = resolve_default_entry_points(settings.default_entry_points_list, known_eps)
+            if interactive:
+                if known_eps:
+                    click.secho("    Available: " + ", ".join(e.name for e in known_eps), fg="cyan")
+                raw = click.prompt(
+                    "  Entry points (comma list)",
+                    default=",".join(default),
+                    show_default=bool(default),
+                    type=str,
+                )
+                chosen = parse_entry_points(raw)
+                if cert_resolver is None:
+                    resolver = click.prompt(
+                        "  Certificate resolver (blank = none)",
+                        default=settings.traefik_default_cert_resolver,
+                        show_default=False,
+                        type=str,
+                    ).strip()
+            else:
+                chosen = default  # the documented default rule; empty -> validation error below
+                if cert_resolver is None:
+                    resolver = settings.traefik_default_cert_resolver.strip()
+
+    wanted_host = str(entry.get("hostname", "")).strip().lower()
+    taken = [
+        str(h.get("hostname", ""))
+        for other in editor.service_slugs()
+        for h in ((editor.get_service(other) or {}).get("proxy_hosts") or [])
+        if not (other == slug and str(h.get("hostname", "")).lower() == wanted_host)
+    ]
+    errors = validate_proxy_host(
+        hostname=entry.get("hostname", ""),
+        upstream=entry.get("upstream", ""),
+        entry_points=chosen,
+        cert_resolver=resolver,
+        live_managed=live_managed,
+        known_entry_points=known_eps,
+        known_cert_resolvers=known_resolvers,
+        taken_hostnames=taken,
+    )
+    if errors:
+        raise click.ClickException(
+            "invalid proxy host:\n" + "\n".join(f"  {k}: {v}" for k, v in errors.items())
+        )
+    entry["hostname"] = normalize_hostname(entry["hostname"])
+    if live_managed:
+        entry["entry_points"] = chosen
+        if resolver:
+            entry["cert_resolver"] = resolver
     action = editor.upsert_proxy_host(slug, entry)
     save(editor, f"proxy host {entry['hostname']!r} {action} on {slug!r}")
 
@@ -519,7 +665,13 @@ def proxy_list(slug: str | None, path_override: str | None) -> None:
         click.secho(f"{s}:", bold=True)
         for h in hosts:
             provider = h.get("router_provider", "traefik")
-            click.echo(f"    {h.get('hostname'):<34} -> {h.get('upstream'):<28} [{provider}]")
+            eps = ",".join(h.get("entry_points") or [])
+            suffix = f" ep={eps}" if eps else ""
+            if h.get("cert_resolver"):
+                suffix += f" resolver={h.get('cert_resolver')}"
+            click.echo(
+                f"    {h.get('hostname'):<34} -> {h.get('upstream'):<28} [{provider}]{suffix}"
+            )
     if not any_found:
         click.echo("(no proxy hosts configured)")
 

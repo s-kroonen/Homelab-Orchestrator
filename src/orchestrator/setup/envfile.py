@@ -286,6 +286,18 @@ ENV_SECTIONS: tuple[EnvSection, ...] = (
                 "Short on purpose — this runs synchronously from a proxy-host mutation.",
             ),
             EnvKey(
+                "TRAEFIK_DEFAULT_ENTRYPOINTS",
+                "Comma list pre-selected for a NEW live-managed proxy host, e.g. websecure.\n"
+                "Blank = pick from the live Traefik: `websecure` if it exists, else the\n"
+                "first entry point that is not `traefik`. Only a pre-selection - the\n"
+                "operator's choice is what is written. See docs/proxy_hosts.md.",
+            ),
+            EnvKey(
+                "TRAEFIK_DEFAULT_CERT_RESOLVER",
+                "Certificate resolver pre-selected for a new host on a TLS entry point\n"
+                "(e.g. letsencrypt). Blank = none.",
+            ),
+            EnvKey(
                 "ORCHESTRATOR_PUBLIC_URL",
                 "This orchestrator's own base URL AS REACHABLE FROM THE GATEWAY VM, e.g.\n"
                 "http://10.0.0.5:8000 — not necessarily what a browser uses. Backend\n"

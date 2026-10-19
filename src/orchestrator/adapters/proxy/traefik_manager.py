@@ -62,6 +62,7 @@ from __future__ import annotations
 
 import io
 import re
+from collections.abc import Sequence
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -70,6 +71,7 @@ from ruamel.yaml import YAML
 
 from orchestrator.adapters.proxy.base import (
     AccessLogTail,
+    EntryPointInfo,
     ProxyAdapter,
     ProxyRouteNotFound,
     RouteInfo,
@@ -108,14 +110,12 @@ class TraefikManagerNotFound(TraefikManagerError):
 #: RESOLUTION: create a minimal, deliberately-never-matched router alongside
 #: the service. Its ``httpRule`` targets a reserved, permanently-unresolvable
 #: hostname (RFC 2606's ``.invalid`` TLD: "and are guaranteed not to be
-#: installed" as a real DNS name, ever) rather than relying on an
-#: empty/absent ``entryPoints`` value, whose exact behaviour (no binding at
-#: all vs. falling back to Traefik Manager's documented HTTP default of
-#: ``https``) isn't nailed down by its docs. Even if the router DOES end up
-#: bound to a real entrypoint, no real request will ever carry
-#: ``Host: <this hostname>``, so it can never actually serve traffic — this
-#: is belt-and-suspenders against that documentation gap. See
-#: docs/proxy_hosts.md for the full reasoning and alternatives considered.
+#: installed" as a real DNS name, ever), so no real request can ever match it.
+#: It is bound to a REAL entry point read from the live Traefik (never an
+#: empty ``entryPoints`` value: Traefik Manager turns that into its own
+#: default ``https``, which does not exist on most setups and leaves the
+#: router flagged as broken) and sent with TLS disabled, so no certificate is
+#: ever requested for the ``.invalid`` name. See docs/proxy_hosts.md.
 SHARED_BACKEND_SERVICE_NAME = "orchestrator-maintenance-backend"
 _DUMMY_ROUTER_HOSTNAME = "orchestrator-maintenance-backend.invalid"
 
@@ -158,6 +158,56 @@ def route_name_for_hostname(hostname: str) -> str:
     return f"orchestrator-{slug}" if slug else "orchestrator-route"
 
 
+#: ``certResolver`` sentinels Traefik Manager's ``/save`` understands: the first
+#: keeps the TLS block but names no resolver, the second writes no ``tls``
+#: block at all. A blank value is NOT "none" - Traefik Manager substitutes the
+#: first configured resolver for it.
+CERT_RESOLVER_NONE = "__none__"
+CERT_RESOLVER_DISABLED = "__disabled__"
+
+
+def is_plain_http_entrypoint(name: str, address: str = "") -> bool:
+    """``web`` / ``:80`` style entry points serve plain HTTP: a router on one
+    must not carry a ``tls`` block (it would stop matching plain requests)."""
+    if name.strip().lower() in {"web", "http"}:
+        return True
+    return address.strip().endswith(":80")
+
+
+def cert_resolver_form_value(
+    cert_resolver: str,
+    entry_points: Sequence[str],
+    known: Sequence[EntryPointInfo] | None = None,
+) -> str:
+    """Encode a stored ``cert_resolver`` for Traefik Manager's ``certResolver``
+    field. A resolver is sent as its name. No resolver means TLS without one
+    (``__none__``) - except when every selected entry point is plain HTTP,
+    where no ``tls`` block is wanted at all (``__disabled__``)."""
+    resolver = cert_resolver.strip()
+    if resolver:
+        return resolver
+    addresses = {ep.name: ep.address for ep in (known or [])}
+    if entry_points and all(
+        is_plain_http_entrypoint(name, addresses.get(name, "")) for name in entry_points
+    ):
+        return CERT_RESOLVER_DISABLED
+    return CERT_RESOLVER_NONE
+
+
+def _router_error_text(raw: Any) -> str | None:
+    """Traefik's runtime router ``error`` is a list of strings; flatten it the
+    way Traefik Manager's own UI does (``a · b``)."""
+    if not raw:
+        return None
+    items = raw if isinstance(raw, list) else [raw]
+    parts = [
+        (x if isinstance(x, str) else (x.get("message") if isinstance(x, dict) else str(x)))
+        for x in items
+    ]
+    text = " · ".join(str(p).strip() for p in parts if p and str(p).strip())
+    return text or None
+
+
 def _split_host_port(url: str) -> tuple[str, str]:
     """Split a ``scheme://host:port`` URL into ``(host, port)`` — shared by
     the maintenance-fallback backend target and the general route CRUD
@@ -197,7 +247,17 @@ def _routes_to_route_info(apps: Any) -> list[RouteInfo]:
             if isinstance(servers, list) and servers
             else (app.get("target") if isinstance(app.get("target"), str) else None)
         )
-        infos.append(RouteInfo(name=name, hostnames=hostnames, upstream=upstream or None))
+        eps = app.get("entryPoints")
+        infos.append(
+            RouteInfo(
+                name=name,
+                hostnames=hostnames,
+                upstream=upstream or None,
+                entry_points=(
+                    tuple(e for e in eps if isinstance(e, str)) if isinstance(eps, list) else ()
+                ),
+            )
+        )
     return infos
 
 
@@ -245,7 +305,7 @@ class TraefikManagerProxyAdapter(ProxyAdapter):
             raise TraefikManagerUnavailable(f"could not reach Traefik Manager: {exc}") from exc
         raise exc
 
-    async def _get_json(self, client: httpx.AsyncClient, path: str) -> dict[str, Any]:
+    async def _get_json(self, client: httpx.AsyncClient, path: str) -> Any:
         try:
             response = await client.get(path)
             response.raise_for_status()
@@ -310,7 +370,8 @@ class TraefikManagerProxyAdapter(ProxyAdapter):
         target_port: str = "",
         subdomain: str = "",
         http_rule: str = "",
-        entry_points: str = "",
+        entry_points: str,
+        cert_resolver: str,
         middlewares: str = "",
         is_edit: bool = False,
         original_id: str = "",
@@ -320,7 +381,17 @@ class TraefikManagerProxyAdapter(ProxyAdapter):
 
         Only the fields this integration actually needs are exposed; see
         Traefik Manager's API docs for the full field list.
+
+        ``entry_points`` (comma-joined) and ``cert_resolver`` (already encoded,
+        see :func:`cert_resolver_form_value`) are required and always posted:
+        Traefik Manager's ``/save`` turns an empty ``entryPoints`` into its
+        default ``https`` and an empty ``certResolver`` into the first
+        configured resolver, neither of which the operator chose.
         """
+        if protocol == "http" and not entry_points.strip():
+            raise ValueError("entry_points must not be empty (Traefik Manager would default it)")
+        if not cert_resolver.strip():
+            raise ValueError("cert_resolver must be a name or a sentinel, never blank")
         data: dict[str, str] = {
             "serviceName": service_name,
             "protocol": protocol,
@@ -329,6 +400,7 @@ class TraefikManagerProxyAdapter(ProxyAdapter):
             "subdomain": subdomain,
             "httpRule": http_rule,
             "entryPoints": entry_points,
+            "certResolver": cert_resolver,
             "middlewares": middlewares,
             "isEdit": "true" if is_edit else "false",
             "originalId": original_id,
@@ -413,6 +485,18 @@ class TraefikManagerProxyAdapter(ProxyAdapter):
         _yaml.dump(doc, buf)
         return buf.getvalue()
 
+    async def _pick_internal_entrypoint(self) -> str | None:
+        """A real, existing entry point for the never-matched maintenance
+        backend router: the configured default, else ``websecure``, else the
+        first non-``traefik`` one. ``None`` when the live list is unreadable."""
+        from orchestrator.registry.proxy_validation import resolve_default_entry_points
+
+        live = await self.list_entrypoints()
+        if not live:
+            return None
+        picked = resolve_default_entry_points(self._settings.default_entry_points_list, live)
+        return picked[0] if picked else None
+
     async def _ensure_shared_backend_service(self) -> SyncEvent | None:
         """Create :data:`SHARED_BACKEND_SERVICE_NAME` if it doesn't already
         exist. Idempotent: checks ``GET /api/routes``'s ``services.http``
@@ -423,6 +507,17 @@ class TraefikManagerProxyAdapter(ProxyAdapter):
         if isinstance(http_services, list) and SHARED_BACKEND_SERVICE_NAME in http_services:
             return None
 
+        entry_point = await self._pick_internal_entrypoint()
+        if entry_point is None:
+            # Never guess an entry point: a router bound to one that does
+            # not exist shows up broken in Traefik Manager. Abort the whole
+            # fallback (the caller logs and fails open) rather than create a
+            # middleware that points at a service that does not exist.
+            raise TraefikManagerUnavailable(
+                "no usable entry point for the maintenance backend router "
+                "(Traefik's entry points could not be read)"
+            )
+
         host, port = self._public_target()
         await self._save_route(
             service_name=SHARED_BACKEND_SERVICE_NAME,
@@ -430,7 +525,8 @@ class TraefikManagerProxyAdapter(ProxyAdapter):
             target_ip=host,
             target_port=port,
             http_rule=f"Host(`{_DUMMY_ROUTER_HOSTNAME}`)",
-            entry_points="",
+            entry_points=entry_point,
+            cert_resolver=CERT_RESOLVER_DISABLED,
         )
         return SyncEvent(
             "backend_service.created",
@@ -650,8 +746,28 @@ class TraefikManagerProxyAdapter(ProxyAdapter):
             )
         return host, port
 
-    async def create_route(self, *, hostname: str, upstream: str) -> str:
+    async def _route_fields(
+        self, entry_points: Sequence[str], cert_resolver: str
+    ) -> tuple[str, str]:
+        """``(entryPoints, certResolver)`` form values. Raises ``ValueError``
+        on an empty selection - nothing is ever posted for the manager to
+        default."""
+        eps = [e.strip() for e in entry_points if e and e.strip()]
+        if not eps:
+            raise ValueError("at least one entry point is required")
+        known = await self.list_entrypoints() if not cert_resolver.strip() else None
+        return ",".join(eps), cert_resolver_form_value(cert_resolver, eps, known)
+
+    async def create_route(
+        self,
+        *,
+        hostname: str,
+        upstream: str,
+        entry_points: Sequence[str],
+        cert_resolver: str = "",
+    ) -> str:
         host, port = self._target_or_raise(upstream)
+        eps, resolver = await self._route_fields(entry_points, cert_resolver)
         name = route_name_for_hostname(hostname)
         await self._save_route(
             service_name=name,
@@ -659,12 +775,23 @@ class TraefikManagerProxyAdapter(ProxyAdapter):
             target_ip=host,
             target_port=port,
             http_rule=f"Host(`{hostname}`)",
+            entry_points=eps,
+            cert_resolver=resolver,
             is_edit=False,
         )
         return name
 
-    async def update_route(self, route_ref: str, *, hostname: str, upstream: str) -> None:
+    async def update_route(
+        self,
+        route_ref: str,
+        *,
+        hostname: str,
+        upstream: str,
+        entry_points: Sequence[str],
+        cert_resolver: str = "",
+    ) -> None:
         host, port = self._target_or_raise(upstream)
+        eps, resolver = await self._route_fields(entry_points, cert_resolver)
         try:
             await self._save_route(
                 service_name=route_ref,
@@ -672,6 +799,8 @@ class TraefikManagerProxyAdapter(ProxyAdapter):
                 target_ip=host,
                 target_port=port,
                 http_rule=f"Host(`{hostname}`)",
+                entry_points=eps,
+                cert_resolver=resolver,
                 is_edit=True,
                 original_id=route_ref,
             )
@@ -768,11 +897,71 @@ class TraefikManagerProxyAdapter(ProxyAdapter):
             if not hostnames:
                 continue
             service = router.get("service")
+            eps = router.get("entryPoints")
+            tls = router.get("tls")
+            resolver = tls.get("certResolver") if isinstance(tls, dict) else None
+            status = router.get("status")
             infos.append(
                 RouteInfo(
                     name=name,
                     hostnames=hostnames,
                     upstream=service if isinstance(service, str) else None,
+                    entry_points=(
+                        tuple(e for e in eps if isinstance(e, str)) if isinstance(eps, list) else ()
+                    ),
+                    status=status if isinstance(status, str) else None,
+                    error=_router_error_text(router.get("error")),
+                    cert_resolver=resolver if isinstance(resolver, str) else None,
                 )
             )
         return infos
+
+    # -- ProxyAdapter: entry points / cert resolvers -------------------------
+    #
+    # ``GET /api/traefik/entrypoints`` - Traefik Manager proxies Traefik's own
+    # ``/api/entrypoints`` (a JSON list of ``{"name": "web", "address": ":80",
+    # ...}``), or answers 502 ``{"error": "Traefik API unreachable"}``.
+    # ``GET /api/settings`` carries the operator's configured
+    # ``cert_resolver`` (comma-separated); Traefik Manager exposes no list of
+    # the resolvers declared in Traefik's static config over its API.
+
+    async def list_entrypoints(self) -> list[EntryPointInfo] | None:
+        if not self._settings.traefik_manager_url.strip():
+            return None
+        try:
+            async with self._client() as client:
+                response = await self._get_json(client, "/api/traefik/entrypoints")
+        except TraefikManagerError as exc:  # includes the 502 "API unreachable"
+            log.warning("traefik_manager.entrypoints_failed", error=str(exc))
+            return None
+        if not isinstance(response, list):
+            return None
+        found: list[EntryPointInfo] = []
+        for item in response:
+            if isinstance(item, dict) and isinstance(item.get("name"), str) and item["name"]:
+                address = item.get("address")
+                found.append(
+                    EntryPointInfo(
+                        name=item["name"], address=address if isinstance(address, str) else ""
+                    )
+                )
+        return found
+
+    async def list_cert_resolvers(self) -> list[str] | None:
+        if not self._settings.traefik_manager_url.strip():
+            return None
+        try:
+            async with self._client() as client:
+                response = await self._get_json(client, "/api/settings")
+        except TraefikManagerError as exc:
+            log.warning("traefik_manager.settings_failed", error=str(exc))
+            return None
+        raw = response.get("cert_resolver") if isinstance(response, dict) else None
+        if not isinstance(raw, str):
+            return None
+        names: list[str] = []
+        for part in raw.split(","):
+            part = part.strip()
+            if part and part.lower() != "none" and part not in names:
+                names.append(part)
+        return names

@@ -51,6 +51,20 @@ every other optional integration here. Once it's set:
   bulk-discovery/drift-catch-up path. See
   [proxy_hosts.md](proxy_hosts.md#live-managed-proxy-hosts) for the full
   write-through/rollback/backfill behaviour.
+- ~~**Proxy hosts: explicit entry points + verified writes.**~~ **Done.** A
+  first live-managed host showed up in Traefik Manager as broken
+  (`entryPoint "https" doesn't exist`): `/save` was posted with an empty
+  `entryPoints`, which Traefik Manager turns into its default `https`, and every
+  edit reset a route the same way. Each proxy host now stores `entry_points` and
+  `cert_resolver` (migration `0011_proxy_host_entrypoints`, YAML fields, API),
+  chosen from the live Traefik's entry points (`GET /api/proxy/entrypoints`,
+  `orchestrator-cli proxy entrypoints`, `--entry-point` / `--cert-resolver`) and
+  always sent explicitly. Everything is validated before it is written (hostname,
+  upstream, entry points, resolver, conflict with a router that is not ours), and
+  after `/save` the runtime router is polled: a rejected create is rolled back, a
+  rejected edit returns Traefik's message, and the list shows each host's router
+  status in red with Traefik's error. See
+  [proxy_hosts.md](proxy_hosts.md#entry-points-and-certificate-resolver).
 - ~~**Backfill command for the maintenance middleware**~~ **Done.**
   `orchestrator-cli proxy resync-maintenance` re-runs
   `sync_maintenance_middleware` for every `ProxyHost` with a linked

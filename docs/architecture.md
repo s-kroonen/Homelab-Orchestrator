@@ -295,6 +295,8 @@ New settings:
 | `PROXY_ADAPTER` | `traefik_manager` \| `dry_run`. A live value with `TRAEFIK_MANAGER_URL` blank falls back to `dry_run`, loudly (same "substitute + warn" convention `MqttPowerAdapter.IMPLEMENTED` uses) — see `adapters/factory.py::build_adapters`. | `dry_run` |
 | `TRAEFIK_MANAGER_URL` | Base URL. Empty disables the read-path swap AND the middleware-injection feature AND forces `PROXY_ADAPTER` to `dry_run` regardless of its own setting. | `""` |
 | `TRAEFIK_MANAGER_API_KEY` | `X-Api-Key` header, generated per-device in Traefik Manager's own UI. | `""` |
+| `TRAEFIK_DEFAULT_ENTRYPOINTS` | Comma list pre-selected for a NEW live-managed proxy host. Blank = `websecure` if it exists on the live Traefik, else the first entry point that is not `traefik`, else the operator must choose. Only a pre-selection — see `docs/proxy_hosts.md#entry-points-and-certificate-resolver`. | `""` |
+| `TRAEFIK_DEFAULT_CERT_RESOLVER` | Certificate resolver pre-selected for a new host on a TLS entry point. Blank = none. | `""` |
 | `TRAEFIK_MANAGER_VERIFY_TLS` | TLS verification for that connection. | `true` |
 | `TRAEFIK_MANAGER_TIMEOUT_S` | Short — runs synchronously from a dashboard-triggered request. | `5.0` |
 | `ORCHESTRATOR_PUBLIC_URL` | This orchestrator's own address as reachable FROM THE GATEWAY VM — the backend target for the maintenance-page fallback service. Unlike `TRAEFIK_MANAGER_URL`, does NOT affect which adapter is selected — it only gates the middleware-injection feature itself (the read-path swap only needs `TRAEFIK_MANAGER_URL`). | `""` |

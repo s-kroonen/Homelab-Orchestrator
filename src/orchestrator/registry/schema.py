@@ -82,6 +82,27 @@ class ProxyHostSpec(BaseModel):
     #: See ProxyHost.wake_on_hit — per-route opt-in for the TrafficCollector
     #: "wake on hit" stand-in. Defaults False (opt-in).
     wake_on_hit: bool = False
+    #: See ProxyHost.entry_points / cert_resolver. Empty = not stored.
+    entry_points: list[str] = Field(default_factory=list)
+    cert_resolver: str = ""
+
+    @field_validator("entry_points", mode="before")
+    @classmethod
+    def _clean_entry_points(cls, value: Any) -> Any:
+        # Accept "web, websecure" as well as a list; trim and de-duplicate so a
+        # YAML spelling hashes equal to the DB copy.
+        from orchestrator.registry.proxy_validation import parse_entry_points
+
+        if value is None:
+            return []
+        if isinstance(value, str | list | tuple):
+            return parse_entry_points(value)
+        return value
+
+    @field_validator("cert_resolver")
+    @classmethod
+    def _strip_resolver(cls, value: str) -> str:
+        return value.strip()
 
 
 class ServiceSpec(BaseModel):

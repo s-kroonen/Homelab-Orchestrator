@@ -24,7 +24,11 @@
         <strong>Traefik</strong> column: <span class="badge healthy">matched</span> a live router
         covers this hostname; <span class="badge failed">missing</span> Traefik is reachable but
         has no matching router; <span class="badge unknown">unknown</span> Traefik Manager is not
-        configured or the last poll failed — not the same as "missing".
+        configured or the last poll failed — not the same as "missing". Below it, the router's own
+        verdict from Traefik: <span class="badge healthy">router enabled</span> or
+        <span class="badge failed">router error</span> with Traefik's message (for example
+        <em>entryPoint "https" doesn't exist</em> — edit the host and pick an entry point that
+        exists). <strong>Entry points</strong> shows what the host is bound to.
       </p>
       <p>
         <strong>Resync</strong> pulls Traefik Manager's current routes into the DB: it imports
@@ -47,9 +51,9 @@
     <div class="table-scroll">
     <table>
       <thead>
-        <tr><th>Hostname</th><th>Upstream</th><th>Provider</th><th>Service</th><th>Traefik</th><th>Last seen</th><th>Wake on hit</th><th></th></tr>
+        <tr><th>Hostname</th><th>Upstream</th><th>Provider</th><th>Service</th><th>Entry points</th><th>Traefik</th><th>Last seen</th><th>Wake on hit</th><th></th></tr>
       </thead>
-      <tbody id="ph-rows"><tr><td colspan="8">Loading…</td></tr></tbody>
+      <tbody id="ph-rows"><tr><td colspan="9">Loading…</td></tr></tbody>
     </table>
     </div>
   </section>
@@ -68,6 +72,16 @@
       <tbody id="discovered-rows"></tbody>
     </table>
   </section>
+{% endblock %}
+{% block extra_head %}
+<style>
+  .router-status { margin-top: 0.3rem; }
+  .router-error { font-size: 0.78rem; color: #9aa4b2; margin-top: 0.25rem; max-width: 22rem; overflow-wrap: anywhere; white-space: normal; }
+  .router-error.bad { color: #e5534b; }
+  .host-err { display: none; font-size: 0.78rem; color: #e5534b; margin-top: 0.3rem; max-width: 14rem; overflow-wrap: anywhere; white-space: normal; }
+  @media (max-width: 40rem) { .host-err { display: block; } }
+  .ep-badge { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+</style>
 {% endblock %}
 {% block scripts %}
 <script>
@@ -142,10 +156,14 @@
           return;
         }
         try {
+          // Adopt: record the route Traefik Manager already has - never create
+          // or overwrite it (the create path refuses an existing router).
           await apiFetch("POST", "/api/proxy-hosts", {
             hostname: d.hostname,
             upstream: d.upstream || "",
             service_id: Number(select.value),
+            entry_points: d.entry_points || [],
+            adopt: true,
           }, { suppressToast: true });
         } catch (err) {
           setMsg("resync-msg", err.message, "error");
@@ -194,6 +212,79 @@
     return td;
   }
 
+  function entryPointsCell(h) {
+    const td = document.createElement("td");
+    td.dataset.col = "entry-points";
+    const stored = h.entry_points || [];
+    const live = (h.traefik && h.traefik.entry_points) || [];
+    const shown = stored.length ? stored : live;
+    if (h.router_provider !== "traefik" || !shown.length) {
+      td.textContent = "—";
+      td.className = "muted";
+      return td;
+    }
+    for (const ep of shown) {
+      const b = document.createElement("span");
+      b.className = "badge unknown ep-badge";
+      b.textContent = ep;
+      td.append(b, " ");
+    }
+    if (!stored.length) {
+      const note = document.createElement("div");
+      note.className = "msg muted";
+      note.textContent = "not stored yet — from Traefik";
+      td.appendChild(note);
+    } else if (h.cert_resolver) {
+      const r = document.createElement("div");
+      r.className = "msg muted";
+      r.textContent = "resolver: " + h.cert_resolver;
+      td.appendChild(r);
+    }
+    return td;
+  }
+
+  // The runtime router's own verdict - what Traefik Manager shows in red.
+  function appendRouterStatus(td, h) {
+    const t = h.traefik;
+    if (!t) return;
+    const wrap = document.createElement("div");
+    wrap.className = "router-status";
+    wrap.dataset.state = t.state;
+    const b = document.createElement("span");
+    if (t.state === "ok") {
+      b.className = "badge healthy";
+      b.textContent = "router enabled";
+    } else if (t.state === "error") {
+      b.className = "badge failed";
+      b.textContent = "router error";
+    } else if (t.state === "not_loaded") {
+      b.className = "badge warn";
+      b.textContent = "router not loaded";
+    } else {
+      b.className = "badge unknown";
+      b.textContent = "router unverified";
+    }
+    wrap.appendChild(b);
+    if (t.state === "error" || t.state === "not_loaded") {
+      const msg = document.createElement("div");
+      msg.className = "router-error" + (t.state === "error" ? " bad" : "");
+      msg.textContent = t.message;
+      wrap.appendChild(msg);
+    }
+    td.appendChild(wrap);
+  }
+
+  function showFlash() {
+    try {
+      const raw = sessionStorage.getItem("ph-flash");
+      if (!raw) return;
+      sessionStorage.removeItem("ph-flash");
+      const f = JSON.parse(raw);
+      setMsg("registry-msg", f.text, f.kind === "warn" ? "error" : f.kind);
+      if (window.toast) toast(f.text, f.kind === "warn" ? "error" : f.kind, { timeoutMs: 10000 });
+    } catch (_e) { /* storage unavailable */ }
+  }
+
   async function loadHosts() {
     const body = document.getElementById("ph-rows");
     let data;
@@ -203,7 +294,7 @@
       body.innerHTML = "";
       const tr = document.createElement("tr");
       const td = cell(err.message);
-      td.colSpan = 8;
+      td.colSpan = 9;
       tr.appendChild(td);
       body.appendChild(tr);
       return;
@@ -213,7 +304,7 @@
     if (!hosts.length) {
       const tr = document.createElement("tr");
       const td = cell("No proxy hosts recorded.");
-      td.colSpan = 8;
+      td.colSpan = 9;
       tr.appendChild(td);
       body.appendChild(tr);
       return;
@@ -225,6 +316,14 @@
       const code = document.createElement("code");
       code.textContent = h.hostname;
       hostTd.appendChild(code);
+      if (h.traefik && h.traefik.state === "error") {
+        // Phones scroll the table sideways: surface a broken router right
+        // under the hostname too (the Traefik column carries the full text).
+        const warn = document.createElement("div");
+        warn.className = "host-err";
+        warn.textContent = "Router error: " + h.traefik.message;
+        hostTd.appendChild(warn);
+      }
       tr.appendChild(hostTd);
       tr.appendChild(cell(h.upstream || "—"));
       tr.appendChild(cell(h.router_provider));
@@ -240,6 +339,8 @@
       }
       tr.appendChild(svcTd);
 
+      tr.appendChild(entryPointsCell(h));
+
       const statusTd = document.createElement("td");
       const statusCls = { matched: "healthy", missing: "failed", unknown: "unknown" }[h.live_status]
         || "unknown";
@@ -249,6 +350,7 @@
       statusBadge.className = "badge " + statusCls;
       statusBadge.textContent = statusLabel;
       statusTd.appendChild(statusBadge);
+      appendRouterStatus(statusTd, h);
       tr.appendChild(statusTd);
 
       tr.appendChild(cell(h.last_seen_at || "never", h.last_seen_at ? "" : "muted"));
@@ -295,6 +397,7 @@
   }
   document.getElementById("ph-filter").addEventListener("input", applyFilter);
 
+  showFlash();
   loadHosts();
 </script>
 {% endblock %}

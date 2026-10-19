@@ -215,6 +215,14 @@ class ProxyHost(SQLModel, table=True):
     # opts a hostname in explicitly, per route.
     wake_on_hit: bool = Field(default=False)
 
+    # Entry points the live-managed route is bound to and the certificate
+    # resolver its TLS uses (empty = none). Chosen by the operator from what
+    # Traefik really has - Traefik Manager would otherwise default an empty
+    # selection to an `https` entry point most setups do not have. An empty
+    # list on a row means "not stored yet" (created before this existed).
+    entry_points: list[str] = Field(default_factory=list, sa_column=Column(JSON))
+    cert_resolver: str = ""
+
 
 # ---------------------------------------------------------------------------
 # Runtime telemetry — DB-only, never touched by YAML reconcile.

@@ -16,33 +16,68 @@
       <code>docs/proxy_hosts.md</code>.
     </p>
 
-    <form id="ph-form" autocomplete="off">
+    <form id="ph-form" autocomplete="off" novalidate>
       <label for="ph-hostname">Hostname</label>
-      <input id="ph-hostname" required placeholder="app.example.com"
-             value="{{ proxy_host.hostname if proxy_host else '' }}">
+      <div class="field">
+        <input id="ph-hostname" required placeholder="app.example.com"
+               value="{{ proxy_host.hostname if proxy_host else '' }}">
+        <div class="field-error" data-error-for="hostname" role="alert"></div>
+      </div>
 
       <label for="ph-upstream">Upstream</label>
-      <input id="ph-upstream" placeholder="http://10.0.0.12:8080"
-             value="{{ proxy_host.upstream if proxy_host else '' }}">
+      <div class="field">
+        <input id="ph-upstream" placeholder="http://10.0.0.12:8080"
+               value="{{ proxy_host.upstream if proxy_host else '' }}">
+        <div class="field-error" data-error-for="upstream" role="alert"></div>
+      </div>
 
       <label for="ph-provider">Provider</label>
-      <select id="ph-provider">
-        {% for p in providers %}
-        <option value="{{ p }}" {% if proxy_host and proxy_host.router_provider == p %}selected{% endif %}>{{ p }}</option>
-        {% endfor %}
-      </select>
+      <div class="field">
+        <select id="ph-provider">
+          {% for p in providers %}
+          <option value="{{ p }}" {% if proxy_host and proxy_host.router_provider == p %}selected{% endif %}>{{ p }}</option>
+          {% endfor %}
+        </select>
+      </div>
+
+      <label id="ep-label" class="ep-row">Entry points</label>
+      <div class="field ep-row" id="ep-field">
+        <div id="ep-warning" class="notice" hidden></div>
+        <div id="ep-list" class="ep-list" role="group" aria-labelledby="ep-label"></div>
+        <input id="ep-text" placeholder="websecure, web" hidden>
+        <div class="ep-tools">
+          <button type="button" class="secondary small" id="ep-refresh">&#8635; Refresh from Traefik Manager</button>
+          <span class="msg" id="ep-source"></span>
+        </div>
+        <div class="msg" id="ep-note"></div>
+        <div class="field-error" data-error-for="entry_points" role="alert"></div>
+      </div>
+
+      <label for="ph-resolver" class="ep-row">Certificate resolver</label>
+      <div class="field ep-row">
+        <select id="ph-resolver"></select>
+        <input id="ph-resolver-text" placeholder="blank = none" hidden>
+        <div class="msg">
+          <code>websecure</code> (TLS) usually needs a resolver, e.g. <code>letsencrypt</code>;
+          plain <code>web</code> does not — pick <em>None</em> there.
+        </div>
+        <div class="field-error" data-error-for="cert_resolver" role="alert"></div>
+      </div>
 
       <label for="ph-service">Linked service</label>
-      <select id="ph-service" required>
-        <option value="" disabled {% if not (proxy_host and proxy_host.service_id) and not initial_service_id %}selected{% endif %}>— select a service —</option>
-        {% for s in services %}
-        <option value="{{ s.id }}"
-          {% if proxy_host and proxy_host.service_id == s.id %}selected
-          {% elif not proxy_host and initial_service_id and initial_service_id == s.id %}selected{% endif %}>
-          {{ s.name }} ({{ s.slug }})
-        </option>
-        {% endfor %}
-      </select>
+      <div class="field">
+        <select id="ph-service" required>
+          <option value="" disabled {% if not (proxy_host and proxy_host.service_id) and not initial_service_id %}selected{% endif %}>— select a service —</option>
+          {% for s in services %}
+          <option value="{{ s.id }}"
+            {% if proxy_host and proxy_host.service_id == s.id %}selected
+            {% elif not proxy_host and initial_service_id and initial_service_id == s.id %}selected{% endif %}>
+            {{ s.name }} ({{ s.slug }})
+          </option>
+          {% endfor %}
+        </select>
+        <div class="field-error" data-error-for="service_id" role="alert"></div>
+      </div>
 
       <label for="ph-wake-on-hit">Wake on hit</label>
       <span><input id="ph-wake-on-hit" type="checkbox" {% if proxy_host and proxy_host.wake_on_hit %}checked{% endif %}></span>
@@ -56,6 +91,9 @@
       <label class="full" for="ph-extra">Extra (JSON object, optional)</label>
       <textarea class="full" id="ph-extra" placeholder='{"middlewares": ["auth"]}'>{{ (proxy_host.extra | tojson(indent=2)) if proxy_host and proxy_host.extra else "" }}</textarea>
 
+      <div class="full">
+        <div class="field-error" id="form-error" role="alert"></div>
+      </div>
       <div class="row full">
         <button type="submit" id="submit-btn">{{ "Save changes" if mode == "edit" else "Add" }}</button>
         <a class="btn secondary" href="/proxy-hosts">Cancel</a>
@@ -66,12 +104,27 @@
 {% endblock %}
 {% block extra_head %}
 <style>
-  form#ph-form { display: grid; grid-template-columns: max-content 1fr; gap: 0.5rem 0.75rem; align-items: center; max-width: 40rem; }
-  form#ph-form label { color: #9aa4b2; font-size: 0.85rem; }
+  form#ph-form { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 0.6rem 0.75rem; align-items: start; max-width: 44rem; }
+  form#ph-form label { color: #9aa4b2; font-size: 0.85rem; padding-top: 0.45rem; }
   form#ph-form .full { grid-column: 1 / -1; }
+  form#ph-form .field { min-width: 0; }
+  form#ph-form .field > input:not([type=checkbox]), form#ph-form .field > select { width: 100%; box-sizing: border-box; }
   form#ph-form textarea { box-sizing: border-box; min-height: 4rem; }
+  form#ph-form [hidden] { display: none !important; }
+  .ep-list { display: flex; flex-direction: column; gap: 0.35rem; margin-bottom: 0.5rem; }
+  form#ph-form label.ep-item { padding: 0.3rem 0.5rem; color: #e6e9ef; }
+  .ep-item { display: flex; gap: 0.5rem; align-items: baseline; flex-wrap: wrap; color: #e6e9ef; font-size: 0.85rem; padding: 0.3rem 0.5rem; border: 1px solid #2a2f3a; border-radius: 0.4rem; background: #171b24; }
+  .ep-item input { margin: 0; }
+  .ep-item code { font-size: 0.85rem; }
+  .ep-item .addr { color: #9aa4b2; font-size: 0.8rem; }
+  .ep-item.unknown { border-color: #e5534b; }
+  .ep-item.unknown .addr { color: #e5534b; }
+  .ep-item.internal { opacity: 0.7; }
+  .ep-tools { display: flex; gap: 0.6rem; align-items: center; flex-wrap: wrap; margin-bottom: 0.4rem; }
+  #ep-warning { margin-bottom: 0.5rem; background: #3b2e14; color: #e5a63e; padding: 0.5rem 0.7rem; border-radius: 0.4rem; font-size: 0.85rem; line-height: 1.4; }
   @media (max-width: 40rem) {
-    form#ph-form { grid-template-columns: 1fr; }
+    form#ph-form { grid-template-columns: minmax(0, 1fr); }
+    form#ph-form label { padding-top: 0; }
   }
 </style>
 {% endblock %}
@@ -85,9 +138,200 @@
 
   const MODE = {{ mode | tojson }};
   const PROXY_HOST_ID = {{ (proxy_host.id if proxy_host else None) | tojson }};
+  const INITIAL = {{ ({
+    "entry_points": proxy_host.entry_points if proxy_host else [],
+    "cert_resolver": proxy_host.cert_resolver if proxy_host else "",
+    "stored": proxy_host.entry_points_stored if proxy_host else False,
+  }) | tojson }};
 
+  // --- inline errors -------------------------------------------------------
+  function clearErrors() {
+    document.querySelectorAll("[data-error-for]").forEach((el) => { el.textContent = ""; });
+    document.getElementById("form-error").textContent = "";
+    document.querySelectorAll(".invalid").forEach((el) => el.classList.remove("invalid"));
+  }
+  function showFieldError(field, message) {
+    const el = document.querySelector(`[data-error-for="${field}"]`);
+    if (!el) {
+      document.getElementById("form-error").textContent = message;
+      return;
+    }
+    el.textContent = message;
+    const input = el.parentElement.querySelector("input:not([hidden]), select");
+    if (input) input.classList.add("invalid");
+  }
+
+  // --- entry points / resolver --------------------------------------------
+  const state = {
+    catalog: null,       // /api/proxy/entrypoints body
+    selected: new Set(), // chosen entry point names
+    resolver: "",
+    note: "",
+    initialised: false,
+  };
+
+  function csv(text) {
+    return text.split(",").map((p) => p.trim()).filter(Boolean);
+  }
+
+  function renderEntryPoints() {
+    const cat = state.catalog;
+    const list = document.getElementById("ep-list");
+    const text = document.getElementById("ep-text");
+    const warn = document.getElementById("ep-warning");
+    const unavailable = !cat || cat.source === "unavailable";
+    list.innerHTML = "";
+    list.hidden = unavailable;
+    text.hidden = !unavailable;
+    warn.hidden = !unavailable;
+    if (unavailable) {
+      warn.textContent =
+        "Could not read the entry points from Traefik Manager (not configured, or Traefik is " +
+        "unreachable). Type them as a comma-separated list — they are sent exactly as typed and " +
+        "nothing is defaulted for you. Entry points that do not exist make Traefik flag the " +
+        "router as broken.";
+      if (!text.dataset.touched) text.value = [...state.selected].join(", ");
+      document.getElementById("ep-source").textContent = "Source: unavailable";
+    } else {
+      const known = new Map(cat.entrypoints.map((e) => [e.name, e]));
+      const names = cat.entrypoints.map((e) => e.name);
+      for (const n of state.selected) if (!known.has(n)) names.push(n); // stale choice: show it so it can be unticked
+      for (const name of names) {
+        const info = known.get(name);
+        const label = document.createElement("label");
+        label.className = "ep-item" + (info ? "" : " unknown") + (name === "traefik" ? " internal" : "");
+        const cb = document.createElement("input");
+        cb.type = "checkbox";
+        cb.value = name;
+        cb.checked = state.selected.has(name);
+        // Traefik's internal API/dashboard entry point can never serve a router.
+        if (name === "traefik" && !cb.checked) cb.disabled = true;
+        cb.addEventListener("change", () => {
+          if (cb.checked) state.selected.add(name); else state.selected.delete(name);
+        });
+        const code = document.createElement("code");
+        code.textContent = name;
+        const addr = document.createElement("span");
+        addr.className = "addr";
+        addr.textContent = info
+          ? (info.address || "") + (name === "traefik" ? " · internal API/dashboard" : "")
+          : "does not exist on this Traefik";
+        label.append(cb, code, addr);
+        list.appendChild(label);
+      }
+      document.getElementById("ep-source").textContent = "Source: Traefik Manager";
+    }
+    document.getElementById("ep-note").textContent = state.note;
+    renderResolver();
+  }
+
+  function renderResolver() {
+    const cat = state.catalog;
+    const sel = document.getElementById("ph-resolver");
+    const txt = document.getElementById("ph-resolver-text");
+    const known = cat && cat.cert_resolvers_known;
+    sel.hidden = !known;
+    txt.hidden = !!known;
+    if (!known) {
+      if (!txt.dataset.touched) txt.value = state.resolver;
+      return;
+    }
+    sel.innerHTML = "";
+    const none = new Option("None (no certificate resolver)", "");
+    sel.add(none);
+    const names = [...cat.cert_resolvers];
+    if (state.resolver && !names.includes(state.resolver)) names.push(state.resolver);
+    for (const n of names) {
+      const known_ = cat.cert_resolvers.includes(n);
+      sel.add(new Option(known_ ? n : `${n} (not known to Traefik Manager)`, n));
+    }
+    sel.value = state.resolver;
+  }
+
+  function currentEntryPoints() {
+    const cat = state.catalog;
+    if (!cat || cat.source === "unavailable") return csv(document.getElementById("ep-text").value);
+    return [...document.querySelectorAll("#ep-list input:checked")].map((cb) => cb.value);
+  }
+  function currentResolver() {
+    const cat = state.catalog;
+    if (cat && cat.cert_resolvers_known) return document.getElementById("ph-resolver").value;
+    return document.getElementById("ph-resolver-text").value.trim();
+  }
+
+  function syncVisibility() {
+    const traefik = document.getElementById("ph-provider").value === "traefik";
+    document.querySelectorAll(".ep-row").forEach((el) => { el.hidden = !traefik; });
+  }
+
+  async function loadCatalog(refresh) {
+    try {
+      state.catalog = await apiFetch(
+        "GET", "/api/proxy/entrypoints" + (refresh ? "?refresh=true" : ""), undefined,
+        { suppressToast: true }
+      );
+    } catch (err) {
+      state.catalog = { source: "unavailable", entrypoints: [], cert_resolvers: [],
+                        cert_resolvers_known: false, default_entrypoints: [], default_cert_resolver: "" };
+    }
+  }
+
+  async function initEntryPoints() {
+    await loadCatalog(false);
+    const cat = state.catalog;
+    if (MODE === "edit" && INITIAL.stored) {
+      state.selected = new Set(INITIAL.entry_points);
+      state.resolver = INITIAL.cert_resolver || "";
+    } else if (MODE === "edit") {
+      // Created before entry points were stored: show what Traefik Manager
+      // really has on the route, else the default rule.
+      let live = null;
+      try {
+        const host = await apiFetch("GET", `/api/proxy-hosts/${PROXY_HOST_ID}`, undefined, { suppressToast: true });
+        live = host && host.traefik;
+      } catch (err) { /* fall through to the default */ }
+      if (live && live.entry_points && live.entry_points.length) {
+        state.selected = new Set(live.entry_points);
+        state.resolver = live.cert_resolver || "";
+        state.note = "Not stored yet — pre-selected from what Traefik Manager has on this route. " +
+          "Saving will set it.";
+      } else {
+        state.selected = new Set(cat.default_entrypoints);
+        state.resolver = cat.default_cert_resolver || "";
+        state.note = "Not stored yet — nothing readable on the route, so the default is pre-selected. " +
+          "Saving will set it.";
+      }
+    } else {
+      state.selected = new Set(cat.default_entrypoints);
+      state.resolver = cat.default_cert_resolver || "";
+      if (cat.source !== "unavailable" && !cat.default_entrypoints.length) {
+        state.note = "No safe default — choose the entry point(s) this host should listen on.";
+      }
+    }
+    state.initialised = true;
+    renderEntryPoints();
+  }
+
+  document.getElementById("ep-text").addEventListener("input", (ev) => { ev.target.dataset.touched = "1"; });
+  document.getElementById("ph-resolver-text").addEventListener("input", (ev) => { ev.target.dataset.touched = "1"; });
+  document.getElementById("ph-provider").addEventListener("change", syncVisibility);
+  document.getElementById("ep-refresh").addEventListener("click", async () => {
+    // Keep what the operator already ticked / typed across the refresh.
+    state.selected = new Set(currentEntryPoints());
+    state.resolver = currentResolver();
+    document.getElementById("ep-source").textContent = "Refreshing…";
+    await loadCatalog(true);
+    renderEntryPoints();
+    toast(state.catalog.source === "unavailable"
+      ? "Traefik Manager did not answer — entry points are unavailable."
+      : "Entry points refreshed.", state.catalog.source === "unavailable" ? "error" : "ok");
+  });
+
+  // --- submit --------------------------------------------------------------
   document.getElementById("ph-form").addEventListener("submit", async (ev) => {
     ev.preventDefault();
+    clearErrors();
+    setMsg("form-msg", "");
     const extraRaw = document.getElementById("ph-extra").value.trim();
     let extra = {};
     if (extraRaw) {
@@ -104,7 +348,8 @@
     }
     const serviceVal = document.getElementById("ph-service").value;
     if (!serviceVal) {
-      setMsg("form-msg", "Select a service — every proxy host must be linked to one.", "error");
+      showFieldError("service_id", "Select a service — every proxy host must be linked to one.");
+      toast("Select a service — every proxy host must be linked to one.", "error");
       return;
     }
     const payload = {
@@ -115,17 +360,45 @@
       extra,
       wake_on_hit: document.getElementById("ph-wake-on-hit").checked,
     };
+    if (payload.router_provider === "traefik") {
+      // Always sent explicitly — the server never lets Traefik Manager default them.
+      payload.entry_points = currentEntryPoints();
+      payload.cert_resolver = currentResolver();
+    }
+    const btn = document.getElementById("submit-btn");
+    btn.disabled = true;
+    setMsg("form-msg", "Saving and checking with Traefik…");
+    let result;
     try {
+      // Not suppressed: apiFetch toasts the error AND we mark the field inline.
       if (MODE === "edit") {
-        await apiFetch("PUT", `/api/proxy-hosts/${PROXY_HOST_ID}`, payload, { suppressToast: true });
+        result = await apiFetch("PUT", `/api/proxy-hosts/${PROXY_HOST_ID}`, payload);
       } else {
-        await apiFetch("POST", "/api/proxy-hosts", payload, { suppressToast: true });
+        result = await apiFetch("POST", "/api/proxy-hosts", payload);
       }
     } catch (err) {
-      setMsg("form-msg", err.message, "error");
+      btn.disabled = false;
+      setMsg("form-msg", "");
+      const fields = err.fieldErrors || {};
+      const keys = Object.keys(fields);
+      if (keys.length) {
+        for (const k of keys) showFieldError(k === "_" ? "form" : k, fields[k]);
+      } else {
+        document.getElementById("form-error").textContent = err.message;
+      }
       return;
+    }
+    btn.disabled = false;
+    const warnings = (result && result.warnings) || [];
+    if (warnings.length) {
+      try {
+        sessionStorage.setItem("ph-flash", JSON.stringify({ text: warnings.join(" "), kind: "warn" }));
+      } catch (_e) { /* storage may be unavailable */ }
     }
     location.href = "/proxy-hosts";
   });
+
+  syncVisibility();
+  initEntryPoints();
 </script>
 {% endblock %}

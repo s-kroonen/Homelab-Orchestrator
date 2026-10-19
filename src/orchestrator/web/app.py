@@ -255,6 +255,7 @@ def create_app() -> FastAPI:
     app.include_router(backup.router)
     app.include_router(backup_policies.router)
     app.include_router(proxy_hosts.router)
+    app.include_router(proxy_hosts.catalog_router)
     app.include_router(activity.router)
     app.include_router(geo_traffic.router)
     app.include_router(traffic.router)

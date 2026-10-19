@@ -163,7 +163,7 @@ def test_update_audit_records_only_changed_fields(client: TestClient, service: S
     assert entry.target == "proxy_host:a.example.com"
     # "extra" changes too: router_provider defaults to "traefik" (write-through),
     # which stamps/updates the backend route reference alongside "upstream".
-    assert set(entry.details["changes"]) == {"upstream", "extra"}
+    assert set(entry.details["changes"]) == {"upstream", "extra", "entry_points"}
 
 
 def test_wake_on_hit_defaults_false_and_round_trips_through_crud(
@@ -561,6 +561,7 @@ def test_resync_discovered_host_is_not_persisted(
         "hostname": "new.example.com",
         "upstream": "http://10.0.0.9:80",
         "router": "r1@docker",
+        "entry_points": [],
     }
 
     with Session(get_engine()) as s:
@@ -785,7 +786,11 @@ def test_auto_probe_appears_on_service_detail_as_non_required(
     _enable_proxy_base_url(monkeypatch)
     client.post(
         "/api/proxy-hosts",
-        json={"hostname": "media.example.com", "service_id": service.id, "upstream": "http://u"},
+        json={
+            "hostname": "media.example.com",
+            "service_id": service.id,
+            "upstream": "http://u:80",
+        },
     )
     client.post(
         f"/api/registry/services/{service.slug}/probes",
@@ -868,7 +873,8 @@ def test_live_status_matched_via_traefik_manager(
     )
 
     def handle(request: httpx.Request) -> httpx.Response:
-        assert request.url.path == "/api/routes"
+        if request.url.path != "/api/routes":
+            return httpx.Response(404, json={"ok": False})
         return httpx.Response(
             200,
             json={
@@ -968,7 +974,12 @@ def test_resync_via_traefik_manager_updates_matched_host(
     _patch_tm_transport(monkeypatch, lambda request: httpx.Response(200, json={"ok": True}))
     created = client.post(
         "/api/proxy-hosts",
-        json={"hostname": "a.example.com", "upstream": "http://stale:9", "service_id": service.id},
+        json={
+            "hostname": "a.example.com",
+            "upstream": "http://stale:9",
+            "entry_points": ["websecure"],
+            "service_id": service.id,
+        },
     )
     assert created.status_code == 201, created.text
 
@@ -1121,6 +1132,7 @@ def test_create_persists_the_backend_route_ref_in_extra(
         json={
             "hostname": "live.example.com",
             "upstream": "http://10.0.0.9:8080",
+            "entry_points": ["websecure"],
             "service_id": service.id,
         },
     )
@@ -1148,6 +1160,7 @@ def test_create_fails_and_does_not_persist_the_row_when_the_backend_call_fails(
         json={
             "hostname": "live.example.com",
             "upstream": "http://10.0.0.9:8080",
+            "entry_points": ["websecure"],
             "service_id": service.id,
         },
     )
@@ -1257,6 +1270,7 @@ def test_update_edits_the_real_route_using_the_stored_ref(
         json={
             "hostname": "live.example.com",
             "upstream": "http://10.0.0.9:8080",
+            "entry_points": ["websecure"],
             "service_id": service.id,
         },
     ).json()
@@ -1302,6 +1316,7 @@ def test_update_backfills_a_route_ref_for_a_pre_existing_host(
         json={
             "hostname": "legacy.example.com",
             "upstream": "http://10.0.0.9:8080",
+            "entry_points": ["websecure"],
             "service_id": service.id,
         },
     )
@@ -1321,6 +1336,7 @@ def test_update_fails_and_leaves_the_row_unchanged_when_the_backend_call_fails(
         json={
             "hostname": "live.example.com",
             "upstream": "http://10.0.0.9:8080",
+            "entry_points": ["websecure"],
             "service_id": service.id,
         },
     ).json()
@@ -1356,6 +1372,7 @@ def test_delete_deletes_the_real_route_using_the_stored_ref(
         json={
             "hostname": "live.example.com",
             "upstream": "http://10.0.0.9:8080",
+            "entry_points": ["websecure"],
             "service_id": service.id,
         },
     ).json()
@@ -1392,6 +1409,7 @@ def test_delete_tolerates_a_route_already_gone_on_the_backend(
         json={
             "hostname": "live.example.com",
             "upstream": "http://10.0.0.9:8080",
+            "entry_points": ["websecure"],
             "service_id": service.id,
         },
     ).json()
