@@ -205,6 +205,14 @@ services:
       - hostname: media.example.lan
         upstream: "http://10.0.0.10:8096"
         router_provider: traefik
+        # Which Traefik entry points the route listens on, and which certificate
+        # resolver issues its TLS cert. Pick from what `orchestrator-cli proxy
+        # entrypoints` lists - an entry point that does not exist (Traefik
+        # Manager's own default is `https`) leaves the router flagged as broken.
+        # Leave both out on a host created before they were stored: the dashboard
+        # then pre-selects from the route and saving writes them.
+        entry_points: [websecure]
+        cert_resolver: letsencrypt
 
   # --- Example cloud service (VM) with a MariaDB integrity check -----------
   - slug: example-cloud
@@ -253,6 +261,8 @@ services:
       - hostname: cloud.example.lan
         upstream: "http://10.0.0.11:80"
         router_provider: traefik
+        # Plain HTTP on the `web` entry point: no TLS, so no certificate resolver.
+        entry_points: [web]
 
   # --- Example home automation (LXC container) -----------------------------
   - slug: example-home

@@ -73,3 +73,18 @@ def service(session: Session) -> Service:
     session.commit()
     session.refresh(svc)
     return svc
+
+
+@pytest.fixture(autouse=True)
+def _fast_proxy_verification(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    """Post-save router verification polls for up to ~5s in production; keep
+    tests quick (tests of the polling itself pass their own timings) and make
+    sure no cached entry-point catalog leaks between tests."""
+    from orchestrator.adapters.proxy import verify
+    from orchestrator.web import proxy_catalog
+
+    monkeypatch.setattr(verify, "VERIFY_TIMEOUT_S", 0.05)
+    monkeypatch.setattr(verify, "VERIFY_INTERVAL_S", 0.01)
+    proxy_catalog.clear_cache()
+    yield
+    proxy_catalog.clear_cache()

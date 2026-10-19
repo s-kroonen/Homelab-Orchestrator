@@ -50,6 +50,7 @@ up "which hostname reaches which service, through what":
 | Where                           | Writes to          | Persisted how                         |
 |---------------------------------|--------------------|---------------------------------------|
 | `orchestrator-cli proxy add/list/remove` | `services.yaml` directly | Reconciled into the DB on next boot / Reset |
+| `orchestrator-cli proxy add --entry-point websecure --cert-resolver letsencrypt` | `services.yaml`; validated first with the same rules as the API (entry points checked against the live Traefik when readable) | As above. `orchestrator-cli proxy entrypoints` lists what the manager reports (exit 1 + a message when unavailable); non-interactive runs use the default rule when no `--entry-point` is given |
 | Dashboard → **Proxy hosts** (`/proxy-hosts`) — list page | reads the live DB | **Save to YAML** writes it out; **Reset to saved** discards it; **Resync from Traefik** is the bulk-discovery/drift-catch-up path (see below) |
 | Dashboard → **Add a proxy host** (`/proxy-hosts/new`) / **Edit** (`/proxy-hosts/{id}/edit`) — dedicated pages | live DB, and (for a `traefik` host with an upstream) the real route | same underlying API as below; these are the normal way to create/edit one now |
 | Dashboard → a service's own page (`/services/{slug}`), **Proxy hosts** section | read-only list + a link to `/proxy-hosts/new?service_id=<id>` | same create/edit flow as above, pre-filled for this service |
@@ -126,6 +127,8 @@ explicit action the admin just took, so a failure is never swallowed:
   (today, a deterministic name derived from the hostname, e.g.
   `orchestrator-app-example-com` — see
   `orchestrator.adapters.proxy.traefik_manager.route_name_for_hostname`).
+  Create also requires explicit entry points / certificate resolver, is
+  validated first and verified afterwards (see below).
   **If `create_route` fails, the whole request fails** (`502`) and the
   `ProxyHost` row is never committed — closing this session's DB
   transaction without a commit rolls back the row the same way any other
@@ -148,6 +151,128 @@ explicit action the admin just took, so a failure is never swallowed:
   the local record — the operator's intent ("this host should no longer
   exist") is still satisfiable. Every other failure (`502`) blocks the
   local delete.
+
+### Entry points and certificate resolver
+
+Every live-managed host carries two stored fields, chosen by the operator and
+**always sent explicitly** to Traefik Manager's `/save` — on create *and* on
+every edit:
+
+* `entry_points` — the Traefik entry points the router listens on
+  (`web`, `websecure`, ...). Sent as the comma-joined `entryPoints` field.
+* `cert_resolver` — the certificate resolver that issues the route's TLS
+  cert (empty = none). Sent as Traefik Manager's `certResolver` field: the
+  resolver's name, or `__none__` (TLS block without a resolver), or
+  `__disabled__` (no `tls` block at all — what a route on plain `web` /
+  `:80` gets when no resolver is chosen).
+
+**Why this exists.** Traefik Manager's `/save` turns an empty `entryPoints`
+into its own default, `https`, and an empty `certResolver` into the first
+resolver it knows. This orchestrator used to post both empty, so a route
+created on a Traefik with entry points `web` / `websecure` / `traefik` was
+accepted and then shown by Traefik Manager as broken —
+`entryPoint "https" doesn't exist · no valid entryPoint for this router` —
+and every *edit* reset a working route's entry points to `https` again. The
+orchestrator now never posts a blank value; an empty selection is refused
+before anything is written, in the adapter as well as the API.
+
+**Where the choices come from.** `GET /api/proxy/entrypoints` (admin) returns
+what the live proxy reports, cached for ~30 s (the form's
+"Refresh from Traefik Manager" button and Resync bust the cache):
+
+```json
+{"entrypoints": [{"name": "web", "address": ":80"}, ...],
+ "cert_resolvers": ["letsencrypt"], "cert_resolvers_known": true,
+ "default_entrypoints": ["websecure"], "default_cert_resolver": "",
+ "source": "traefik_manager"}
+```
+
+`source` is `"unavailable"` when Traefik Manager is not configured or Traefik
+behind it cannot be reached; the form then shows a clear warning and a
+free-text comma field (still sent explicitly — nothing is defaulted for you).
+
+* Entry points: `GET /api/traefik/entrypoints` on Traefik Manager, which proxies
+  Traefik's own `/api/entrypoints` (or answers `502 Traefik API unreachable`,
+  which reads as unavailable).
+* Certificate resolvers: `GET /api/settings` → `cert_resolver` (the comma list
+  configured in Traefik Manager's Settings). Traefik Manager does not expose the
+  resolvers declared in Traefik's static config over its API, so a resolver that
+  is only there will not be offered; if the setting cannot be read the form falls
+  back to a free-text field.
+
+**Default selection for a new host.** `TRAEFIK_DEFAULT_ENTRYPOINTS` (comma list)
+if set *and* it still exists on the live Traefik; otherwise `websecure` if it
+exists; otherwise the first live entry point that is not `traefik`; otherwise
+there is no default and the operator must choose. `TRAEFIK_DEFAULT_CERT_RESOLVER`
+likewise pre-selects a resolver (ignored when it is not a known one, or when
+every selected entry point is plain HTTP). A create/update **API call that omits
+`entry_points`** resolves them the same way — for an edit: what is stored, else
+what the route has on Traefik Manager, else the default — and then validates the
+result like any explicit choice.
+
+A host created before these fields existed has none *stored*. The edit form says
+so ("not stored yet — saving will set it") and pre-selects from what Traefik
+Manager actually has on the route (runtime router list), else the default rule.
+The list shows such a host's live entry points with "not stored yet".
+
+### Validation — before anything is written
+
+One validator module (`orchestrator.registry.proxy_validation`) is used by the
+API, `orchestrator-cli proxy add` and the YAML loader. The API answers
+`422` (`409` for a duplicate hostname) with
+`{"detail": {"message": "...", "errors": {"<field>": "<message>"}}}`; the form
+renders each message next to its field *and* as a toast, the CLI prints
+`field: message` lines.
+
+| Field | Rule |
+|---|---|
+| `hostname` | valid DNS name, optional leading `*.`; no scheme, path, port or spaces; lower-cased; not used by another orchestrator proxy host |
+| `upstream` | `http://` or `https://` + host + port (friendly messages for a missing port / scheme); required for a live-managed host |
+| `entry_points` | non-empty; each must exist on the live Traefik when it can be read (`Entry point "https" does not exist on this Traefik. Available: web, websecure, traefik`); the internal `traefik` entry point (API/dashboard) is refused |
+| `cert_resolver` | when given and the known list is available, must be in it |
+| conflict (create, or a hostname change) | refused if Traefik Manager (or any other Traefik provider) already has a router for that hostname, or a route with the name we would create — it names the existing router and suggests Resync to adopt it. A route this orchestrator did not create is never silently overwritten |
+
+When the live entry-point list cannot be read only the *shape* is checked and
+what you typed is trusted.
+
+### Post-save verification and rollback
+
+Traefik Manager accepts a router that Traefik then refuses, so after `/save` the
+runtime router is polled (`GET /api/traefik/routers`, every ~0.5 s for up to
+~5 s — Traefik reloads the file provider asynchronously) until it is `enabled`
+with no `error`, and bound to the entry points just written
+(`orchestrator.adapters.proxy.verify.verify_route`, also what the list's
+**Router** status and Resync use):
+
+* **Create, router rejected** — the route just created is deleted again on
+  Traefik Manager (best effort), **no DB row is committed**, and the API returns
+  `422` with Traefik's own text (`traefik_error`, `rolled_back: true`).
+* **Edit, router rejected** — the new configuration is kept (the previous one
+  cannot be safely guessed): the DB row is updated, the API returns `422`
+  (`rolled_back: false`) including Traefik's message, and the host's Traefik
+  status stays red in the list until fixed.
+* **Cannot verify** — the runtime router list is unreadable, or Traefik has not
+  loaded the router within the window — the save succeeds (`2xx`) with a
+  `warnings` entry ("Saved, but could not be verified …"). Never silent success.
+
+The list's **Traefik** column shows the router's own verdict for every host:
+`router enabled`, `router error` with Traefik's message (red), `router not
+loaded` or `router unverified`.
+
+### Fixing an already-broken route
+
+A route that already shows `entryPoint "https" doesn't exist` (created before
+this change) is fixed from the dashboard: **Edit** the host, tick the entry point
+that exists (e.g. `websecure`) and the right certificate resolver, **Save**. The
+stale `https` is shown ticked and flagged as not existing on this Traefik; saving
+rewrites the route on Traefik Manager with explicit values, then verifies it.
+
+### Adopting a route Traefik Manager already has
+
+Create refuses to touch a router that is not ours. **Resync** lists such routes
+under "Discovered"; its **Add** button records one with `adopt: true` — no write to
+Traefik Manager at all; the route reference and entry points are taken from the
+existing router.
 
 **Known gap**: switching `router_provider` away from `traefik` on an
 existing live-managed host does not delete the real route it created —
@@ -327,6 +452,10 @@ Pangolin and NPM would need their own equivalents; nothing above applies to
 them.
 
 ## Resync (manual, admin-triggered write to the DATABASE)
+
+> Resync also busts the entry-point cache, reports each matched host's runtime
+> router status (`traefik` in the response, same verdicts as the list), and lists
+> each discovered route's entry points so it can be adopted.
 
 Drift detection above is read-only and automatic (it runs on every page
 load). **Resync** is the opposite in both respects: it is the one thing in
@@ -535,6 +664,13 @@ service, no middleware, no injection, same "empty disables it" convention
 as every other optional integration in this app.
 
 ### What it builds, and why
+
+> The shared backend's never-matched router is bound to a **real** entry point read
+> from the live Traefik (the configured default, else `websecure`, else the first
+> non-`traefik` one) with TLS disabled — never a blank `entryPoints`, which Traefik
+> Manager would turn into `https`. If no entry point can be read, the whole
+> fallback is skipped (logged, fail-open) rather than create a middleware that
+> points at a missing service.
 
 1. **One shared backend service**
    (`orchestrator-maintenance-backend`), pointing at

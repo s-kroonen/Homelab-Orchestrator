@@ -38,6 +38,13 @@ from orchestrator.config import Settings
 
 _REAL_ASYNC_CLIENT = httpx.AsyncClient
 
+#: Traefik's own GET /api/entrypoints shape, as Traefik Manager proxies it.
+TRAEFIK_ENTRYPOINTS = [
+    {"address": ":80", "name": "web", "transport": {"lifeCycle": {}}},
+    {"address": ":443", "name": "websecure"},
+    {"address": ":8080", "name": "traefik"},
+]
+
 
 def _patch_transport(monkeypatch: pytest.MonkeyPatch, handler: Any) -> None:
     import orchestrator.adapters.proxy.traefik_manager as tm_mod
@@ -372,6 +379,8 @@ async def test_shared_backend_service_request_shape(monkeypatch: pytest.MonkeyPa
                     "services": {"http": [], "tcp": [], "udp": []},  # not created yet
                 },
             )
+        if path == "/api/traefik/entrypoints":
+            return httpx.Response(200, json=TRAEFIK_ENTRYPOINTS)
         if path == "/save":
             from urllib.parse import parse_qsl
 
@@ -388,6 +397,10 @@ async def test_shared_backend_service_request_shape(monkeypatch: pytest.MonkeyPa
 
     assert len(save_calls) == 1
     call = save_calls[0]
+    # A REAL entry point from the live list - never blank (Traefik Manager would
+    # turn that into its default `https`) - and no TLS for the .invalid name.
+    assert call["entryPoints"] == "websecure"
+    assert call["certResolver"] == "__disabled__"
     assert call["serviceName"] == SHARED_BACKEND_SERVICE_NAME
     assert call["targetIp"] == "10.0.0.5"
     assert call["targetPort"] == "8000"
@@ -466,7 +479,12 @@ async def test_create_route_request_shape(monkeypatch: pytest.MonkeyPatch) -> No
     _patch_transport(monkeypatch, handle)
     adapter = TraefikManagerProxyAdapter(_settings())
 
-    ref = await adapter.create_route(hostname="app.example.com", upstream="http://10.0.0.9:8080")
+    ref = await adapter.create_route(
+        hostname="app.example.com",
+        upstream="http://10.0.0.9:8080",
+        entry_points=["websecure"],
+        cert_resolver="letsencrypt",
+    )
 
     assert ref == route_name_for_hostname("app.example.com")
     assert len(save_calls) == 1
@@ -476,12 +494,18 @@ async def test_create_route_request_shape(monkeypatch: pytest.MonkeyPatch) -> No
     assert call["targetPort"] == "8080"
     assert call["httpRule"] == "Host(`app.example.com`)"
     assert call["isEdit"] == "false"
+    # Explicit - Traefik Manager would turn a blank value into `https` (entry
+    # point) / its first resolver.
+    assert call["entryPoints"] == "websecure"
+    assert call["certResolver"] == "letsencrypt"
 
 
 async def test_create_route_raises_on_invalid_upstream() -> None:
     adapter = TraefikManagerProxyAdapter(_settings())
     with pytest.raises(ValueError):
-        await adapter.create_route(hostname="app.example.com", upstream="not-a-url")
+        await adapter.create_route(
+            hostname="app.example.com", upstream="not-a-url", entry_points=["web"]
+        )
 
 
 async def test_create_route_raises_on_unreachable_backend(
@@ -496,7 +520,9 @@ async def test_create_route_raises_on_unreachable_backend(
     from orchestrator.adapters.proxy.traefik_manager import TraefikManagerUnavailable
 
     with pytest.raises(TraefikManagerUnavailable):
-        await adapter.create_route(hostname="app.example.com", upstream="http://10.0.0.9:80")
+        await adapter.create_route(
+            hostname="app.example.com", upstream="http://10.0.0.9:80", entry_points=["web"]
+        )
 
 
 async def test_update_route_request_shape(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -514,7 +540,13 @@ async def test_update_route_request_shape(monkeypatch: pytest.MonkeyPatch) -> No
     adapter = TraefikManagerProxyAdapter(_settings())
     ref = route_name_for_hostname("app.example.com")
 
-    await adapter.update_route(ref, hostname="new.example.com", upstream="http://10.0.0.5:9090")
+    await adapter.update_route(
+        ref,
+        hostname="new.example.com",
+        upstream="http://10.0.0.5:9090",
+        entry_points=["websecure", "web"],
+        cert_resolver="letsencrypt",
+    )
 
     assert len(save_calls) == 1
     call = save_calls[0]
@@ -524,12 +556,17 @@ async def test_update_route_request_shape(monkeypatch: pytest.MonkeyPatch) -> No
     assert call["httpRule"] == "Host(`new.example.com`)"
     assert call["targetIp"] == "10.0.0.5"
     assert call["targetPort"] == "9090"
+    # An edit re-sends them too: omitting them would reset the route to `https`.
+    assert call["entryPoints"] == "websecure,web"
+    assert call["certResolver"] == "letsencrypt"
 
 
 async def test_update_route_raises_on_invalid_upstream() -> None:
     adapter = TraefikManagerProxyAdapter(_settings())
     with pytest.raises(ValueError):
-        await adapter.update_route("some-ref", hostname="app.example.com", upstream="")
+        await adapter.update_route(
+            "some-ref", hostname="app.example.com", upstream="", entry_points=["web"]
+        )
 
 
 async def test_delete_route_posts_to_delete_endpoint(monkeypatch: pytest.MonkeyPatch) -> None:

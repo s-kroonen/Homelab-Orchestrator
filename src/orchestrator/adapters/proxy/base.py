@@ -21,6 +21,7 @@ caller — see ``docs/roadmap.md``'s "generalize the adapter pattern" entry.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -42,6 +43,24 @@ class RouteInfo:
     name: str
     hostnames: set[str]
     upstream: str | None
+    #: Entry points the route is bound to, when the backend reports them.
+    entry_points: tuple[str, ...] = ()
+    #: Runtime health, only filled by :meth:`ProxyAdapter.list_runtime_routers`:
+    #: Traefik's own ``status`` ("enabled" / "disabled" / "warning") and its
+    #: ``error`` text (joined), exactly what Traefik Manager's UI shows.
+    status: str | None = None
+    error: str | None = None
+    #: The ``tls.certResolver`` the router carries, when reported.
+    cert_resolver: str | None = None
+
+
+@dataclass(frozen=True)
+class EntryPointInfo:
+    """One entry point the reverse proxy listens on (Traefik: ``web`` ->
+    ``:80``). ``address`` is whatever the proxy reports (``":443"``)."""
+
+    name: str
+    address: str = ""
 
 
 @dataclass(frozen=True)
@@ -165,8 +184,18 @@ class ProxyAdapter(ABC):
     # ``docs/proxy_hosts.md``'s "Live-managed proxy hosts" section.
 
     @abstractmethod
-    async def create_route(self, *, hostname: str, upstream: str) -> str:
-        """Create a real route on this backend for ``hostname`` -> ``upstream``.
+    async def create_route(
+        self,
+        *,
+        hostname: str,
+        upstream: str,
+        entry_points: Sequence[str],
+        cert_resolver: str = "",
+    ) -> str:
+        """Create a real route on this backend for ``hostname`` -> ``upstream``,
+        bound to exactly ``entry_points`` (never empty - an implementation
+        raises ``ValueError`` rather than let the backend pick a default
+        that may not exist) with TLS from ``cert_resolver`` (empty = none).
 
         Returns an opaque, backend-specific reference (a route id) the
         caller MUST persist (``ProxyHost.extra``) in order to target this
@@ -178,9 +207,19 @@ class ProxyAdapter(ABC):
         """
 
     @abstractmethod
-    async def update_route(self, route_ref: str, *, hostname: str, upstream: str) -> None:
+    async def update_route(
+        self,
+        route_ref: str,
+        *,
+        hostname: str,
+        upstream: str,
+        entry_points: Sequence[str],
+        cert_resolver: str = "",
+    ) -> None:
         """Update the route ``route_ref`` identifies to point at the given
-        ``hostname``/``upstream``. Raises on failure, including
+        ``hostname``/``upstream``/``entry_points``/``cert_resolver`` (all of
+        them, every time - an edit that omitted entry points would reset
+        them on backends that default). Raises on failure, including
         :class:`ProxyRouteNotFound` if the backend no longer has a route
         for that reference (the caller decides what to do about that; see
         :meth:`delete_route`'s note on the same case)."""
@@ -247,4 +286,15 @@ class ProxyAdapter(ABC):
         provider, bare names). ``upstream`` may be ``None``. Default:
         ``None`` (backend has no such view); never raises.
         """
+        return None
+
+    async def list_entrypoints(self) -> list[EntryPointInfo] | None:
+        """The entry points the proxy really listens on, for the add/edit form
+        and for validation. ``None`` - never raises - when this backend has no
+        such view or cannot be reached; callers then fall back to free text."""
+        return None
+
+    async def list_cert_resolvers(self) -> list[str] | None:
+        """Certificate resolver names this backend knows about, or ``None``
+        when it cannot say (the caller then offers a free-text field)."""
         return None

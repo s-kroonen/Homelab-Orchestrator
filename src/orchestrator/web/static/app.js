@@ -20,7 +20,9 @@
  *   error text — parsed from the conventional {"detail": ...} /
  *   {"message": ...} / {"error": ...} shapes this app's routers use — and,
  *   unless `opts.suppressToast` is true, also shows that error as a toast
- *   before throwing. This means a caller that does nothing special with the
+ *   before throwing. The thrown Error also carries `.status`, `.detail` and
+ *   `.fieldErrors` ({field: message} from a structured
+ *   {"detail": {"message", "errors"}} body) for inline form errors. This means a caller that does nothing special with the
  *   rejection (no try/catch, or a catch that only updates its own inline
  *   .msg element) still always shows the user *something* on failure.
  */
@@ -80,18 +82,37 @@
     }
     if (typeof data.message === "string") return data.message;
     if (typeof data.error === "string") return data.error;
+    // Structured validation error: {"detail": {"message": "...", "errors": {field: msg}}}
+    if (data.detail && typeof data.detail === "object" && typeof data.detail.message === "string") {
+      return data.detail.message;
+    }
     if (data.detail !== undefined) return JSON.stringify(data.detail);
     return null;
   }
 
-  async function responseErrorMessage(resp) {
+  // {field: message} map from a structured validation error, or {}.
+  function extractFieldErrors(data) {
+    const d = data && data.detail;
+    if (d && typeof d === "object" && !Array.isArray(d) && d.errors && typeof d.errors === "object") {
+      return d.errors;
+    }
+    return {};
+  }
+
+  async function responseError(resp) {
     let data = null;
     try {
       data = await resp.json();
     } catch (_err) {
       /* body wasn't JSON (or was empty) - fall through to the status line */
     }
-    return extractMessage(data) || `${resp.status} ${resp.statusText || ""}`.trim();
+    const message = extractMessage(data) || `${resp.status} ${resp.statusText || ""}`.trim();
+    const err = new Error(message);
+    // Callers that want inline per-field errors read these off the thrown error.
+    err.status = resp.status;
+    err.fieldErrors = extractFieldErrors(data);
+    err.detail = data && data.detail !== undefined ? data.detail : null;
+    return err;
   }
 
   async function apiFetch(method, url, body, opts) {
@@ -112,9 +133,9 @@
       throw new Error(message);
     }
     if (!resp.ok) {
-      const message = await responseErrorMessage(resp);
-      if (!options.suppressToast) toast(message, "error");
-      throw new Error(message);
+      const err = await responseError(resp);
+      if (!options.suppressToast) toast(err.message, "error");
+      throw err;
     }
     if (resp.status === 204) return null;
     const contentType = resp.headers.get("content-type") || "";
