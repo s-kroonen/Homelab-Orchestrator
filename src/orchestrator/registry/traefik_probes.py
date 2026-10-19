@@ -18,7 +18,8 @@ service can have several ``ProxyHost`` records (e.g. two hostnames fronting
 the same app) and none of them individually has to be up for the service to
 be healthy. An operator who wants one specific route's reachability to
 actually gate a service flips ``required=True`` on that one probe via the
-existing probe-edit UI — no code change needed.
+existing probe-edit UI — no code change needed. A later sync (Resync, a proxy
+host edit) only rewrites the derived config, never ``required``.
 
 Gateway-outage handling (UNKNOWN, not FAILED, downstream of a dead gateway)
 falls out of ``Service.depends_on`` / the health engine for free, the same
@@ -144,13 +145,13 @@ def _upsert(
         assert probe.id is not None
         return ProbeSyncEvent("created", probe.id, service_id, name, config)
 
-    changed = (
-        probe.config != config or probe.required is not False or probe.kind is not ProbeKind.HTTP
-    )
+    # Only what this sync derives (the URL/Host header) is rewritten. ``required``
+    # and ``timeout_s`` are the operator's: a Resync or proxy-host edit must never
+    # undo "this route gates the service".
+    changed = probe.config != config or probe.kind is not ProbeKind.HTTP
     if not changed:
         return None
     probe.config = config
-    probe.required = False
     probe.kind = ProbeKind.HTTP
     session.add(probe)
     session.flush()

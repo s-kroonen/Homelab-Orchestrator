@@ -780,6 +780,39 @@ def test_resync_backfills_probes_for_preexisting_linked_hosts(
     _ = ph_id  # unused beyond setup
 
 
+def test_resync_keeps_a_probe_the_operator_made_required(
+    client: TestClient, service: Service, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Regression: Resync used to force every auto probe back to required=False,
+    silently undoing "this route gates the service"."""
+    _enable_proxy_base_url(monkeypatch)
+    client.post(
+        "/api/proxy-hosts", json={"hostname": "media.example.com", "service_id": service.id}
+    )
+    (probe,) = _probes_for(service.id)
+    with Session(get_engine()) as s:
+        row = s.get(Probe, probe.id)
+        assert row is not None
+        row.required = True
+        row.timeout_s = 12
+        s.add(row)
+        s.commit()
+
+    monkeypatch.setenv("TRAEFIK_API_URL", "http://traefik.test:8080")
+    config_module.reset_settings_cache()
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        if request.url.path in ("/api/http/routers", "/api/http/services"):
+            return httpx.Response(200, json=[])
+        return httpx.Response(404, json={})
+
+    _patch_traefik_transport(monkeypatch, handle)
+    assert client.post("/api/proxy-hosts/resync").status_code == 200
+
+    (after,) = _probes_for(service.id)
+    assert after.required is True and after.timeout_s == 12
+
+
 def test_auto_probe_appears_on_service_detail_as_non_required(
     client: TestClient, service: Service, monkeypatch: pytest.MonkeyPatch
 ) -> None:
