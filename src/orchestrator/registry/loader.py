@@ -39,6 +39,7 @@ from orchestrator.db.models import (
 )
 from orchestrator.domain.enums import RouterProvider
 from orchestrator.logging_setup import get_logger
+from orchestrator.registry.backup_plan import clean_slug_list, requires_problems
 from orchestrator.registry.schema import (
     BackupPolicySpec,
     NodeSpec,
@@ -165,6 +166,7 @@ def _spec_from_db(session: Session) -> RegistryFile:
                 backup_excluded_reason=svc.backup_excluded_reason,
                 wake_on_hit_enabled=svc.wake_on_hit_enabled,
                 depends_on=list(svc.depends_on or []),
+                backup_requires=list(svc.backup_requires or []),
                 backup_policy=policy_name,
                 probes=[
                     ProbeSpec(
@@ -209,6 +211,8 @@ def _spec_from_db(session: Session) -> RegistryFile:
                 mode=p.mode,
                 retention=p.retention,
                 targets=p.targets,
+                requires=list(p.requires or []),
+                wake_before_backup=p.wake_before_backup,
             )
             for p in policies
         ],
@@ -313,6 +317,13 @@ def validate_references(parsed: RegistryFile) -> None:
     if cycle:
         problems.append("depends_on forms a cycle: " + " -> ".join(cycle))
 
+    problems += requires_problems(
+        service_requires={s.slug: list(s.backup_requires) for s in parsed.services},
+        service_policy={s.slug: s.backup_policy for s in parsed.services},
+        policy_requires={p.name: list(p.requires) for p in parsed.backup_policies},
+        excluded={s.slug for s in parsed.services if s.backup_excluded},
+    )
+
     if problems:
         joined = "\n  - ".join(problems)
         raise ValueError(f"services.yaml has unresolved references:\n  - {joined}")
@@ -382,6 +393,8 @@ def reconcile_yaml_into_db(session: Session, path: Path) -> RegistryFile:
         pol.mode = spec.mode
         pol.retention = spec.retention
         pol.targets = spec.targets
+        pol.requires = clean_slug_list(spec.requires)
+        pol.wake_before_backup = spec.wake_before_backup
         pol.updated_at = datetime.now(UTC)
 
     session.flush()
@@ -418,6 +431,7 @@ def reconcile_yaml_into_db(session: Session, path: Path) -> RegistryFile:
         svc.backup_excluded_reason = spec.backup_excluded_reason
         svc.wake_on_hit_enabled = spec.wake_on_hit_enabled
         svc.depends_on = list(spec.depends_on)
+        svc.backup_requires = clean_slug_list(spec.backup_requires)
         svc.node_id = node.id
         svc.backup_policy_id = policy.id if policy else None
         svc.updated_at = datetime.now(UTC)

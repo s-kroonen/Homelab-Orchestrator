@@ -65,6 +65,8 @@ means a freshly scaffolded service will not back up until you add a probe.
 
 See [docs/architecture.md](docs/architecture.md) for the full design,
 [docs/adding_a_service.md](docs/adding_a_service.md) for registering a service,
+[docs/backup_wake.md](docs/backup_wake.md) for waking storage and the services
+being backed up before a backup (prerequisites, holds, failure semantics),
 [docs/api_tokens.md](docs/api_tokens.md) for the API token privileges,
 [docs/dashboard_auth.md](docs/dashboard_auth.md) for the passkey/invite/session
 mechanics behind the dashboard,
@@ -188,7 +190,8 @@ orchestrator-cli check                  # can I reach Proxmox and PBS?
 orchestrator-cli guests                 # what does Proxmox see?
 orchestrator-cli snapshots              # what is in the PBS datastore?
 orchestrator-cli scan <slug> | --all    # what will the backup gate decide?
-orchestrator-cli backup <slug>          # run one backup end to end
+orchestrator-cli backup <slug>          # wake what it needs, then run one backup end to end
+orchestrator-cli backup plan <slug>     # preview what that backup would wake (exit 1 on a blocker)
 ```
 
 Setting up and changing the config is three commands, each with one job:

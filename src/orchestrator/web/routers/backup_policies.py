@@ -22,6 +22,11 @@ from sqlmodel import Session, select
 from orchestrator.audit import log as audit
 from orchestrator.db.models import BackupPolicy, BackupRecord, Service
 from orchestrator.domain.enums import BackupMode
+from orchestrator.registry.backup_plan import (
+    clean_slug_list,
+    requires_problems_from_db,
+    resolve_policy_prerequisites,
+)
 from orchestrator.scheduler import BackupScheduler, next_fire_time, parse_cron
 from orchestrator.scheduler.retention import validate_retention
 from orchestrator.web.auth import CurrentAdmin, require_admin
@@ -52,6 +57,11 @@ class PolicyCreate(BaseModel):
     # to that field rather than stored on the policy itself. See
     # _sync_service_membership.
     services: Any = None
+    # Slugs that must be up before any backup under this policy (woken first,
+    # held until the backup finishes), and whether to wake the services being
+    # backed up. Not Service.depends_on — see docs/backup_wake.md.
+    requires: Any = None
+    wake_before_backup: bool = True
 
 
 class PolicyUpdate(BaseModel):
@@ -61,6 +71,8 @@ class PolicyUpdate(BaseModel):
     mode: str | None = None
     retention: Any = None
     services: Any = None
+    requires: Any = None
+    wake_before_backup: bool | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -118,6 +130,30 @@ def _validate_services(session: Session, services: Any) -> list[str]:
     if missing:
         raise _bad(f"services references unknown service(s): {missing}")
     return services
+
+
+def _validate_requires(session: Session, requires: Any) -> list[str]:
+    """Known service slugs only; duplicates collapse. A required service may be
+    ``backup_excluded`` (the storage VM usually is) — that is expected."""
+    if requires is None:
+        return []
+    if not isinstance(requires, list) or not all(isinstance(s, str) for s in requires):
+        raise _bad("requires must be a list of service slugs")
+    cleaned = clean_slug_list(requires)
+    known = set(session.exec(select(Service.slug)).all())
+    missing = [s for s in cleaned if s not in known]
+    if missing:
+        raise _bad(f"requires references unknown service(s): {', '.join(missing)}")
+    return cleaned
+
+
+def _check_requires_cycles(session: Session) -> None:
+    """After the policy + membership are staged (flushed, not committed), refuse
+    a requires graph that loops. Raising leaves the request session uncommitted,
+    so nothing is persisted."""
+    cycles = [p for p in requires_problems_from_db(session) if "cycle" in p]
+    if cycles:
+        raise _bad(cycles[0] + " — backup requirements must not loop back on themselves")
 
 
 # ---------------------------------------------------------------------------
@@ -187,6 +223,15 @@ def policy_to_dict(
         "schedule_cron": policy.schedule_cron,
         "mode": policy.mode.value,
         "retention": policy.retention,
+        "requires": list(policy.requires or []),
+        "wake_before_backup": policy.wake_before_backup,
+        # Prerequisites whose node can never be woken (no power target), so the
+        # form and list can warn before a backup fails on it.
+        "requires_blockers": [
+            {"slug": s.slug, "node": s.node, "blocker": s.blocker}
+            for s in resolve_policy_prerequisites(session, policy)
+            if s.blocker
+        ],
         # The single source of a service's policy membership is
         # Service.backup_policy_id (== services.yaml's per-service
         # `backup_policy:` key, same field the CLI edits). Dashboard writes
@@ -203,6 +248,8 @@ def _snapshot(policy: BackupPolicy) -> dict[str, Any]:
         "schedule_cron": policy.schedule_cron,
         "mode": policy.mode.value,
         "retention": policy.retention,
+        "requires": list(policy.requires or []),
+        "wake_before_backup": policy.wake_before_backup,
     }
 
 
@@ -274,10 +321,14 @@ async def create_policy(
         schedule_cron=_validate_cron(body.schedule_cron),
         mode=_validate_mode(body.mode),
         retention=_validate_retention(body.retention),
+        requires=_validate_requires(session, body.requires),
+        wake_before_backup=body.wake_before_backup,
     )
     session.add(policy)
     session.flush()  # assigns policy.id, needed to attach services below
     membership = _sync_service_membership(session, policy, services)
+    session.flush()
+    _check_requires_cycles(session)
     audit.record(
         session,
         actor=admin.username,
@@ -308,6 +359,12 @@ async def update_policy(
         policy.mode = _validate_mode(body.mode or "")
     if "retention" in fields:
         policy.retention = _validate_retention(body.retention)
+    if "requires" in fields:
+        policy.requires = _validate_requires(session, body.requires)
+    if "wake_before_backup" in fields:
+        if body.wake_before_backup is None:
+            raise _bad("wake_before_backup must be true or false")
+        policy.wake_before_backup = body.wake_before_backup
     membership = {}
     if "services" in fields:
         membership = _sync_service_membership(
@@ -315,6 +372,8 @@ async def update_policy(
         )
     policy.updated_at = datetime.now(UTC)
     session.add(policy)
+    session.flush()
+    _check_requires_cycles(session)
     audit.record(
         session,
         actor=admin.username,

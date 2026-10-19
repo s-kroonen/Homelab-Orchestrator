@@ -31,6 +31,8 @@ from orchestrator.db.models import (
     ServiceState,
 )
 from orchestrator.domain.enums import BackupMode, GuestKind, RouterProvider
+from orchestrator.pipelines.wake import wake_is_unsupported
+from orchestrator.registry.backup_plan import BLOCKER_NO_POWER_TARGET
 from orchestrator.registry.loader import compute_registry_diff
 from orchestrator.registry.probe_specs import PROBE_SPECS
 from orchestrator.web.auth import get_current_admin
@@ -52,6 +54,28 @@ _templates = Jinja2Templates(directory=str(Path(__file__).parent.parent / "templ
 #: Probe state -> the ``ol.steps`` class maintenance.html already styles
 #: (ok = check mark, failed/indeterminate = cross).
 _STATE_CLASS = {"healthy": "ok", "failed": "failed", "unknown": "indeterminate"}
+
+
+def _requirable_services(session: Session, *, exclude: str | None = None) -> list[dict[str, Any]]:
+    """Services an operator can pick as a backup prerequisite, each with its node
+    and — when its node can never be woken (no power target, not always on) — the
+    blocker, so the pickers can warn before a backup fails on it."""
+    nodes = {n.id: n for n in session.exec(select(Node)).all()}
+    out: list[dict[str, Any]] = []
+    for svc in session.exec(select(Service).order_by(Service.slug)).all():
+        if svc.slug == exclude:
+            continue
+        node = nodes.get(svc.node_id) if svc.node_id is not None else None
+        out.append(
+            {
+                "slug": svc.slug,
+                "name": svc.name,
+                "group": svc.group,
+                "node": node.name if node else "",
+                "blocker": BLOCKER_NO_POWER_TARGET if wake_is_unsupported(node) else None,
+            }
+        )
+    return out
 
 
 def _group_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -167,6 +191,7 @@ async def service_detail_page(
             "nodes": [{"id": n.id, "name": n.name} for n in nodes],
             "policies": [{"id": p.id, "name": p.name} for p in policies],
             "other_slugs": other_slugs,
+            "requirable": _requirable_services(session, exclude=slug),
             "existing_groups": existing_groups,
             "guest_kinds": [k.value for k in GuestKind],
             "probe_kinds": probe_kinds,
@@ -316,6 +341,7 @@ def _policy_form_context(session: Session) -> dict[str, Any]:
     services = session.exec(select(Service).order_by(Service.slug)).all()
     return {
         "services": [{"slug": s.slug, "group": s.group} for s in services],
+        "requirable": _requirable_services(session),
         "groups": sorted({s.group for s in services if s.group}),
         "modes": [m.value for m in BackupMode],
     }

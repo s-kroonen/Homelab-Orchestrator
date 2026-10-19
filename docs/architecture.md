@@ -187,6 +187,31 @@ happens to have no `power_mgr_target` set also shows this page — a rare
 edge case, and arguably still correct: the data gap is real even if it
 hasn't bitten anyone yet.
 
+## Waking for a backup
+
+`BackupPipeline.run_for_service` begins with a wake phase
+(`orchestrator.pipelines.backup_wake`), **before** the PBS preflight, because the
+datastore may sit on NFS served by a VM on a normally-off node. What to wake comes
+from one pure function, `registry/backup_plan.resolve_backup_plan`
+(`BackupPolicy.requires`, then `Service.backup_requires`, then the target when
+`BackupPolicy.wake_before_backup`), which the pipeline executes and
+`GET /api/backup/plan`, `orchestrator-cli backup plan` and the service page
+preview — so a preview cannot drift from a run.
+
+The waking itself is not reimplemented: each entry goes through
+`WakePipeline.ensure_awake`, which uses `get_or_start` (so a backup joins a wake a
+visitor already started, and the retry cooldown applies). What is new in
+`wake.py` is the public `assert_hold` / `release_hold` (the backup holds each node
+for the whole backup, not just the wake) and `is_up`, a cheap "needs waking at all?"
+check. `StepRecorder` and `BackupError` moved to `pipelines/steps.py` so the two
+pipelines can import each other's pieces without a cycle.
+
+Holds are released in a `finally`; a failed wake fails the run at that step with the
+gate and dump never reached. A scheduled policy wakes its policy-level prerequisites
+once for the batch (`BackupPipeline.prepare_policy`) and passes that context to each
+per-service run. `requires` / `backup_requires` are **not** `Service.depends_on`
+(health-gate dependency, never wakes). See [backup_wake.md](backup_wake.md).
+
 ## Manual power actions: two raw actions, deliberately not the wake pipeline
 
 Two endpoints exist purely for an admin who wants a specific low-level

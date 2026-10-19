@@ -141,6 +141,18 @@ every other optional integration here. Once it's set:
   reloads), and `/traffic` gained hand-drawn SVG charts (requests by status
   class, avg/max latency) and a clickable per-service table. See
   `docs/traffic_metrics.md`.
+- ~~**Wake for backup.**~~ **Done.** A backup wakes what it needs before
+  anything else: policy-level `requires` (e.g. the TrueNAS VM hosting the PBS
+  datastore's NFS), per-service `backup_requires`, and — with
+  `wake_before_backup` (default on) — the services being backed up. Nodes are held
+  awake until the backup ends; a failed wake fails the run before the gate or
+  dump. Scheduled policies wake their shared prerequisites once per run.
+  Previewed by `GET /api/backup/plan` / `orchestrator-cli backup plan` and a
+  *Backup plan* panel on the service page. See [backup_wake.md](backup_wake.md).
+- **Follow-up: power nodes back off after a backup they were woken for
+  (opt-in).** Today the power manager's idle shutdown handles it once the holds are
+  released; an explicit, opt-in "power off what this backup woke" (never anything
+  that was already on, never while another hold exists) would save the idle wait.
 - **Follow-up: wake-on-hit from the access log.** The wake-on-hit stand-in
   still rides on the Prometheus `TrafficCollector`, so it only works with
   `TRAEFIK_API_URL` set. The access-log collector sees the same "new traffic

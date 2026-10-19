@@ -43,6 +43,7 @@ from orchestrator.domain.enums import GuestKind, PipelineKind, PipelineStatus, P
 from orchestrator.domain.schemas import HttpProbeConfig, TcpProbeConfig
 from orchestrator.health.engine import HealthEngine
 from orchestrator.pipelines.wake import wake_is_unsupported
+from orchestrator.registry.backup_plan import clean_slug_list, requires_problems_from_db
 from orchestrator.registry.loader import (
     _find_dependency_cycle,
     compute_registry_diff,
@@ -107,6 +108,7 @@ class ServiceCreate(_Body):
     backup_excluded_reason: str = ""
     backup_policy_id: int | None = None
     depends_on: list[str] = Field(default_factory=list)
+    backup_requires: list[str] = Field(default_factory=list)
 
 
 class ServiceUpdate(_Body):
@@ -125,6 +127,7 @@ class ServiceUpdate(_Body):
     backup_policy_id: int | None = None
     wake_on_hit_enabled: bool | None = None
     depends_on: list[str] | None = None
+    backup_requires: list[str] | None = None
 
 
 class NodeCreate(_Body):
@@ -249,6 +252,7 @@ def service_detail(session: Session, svc: Service) -> dict[str, Any]:
         "backup_policy_id": svc.backup_policy_id,
         "backup_policy": policy.name if policy else None,
         "depends_on": list(svc.depends_on or []),
+        "backup_requires": list(svc.backup_requires or []),
         "node_id": svc.node_id,
         "node": _node_dict(node) if node else None,
         # Same condition orchestrator.pipelines.wake.WakePipeline uses to
@@ -350,6 +354,51 @@ def _check_depends_on(session: Session, slug: str, depends_on: list[str]) -> lis
     if cycle:
         raise _bad_request("depends_on would create a cycle: " + " -> ".join(cycle))
     return cleaned
+
+
+def _check_backup_requires(
+    session: Session,
+    slug: str,
+    backup_requires: list[str],
+    *,
+    policy_id: int | None,
+) -> list[str]:
+    """Same rules the YAML loader applies to ``backup_requires``: known slugs,
+    no self reference, no cycle (through other services' requirements or the
+    policy's ``requires``). Duplicates collapse. Unrelated to ``depends_on``."""
+    cleaned = clean_slug_list(backup_requires)
+    if slug in cleaned:
+        raise _bad_request(f"service {slug!r} cannot list itself in backup_requires")
+    known = set(session.exec(select(Service.slug)).all())
+    unknown = [c for c in cleaned if c not in known]
+    if unknown:
+        raise _bad_request(f"backup_requires references unknown service(s): {', '.join(unknown)}")
+    _check_requires_graph(
+        session,
+        service_requires_override={slug: cleaned},
+        policy_id=policy_id,
+        slug=slug,
+    )
+    return cleaned
+
+
+def _check_requires_graph(
+    session: Session,
+    *,
+    slug: str,
+    service_requires_override: dict[str, list[str]] | None = None,
+    policy_id: int | None,
+) -> None:
+    """Refuse a change that would make the requires graph cyclic."""
+    policy = session.get(BackupPolicy, policy_id) if policy_id is not None else None
+    problems = requires_problems_from_db(
+        session,
+        service_requires_override=service_requires_override,
+        service_policy_override={slug: policy.name if policy else None},
+    )
+    cycles = [p for p in problems if "cycle" in p]
+    if cycles:
+        raise _bad_request(cycles[0] + " — backup requirements must not loop back on themselves")
 
 
 def _check_backup_exclusion(excluded: bool, reason: str) -> None:
@@ -533,6 +582,12 @@ async def create_service(
     _check_policy_exists(session, body.backup_policy_id)
     _check_backup_exclusion(body.backup_excluded, body.backup_excluded_reason)
     depends_on = _check_depends_on(session, slug, body.depends_on)
+    backup_requires = _check_backup_requires(
+        session,
+        slug,
+        body.backup_requires,
+        policy_id=body.backup_policy_id,
+    )
 
     svc = Service(
         slug=slug,
@@ -547,6 +602,7 @@ async def create_service(
         backup_excluded_reason=body.backup_excluded_reason,
         backup_policy_id=body.backup_policy_id,
         depends_on=depends_on,
+        backup_requires=backup_requires,
     )
     session.add(svc)
     session.flush()
@@ -590,6 +646,21 @@ async def update_service(
         _check_policy_exists(session, changes["backup_policy_id"])
     if "depends_on" in changes:
         changes["depends_on"] = _check_depends_on(session, slug, changes["depends_on"] or [])
+    if "backup_requires" in changes:
+        changes["backup_requires"] = _check_backup_requires(
+            session,
+            slug,
+            changes["backup_requires"] or [],
+            policy_id=changes.get("backup_policy_id", svc.backup_policy_id),
+        )
+    elif "backup_policy_id" in changes:
+        # Re-pointing a service at another policy changes which `requires` it
+        # inherits, which can close a loop even though its own list did not move.
+        _check_requires_graph(
+            session,
+            slug=slug,
+            policy_id=changes.get("backup_policy_id", svc.backup_policy_id),
+        )
     _check_backup_exclusion(
         changes.get("backup_excluded", svc.backup_excluded),
         changes.get("backup_excluded_reason", svc.backup_excluded_reason),
@@ -624,6 +695,19 @@ async def delete_service(slug: str, session: SessionDep, admin: CurrentAdmin) ->
         raise _conflict(
             f"cannot delete {slug!r}: {', '.join(dependents)} depend(s) on it — "
             "remove it from their depends_on first"
+        )
+    required_by = sorted(
+        {s.slug for s in session.exec(select(Service)).all() if slug in (s.backup_requires or [])}
+        | {
+            f"policy {p.name}"
+            for p in session.exec(select(BackupPolicy)).all()
+            if slug in (p.requires or [])
+        }
+    )
+    if required_by:
+        raise _conflict(
+            f"cannot delete {slug!r}: {', '.join(required_by)} require(s) it for backups — "
+            "remove it from their backup requirements first"
         )
     probe_names = [p.name for p in _service_probes(session, svc)]
     session.delete(svc)

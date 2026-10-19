@@ -44,7 +44,7 @@ from orchestrator.domain.enums import (
 )
 from orchestrator.health.engine import HealthEngine
 from orchestrator.logging_setup import get_logger, new_correlation_id
-from orchestrator.pipelines.backup import StepRecorder
+from orchestrator.pipelines.steps import Recorder, StepRecorder
 
 log = get_logger(__name__)
 
@@ -240,6 +240,75 @@ class WakePipeline:
         await self._run(session, run, slug, actor=actor, timeout_s=timeout_s)
         return run
 
+    async def ensure_awake(
+        self,
+        session: Session,
+        slug: str,
+        *,
+        actor: str = "system",
+        timeout_s: int | None = None,
+    ) -> PipelineRun:
+        """Wake ``slug`` and return only once it is up — or raise.
+
+        What the backup pipeline calls for every prerequisite and target. It
+        goes through :meth:`get_or_start`, so a backup that needs a node a
+        visitor (or another backup) is already waking JOINS that wake instead
+        of firing a second one, and a wake that just finished inside the
+        cooldown is reused rather than repeated.
+
+        * a new run is executed inline on ``session`` via :meth:`_run`, which
+          records its own steps and audit rows and raises
+          :class:`WakeError` / :class:`WakeUnsupportedError` / ``AdapterError``;
+        * a run owned by someone else is polled until it leaves RUNNING (bounded
+          by the wake budget), then judged by its final status.
+        """
+        run, started_new = self.get_or_start(session, slug, actor=actor)
+        if started_new:
+            await self._run(session, run, slug, actor=actor, timeout_s=timeout_s)
+            return run
+
+        budget = timeout_s if timeout_s is not None else self._settings.wake_timeout_s
+        deadline = time.monotonic() + budget
+        while run.status is PipelineStatus.RUNNING:
+            if time.monotonic() >= deadline:
+                raise WakeError(
+                    f"a wake for {slug!r} (run #{run.id}) started elsewhere is still "
+                    f"running after {budget}s"
+                )
+            # Close the read transaction before sleeping: nothing here may sit
+            # on a DB lock while a node takes minutes to boot.
+            session.commit()
+            await asyncio.sleep(self._settings.wake_poll_interval_s)
+            session.refresh(run)
+        if run.status is PipelineStatus.SUCCEEDED:
+            return run
+        raise WakeError(
+            f"the latest wake for {slug!r} (run #{run.id}) {run.status.value}: "
+            f"{run.error or 'no error recorded'}"
+        )
+
+    async def is_up(self, session: Session, slug: str) -> bool:
+        """Cheap "does this need waking at all?": node online in the cluster and
+        its guest (if any) running. Never raises and never starts anything — if
+        Proxmox cannot be asked, the answer is "not known to be up", which sends
+        the caller down the full wake path (that path tolerates the same blip).
+        """
+        service = session.exec(select(Service).where(Service.slug == slug)).one_or_none()
+        node = session.get(Node, service.node_id) if service and service.node_id else None
+        if service is None or node is None:
+            return False
+        try:
+            cluster = await self._proxmox.cluster_status()
+            if not self._node_online(cluster, node.name):
+                return False
+            if service.guest_kind is GuestKind.NONE or service.guest_id is None:
+                return True
+            guests = await self._proxmox.list_guests(node.name)
+        except AdapterError:
+            return False
+        guest = next((g for g in guests if g.vmid == service.guest_id), None)
+        return bool(guest and guest.status == "running")
+
     # -- the pipeline body ------------------------------------------------------
 
     async def _run(
@@ -259,7 +328,7 @@ class WakePipeline:
 
         hold_handle: str | None = None
         try:
-            hold_handle = await self._assert_hold(session, steps, node, reason=f"wake:{slug}")
+            hold_handle = await self.assert_hold(session, steps, node, reason=f"wake:{slug}")
             await self._ensure_node_powered(steps, node)
             await self._wait_node_online(session, steps, node, deadline)
             await self._ensure_guest_running(steps, service, node)
@@ -299,15 +368,28 @@ class WakePipeline:
             raise
         finally:
             if hold_handle is not None:
-                await self._release_hold(session, steps, node, hold_handle)
+                await self.release_hold(session, steps, node, hold_handle)
 
     # -- steps ---------------------------------------------------------------
 
-    async def _assert_hold(
-        self, session: Session, steps: StepRecorder, node: Node, *, reason: str
+    async def assert_hold(
+        self,
+        session: Session,
+        steps: Recorder,
+        node: Node,
+        *,
+        reason: str,
+        ttl_s: int | None = None,
     ) -> str:
+        """Assert an inhibit-shutdown hold on ``node`` and account for it in
+        ``NodeState``. Public because the backup pipeline holds the nodes it
+        woke for the whole backup — a hold must outlive the wake that asked for
+        it, so the wake's own (short, ``wake_timeout_s``) hold is not enough.
+        ``ttl_s`` defaults to the wake timeout."""
         handle = await self._power.hold(
-            node.power_mgr_target, reason=reason, ttl_s=self._settings.wake_timeout_s
+            node.power_mgr_target,
+            reason=reason,
+            ttl_s=ttl_s if ttl_s is not None else self._settings.wake_timeout_s,
         )
         state = self._node_state(session, node)
         state.hold_count += 1
@@ -317,11 +399,13 @@ class WakePipeline:
         ]
         session.add(state)
         session.commit()
-        steps.record("hold_asserted", "ok", detail={"handle": handle})
+        steps.record(
+            "hold_asserted", "ok", detail={"handle": handle, "node": node.name, "reason": reason}
+        )
         return handle
 
-    async def _release_hold(
-        self, session: Session, steps: StepRecorder, node: Node, handle: str
+    async def release_hold(
+        self, session: Session, steps: Recorder, node: Node, handle: str
     ) -> None:
         state = self._node_state(session, node)
         state.hold_count = max(0, state.hold_count - 1)
@@ -332,11 +416,15 @@ class WakePipeline:
         session.commit()
         try:
             await self._power.release(node.power_mgr_target, handle=handle)
-            steps.record("hold_released", "ok", detail={"handle": handle})
+            steps.record("hold_released", "ok", detail={"handle": handle, "node": node.name})
         except AdapterError as exc:
             # Don't let a release failure mask whatever outcome is already
             # recorded — log it and move on.
-            steps.record("hold_released", "failed", detail={"handle": handle, "error": str(exc)})
+            steps.record(
+                "hold_released",
+                "failed",
+                detail={"handle": handle, "node": node.name, "error": str(exc)},
+            )
             log.warning("wake.hold_release_failed", node=node.name, handle=handle, error=str(exc))
 
     async def _ensure_node_powered(self, steps: StepRecorder, node: Node) -> None:

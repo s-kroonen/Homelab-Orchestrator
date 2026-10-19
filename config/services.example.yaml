@@ -41,6 +41,21 @@ nodes:
 # ---------------------------------------------------------------------------
 # Backup policies. Attach one to each service. The scheduler (phase 6) reads
 # `schedule_cron`; retention is applied by the PBS adapter after each run.
+#
+# Waking for a backup (docs/backup_wake.md):
+#   requires:           service slugs that must be UP before ANY backup under
+#                       this policy can work at all. They are woken first
+#                       (before PBS is even checked) and held awake until the
+#                       backup finishes. Here: the storage VM hosting the NFS
+#                       the PBS datastore lives on — its node is normally off.
+#                       Each is woken through its own node only (not
+#                       transitive). Not `depends_on`, which only affects
+#                       health verdicts and never wakes anything.
+#   wake_before_backup: also wake the services being backed up (node on, guest
+#                       running, probes healthy) right before their backup.
+#                       Default true. The cron time is when the wake STARTS,
+#                       so leave boot-time headroom.
+# A single service can add extras of its own with `backup_requires`.
 # ---------------------------------------------------------------------------
 backup_policies:
   - name: daily-frequent
@@ -50,6 +65,9 @@ backup_policies:
       keep_daily: 7
       protect_latest_verified: true
     targets: {}
+    requires:
+      - example-storage
+    wake_before_backup: true
 
   - name: monthly-full
     schedule_cron: "0 4 1 * *"
@@ -58,6 +76,9 @@ backup_policies:
       keep_monthly: 6
       protect_latest_verified: true
     targets: {}
+    requires:
+      - example-storage
+    wake_before_backup: true
 
 # ---------------------------------------------------------------------------
 # Services. Each `service` maps a slug to a Proxmox guest and a list of probes
@@ -194,6 +215,9 @@ services:
     guest_id: 9002
     enabled: true
     backup_policy: daily-frequent
+    # Extra services THIS backup needs up, on top of the policy's `requires`
+    # (e.g. a separate database service). Woken first, held until it finishes:
+    #   backup_requires: [example-db]
     probes:
       - name: http-status
         kind: http

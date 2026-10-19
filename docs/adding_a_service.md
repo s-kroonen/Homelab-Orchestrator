@@ -162,6 +162,21 @@ Set it from the CLI with `orchestrator-cli service update <slug> --group
 <name>` (`--group ''` clears it), or from the service's own page in the
 dashboard.
 
+## Waking for a backup (`backup_requires`)
+
+A backup wakes the services being backed up, and anything the backup needs up
+first — see [backup_wake.md](backup_wake.md). A policy lists the services every one
+of its backups needs (`requires: [truenas]`); a service can add its own
+(`backup_requires: [its-database]`), from the CLI with
+`orchestrator-cli service update <slug> --backup-requires a,b` (`''` clears) or on
+the service page's **Backups** tab. `orchestrator-cli backup plan <slug>` previews
+the ordered list and exits non-zero if something in it can never be woken.
+
+This is **not** `depends_on`. `depends_on` is the health-gate dependency above
+(a down gateway makes a verdict UNKNOWN); it never wakes anything. `backup_requires`
+wakes and holds, and never changes a verdict. Requires are not transitive — each
+required service is woken through its own node only.
+
 ## Aggregation rule (the gate)
 
 * All REQUIRED probes HEALTHY -> service is HEALTHY -> backup runs.

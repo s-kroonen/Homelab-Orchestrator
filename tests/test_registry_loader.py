@@ -179,6 +179,10 @@ def test_replacing_the_entire_node_set_does_not_violate_fk(session: Session) -> 
         {"name": "eve1", "always_on": True, "power_mgr_target": "eve1", "notes": ""},
         {"name": "evepve", "always_on": False, "power_mgr_target": "evepve", "notes": ""},
     ]
+    # The example's policies now require its storage VM; that service is being
+    # replaced too, so the requirement has to go with it (an unknown slug is refused).
+    for policy in doc["backup_policies"]:
+        policy["requires"] = []
     doc["services"] = [
         {
             "slug": "real-thing",

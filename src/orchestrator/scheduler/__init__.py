@@ -45,7 +45,7 @@ from orchestrator.db.models import BackupPolicy, Service
 from orchestrator.db.session import session_scope
 from orchestrator.domain.enums import AuditResult
 from orchestrator.logging_setup import get_logger
-from orchestrator.pipelines.backup import BackupError, BackupPipeline
+from orchestrator.pipelines.backup import BackupError, BackupPipeline, WakeContext
 from orchestrator.scheduler.retention import RetentionError, enforce_retention
 
 log = get_logger(__name__)
@@ -98,7 +98,12 @@ class BackupScheduler:
         self._adapters = adapters
         self._settings = settings
         self._pipeline_factory = pipeline_factory or (
-            lambda: BackupPipeline(proxmox=adapters.proxmox, pbs=adapters.pbs, settings=settings)
+            lambda: BackupPipeline(
+                proxmox=adapters.proxmox,
+                pbs=adapters.pbs,
+                settings=settings,
+                power=adapters.power,
+            )
         )
         self._scheduler = AsyncIOScheduler()
         self._lock = asyncio.Lock()
@@ -203,14 +208,35 @@ class BackupScheduler:
                 slugs = resolve_targets(session, policy)
                 log.info("scheduler.policy.fire", policy=policy_name, services=slugs)
                 outcomes: dict[str, dict[str, Any]] = {}
-                for slug in slugs:
-                    outcomes[slug] = await self._run_one(session, policy, slug)
+                # The policy's own prerequisites (e.g. the storage VM) are woken
+                # ONCE for the whole batch and held until the last service is
+                # done — not woken and released per service. Per-service extras
+                # and each target are still handled per service, in its own run.
+                pipeline = self._pipeline_factory()
+                prepared = await pipeline.prepare_policy(
+                    session, policy, actor="scheduler", services=len(slugs)
+                )
+                try:
+                    for slug in slugs:
+                        outcomes[slug] = await self._run_one(
+                            session, policy, slug, pipeline, prepared
+                        )
+                finally:
+                    await pipeline.release_prepared(session, prepared)
                 return outcomes
 
-    async def _run_one(self, session: Session, policy: BackupPolicy, slug: str) -> dict[str, Any]:
-        pipeline = self._pipeline_factory()
+    async def _run_one(
+        self,
+        session: Session,
+        policy: BackupPolicy,
+        slug: str,
+        pipeline: BackupPipeline,
+        prepared: WakeContext,
+    ) -> dict[str, Any]:
         try:
-            run = await pipeline.run_for_service(session, slug, actor="scheduler", verify=True)
+            run = await pipeline.run_for_service(
+                session, slug, actor="scheduler", verify=True, prepared=prepared
+            )
         except (BackupError, AdapterError) as exc:
             # The pipeline already recorded the run + audit row; retention is
             # deliberately skipped so a failure never prunes anything.

@@ -28,7 +28,7 @@
     <div class="table-scroll">
     <table>
       <thead>
-        <tr><th>Policy</th><th>Schedule</th><th>Next run</th><th>Retention</th><th>Services</th><th></th></tr>
+        <tr><th>Policy</th><th>Schedule</th><th>Next run</th><th>Retention</th><th>Needs</th><th>Services</th><th></th></tr>
       </thead>
       <tbody id="bp-rows">
         {% for p in policies %}
@@ -45,6 +45,12 @@
             {% if p.retention.get("protect_latest_verified") %}<span class="badge ok">pins latest verified</span>{% endif %}
             {% if not p.retention %}<span class="muted">keep everything</span>{% endif %}
           </td>
+          <td class="needs">
+            {% for slug in p.requires %}<code>{{ slug }}</code> {% endfor %}
+            {% if not p.requires %}<span class="muted">nothing</span>{% endif %}
+            {% for b in p.requires_blockers %}<br><span class="badge failed" title="{{ b.blocker }}">{{ b.slug }}: cannot be woken</span>{% endfor %}
+            {% if not p.wake_before_backup %}<br><span class="muted">targets not woken</span>{% endif %}
+          </td>
           <td>
             {% for slug in p.services %}<code>{{ slug }}</code> {% endfor %}
             {% if not p.services %}<span class="muted">none</span>{% endif %}
@@ -56,7 +62,7 @@
           </td>
         </tr>
         <tr class="history-row" data-history-for="{{ p.id }}" data-history-owner="{{ p.name|lower }}" hidden>
-          <td colspan="6">
+          <td colspan="7">
             <p class="msg">
               Run history across every service this policy currently covers
               (<code>GET /api/runs?policy_id={{ p.id }}</code>) — not just one service's.
@@ -75,7 +81,7 @@
           </td>
         </tr>
         {% else %}
-        <tr><td colspan="6">No backup policies yet.</td></tr>
+        <tr><td colspan="7">No backup policies yet.</td></tr>
         {% endfor %}
       </tbody>
     </table>

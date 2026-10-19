@@ -12,9 +12,20 @@ from __future__ import annotations
 
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from orchestrator.domain.enums import BackupMode, GuestKind, ProbeKind
+
+
+def _collapse_slugs(value: list[str]) -> list[str]:
+    """Strip + de-duplicate a slug list, keeping first position, so a YAML that
+    names a service twice hashes equal to the DB copy (no phantom drift)."""
+    out: list[str] = []
+    for item in value:
+        slug = str(item).strip()
+        if slug and slug not in out:
+            out.append(slug)
+    return out
 
 
 class NodeSpec(BaseModel):
@@ -37,6 +48,13 @@ class BackupPolicySpec(BaseModel):
     mode: BackupMode = BackupMode.SNAPSHOT
     retention: dict[str, Any] = Field(default_factory=dict)
     targets: dict[str, Any] = Field(default_factory=dict)
+    #: Service slugs that must be up before any backup under this policy. See
+    #: BackupPolicy.requires and docs/backup_wake.md.
+    requires: list[str] = Field(default_factory=list)
+    #: Wake the services being backed up first. See BackupPolicy.wake_before_backup.
+    wake_before_backup: bool = True
+
+    _collapse_requires = field_validator("requires")(_collapse_slugs)
 
 
 class ProbeSpec(BaseModel):
@@ -87,9 +105,14 @@ class ServiceSpec(BaseModel):
     #: Slugs that must be HEALTHY before this service can be judged. See
     #: Service.depends_on — the gateway case.
     depends_on: list[str] = Field(default_factory=list)
+    #: Extra slugs that must be up before THIS service's backup (on top of its
+    #: policy's `requires`). Not the same as depends_on — see docs/backup_wake.md.
+    backup_requires: list[str] = Field(default_factory=list)
     backup_policy: str | None = None  # -> BackupPolicySpec.name
     probes: list[ProbeSpec] = Field(default_factory=list)
     proxy_hosts: list[ProxyHostSpec] = Field(default_factory=list)
+
+    _collapse_backup_requires = field_validator("backup_requires")(_collapse_slugs)
 
 
 class RegistryFile(BaseModel):

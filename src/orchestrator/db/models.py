@@ -85,6 +85,16 @@ class BackupPolicy(SQLModel, table=True):
     retention: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))
     # targets: {"services": ["example-media", "example-cloud"]}
     targets: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))
+    # Slugs of services that must be UP before ANY backup under this policy can
+    # work at all — canonically the storage VM hosting the NFS the PBS datastore
+    # lives on. Woken first, held until the backup finishes. NOT transitive and
+    # NOT a health-gate dependency (that is Service.depends_on). See
+    # docs/backup_wake.md.
+    requires: list[str] = Field(default_factory=list, sa_column=Column(JSON))
+    # Wake the services this policy backs up (node on, guest running, probes
+    # healthy) before their backup starts. Default on: a burst node that is off
+    # would otherwise just fail the run.
+    wake_before_backup: bool = Field(default=True)
     created_at: datetime = Field(default_factory=_utcnow)
     updated_at: datetime = Field(default_factory=_utcnow)
 
@@ -137,6 +147,11 @@ class Service(SQLModel, table=True):
     # A failed dependency yields UNKNOWN downstream, never FAILED: we genuinely
     # could not look, which is not evidence of anything about the service.
     depends_on: list[str] = Field(default_factory=list, sa_column=Column(JSON))
+
+    # Extra slugs that must be UP (woken + held) before THIS service's backup,
+    # on top of its policy's `requires` — e.g. its database service. Unrelated
+    # to `depends_on` above, which only affects health verdicts.
+    backup_requires: list[str] = Field(default_factory=list, sa_column=Column(JSON))
 
     node_id: int | None = Field(
         default=None,
