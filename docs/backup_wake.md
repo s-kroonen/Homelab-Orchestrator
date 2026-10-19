@@ -108,6 +108,20 @@ Note that a *target* that needs waking must become HEALTHY as part of the wake. 
 service that is already running and unhealthy is not waked at all; the gate then
 judges it (FAILED vs UNKNOWN) as before.
 
+### The gate always requires a running guest
+
+The integrity gate's scan starts with the **guest gate** (see
+docs/architecture.md, "Health model"): node online and guest running. That
+check is not optional for a backup — with `wake=false`, with the policy's
+*Wake before backup* off, or after a wake that did not bring the guest up, a
+stopped guest makes the verdict DOWN and the gate refuses:
+
+> integrity gate refused 'example-media': the guest is not running (DOWN) — guest vm 9001 is stopped. … This is NOT a restore candidate. Turn on 'Wake before backup' in the backup policy (or start the guest) so the backup brings it up first.
+
+The wake phase runs before the gate, and the gate reads the guest state fresh
+from Proxmox (never a scan cycle's cached copy), so a guest the wake just
+started is seen running. Only `gate=False` / `--no-gate` bypasses it, as before.
+
 ### Skipping it
 
 `orchestrator-cli backup SLUG --no-wake` and `POST /api/backup/SLUG?wake=false`

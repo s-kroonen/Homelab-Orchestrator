@@ -176,7 +176,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # one an intentional no-op too.
     health_scanner: HealthScanner | None = None
     try:
-        health_scanner = HealthScanner(settings=settings)
+        health_scanner = HealthScanner(settings=settings, adapters=adapters)
         health_scanner.start()
     except Exception as exc:
         log.error(

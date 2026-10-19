@@ -147,13 +147,20 @@ ProbeConfig = Annotated[
 # ---------------------------------------------------------------------------
 
 
+#: ``ProbeResult.kind`` of the synthetic guest-gate result the engine records
+#: first in every verdict for a guest-backed service (see
+#: ``orchestrator.health.guest_gate``). Deliberately NOT a ``ProbeKind``: it is
+#: not something an operator can configure as a probe.
+GUEST_CHECK_KIND: Literal["guest"] = "guest"
+
+
 class ProbeResult(BaseModel):
     """One probe execution's outcome; stored in ``ServiceState.last_probe_results``."""
 
     model_config = ConfigDict(extra="forbid")
 
     probe_name: str
-    kind: ProbeKind
+    kind: ProbeKind | Literal["guest"]
     state: HealthState
     latency_ms: int | None = None
     message: str | None = None

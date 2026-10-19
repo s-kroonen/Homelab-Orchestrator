@@ -166,6 +166,7 @@ section h2 { font-size: 0.95rem; margin: 0 0 0.75rem; }
 .badge.healthy, .badge.ok { background: #113b23; color: #3ecf6d; }
 .badge.failed { background: #3b1414; color: #e5534b; }
 .badge.unknown { background: #2a2f3a; color: #9aa4b2; }
+.badge.down { background: #142a3b; color: #5ba8e5; }
 .badge.disabled { background: #2a2f3a; color: #6b7280; }
 .badge.warn { background: #3b2e14; color: #e5a63e; }
 .field-error { color: #e5534b; font-size: 0.8rem; margin-top: 0.25rem; overflow-wrap: anywhere; }

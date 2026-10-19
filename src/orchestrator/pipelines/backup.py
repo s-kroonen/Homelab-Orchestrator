@@ -76,7 +76,7 @@ class BackupPipeline:
         self._settings = settings
         # Injected so tests can drive the gate deterministically. Defaults to a
         # real engine — the gate must be on unless someone explicitly opts out.
-        self._health = health or HealthEngine(settings=settings)
+        self._health = health or HealthEngine(settings=settings, proxmox=proxmox)
         # The wake phase needs the power adapter. Every real entry point (API,
         # CLI, scheduler) passes it; without one there is nothing to wake WITH,
         # so the phase is skipped (and logged) rather than guessed at — which
@@ -358,9 +358,14 @@ class BackupPipeline:
           network blip must not be allowed to produce a backup we would later
           trust, but it must equally not be treated as corruption.
 
-        This asymmetry is the entire point of the three-state model: never
-        overwrite a good backup with a bad one, and never mistake "don't know"
-        for either answer.
+        * DOWN    — the guest gate: the node is offline or the guest is not
+          running, so no probe ran. Refused, but never a restore candidate: a
+          stopped VM says nothing about its data. Wake before backup (which runs
+          before this gate) is what turns it into HEALTHY. The engine reads the
+          guest state fresh for every gate check — never a cached cycle's.
+
+        This asymmetry is the entire point of the model: never overwrite a good
+        backup with a bad one, and never mistake "don't know" for either answer.
         """
         if not gate:
             # Explicit operator override. Loud, audited, and never the default.
@@ -382,7 +387,7 @@ class BackupPipeline:
             "verdict": verdict.state.value,
             "reason": verdict.reason,
             "probe_results": [
-                {"name": r.probe_name, "kind": r.kind.value, "state": r.state.value}
+                {"name": r.probe_name, "kind": str(r.kind), "state": r.state.value}
                 for r in verdict.probe_results
             ],
         }
@@ -398,6 +403,18 @@ class BackupPipeline:
             detail=detail,
         )
 
+        if verdict.state is HealthState.DOWN:
+            # The guest gate: node offline or guest not running. Always
+            # required for a backup — there is nothing consistent to dump
+            # from a guest that is not running, and the probes never ran.
+            raise BackupError(
+                f"integrity gate refused {service.slug!r}: the guest is not running "
+                f"(DOWN) — {verdict.reason.split(' — ', 1)[0]}. The guest is stopped or "
+                f"its node is off, so its health could not be checked and no backup was "
+                f"taken; the last known-good backup is untouched. This is NOT a restore "
+                f"candidate. Turn on 'Wake before backup' in the backup policy (or start "
+                f"the guest) so the backup brings it up first."
+            )
         if verdict.state is HealthState.FAILED:
             raise BackupError(
                 f"integrity gate refused {service.slug!r}: the service is FAILED — "

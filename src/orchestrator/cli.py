@@ -524,8 +524,20 @@ def scan(slug: str | None, scan_all: bool) -> None:
     if not slug and not scan_all:
         raise click.UsageError("give a SLUG or --all")
 
+    adapters = build_adapters(settings)
+
     async def _go() -> int:
-        engine = HealthEngine(settings=settings)
+        # Only Proxmox is needed (for the guest gate) — never the power
+        # adapter: a scan must not depend on the power manager being reachable.
+        await adapters.proxmox.start()
+        try:
+            return await _scan_all()
+        finally:
+            await adapters.proxmox.stop()
+
+    async def _scan_all() -> int:
+        # The Proxmox adapter drives the guest gate, which runs first.
+        engine = HealthEngine(settings=settings, proxmox=adapters.proxmox)
         unhealthy = 0
         with Session(get_engine()) as session:
             if settings.services_yaml_path.exists():
@@ -544,18 +556,32 @@ def scan(slug: str | None, scan_all: bool) -> None:
                 click.secho(f"no service matched {slug!r}", fg="red")
                 return 1
 
-            colour = {"healthy": "green", "failed": "red", "unknown": "yellow"}
+            colour = {"healthy": "green", "failed": "red", "unknown": "yellow", "down": "blue"}
             for svc in services:
                 verdict = await engine.scan(session, svc)
                 state = verdict.state.value
                 if state != "healthy":
                     unhealthy += 1
-                click.secho(f"{svc.slug:<24} {state.upper()}", fg=colour[state], bold=True)
+                label = "DOWN (guest not running)" if state == "down" else state.upper()
+                click.secho(f"{svc.slug:<24} {label}", fg=colour[state], bold=True)
+                for r in verdict.probe_results:
+                    if str(r.kind) == "guest":
+                        # The guest gate runs first, so it is printed first.
+                        gmark = {"healthy": "up", "down": "DOWN"}.get(r.state.value, "??")
+                        click.secho(
+                            f"    guest gate: {gmark} — {r.message}",
+                            fg=colour.get(r.state.value, "yellow"),
+                        )
                 click.echo(f"    {verdict.reason}")
                 for r in verdict.probe_results:
-                    mark = {"healthy": "ok  ", "failed": "FAIL", "unknown": "??  "}[r.state.value]
+                    if str(r.kind) == "guest":
+                        continue
+                    if r.details.get("skipped"):
+                        click.echo(f"      skip {r.probe_name} [{r.kind}] — {r.message}")
+                        continue
+                    mark = {"healthy": "ok  ", "failed": "FAIL"}.get(r.state.value, "??  ")
                     latency = f" ({r.latency_ms}ms)" if r.latency_ms is not None else ""
-                    click.echo(f"      {mark} {r.probe_name} [{r.kind.value}]{latency}")
+                    click.echo(f"      {mark} {r.probe_name} [{r.kind}]{latency}")
                     if r.message and r.state.value != "healthy":
                         click.echo(f"           {r.message}")
                 click.echo("")
@@ -602,7 +628,7 @@ def probe_test(slug: str, probe_name: str) -> None:
     result = _run(_go())
     colour = {"healthy": "green", "failed": "red", "unknown": "yellow"}[result.state.value]
     click.secho(
-        f"{result.probe_name} [{result.kind.value}] -> {result.state.value.upper()}",
+        f"{result.probe_name} [{result.kind}] -> {result.state.value.upper()}",
         fg=colour,
         bold=True,
     )

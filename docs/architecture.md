@@ -52,18 +52,47 @@ consideration that affects whether the wake pipeline can start guests at all on
 a mostly-powered-off cluster. Both are covered in
 [proxmox_connectivity.md](proxmox_connectivity.md).
 
-## Three-state health model
+## Health model
 
-Every scan aggregates its required probes into one of:
+A scan runs three stages in order; each one short-circuits the rest:
+
+1. **Guest gate** (`health/guest_gate.py`) — for a service with a guest
+   (`guest_kind` vm/ct and `guest_id` set): is its node online in the Proxmox
+   cluster (`cluster_status`) and is the guest `running` (`list_guests`)? If
+   not, the verdict is **DOWN** and no probe runs. The check is recorded as the
+   first entry in the verdict's probe results (name `guest`, kind `guest`) and
+   every probe is recorded as `skipped — guest stopped` / `skipped — node
+   offline`. If Proxmox cannot be read, the gate steps aside: the probes run as
+   before and the reason notes "guest state unknown".
+2. **Dependencies** — any `depends_on` service not HEALTHY makes this one
+   UNKNOWN (`blocked: dependency 'nas' is DOWN (guest vm 9001 is stopped)…`).
+3. **Probes** — the required probes aggregate into one of the states below.
 
 | State    | Meaning                                                                                          | Backup gate |
 | -------- | ------------------------------------------------------------------------------------------------ | ----------- |
-| HEALTHY  | Proxmox boot ok AND all required probes pass (containers healthy, DB integrity check ok).        | Runs        |
+| HEALTHY  | Node online, guest running AND all required probes pass (containers healthy, DB integrity ok).   | Runs        |
 | FAILED   | A definitive negative: unit failed, container exited/unhealthy, HTTP 5xx, integrity check fails. | Skipped, restore candidate. |
-| UNKNOWN  | Indeterminate — probe timed out, node unreachable, DB check couldn't run.                        | Skipped, alert only. |
+| UNKNOWN  | Indeterminate — probe timed out, node unreachable, DB check couldn't run, dependency blocked.    | Skipped, alert only. |
+| DOWN     | The guest gate: node offline or guest not running. Probes were not run.                          | Skipped; **not** a restore candidate. |
 
 **Never overwrite a good backup with a bad one.** UNKNOWN is treated as
 non-clean (fail closed) so a network blip cannot cascade a failed backup.
+
+**DOWN is not FAILED.** A stopped VM is not evidence of corrupt data and must
+never look like a restore candidate. It is not UNKNOWN either: we know exactly
+why the service is not answering, and so is its traffic data (on `/traffic` a
+DOWN service's hosts are flagged "guest stopped — requests to it are
+failing"). Wake-on-hit treats DOWN like FAILED — it is the clearest sign a wake
+is what's needed.
+
+The guest state is fetched once per scan cycle and shared by every service in
+it (the HealthScanner hands one `GuestStateCache` to all of them, so N services
+cost two Proxmox calls). A one-off scan — the backup gate, the wake pipeline's
+health poll, `orchestrator-cli scan` — reads it fresh. `HealthState` is
+persisted by name into plain string columns (`service_state.last_verdict`,
+`health_scan_sample.state`), so DOWN needed no migration. A `HealthEngine`
+constructed without a `proxmox=` adapter has no guest gate; every real
+construction site (scanner, wake and backup pipelines, CLI `scan`) passes one.
 
 ### Periodic scanning and the shared-cache consistency guarantee
 
