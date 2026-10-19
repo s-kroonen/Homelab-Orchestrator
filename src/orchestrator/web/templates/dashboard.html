@@ -81,9 +81,9 @@
     <h2>Nodes</h2>
     <table>
       <thead>
-        <tr><th>Name</th><th>Always on</th><th>Power target</th><th>Notes</th><th>Wake on hit</th><th>Services</th><th></th></tr>
+        <tr><th>Name</th><th>State</th><th>Always on</th><th>Power target</th><th>Notes</th><th>Wake on hit</th><th>Services</th><th></th></tr>
       </thead>
-      <tbody id="nodes-body"><tr><td colspan="7">Loading…</td></tr></tbody>
+      <tbody id="nodes-body"><tr><td colspan="8">Loading…</td></tr></tbody>
     </table>
     <div class="row">
       <input id="new-node-name" placeholder="name (e.g. pve1)" size="12">
@@ -233,13 +233,47 @@
     return b;
   }
 
+  // Live power state (GET /api/infra/nodes/status), filled in after the table
+  // renders so a slow power manager never delays the page.
+  const nodeStates = {};
+  function stateBadge(s) {
+    const span = document.createElement("span");
+    if (!s) { span.className = "badge unknown"; span.textContent = "…"; return span; }
+    const cls = { on: "healthy", off: "disabled", booting: "unknown", stopping: "unknown" }[s.state] || "unknown";
+    span.className = "badge " + cls;
+    span.textContent = s.state;
+    const bits = [];
+    bits.push("Proxmox: " + (s.proxmox_online === true ? "online" : s.proxmox_online === false ? "offline" : "unknown"));
+    bits.push("Power manager: " + (s.power || "—") + (s.power_detail ? " (" + s.power_detail + ")" : ""));
+    span.title = bits.join("\n");
+    return span;
+  }
+  async function loadNodeStates() {
+    try {
+      const body = await apiFetch("GET", "/api/infra/nodes/status", undefined, { suppressToast: true });
+      for (const n of body.nodes) nodeStates[n.name] = n;
+    } catch (err) {
+      for (const td of document.querySelectorAll("td.node-state")) {
+        td.replaceChildren(Object.assign(document.createElement("span"), { className: "badge unknown", textContent: "?", title: err.message }));
+      }
+      return;
+    }
+    for (const td of document.querySelectorAll("td.node-state")) {
+      td.replaceChildren(stateBadge(nodeStates[td.dataset.node]));
+    }
+  }
+
   function renderNodeRow(node, editing) {
     const tr = document.createElement("tr");
     const path = "/api/registry/nodes/" + encodeURIComponent(node.name);
     const actions = document.createElement("td");
     if (!editing) {
+      const stateCell = document.createElement("td");
+      stateCell.className = "node-state";
+      stateCell.dataset.node = node.name;
+      stateCell.appendChild(stateBadge(nodeStates[node.name]));
       tr.append(
-        cell(node.name), cell(node.always_on ? "yes" : "no"), cell(node.power_mgr_target || "—"),
+        cell(node.name), stateCell, cell(node.always_on ? "yes" : "no"), cell(node.power_mgr_target || "—"),
         cell(node.notes || "—"), cell(node.wake_on_hit_enabled ? "yes" : "no"),
         cell(String(node.service_count)),
       );
@@ -305,7 +339,7 @@
     wakeOnHit.type = "checkbox";
     wakeOnHit.checked = node.wake_on_hit_enabled;
     tr.append(
-      cell(name), cell(alwaysOn), cell(target), cell(notes), cell(wakeOnHit),
+      cell(name), cell(stateBadge(nodeStates[node.name])), cell(alwaysOn), cell(target), cell(notes), cell(wakeOnHit),
       cell(String(node.service_count)),
     );
     actions.append(
@@ -330,10 +364,11 @@
     const body = document.getElementById("nodes-body");
     body.innerHTML = "";
     if (!nodes.length) {
-      body.innerHTML = '<tr><td colspan="7">No nodes yet.</td></tr>';
+      body.innerHTML = '<tr><td colspan="8">No nodes yet.</td></tr>';
       return;
     }
     for (const n of nodes) body.appendChild(renderNodeRow(n, false));
+    loadNodeStates();
   }
 
   document.getElementById("new-node-btn").addEventListener("click", async () => {

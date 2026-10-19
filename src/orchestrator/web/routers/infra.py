@@ -12,6 +12,7 @@ power_off/restart), not the wake pipeline. See :func:`node_power_action`.
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -21,6 +22,7 @@ from sqlmodel import select
 from orchestrator.adapters.errors import AdapterError, AdapterUnreachable
 from orchestrator.audit import log as audit
 from orchestrator.db.models import Node
+from orchestrator.domain.enums import PowerState
 from orchestrator.web.auth import CurrentAdmin, require_admin
 from orchestrator.web.deps import AdaptersDep, SessionDep, SettingsDep
 
@@ -85,6 +87,69 @@ class NodePowerIn(BaseModel):
     #: False (default) asks for a graceful action, True skips straight to an
     #: immediate power cut / full power-cycle. Ignored for "wake".
     force: bool = False
+
+
+#: A power manager that never answers must not stall the dashboard.
+_POWER_STATUS_TIMEOUT_S = 4.0
+
+
+def combined_node_state(power: PowerState | None, proxmox_online: bool | None) -> str:
+    """One word for the dashboard: ``on`` / ``off`` / ``booting`` /
+    ``stopping`` / ``unknown``. Proxmox seeing the node online wins (it is
+    serving the API right now); otherwise the power manager's own view; a
+    node Proxmox reports offline with no power-manager answer counts as off."""
+    if proxmox_online:
+        return "on"
+    if power in (PowerState.ON, PowerState.OFF, PowerState.BOOTING, PowerState.STOPPING):
+        return power.value
+    if proxmox_online is False:
+        return "off"
+    return "unknown"
+
+
+@router.get("/nodes/status")
+async def nodes_status(session: SessionDep, adapters: AdaptersDep) -> dict[str, Any]:
+    """Live power state of every node: the power manager's report (when the
+    node has a power target) and whether Proxmox sees it online. Read-only,
+    never raises for one unreachable source - that source reads ``None``."""
+    nodes = session.exec(select(Node).order_by(Node.name)).all()
+
+    proxmox_error: str | None = None
+    online: dict[str, bool] = {}
+    try:
+        cluster = await adapters.proxmox.cluster_status()
+        online = {n.name: n.online for n in cluster.nodes}
+    except Exception as exc:  # unreachable cluster: report it, keep the power view
+        proxmox_error = str(exc)
+
+    async def power_of(node: Node) -> tuple[PowerState | None, str | None]:
+        if not node.power_mgr_target.strip():
+            return None, "no power target"
+        try:
+            report = await asyncio.wait_for(
+                adapters.power.get_status(node.power_mgr_target), _POWER_STATUS_TIMEOUT_S
+            )
+        except TimeoutError:
+            return None, "power manager did not answer"
+        except Exception as exc:
+            return None, str(exc)
+        return report.state, report.detail
+
+    reports = await asyncio.gather(*(power_of(n) for n in nodes))
+    out = []
+    for node, (power, detail) in zip(nodes, reports, strict=True):
+        pve = online.get(node.name) if not proxmox_error else None
+        out.append(
+            {
+                "name": node.name,
+                "always_on": node.always_on,
+                "power": power.value if power else None,
+                "power_detail": detail,
+                "proxmox_online": pve,
+                "state": combined_node_state(power, pve),
+            }
+        )
+    return {"nodes": out, "proxmox_error": proxmox_error}
 
 
 @router.post("/nodes/{name}/power")
