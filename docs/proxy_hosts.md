@@ -256,6 +256,24 @@ Editing keeps what is stored when the request omits `route_options`; turning
 both, and a failed redirect write takes the main route back so there is never a
 half-made pair.
 
+### Enabled state is kept in step with Traefik Manager
+
+Traefik Manager is the source of truth for whether a route is on:
+
+* **The switch reaches every route that serves the hostname.** The route this
+  orchestrator created (and its `-redirect` companion), **plus any other
+  Traefik Manager route with that hostname** — so a host adopted by Resync, or a
+  hand-written setup with a separate `…-redirect` router, is switched as a whole.
+  (Previously a host without a stored route reference only changed the local flag.)
+* **The list and the edit page show Traefik Manager's state** (`tm_state`:
+  `enabled` / `disabled` / `partial`). If it differs from the orchestrator's flag
+  an amber badge says so (`off in Traefik Manager`, `on in Traefik Manager`,
+  `partly off in TM`). Clicking the switch makes both match.
+* **Resync adopts Traefik Manager's state** for hosts it matches (only when
+  Traefik Manager itself was read). A `partial` state is left alone.
+* The edit page has the same Enable / Disable button; a disabled host cannot be
+  saved until it is enabled.
+
 ### Validation — before anything is written
 
 One validator module (`orchestrator.registry.proxy_validation`) is used by the

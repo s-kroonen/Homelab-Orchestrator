@@ -399,3 +399,123 @@ def test_route_disabled_on_tm_but_enabled_here_is_explained(
 
 def test_route_info_enabled_defaults_true() -> None:
     assert RouteInfo(name="x", hostnames=set(), upstream=None).enabled is True
+
+
+# ---------------------------------------------------------------------------
+# State kept in step with Traefik Manager (it is the source of truth)
+# ---------------------------------------------------------------------------
+
+
+def _adopted_host(service: Service, hostname: str = "pbs.example.com") -> int:
+    """A host recorded WITHOUT a Traefik Manager route reference, the way a
+    Resync "Discovered -> Add" leaves it."""
+    with Session(get_engine()) as s:
+        ph = ProxyHost(
+            hostname=hostname,
+            upstream="http://10.0.0.9:8006",
+            service_id=service.id,
+            entry_points=["websecure"],
+        )
+        s.add(ph)
+        s.commit()
+        s.refresh(ph)
+        assert ph.id is not None
+        return ph.id
+
+
+def test_toggle_reaches_tm_for_a_host_without_a_stored_route_reference(
+    service: Service, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Regression: the switch only changed the local flag for adopted hosts, so
+    Traefik Manager never saw the disable."""
+    fake = ToggleTM()
+    fake.seed("hand-made", "pbs.example.com", ["websecure"])
+    fake.seed("hand-made-redirect", "pbs.example.com", ["web"])  # a separate redirect router
+    client = _client(monkeypatch, fake)
+    pid = _adopted_host(service)
+
+    r = client.post(f"/api/proxy-hosts/{pid}/enabled", json={"enabled": False})
+    assert r.status_code == 200, r.text
+    assert sorted(t for t in fake.toggles) == [("hand-made", False), ("hand-made-redirect", False)]
+    assert _row(pid).enabled is False
+    body = r.json()
+    assert body["tm_state"] == "disabled" and body["enabled"] is False
+
+    fake.toggles.clear()
+    assert client.post(f"/api/proxy-hosts/{pid}/enabled", json={"enabled": True}).status_code == 200
+    assert sorted(t for t in fake.toggles) == [("hand-made", True), ("hand-made-redirect", True)]
+
+
+def test_list_shows_traefik_managers_state_and_a_mismatch(
+    service: Service, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake = ToggleTM()
+    fake.seed("hand-made", "pbs.example.com", ["websecure"])
+    client = _client(monkeypatch, fake)
+    pid = _adopted_host(service)
+
+    row = next(h for h in client.get("/api/proxy-hosts").json() if h["id"] == pid)
+    assert row["enabled"] is True and row["tm_state"] == "enabled"
+
+    # Switched off in Traefik Manager by hand: the orchestrator still says "on".
+    fake.disabled["hand-made"] = fake.routes.pop("hand-made")
+    row = next(h for h in client.get("/api/proxy-hosts").json() if h["id"] == pid)
+    assert row["enabled"] is True and row["tm_state"] == "disabled"
+
+
+def test_partial_state_when_only_some_routes_are_off(
+    service: Service, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake = ToggleTM()
+    fake.seed("main", "pbs.example.com", ["websecure"])
+    fake.seed("redir", "pbs.example.com", ["web"])
+    fake.disabled["redir"] = fake.routes.pop("redir")
+    client = _client(monkeypatch, fake)
+    pid = _adopted_host(service)
+    row = next(h for h in client.get("/api/proxy-hosts").json() if h["id"] == pid)
+    assert row["tm_state"] == "partial"
+
+
+def test_resync_adopts_traefik_managers_disabled_state(
+    service: Service, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake = ToggleTM()
+    fake.seed("hand-made", "pbs.example.com", ["websecure"])
+    client = _client(monkeypatch, fake)
+    pid = _adopted_host(service)
+    fake.disabled["hand-made"] = fake.routes.pop("hand-made")  # disabled in TM
+
+    r = client.post("/api/proxy-hosts/resync")
+    assert r.status_code == 200, r.text
+    assert _row(pid).enabled is False
+    upd = next(u for u in r.json()["updated"] if u["hostname"] == "pbs.example.com")
+    assert upd["enabled_changed"] is True
+
+    # ...and back on again when TM has it enabled.
+    fake.routes["hand-made"] = fake.disabled.pop("hand-made")
+    assert client.post("/api/proxy-hosts/resync").status_code == 200
+    assert _row(pid).enabled is True
+
+
+def test_edit_page_has_the_enable_switch(service: Service, monkeypatch: pytest.MonkeyPatch) -> None:
+    fake = ToggleTM()
+    fake.seed("hand-made", "pbs.example.com", ["websecure"])
+    client = _client(monkeypatch, fake)
+    pid = _adopted_host(service)
+    html = client.get(f"/proxy-hosts/{pid}/edit").text
+    assert 'id="toggle-enabled"' in html and "Disable" in html
+    client.post(f"/api/proxy-hosts/{pid}/enabled", json={"enabled": False})
+    html = client.get(f"/proxy-hosts/{pid}/edit").text
+    assert "cannot be edited" in html and ">Enable</button>" in html
+
+
+def test_link_buttons_keep_their_colour_when_visited() -> None:
+    """Regression: `a:visited` outranked `a.btn`, turning a visited "Add proxy
+    host" button blue on blue (invisible text)."""
+    from pathlib import Path
+
+    css = (
+        Path(__file__).parent.parent / "src" / "orchestrator" / "web" / "static" / "app.css"
+    ).read_text(encoding="utf-8")
+    assert "a.btn, a.btn:visited { color: #0b0e14; }" in css
+    assert "a.btn.secondary, a.btn.secondary:visited" in css

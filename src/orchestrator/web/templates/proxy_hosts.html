@@ -59,7 +59,7 @@
     <div class="table-scroll" id="ph-scroll">
     <table id="ph-table">
       <thead>
-        <tr><th>Hostname</th><th>Enabled</th><th>Upstream</th><th>Provider</th><th>Service</th><th>Entry points</th><th>Traefik</th><th>Last seen</th><th>Wake on hit</th><th></th></tr>
+        <tr><th class="c-host">Hostname</th><th class="c-en">Enabled</th><th class="c-up">Upstream</th><th class="c-prov">Provider</th><th class="c-svc">Service</th><th class="c-ep">Entry points</th><th class="c-tf">Traefik</th><th class="c-seen">Last seen</th><th class="c-wake">Wake on hit</th><th class="c-act"></th></tr>
       </thead>
       <tbody id="ph-rows"><tr><td colspan="10">Loading…</td></tr></tbody>
     </table>
@@ -89,6 +89,33 @@
   .host-err { display: none; font-size: 0.78rem; color: #e5534b; margin-top: 0.3rem; max-width: 14rem; overflow-wrap: anywhere; white-space: normal; }
   @media (max-width: 40rem) { .host-err { display: block; } }
   .ep-badge { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+
+  /* Every column is always shown. The table has a floor width (it scrolls
+     sideways inside .table-scroll below that, never clips), and above it the
+     columns share the space: short ones are fixed, long strings (hostname,
+     upstream, service, timestamp) are cut with an ellipsis - the full text is
+     in the cell's tooltip. */
+  #ph-table { display: table; table-layout: fixed; width: 100%; min-width: 48rem; }
+  #ph-table th, #ph-table td { overflow: hidden; text-overflow: ellipsis; vertical-align: top; padding: 0.5rem 0.4rem; font-size: 0.8rem; }
+  #ph-table td.nowrap, #ph-table td.c-host, #ph-table td.c-seen { white-space: nowrap; }
+  #ph-table td.c-host code { display: inline-block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; vertical-align: bottom; font-size: 0.78rem; }
+  #ph-table td.c-ep, #ph-table td.c-tf, #ph-table td.c-en { white-space: normal; overflow-wrap: anywhere; }
+  #ph-table .c-host { width: 20%; }
+  #ph-table .c-en { width: 7%; }
+  #ph-table .c-up { width: 14%; }
+  #ph-table .c-prov { width: 5%; }
+  #ph-table .c-svc { width: 9%; }
+  #ph-table .c-ep { width: 9%; }
+  #ph-table .c-tf { width: 13%; }
+  #ph-table .c-seen { width: 9%; }
+  #ph-table .c-wake { width: 5%; }
+  #ph-table .c-act { width: 9%; }
+  #ph-table td.c-act { white-space: normal; overflow: visible; }
+  #ph-table td.c-act .btn, #ph-table td.c-act button { display: block; width: 100%; margin: 0 0 0.25rem; text-align: center; }
+  #ph-table .router-error { max-width: none; }
+  #ph-table td .badge { white-space: normal; }
+  #ph-table td.c-ep .msg { font-size: 0.72rem; overflow-wrap: anywhere; }
+  .tm-mismatch { display: block; margin-top: 0.25rem; white-space: normal; font-size: 0.75rem; }
 </style>
 {% endblock %}
 {% block scripts %}
@@ -214,11 +241,19 @@
   let hosts = [];
   const services = {{ services|tojson }};
 
-  function cell(text, cls) {
+  function cell(text, cls, title) {
     const td = document.createElement("td");
     if (cls) td.className = cls;
     td.textContent = text;
+    // Long values are cut with an ellipsis by the table; the full text stays
+    // available on hover.
+    td.title = title !== undefined ? title : text;
     return td;
+  }
+
+  // "2026-10-20T12:25:42.132336+00:00" -> "2026-10-20 12:25" (full value in the tooltip)
+  function shortTime(iso) {
+    return iso.replace("T", " ").replace(/:\d{2}(\.\d+)?([+-]\d{2}:\d{2}|Z)?$/, "");
   }
 
   function entryPointsCell(h) {
@@ -241,7 +276,8 @@
     if (!stored.length) {
       const note = document.createElement("div");
       note.className = "msg muted";
-      note.textContent = "not stored yet — from Traefik";
+      note.textContent = "live";
+      note.title = "Not stored yet - read from what Traefik has on the route. Edit and save to store it.";
       td.appendChild(note);
     } else if (h.cert_resolver) {
       const r = document.createElement("div");
@@ -331,6 +367,8 @@
       tr.dataset.bulkLabel = h.hostname;
       if (!h.enabled) tr.classList.add("row-disabled");
       const hostTd = document.createElement("td");
+      hostTd.className = "c-host";
+      hostTd.title = h.hostname;
       const code = document.createElement("code");
       code.textContent = h.hostname;
       hostTd.appendChild(code);
@@ -344,12 +382,14 @@
       }
       tr.appendChild(hostTd);
       tr.appendChild(enabledCell(h));
-      tr.appendChild(cell(h.upstream || "—"));
-      tr.appendChild(cell(h.router_provider));
+      tr.appendChild(cell(h.upstream || "—", "c-up nowrap"));
+      tr.appendChild(cell(h.router_provider, "c-prov"));
 
       const svcTd = document.createElement("td");
+      svcTd.className = "c-svc nowrap";
       if (h.service_slug) {
         svcTd.textContent = `${h.service_name} (${h.service_slug})`;
+        svcTd.title = svcTd.textContent;
       } else {
         const b = document.createElement("span");
         b.className = "badge unknown";
@@ -358,9 +398,12 @@
       }
       tr.appendChild(svcTd);
 
-      tr.appendChild(entryPointsCell(h));
+      const epTd = entryPointsCell(h);
+      epTd.classList.add("c-ep");
+      tr.appendChild(epTd);
 
       const statusTd = document.createElement("td");
+      statusTd.className = "c-tf";
       const statusCls = { matched: "healthy", missing: "failed", unknown: "unknown", disabled: "disabled" }[h.live_status]
         || "unknown";
       const statusLabel = { matched: "matched", missing: "missing", unknown: "unknown", disabled: "disabled" }[h.live_status]
@@ -372,11 +415,15 @@
       appendRouterStatus(statusTd, h);
       tr.appendChild(statusTd);
 
-      tr.appendChild(cell(h.last_seen_at || "never", h.last_seen_at ? "" : "muted"));
-      tr.appendChild(cell(h.wake_on_hit ? "yes" : "no", h.wake_on_hit ? "" : "muted"));
+      tr.appendChild(cell(
+        h.last_seen_at ? shortTime(h.last_seen_at) : "never",
+        "c-seen" + (h.last_seen_at ? "" : " muted"),
+        h.last_seen_at || "never",
+      ));
+      tr.appendChild(cell(h.wake_on_hit ? "yes" : "no", "c-wake" + (h.wake_on_hit ? "" : " muted")));
 
       const actions = document.createElement("td");
-      actions.className = "actions";
+      actions.className = "actions c-act";
       const edit = document.createElement("a");
       edit.className = "btn secondary small";
       edit.href = `/proxy-hosts/${h.id}/edit`;
@@ -424,6 +471,19 @@
       await loadHosts();
     });
     td.appendChild(b);
+    td.className = "c-en";
+    // Traefik Manager is the source of truth: say so when it disagrees.
+    const tm = h.tm_state;
+    if (h.router_provider === "traefik" && tm && tm !== (h.enabled ? "enabled" : "disabled")) {
+      const m = document.createElement("span");
+      m.className = "badge warn tm-mismatch";
+      m.textContent = tm === "partial" ? "partly off in TM"
+        : tm === "disabled" ? "off in Traefik Manager" : "on in Traefik Manager";
+      m.title = "Traefik Manager has this route " + tm + ", the orchestrator has it " +
+        (h.enabled ? "enabled" : "disabled") + ". Click the switch to make them match, or " +
+        "Resync to adopt Traefik Manager's state.";
+      td.appendChild(m);
+    }
     return td;
   }
 

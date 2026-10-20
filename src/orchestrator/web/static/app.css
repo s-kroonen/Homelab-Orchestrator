@@ -200,6 +200,14 @@ code { background: #171b24; padding: 0.1rem 0.3rem; border-radius: 0.3rem; }
 a, a:visited { color: #5b8def; text-decoration: none; }
 a:hover { text-decoration: underline; }
 
+/* Link-styled buttons keep their own colours in every link state. The generic
+   `a:visited` rule above has the same specificity as `a.btn` and comes later,
+   so without these a button-link you had already opened turned blue on blue. */
+a.btn, a.btn:visited { color: #0b0e14; }
+a.btn.secondary, a.btn.secondary:visited { color: #e6e9ef; }
+a.btn.danger, a.btn.danger:visited { color: #e5534b; }
+a.btn:hover { text-decoration: none; }
+
 [hidden] { display: none !important; }
 
 /* --- step lists (✓/✗ vocabulary shared by dashboard, maintenance,

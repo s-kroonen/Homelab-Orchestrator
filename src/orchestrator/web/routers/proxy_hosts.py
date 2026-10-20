@@ -271,6 +271,31 @@ def _fail(
     return HTTPException(code, detail={"message": message, "errors": errors or {}, **extra})
 
 
+def tm_routes_for(routes: Sequence[RouteInfo] | None, hostname: str) -> list[RouteInfo]:
+    """Every Traefik Manager route that serves ``hostname`` - the main router
+    and, for example, a hand-written ``<name>-redirect`` on the plain-HTTP entry
+    point."""
+    host = hostname.strip().lower()
+    return [r for r in routes or [] if host in {h.lower() for h in r.hostnames}]
+
+
+def tm_state(routes: Sequence[RouteInfo] | None, hostname: str) -> str | None:
+    """Traefik Manager's own on/off state for a host: ``enabled``, ``disabled``,
+    ``partial`` (some of its routes on, some off) or ``None`` when TM is not
+    readable or has no route for it."""
+    if routes is None:
+        return None
+    found = tm_routes_for(routes, hostname)
+    if not found:
+        return None
+    on = [bool(getattr(r, "enabled", True)) for r in found]
+    if all(on):
+        return "enabled"
+    if not any(on):
+        return "disabled"
+    return "partial"
+
+
 def _traefik_block(
     ph: ProxyHost, live: LiveState | None, expect: Sequence[str] | None = None
 ) -> dict[str, Any] | None:
@@ -344,6 +369,14 @@ def _serialize(
             DISABLED if not ph.enabled else drift_status(ph.hostname, live_hostnames).value
         ),
         "enabled": ph.enabled,
+        # What Traefik Manager says about the same host (it is the source of
+        # truth for routes): enabled / disabled / partial / None (unreadable or
+        # no such route). A difference from `enabled` is shown as a mismatch.
+        "tm_state": (
+            tm_state(live.routes, ph.hostname)
+            if live is not None and ph.router_provider is RouterProvider.TRAEFIK
+            else None
+        ),
         # Traefik's verdict on the router itself (state ok / error / not_loaded
         # / unverified, with Traefik's own error text when it is broken).
         "traefik": _traefik_block(ph, live),
@@ -982,6 +1015,15 @@ async def resync_proxy_hosts(
         upstream_changed = bool(match.upstream) and match.upstream != ph.upstream
         if upstream_changed:
             ph.upstream = match.upstream  # type: ignore[assignment]
+        # Traefik Manager is the source of truth for whether a route is on:
+        # adopt its state (only when TM itself was read - a bare Traefik API has
+        # no notion of a disabled route and would report everything enabled).
+        enabled_changed = False
+        if settings.traefik_manager_url.strip() and ph.router_provider is RouterProvider.TRAEFIK:
+            state = tm_state(routers, ph.hostname)
+            if state in ("enabled", "disabled") and ph.enabled != (state == "enabled"):
+                ph.enabled = state == "enabled"
+                enabled_changed = True
         ph.last_seen_at = now
         session.add(ph)
         updated.append(
@@ -991,6 +1033,7 @@ async def resync_proxy_hosts(
                 "upstream": ph.upstream,
                 "router": match.name,
                 "upstream_changed": upstream_changed,
+                "enabled_changed": enabled_changed,
                 "traefik": _traefik_block(ph, live_for_status),
             }
         )
@@ -1265,6 +1308,34 @@ def _live_route_ref(ph: ProxyHost) -> str | None:
     return str(ref) if ref else None
 
 
+async def _toggle_targets(
+    adapters: AdapterBundle, ph: ProxyHost, ref: str | None, with_redirect: bool
+) -> list[tuple[str, bool]]:
+    """Every Traefik Manager route to switch for this host: the one we created
+    (plus its redirect companion) AND any other TM route serving the hostname -
+    a host adopted by Resync has no stored reference, and a hand-written setup
+    has a separate redirect router. ``[]`` = nothing to toggle (a local-only
+    record). The reads are best-effort: unreadable TM just means fewer targets."""
+    if ph.router_provider is not RouterProvider.TRAEFIK:
+        return []
+    from orchestrator.adapters.proxy.traefik_manager import redirect_route_id
+
+    targets: list[tuple[str, bool]] = []
+    known: set[str] = set()
+    if ref:
+        targets.append((ref, with_redirect))
+        known |= {ref, redirect_route_id(ref)}
+    try:
+        routes = await adapters.proxy.list_routes()
+    except Exception:  # pragma: no cover - adapters degrade themselves
+        routes = None
+    for route in tm_routes_for(routes, ph.hostname):
+        if route.name not in known:
+            targets.append((route.name, False))
+            known.add(route.name)
+    return targets
+
+
 async def set_proxy_host_enabled(
     session: Session,
     admin: CurrentAdmin,
@@ -1282,9 +1353,15 @@ async def set_proxy_host_enabled(
     re-converges a route someone flipped by hand."""
     ref = _live_route_ref(ph)
     with_redirect = RouteOptions.from_dict(ph.route_options).http_redirect
-    if ref:
+    targets = await _toggle_targets(adapters, ph, ref, with_redirect)
+    toggled: list[str] = []
+    if targets:
         try:
-            await adapters.proxy.set_route_enabled(ref, enabled, with_redirect=with_redirect)
+            for target_ref, target_redirect in targets:
+                await adapters.proxy.set_route_enabled(
+                    target_ref, enabled, with_redirect=target_redirect
+                )
+                toggled.append(target_ref)
         except NotImplementedError as exc:
             raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc)) from exc
         except Exception as exc:
@@ -1306,8 +1383,9 @@ async def set_proxy_host_enabled(
         target=f"proxy_host:{ph.hostname}",
         details={
             "id": ph.id,
-            "live": bool(ref),
+            "live": bool(toggled),
             "route_ref": ref,
+            "routes": toggled,
             "with_redirect": bool(ref) and with_redirect,
             "changed": was != enabled,
         },
