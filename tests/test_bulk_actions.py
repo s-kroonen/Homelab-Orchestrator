@@ -339,7 +339,7 @@ def test_pages_render_the_selection_column_and_bar(client: TestClient) -> None:
         "Bulk.attach({" in page and '"/api/bulk/services"' in page and '"/api/bulk/nodes"' in page
     )
     ph = client.get("/proxy-hosts").text
-    assert "/static/bulk.js" in ph and "<th>Enabled</th>" in ph and '"/api/bulk/proxy-hosts"' in ph
+    assert "/static/bulk.js" in ph and "Enabled</th>" in ph and '"/api/bulk/proxy-hosts"' in ph
     guests = client.get("/infra/guests").text
     assert "/static/bulk.js" in guests and "/api/infra/guests/" in guests
     js = client.get("/static/bulk.js")

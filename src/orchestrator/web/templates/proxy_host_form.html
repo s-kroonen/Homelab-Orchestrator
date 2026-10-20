@@ -7,6 +7,20 @@
 
   <section>
     <h2>{{ "Edit " + proxy_host.hostname if mode == "edit" else "Add a proxy host" }}</h2>
+    {% if mode == "edit" %}
+    <div class="state-strip" id="state-strip" data-enabled="{{ 'true' if proxy_host.enabled else 'false' }}">
+      <span class="badge {{ 'healthy' if proxy_host.enabled else 'disabled' }}" id="state-badge">{{ "enabled" if proxy_host.enabled else "disabled" }}</span>
+      <span class="msg" id="state-tm"></span>
+      <button type="button" id="toggle-enabled" class="{{ 'danger' if proxy_host.enabled else '' }} small">{{ "Disable" if proxy_host.enabled else "Enable" }}</button>
+      <span class="msg" id="state-msg"></span>
+    </div>
+    {% if not proxy_host.enabled %}
+    <div class="notice" role="note">
+      This host is <strong>disabled</strong>: Traefik is not serving it, and it cannot be edited
+      until you enable it (an edit could bring the route back unasked).
+    </div>
+    {% endif %}
+    {% endif %}
     <p class="msg">
       A <code>traefik</code> host is <strong>live-managed</strong> once an upstream is given —
       saving this form creates/edits the real route on Traefik Manager, not just a local
@@ -166,6 +180,7 @@
   .ep-checks { display: flex; flex-direction: column; gap: 0.1rem; }
   #cert-custom { display: flex; flex-direction: column; gap: 0.4rem; margin-top: 0.4rem; }
   #cert-custom input, #cert-custom textarea { width: 100%; box-sizing: border-box; }
+  .state-strip { display: flex; flex-wrap: wrap; gap: 0.5rem 0.75rem; align-items: center; margin: 0 0 0.9rem; }
   .ep-tools { display: flex; gap: 0.6rem; align-items: center; flex-wrap: wrap; margin-bottom: 0.4rem; }
   .ip-helper { display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; margin-top: 0.4rem; }
   .ip-helper .msg, .svc-ip-note { font-size: 0.8rem; overflow-wrap: anywhere; }
@@ -585,6 +600,35 @@
     up.setSelectionRange(up.value.length, up.value.length);
     up.dispatchEvent(new Event("input", { bubbles: true }));
   });
+
+  // --- enable / disable (edit mode) ---------------------------------------
+  const toggleBtn = document.getElementById("toggle-enabled");
+  if (toggleBtn) {
+    const strip = document.getElementById("state-strip");
+    const isEnabled = strip.dataset.enabled === "true";
+    if (!isEnabled) document.getElementById("submit-btn").disabled = true;
+    apiFetch("GET", `/api/proxy-hosts/${PROXY_HOST_ID}`, undefined, { suppressToast: true })
+      .then((h) => {
+        const tm = h.tm_state;
+        const el = document.getElementById("state-tm");
+        if (!tm || h.router_provider !== "traefik") return;
+        el.textContent = "Traefik Manager: " + (tm === "partial" ? "partly off" : tm);
+        if (tm !== (h.enabled ? "enabled" : "disabled")) el.className = "msg error";
+      })
+      .catch(() => {});
+    toggleBtn.addEventListener("click", async () => {
+      const turnOn = !isEnabled;
+      if (!turnOn && !confirm("Disable this host? Traefik stops serving it until you enable it again (the route is kept).")) return;
+      toggleBtn.disabled = true;
+      try {
+        await apiFetch("POST", `/api/proxy-hosts/${PROXY_HOST_ID}/enabled`, { enabled: turnOn }, { suppressToast: true });
+        location.reload();
+      } catch (err) {
+        setMsg("state-msg", err.message, "error");
+        toggleBtn.disabled = false;
+      }
+    });
+  }
 
   syncVisibility();
   initEntryPoints();

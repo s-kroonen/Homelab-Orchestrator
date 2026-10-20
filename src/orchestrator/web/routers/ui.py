@@ -396,6 +396,7 @@ async def edit_proxy_host_page(
                 "cert_resolver": ph.cert_resolver or "",
                 "entry_points_stored": bool(ph.entry_points),
                 "route_options": RouteOptions.from_dict(ph.route_options).to_dict(),
+                "enabled": ph.enabled,
             },
             "initial_service_id": None,
             "services": _service_choices(session),

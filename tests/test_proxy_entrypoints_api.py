@@ -709,6 +709,6 @@ def test_edit_form_carries_the_stored_selection(dry_client: TestClient, service:
 
 def test_list_page_has_entry_point_and_router_status_columns(dry_client: TestClient) -> None:
     html = dry_client.get("/proxy-hosts").text
-    assert "<th>Entry points</th>" in html
+    assert ">Entry points</th>" in html
     assert "appendRouterStatus" in html and "router-error" in html
     assert "table-scroll" in html
