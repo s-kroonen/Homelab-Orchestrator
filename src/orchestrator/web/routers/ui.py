@@ -54,7 +54,12 @@ _templates = Jinja2Templates(directory=str(Path(__file__).parent.parent / "templ
 
 #: Probe state -> the ``ol.steps`` class maintenance.html already styles
 #: (ok = check mark, failed/indeterminate = cross).
-_STATE_CLASS = {"healthy": "ok", "failed": "failed", "unknown": "indeterminate"}
+_STATE_CLASS = {
+    "healthy": "ok",
+    "failed": "failed",
+    "unknown": "indeterminate",
+    "down": "indeterminate",
+}
 
 
 def _requirable_services(session: Session, *, exclude: str | None = None) -> list[dict[str, Any]]:
@@ -93,13 +98,50 @@ def _group_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 def _probe_row(result: dict[str, Any]) -> dict[str, Any]:
     state = str(result.get("state", "unknown"))
+    # Probes the guest gate stopped from running are not indeterminate —
+    # they simply did not run. No ✓/✗ for them.
+    skipped = bool((result.get("details") or {}).get("skipped"))
     return {
         "name": result.get("probe_name", "?"),
         "kind": result.get("kind", ""),
-        "state": state,
-        "css": _STATE_CLASS.get(state, ""),
+        "state": "skipped" if skipped else state,
+        "css": "skipped" if skipped else _STATE_CLASS.get(state, ""),
         "message": result.get("message") or "",
         "latency_ms": result.get("latency_ms"),
+    }
+
+
+def _down_label(state: ServiceState | None) -> str:
+    """Badge text for a DOWN verdict: "node off" or "stopped", read from the
+    guest-gate result the engine records first."""
+    for result in (state.last_probe_results if state else [])[:1]:
+        if (
+            result.get("kind") == "guest"
+            and (result.get("details") or {}).get("node_online") is False
+        ):
+            return "node off"
+    return "stopped"
+
+
+def guest_gate_view(state: ServiceState | None) -> dict[str, Any] | None:
+    """The guest-gate result from the last scan, shaped for the service page:
+    node state + guest state. None when the last scan had no guest gate."""
+    results = state.last_probe_results if state else []
+    first = results[0] if results else None
+    if not first or first.get("kind") != "guest":
+        return None
+    details = first.get("details") or {}
+    node_online = details.get("node_online")
+    guest_status = details.get("guest_status")
+    return {
+        "state": str(first.get("state", "unknown")),
+        "message": first.get("message") or "",
+        "node": details.get("node") or "?",
+        "node_state": (
+            "online" if node_online is True else "offline" if node_online is False else "unknown"
+        ),
+        "guest": f"{details.get('guest_kind') or '?'} {details.get('guest_id') or '?'}",
+        "guest_state": guest_status or ("not checked" if node_online is False else "unknown"),
     }
 
 
@@ -129,6 +171,8 @@ async def dashboard_page(
                 "group": svc.group,
                 "node": nodes.get(svc.node_id, "?"),
                 "verdict": state.last_verdict.value if state else "unknown",
+                "verdict_reason": (state.notes or "") if state else "",
+                "down_label": _down_label(state),
                 "verdict_at": (
                     state.last_verdict_at.isoformat() if state and state.last_verdict_at else None
                 ),
@@ -187,12 +231,31 @@ async def service_detail_page(
         for k, spec in PROBE_SPECS.items()
     ]
     diff = compute_registry_diff(session)
+    state = session.get(ServiceState, svc.id) if svc.id is not None else None
+    last_results = state.last_probe_results if state else []
+    health = {
+        "verdict": state.last_verdict.value if state else "unknown",
+        "verdict_at": (
+            state.last_verdict_at.isoformat() if state and state.last_verdict_at else None
+        ),
+        "reason": (state.notes or "") if state else "",
+        "down_label": _down_label(state),
+        "guest": guest_gate_view(state),
+        # Last scan's result per probe name, for the Probes tab ("skipped —
+        # guest stopped" when the guest gate kept them from running).
+        "probe_results": {
+            str(r.get("probe_name")): _probe_row(r)
+            for r in last_results
+            if r.get("kind") != "guest"
+        },
+    }
 
     return _templates.TemplateResponse(
         request,
         "service_detail.html",
         {
             "admin": admin,
+            "health": health,
             "service": service_detail(session, svc),
             "nodes": [{"id": n.id, "name": n.name} for n in nodes],
             "policies": [{"id": p.id, "name": p.name} for p in policies],

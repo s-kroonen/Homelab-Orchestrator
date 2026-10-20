@@ -372,6 +372,15 @@
       if (row.service_slug) {
         var link = h("a", null, row.service_name || row.service_slug, svc);
         link.href = "/services/" + encodeURIComponent(row.service_slug);
+        if (row.service_state === "down") {
+          // The guest gate says the VM/CT (or its node) is not running: every
+          // request in this row is failing for a reason we already know.
+          tr.classList.add("is-down");
+          svc.appendChild(document.createTextNode(" "));
+          var badge = h("span", "badge down", "guest stopped", svc);
+          badge.title = row.service_state_reason || "guest not running";
+          h("div", "msg", "requests to it are failing", svc);
+        }
       } else {
         h("span", "muted", "unlinked", svc);
       }
@@ -418,7 +427,13 @@
     var row = root.querySelector("[data-filter-row]");
     if (!slug) { row.hidden = true; return; }
     var match = d.hosts.filter(function (x) { return x.service_slug === slug; })[0];
-    root.querySelector("[data-filter-name]").textContent = match ? (match.service_name || slug) : slug;
+    var nameEl = root.querySelector("[data-filter-name]");
+    nameEl.textContent = match ? (match.service_name || slug) : slug;
+    if (match && match.service_state === "down") {
+      nameEl.appendChild(document.createTextNode(" "));
+      var b = h("span", "badge down", "guest stopped — requests to it are failing", nameEl);
+      b.title = match.service_state_reason || "";
+    }
     row.hidden = false;
   }
 

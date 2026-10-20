@@ -37,6 +37,39 @@
   </div>
 
   <div class="tabpanel" role="tabpanel" id="panel-overview" aria-labelledby="tab-overview" tabindex="0">
+  <section id="health">
+    <h2>Health</h2>
+    {% set hv = health.verdict %}
+    <p class="health-now">
+      {% if not service.enabled %}<span class="badge disabled">disabled</span>
+      {% elif hv == "healthy" %}<span class="badge healthy">healthy</span>
+      {% elif hv == "failed" %}<span class="badge failed">failed</span>
+      {% elif hv == "down" %}<span class="badge down" title="{{ health.reason }}">{{ health.down_label }}</span>
+      {% else %}<span class="badge unknown">unknown</span>{% endif %}
+      <span class="msg">{{ health.reason or "Not scanned yet." }}</span>
+    </p>
+    {% if health.guest %}
+    {% set g = health.guest %}
+    <div class="guest-gate {{ g.state }}" id="guest-gate">
+      <div class="gg-head">Guest gate <span class="msg">— checked first; probes only run when the node is online and the guest is running</span></div>
+      <dl>
+        <dt>Node</dt><dd><code>{{ g.node }}</code> <span class="gg-{{ 'ok' if g.node_state == 'online' else ('bad' if g.node_state == 'offline' else 'unk') }}">{{ g.node_state }}</span></dd>
+        <dt>Guest</dt><dd><code>{{ g.guest }}</code> <span class="gg-{{ 'ok' if g.guest_state == 'running' else ('unk' if g.guest_state in ('unknown', 'not checked') else 'bad') }}">{{ g.guest_state }}</span></dd>
+      </dl>
+      {% if g.state == "down" %}
+      <p class="msg">Probes were skipped and backups are refused until the guest runs. This is not a failure of the service's data — use <em>Wake</em> or <em>Start guest</em>, or keep <em>Wake before backup</em> on in its backup policy.</p>
+      {% elif g.state == "unknown" %}
+      <p class="msg">{{ g.message }} — the probes ran anyway.</p>
+      {% endif %}
+    </div>
+    {% elif service.guest_kind != "none" and service.guest_id %}
+    <p class="msg">Guest gate: no result yet — it runs on the next scan.</p>
+    {% endif %}
+    <h3 class="health-hist-h">History</h3>
+    <p class="msg">Last 20 periodic scans (oldest → newest), one tick per cycle. Hover a tick for when and why.</p>
+    <ol class="steps health-strip" id="health-strip"><li class="muted-tick">loading…</li></ol>
+  </section>
+
   <section>
     <h2>Service</h2>
     <div class="grid">
@@ -99,17 +132,14 @@
       refused while a backup is currently running for this service.
     </p>
   </section>
-
-  <section>
-    <h2>Health history</h2>
-    <p class="msg">Last 20 periodic scans (oldest → newest), one tick per cycle. Hover a tick for when and why.</p>
-    <ol class="steps health-strip" id="health-strip"><li class="muted-tick">loading…</li></ol>
-  </section>
   </div>
 
   <div class="tabpanel" role="tabpanel" id="panel-probes" aria-labelledby="tab-probes" tabindex="0" hidden>
   <section>
     <h2>Probes</h2>
+    {% if health.verdict == "down" %}
+    <p class="notice probes-skipped">Skipped on the last scan — {{ "node offline" if health.down_label == "node off" else "guest stopped" }}. The guest gate runs before any probe; these run again once the guest is up.</p>
+    {% endif %}
     <table>
       <thead>
         <tr><th>#</th><th>Name</th><th>Kind</th><th>Required</th><th>Timeout</th><th>Config</th><th></th></tr>
@@ -339,11 +369,32 @@
   #backup-live-steps li { overflow-wrap: anywhere; }
   #backup-live-steps li.skipped::before, #backup-live-steps li.bypassed::before { content: "– "; color: #9aa4b2; }
   #backup-live-steps li .detail { color: #6b7280; font-size: 0.75rem; }
+
+  /* --- health + guest gate (Overview tab) -------------------------------- */
+  .health-now { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.3rem 0.6rem; margin: 0 0 0.75rem; overflow-wrap: anywhere; }
+  .health-now .msg { min-width: 0; }
+  .guest-gate { border: 1px solid #2a2f3a; border-radius: 0.5rem; padding: 0.7rem 0.9rem; margin-bottom: 1rem; background: #11151d; }
+  .guest-gate.down { border-color: #1f4a6e; background: #0f1a26; }
+  .guest-gate .gg-head { font-size: 0.85rem; font-weight: 600; margin-bottom: 0.4rem; }
+  .guest-gate .gg-head .msg { font-weight: 400; font-size: 0.75rem; }
+  .guest-gate dl { display: grid; grid-template-columns: 4rem minmax(0, 1fr); gap: 0.25rem 0.75rem; margin: 0; font-size: 0.85rem; }
+  .guest-gate dt { color: #9aa4b2; }
+  .guest-gate dd { margin: 0; overflow-wrap: anywhere; }
+  .guest-gate p.msg { margin: 0.5rem 0 0; }
+  .gg-ok { color: #3ecf6d; }
+  .gg-bad { color: #5ba8e5; font-weight: 600; }
+  .gg-unk { color: #9aa4b2; }
+  .health-hist-h { font-size: 0.85rem; margin: 0.5rem 0 0.25rem; }
+  ol.health-strip li.down::before { content: "■"; color: #5ba8e5; }
+  .probe-last { display: block; font-size: 0.75rem; color: #9aa4b2; }
+  .probe-last.skipped { color: #5ba8e5; }
+  .probes-skipped { margin: 0 0 0.75rem; }
 </style>
 {% endblock %}
 {% block scripts %}
 <script>
   const SERVICE = {{ service|tojson }};
+  const LAST_PROBE_RESULTS = {{ health.probe_results|tojson }};
   const PROBE_KINDS = {{ probe_kinds|tojson }};
   const FORM_KINDS = ["http", "tcp", "systemd"];
   const svcPath = "/api/registry/services/" + encodeURIComponent(SERVICE.slug);
@@ -470,6 +521,15 @@
         const td = document.createElement("td");
         td.textContent = text;
         tr.appendChild(td);
+      }
+      // Last scan's outcome for this probe, under its name.
+      const last = LAST_PROBE_RESULTS[p.name];
+      if (last) {
+        const span = document.createElement("span");
+        span.className = "probe-last" + (last.state === "skipped" ? " skipped" : "");
+        span.textContent = last.state === "skipped" ? last.message : `last scan: ${last.state}`;
+        if (last.message) span.title = last.message;
+        tr.children[1].appendChild(span);
       }
       const cfg = document.createElement("td");
       const code = document.createElement("code");
@@ -998,7 +1058,7 @@
   }
 
   // --- health history (compact ticks from the periodic HealthScanner) -----
-  const HEALTH_CLASS = { healthy: "ok", failed: "failed", unknown: "indeterminate" };
+  const HEALTH_CLASS = { healthy: "ok", failed: "failed", unknown: "indeterminate", down: "down" };
   async function loadHealthHistory() {
     const strip = $("health-strip");
     try {

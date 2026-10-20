@@ -17,19 +17,35 @@ Two deliberate choices in that rule:
   closed rather than silently permissive.
 
 Non-required probes are recorded for the dashboard and ignored by the verdict.
+
+Order of a scan (each stage short-circuits the ones after it):
+
+    guest gate    node offline / guest not running -> DOWN    (no probes run)
+    dependencies  any dependency not HEALTHY       -> UNKNOWN (no probes run)
+    probes        the aggregation rule above
+
+The guest gate (``health/guest_gate.py``) only runs when the engine was given a
+Proxmox adapter and the service maps to a guest. DOWN is not FAILED: a stopped
+VM says nothing about the integrity of its data, so it is never a restore
+candidate — and it is not UNKNOWN either, because we know exactly why the
+service is not answering. If Proxmox cannot be read, the gate steps aside and
+the probes run as before, with "guest state unknown" noted in the reason.
 """
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from datetime import UTC, datetime
 
 from sqlmodel import Session, select
 
+from orchestrator.adapters.proxmox.base import ProxmoxAdapter
 from orchestrator.config import Settings, get_settings
+from orchestrator.db.models import Node, Service, ServiceState
 from orchestrator.db.models import Probe as ProbeRow
-from orchestrator.db.models import Service, ServiceState
 from orchestrator.domain.enums import HealthState
 from orchestrator.domain.schemas import ProbeResult, ServiceVerdict
+from orchestrator.health.guest_gate import GuestCheck, GuestStateCache, check_guest, has_guest
 from orchestrator.health.probes import get_probe_class
 from orchestrator.health.transports.base import (
     CommandTransport,
@@ -142,9 +158,19 @@ class HealthEngine:
         *,
         settings: Settings | None = None,
         transport_factory: TransportFactory | None = None,
+        proxmox: ProxmoxAdapter | None = None,
     ) -> None:
         self._settings = settings or get_settings()
         self._transports = transport_factory or TransportFactory(self._settings)
+        # Source for the guest gate. None -> no guest gate at all (exactly the
+        # behaviour before it existed); every real construction site passes
+        # the adapter bundle's Proxmox adapter.
+        self._proxmox = proxmox
+
+    def new_guest_cache(self) -> GuestStateCache | None:
+        """A fresh guest-state cache, or None when there is no guest gate.
+        The HealthScanner makes one per cycle and passes it to every scan."""
+        return GuestStateCache(self._proxmox) if self._proxmox is not None else None
 
     async def scan(
         self,
@@ -153,19 +179,53 @@ class HealthEngine:
         *,
         _cache: dict[str, ServiceVerdict] | None = None,
         _visiting: frozenset[str] | None = None,
+        _guest_cache: GuestStateCache | None = None,
     ) -> ServiceVerdict:
         """Run every probe for ``service`` and return the aggregated verdict.
 
-        Dependencies are scanned first. If one is not HEALTHY, this service
+        The guest gate runs first: if the service's node is offline or its
+        guest is not running, the verdict is DOWN and no probe runs.
+
+        Dependencies are scanned next. If one is not HEALTHY, this service
         short-circuits to UNKNOWN without running its own probes — they would be
         guaranteed to time out, and the resulting failures would describe the
         wrong problem.
+
+        ``_guest_cache`` shares one Proxmox read across several scans (the
+        HealthScanner's cycle). Without it this call makes its own, fresh one
+        and shares that with the dependencies it scans — so the backup gate and
+        the wake pipeline always judge the guest as it is right now.
         """
         cache = {} if _cache is None else _cache
         visiting = frozenset() if _visiting is None else _visiting
+        guest_cache = _guest_cache if _guest_cache is not None else self.new_guest_cache()
 
-        blocker = await self._check_dependencies(session, service, cache, visiting)
+        rows = session.exec(
+            select(ProbeRow)
+            .where(ProbeRow.service_id == service.id)
+            .order_by(ProbeRow.order, ProbeRow.name)
+        ).all()
+
+        guest = await self._check_guest(session, service, guest_cache)
+        if guest is not None and guest.down:
+            down = self._down_verdict(guest, rows)
+            cache[service.slug] = down
+            self._persist(session, service, down)
+            log.info(
+                "health.scan.down",
+                service=service.slug,
+                verdict=down.state.value,
+                reason=down.reason,
+                skipped_probes=len(rows),
+            )
+            return down
+
+        blocker = await self._check_dependencies(session, service, cache, visiting, guest_cache)
         if blocker is not None:
+            if guest is not None:
+                blocker = blocker.model_copy(
+                    update={"probe_results": [guest.as_probe_result(), *blocker.probe_results]}
+                )
             self._persist(session, service, blocker)
             log.info(
                 "health.scan.blocked",
@@ -176,17 +236,20 @@ class HealthEngine:
             cache[service.slug] = blocker
             return blocker
 
-        rows = session.exec(
-            select(ProbeRow)
-            .where(ProbeRow.service_id == service.id)
-            .order_by(ProbeRow.order, ProbeRow.name)
-        ).all()
-
         results: list[ProbeResult] = []
         for row in rows:
             results.append(await self.run_probe(row))
 
         verdict = self.aggregate(rows, results)
+        if guest is not None:
+            # The guest result is prepended AFTER aggregation: it is not a
+            # probe row and must never count towards (or against) the verdict.
+            reason = verdict.reason
+            if guest.outcome == "unknown":
+                reason = f"{reason} [{guest.message}; probes ran anyway]"
+            verdict = verdict.model_copy(
+                update={"reason": reason, "probe_results": [guest.as_probe_result(), *results]}
+            )
         cache[service.slug] = verdict
         self._persist(session, service, verdict)
         log.info(
@@ -198,12 +261,52 @@ class HealthEngine:
         )
         return verdict
 
+    async def _check_guest(
+        self, session: Session, service: Service, guest_cache: GuestStateCache | None
+    ) -> GuestCheck | None:
+        """Run the guest gate, or return None when it does not apply (no
+        Proxmox source given, or the service has no guest)."""
+        if guest_cache is None or not has_guest(service.guest_kind, service.guest_id):
+            return None
+        assert service.guest_id is not None
+        node = session.get(Node, service.node_id) if service.node_id is not None else None
+        return await check_guest(
+            guest_cache,
+            node_name=node.name if node else None,
+            guest_kind=service.guest_kind,
+            guest_id=service.guest_id,
+        )
+
+    @staticmethod
+    def _down_verdict(guest: GuestCheck, rows: Sequence[ProbeRow]) -> ServiceVerdict:
+        """DOWN: the guest gate failed, so every probe is recorded as skipped."""
+        why = "node offline" if guest.node_online is False else "guest stopped"
+        skipped = [
+            ProbeResult(
+                probe_name=row.name,
+                kind=row.kind,
+                state=HealthState.UNKNOWN,
+                message=f"skipped — {why}",
+                details={"skipped": True, "skipped_because": "guest_down"},
+            )
+            for row in rows
+        ]
+        return ServiceVerdict(
+            state=HealthState.DOWN,
+            reason=(
+                f"{guest.message} — probes not run. DOWN is not FAILED: nothing says "
+                f"the data is bad, only that the service is not running."
+            ),
+            probe_results=[guest.as_probe_result(), *skipped],
+        )
+
     async def _check_dependencies(
         self,
         session: Session,
         service: Service,
         cache: dict[str, ServiceVerdict],
         visiting: frozenset[str],
+        guest_cache: GuestStateCache | None = None,
     ) -> ServiceVerdict | None:
         """Scan this service's dependencies. Return a blocking verdict, or None.
 
@@ -243,9 +346,26 @@ class HealthEngine:
                         probe_results=[],
                     )
                 verdict = await self.scan(
-                    session, dep, _cache=cache, _visiting=visiting | {service.slug}
+                    session,
+                    dep,
+                    _cache=cache,
+                    _visiting=visiting | {service.slug},
+                    _guest_cache=guest_cache,
                 )
 
+            if verdict.state is HealthState.DOWN:
+                # Name the cause plainly ("guest vm 9001 is stopped"), not the
+                # whole DOWN explanation, which is about the dependency.
+                cause = verdict.reason.split(" — ", 1)[0]
+                return ServiceVerdict(
+                    state=HealthState.UNKNOWN,
+                    reason=(
+                        f"blocked: dependency {dep_slug!r} is DOWN ({cause}). This service "
+                        f"was not probed, so this is NOT evidence about {service.slug!r} "
+                        f"itself."
+                    ),
+                    probe_results=[],
+                )
             if verdict.state is not HealthState.HEALTHY:
                 return ServiceVerdict(
                     state=HealthState.UNKNOWN,

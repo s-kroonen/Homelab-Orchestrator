@@ -124,7 +124,7 @@ class WakePipeline:
         self._settings = settings
         # Injected so tests can drive polling deterministically. Defaults to a
         # real engine, same reasoning as BackupPipeline.
-        self._health = health or HealthEngine(settings=settings)
+        self._health = health or HealthEngine(settings=settings, proxmox=proxmox)
 
     # -- entry points ---------------------------------------------------------
 
@@ -516,6 +516,9 @@ class WakePipeline:
     ) -> None:
         started = datetime.now(UTC)
         while True:
+            # Every non-HEALTHY verdict means "not yet" here — DOWN included:
+            # right after start_guest the guest may still be booting, and each
+            # scan re-reads its state fresh from Proxmox.
             verdict = await self._health.scan(session, service)
             if verdict.state is HealthState.HEALTHY:
                 steps.record(

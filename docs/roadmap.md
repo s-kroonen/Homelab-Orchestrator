@@ -172,6 +172,20 @@ every other optional integration here. Once it's set:
   `TRAEFIK_API_URL` set. The access-log collector sees the same "new traffic
   on a proxy host" signal and could drive it too.
 
+## Done: guest gate (DOWN)
+
+**Done.** Every scan of a guest-backed service first checks that its node is
+online and its guest is running; if not, the verdict is the new `DOWN` state
+and no probe runs (see docs/architecture.md, "Health model"). The backup gate
+always requires it (docs/backup_wake.md). Dashboard, service page, `/traffic`
+and `orchestrator-cli scan` all show DOWN distinctly. Open follow-ups:
+
+- **Fall back to the power manager** when Proxmox cannot be read: today the
+  gate steps aside ("guest state unknown"); `NodeState.power_state` = off could
+  still prove DOWN for a node whose Proxmox API is the one that is off.
+- **Wake-on-hit from DOWN** already fires through the Prometheus
+  `TrafficCollector`; the access-log follow-up above should keep that.
+
 ## Done: shared template/CSS/JS foundation
 
 ~~**Every page was a fully standalone HTML document** (own `<html><head>`,
