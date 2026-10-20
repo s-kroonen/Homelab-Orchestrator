@@ -10,6 +10,7 @@
                 guests | snapshots        what do Proxmox and PBS see?
                 scan SLUG | --all         what will the backup gate decide?
                 probe-test SLUG NAME      run one probe now, show its raw result
+                ip show | ip discover     service IPs: manual / guest agent / ARP / DHCP
     Operate     backup SLUG               wake what it needs, then run one backup end to end
                 backup plan SLUG          preview what a backup would wake (exit 1 on a blocker)
                 wake SLUG                 wake the node, start the guest, wait until healthy
@@ -36,6 +37,7 @@ from orchestrator.cli_bulk import bulk
 from orchestrator.cli_config import policy as policy_group
 from orchestrator.cli_config import probe, proxy
 from orchestrator.cli_config import service as service_group
+from orchestrator.cli_ip import ip_group
 from orchestrator.cli_setup import config_group, init, scaffold
 from orchestrator.config import get_settings
 from orchestrator.db.models import Admin, Service, WebAuthnCredential
@@ -819,6 +821,7 @@ cli.add_command(proxy)
 cli.add_command(service_group, name="service")
 cli.add_command(policy_group, name="policy")
 cli.add_command(transport)
+cli.add_command(ip_group, name="ip")
 cli.add_command(bulk)
 cli.add_command(admin_group, name="admin")
 

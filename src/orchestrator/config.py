@@ -106,6 +106,34 @@ class Settings(BaseSettings):
     # and wakes), so it is kept small on purpose.
     health_history_retention_days: int = 7
 
+    # ---- Service IP discovery ----------------------------------------------
+    # Periodically find each running guest's IP: QEMU guest agent / LXC config
+    # + interfaces first (Proxmox API), then the guest's NIC MACs looked up in
+    # an ARP table and a DHCP leases file. A service's manual `ip_address`
+    # always wins over whatever is found. See docs/service_ips.md.
+    ip_discovery_enabled: bool = True
+    ip_discovery_interval_s: int = 600
+    # Where the ARP / DHCP reads run — a transport spec in the same shape as a
+    # probe's `transport:` block, as JSON, e.g.
+    #   {"type": "host_agent", "host": "gateway"}
+    #   {"type": "ssh", "host": "10.0.0.1", "user": "orchestrator"}
+    # A bare word ("local", "host_agent") is shorthand for {"type": <word>}.
+    # Empty = no ARP / DHCP fallback at all (Proxmox-only discovery). The
+    # container's own ARP table only sees its Docker bridge, so "local" is
+    # rarely what you want unless the container runs with network_mode: host.
+    ip_discovery_transport: str = ""
+    # Read the neighbour (ARP) table over the transport. Needs the transport.
+    ip_discovery_arp_enabled: bool = True
+    # Comma-separated CIDRs to "ARP ping" before reading the table, so guests
+    # that have not talked to the transport host lately are in it (fping -a -q
+    # -g if present, else a bounded parallel ping loop). Max /22 per CIDR.
+    # Empty = no sweep, just read the table.
+    ip_discovery_sweep_cidrs: str = ""
+    # dnsmasq-format leases file on the transport host (`expiry mac ip host
+    # clientid` per line), e.g. /var/lib/misc/dnsmasq.leases. Empty = no DHCP
+    # fallback.
+    ip_discovery_dhcp_leases_path: str = ""
+
     # ---- Proxmox ----------------------------------------------------------
     proxmox_host: str = "proxmox.example.lan"
     proxmox_port: int = 8006

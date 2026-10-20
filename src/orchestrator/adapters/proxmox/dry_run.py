@@ -11,6 +11,7 @@ from orchestrator.adapters.proxmox.base import (
     ClusterNode,
     ClusterStatus,
     Guest,
+    GuestNetwork,
     ProxmoxAdapter,
     TaskHandle,
     TaskStatus,
@@ -42,6 +43,9 @@ class DryRunProxmoxAdapter(ProxmoxAdapter):
         #: Tests set these. Unset, the cluster is derived from simulated_guests.
         self.simulated_cluster: ClusterStatus | None = None
         self.simulated_backup_storages: list[BackupStorage] = []
+        #: vmid -> what guest_network() answers. Unset -> no MACs, no IPs.
+        self.simulated_networks: dict[int, GuestNetwork] = {}
+        self.guest_network_calls: list[tuple[str, int, GuestKind]] = []
 
     async def start(self) -> None:
         log.info("proxmox.dry_run.start")
@@ -68,6 +72,11 @@ class DryRunProxmoxAdapter(ProxmoxAdapter):
 
     async def list_backup_storages(self) -> list[BackupStorage]:
         return list(self.simulated_backup_storages)
+
+    async def guest_network(self, node: str, vmid: int, kind: GuestKind) -> GuestNetwork:
+        log.info("proxmox.dry_run.guest_network", node=node, vmid=vmid, kind=kind.value)
+        self.guest_network_calls.append((node, vmid, kind))
+        return self.simulated_networks.get(vmid, GuestNetwork())
 
     async def start_guest(self, node: str, vmid: int, kind: GuestKind) -> TaskHandle:
         return self._record_task("proxmox.dry_run.start_guest", node, vmid=vmid, kind=kind.value)

@@ -245,6 +245,7 @@ class RegistryEditor:
             "node",
             "guest_kind",
             "guest_id",
+            "ip_address",
             "enabled",
             "backup_excluded",
             "backup_excluded_reason",

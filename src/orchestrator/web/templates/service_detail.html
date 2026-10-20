@@ -70,6 +70,40 @@
     <ol class="steps health-strip" id="health-strip"><li class="muted-tick">loading…</li></ol>
   </section>
 
+  {# Address: effective IP (manual wins, else discovered), where it came
+     from, the guest's NIC MACs. Discovery results are runtime state — only
+     the manual IP is part of services.yaml. See docs/service_ips.md. #}
+  <section id="address">
+    <h2>Address</h2>
+    {% set ipv = service.ip %}
+    <div class="addr" id="addr-block">
+      <dl>
+        <dt>IP</dt>
+        <dd><code id="addr-ip">{{ ipv.effective_ip or "none yet" }}</code>
+          <span class="addr-src" id="addr-src">{% if ipv.effective_ip %}{{ ipv.effective_source_label }}{% endif %}</span></dd>
+        <dt>Found</dt>
+        <dd id="addr-found">{% if ipv.discovered_ip %}{{ ipv.discovered_ip }} via {{ ipv.ip_source_label }}{% else %}—{% endif %}</dd>
+        <dt>NIC MACs</dt>
+        <dd id="addr-macs">{% for m in ipv.mac_addresses %}<code>{{ m }}</code>{% if not loop.last %} {% endif %}{% else %}<span class="muted">unknown</span>{% endfor %}</dd>
+      </dl>
+      <p class="msg" id="addr-note"></p>
+      <div class="addr-manual">
+        <label for="f-ip">Manual IP</label>
+        <div class="addr-manual-row">
+          <input id="f-ip" inputmode="decimal" autocomplete="off" spellcheck="false"
+                 placeholder="blank = discovered IP" value="{{ service.ip_address }}">
+          <button class="secondary small" id="addr-save-btn" type="button">Save IP</button>
+        </div>
+        <span class="hint">Wins over anything discovered. Saved to the live registry like the other service fields (then <em>Save to YAML</em>).</span>
+      </div>
+      <div class="row addr-actions">
+        <button class="secondary" id="addr-discover-btn" type="button"{% if not ipv.has_guest %} disabled title="No Proxmox guest to ask — set the IP manually"{% endif %}>Discover now</button>
+        <button class="secondary" id="addr-ping-btn" type="button" hidden>Add ping probe</button>
+        <span class="msg" id="addr-msg" aria-live="polite"></span>
+      </div>
+    </div>
+  </section>
+
   <section>
     <h2>Service</h2>
     <div class="grid">
@@ -212,6 +246,23 @@
         <input id="sd-port" type="number" style="width: 6rem" placeholder="22">
         <label for="sd-jump">Jump host</label>
         <input id="sd-jump" placeholder="blank = SSH_JUMP_HOST default">
+      </div>
+
+      <div class="grid" data-kind="ping" hidden>
+        <label for="ping-host">Host</label>
+        <input id="ping-host" placeholder="blank = this service's IP">
+        <span class="hint">Blank follows the service's IP (manual, else discovered) — see the Address block on Overview.</span>
+        <label for="ping-count">Count</label>
+        <input id="ping-count" type="number" min="1" max="10" style="width: 6rem">
+        <label for="ping-transport">Ping from</label>
+        <select id="ping-transport">
+          <option value="local">local (this container)</option>
+          <option value="host_agent">host_agent</option>
+          <option value="ssh">ssh</option>
+        </select>
+        <label for="ping-thost">Transport host</label>
+        <input id="ping-thost" placeholder="inventory host (host_agent) or hostname/ip (ssh)">
+        <span class="hint">Use host_agent / ssh when the orchestrator is not on the guests' network.</span>
       </div>
 
       <div data-kind="json" hidden>
@@ -389,6 +440,29 @@
   .probe-last { display: block; font-size: 0.75rem; color: #9aa4b2; }
   .probe-last.skipped { color: #5ba8e5; }
   .probes-skipped { margin: 0 0 0.75rem; }
+
+  /* --- address (Overview tab) -------------------------------------------- */
+  .addr { border: 1px solid #2a2f3a; border-radius: 0.5rem; padding: 0.7rem 0.9rem; background: #11151d; }
+  .addr dl { display: grid; grid-template-columns: 5.5rem minmax(0, 1fr); gap: 0.3rem 0.75rem; margin: 0; font-size: 0.85rem; }
+  .addr dt { color: #9aa4b2; }
+  .addr dd { margin: 0; overflow-wrap: anywhere; display: flex; flex-wrap: wrap; gap: 0.25rem 0.5rem; align-items: baseline; }
+  #addr-ip { font-size: 0.95rem; }
+  .addr-src { font-size: 0.7rem; color: #9aa4b2; border: 1px solid #2a2f3a; border-radius: 1rem; padding: 0 0.45rem; }
+  .addr-src:empty { display: none; }
+  .addr-src.manual { color: #e6e9ef; border-color: #5b8def; }
+  .addr p.msg { margin: 0.5rem 0 0; overflow-wrap: anywhere; }
+  .addr p.msg:empty { display: none; }
+  .addr-manual { margin-top: 0.75rem; display: grid; grid-template-columns: 5.5rem minmax(0, 1fr); gap: 0.25rem 0.75rem; align-items: center; }
+  .addr-manual > label { color: #9aa4b2; font-size: 0.85rem; }
+  .addr-manual .hint { grid-column: 2; color: #9aa4b2; font-size: 0.75rem; }
+  .addr-manual-row { display: flex; gap: 0.5rem; min-width: 0; }
+  .addr-manual-row input { flex: 1 1 auto; min-width: 0; max-width: 18rem; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+  .addr-actions { margin: 0.75rem 0 0; }
+  @media (max-width: 40rem) {
+    .addr-manual { grid-template-columns: minmax(0, 1fr); }
+    .addr-manual .hint { grid-column: 1; }
+    .addr-manual-row input { max-width: none; }
+  }
 </style>
 {% endblock %}
 {% block scripts %}
@@ -396,7 +470,10 @@
   const SERVICE = {{ service|tojson }};
   const LAST_PROBE_RESULTS = {{ health.probe_results|tojson }};
   const PROBE_KINDS = {{ probe_kinds|tojson }};
-  const FORM_KINDS = ["http", "tcp", "systemd"];
+  const FORM_KINDS = ["http", "tcp", "systemd", "ping"];
+  // IP_DISCOVERY_TRANSPORT as a probe transport block (or null): the
+  // one-click ping probe pings from where discovery reads ARP.
+  const PING_TRANSPORT = {{ ping_transport|tojson }};
   const svcPath = "/api/registry/services/" + encodeURIComponent(SERVICE.slug);
   const $ = (id) => document.getElementById(id);
 
@@ -452,7 +529,117 @@
     for (const cb of $("f-depends").querySelectorAll("input[type=checkbox]")) {
       cb.checked = s.depends_on.includes(cb.value);
     }
+    $("f-ip").value = s.ip_address || "";
   }
+
+  // --- address (effective IP, discovery, manual IP, one-click ping) -------
+  for (const ev of ["input", "change"]) {
+    $("f-ip").addEventListener(ev, () => { svcFormDirty = true; });
+  }
+
+  function fmtWhen(iso) {
+    if (!iso) return "";
+    const d = new Date(iso);
+    return isNaN(d) ? iso : d.toLocaleString();
+  }
+
+  function hasPingProbe() {
+    return SERVICE.probes.some((p) => p.kind === "ping");
+  }
+
+  function renderAddress() {
+    const ip = SERVICE.ip || {};
+    $("addr-ip").textContent = ip.effective_ip || "none yet";
+    const src = $("addr-src");
+    src.textContent = ip.effective_ip ? ip.effective_source_label : "";
+    src.className = "addr-src" + (ip.effective_source === "manual" ? " manual" : "");
+    $("addr-found").textContent = ip.discovered_ip
+      ? `${ip.discovered_ip} via ${ip.ip_source_label}` + (ip.ip_discovered_at ? ` · ${fmtWhen(ip.ip_discovered_at)}` : "")
+      : "—";
+    const macs = $("addr-macs");
+    macs.innerHTML = "";
+    if (ip.mac_addresses && ip.mac_addresses.length) {
+      for (const m of ip.mac_addresses) {
+        const c = document.createElement("code");
+        c.textContent = m;
+        macs.appendChild(c);
+      }
+    } else {
+      const span = document.createElement("span");
+      span.className = "muted";
+      span.textContent = ip.has_guest ? "unknown — run Discover now" : "no Proxmox guest";
+      macs.appendChild(span);
+    }
+    let note = "";
+    if (ip.effective_source === "manual" && ip.discovered_ip && ip.discovered_ip !== ip.manual_ip) {
+      note = `Discovery found ${ip.discovered_ip} (${ip.ip_source_label}); the manual IP wins.`;
+    } else if (ip.ip_discovery_error) {
+      note = (ip.discovered_ip ? "Last discovery found nothing new: " : "Not found: ") + ip.ip_discovery_error;
+    } else if (!ip.effective_ip && !ip.has_guest) {
+      note = "This service has no Proxmox guest to ask — set its IP manually.";
+    }
+    $("addr-note").textContent = note;
+    $("addr-ping-btn").hidden = !ip.effective_ip || hasPingProbe();
+  }
+
+  async function saveManualIp() {
+    try {
+      const updated = await apiFetch("PUT", svcPath, { ip_address: $("f-ip").value.trim() }, { suppressToast: true });
+      Object.assign(SERVICE, updated);
+      $("f-ip").value = SERVICE.ip_address || "";
+      renderAddress();
+      setMsg("addr-msg", SERVICE.ip_address ? "Manual IP saved. Remember to Save to YAML." : "Manual IP cleared — using the discovered one.", "ok");
+    } catch (err) {
+      setMsg("addr-msg", err.message, "error");
+    }
+  }
+  $("addr-save-btn").addEventListener("click", saveManualIp);
+  $("f-ip").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); saveManualIp(); } });
+
+  $("addr-discover-btn").addEventListener("click", async () => {
+    const btn = $("addr-discover-btn");
+    btn.disabled = true;
+    btn.textContent = "Discovering…";
+    setMsg("addr-msg", "");
+    try {
+      const r = await apiFetch("POST", `/api/services/${encodeURIComponent(SERVICE.slug)}/ip/discover`, undefined, { suppressToast: true });
+      SERVICE.ip = {
+        effective_ip: r.effective_ip, effective_source: r.effective_source,
+        effective_source_label: r.effective_source_label, manual_ip: r.manual_ip,
+        discovered_ip: r.discovered_ip, ip_source: r.ip_source, ip_source_label: r.ip_source_label,
+        mac_addresses: r.mac_addresses, ip_discovered_at: r.ip_discovered_at,
+        ip_discovery_error: r.ip_discovery_error, has_guest: r.has_guest,
+      };
+      renderAddress();
+      const kind = r.status === "found" ? "ok" : r.status === "error" ? "error" : "";
+      // not_found/error details are already in the note above the field.
+      const text = r.status === "found" ? `Found ${r.message}` + (r.changed ? " — address changed." : "")
+        : r.status === "skipped" ? r.message
+        : "No address found this time — see above.";
+      setMsg("addr-msg", text, kind);
+    } catch (err) {
+      setMsg("addr-msg", err.message, "error");
+    } finally {
+      btn.disabled = false;
+      btn.textContent = "Discover now";
+    }
+  });
+
+  $("addr-ping-btn").addEventListener("click", async () => {
+    const names = new Set(SERVICE.probes.map((p) => p.name));
+    let name = "ping";
+    for (let i = 2; names.has(name); i++) name = `ping-${i}`;
+    const config = { host: "", count: 1 };
+    if (PING_TRANSPORT) config.transport = PING_TRANSPORT;
+    try {
+      await apiFetch("POST", svcPath + "/probes", { name, kind: "ping", required: false, config }, { suppressToast: true });
+      await reloadProbes();
+      renderAddress();
+      setMsg("addr-msg", `Added optional probe "${name}" — it pings this service's IP. Test it on the Probes tab.`, "ok");
+    } catch (err) {
+      setMsg("addr-msg", err.message, "error");
+    }
+  });
 
   $("svc-save-btn").addEventListener("click", async () => {
     const guestId = $("f-guest-id").value.trim();
@@ -470,11 +657,13 @@
       backup_excluded: $("f-backup-excluded").checked,
       backup_excluded_reason: $("f-backup-reason").value.trim(),
       depends_on: [...$("f-depends").querySelectorAll("input:checked")].map((cb) => cb.value),
+      ip_address: $("f-ip").value.trim(),
     };
     try {
       const updated = await apiFetch("PUT", svcPath, body, { suppressToast: true });
       Object.assign(SERVICE, updated);
       fillServiceForm(SERVICE);
+      renderAddress();
       svcFormDirty = false;
       setMsg("svc-msg", "Saved to the live registry. Remember to Save to YAML.", "ok");
     } catch (err) {
@@ -501,6 +690,11 @@
     if (p.kind === "systemd") {
       const t = c.transport || {};
       return `${c.unit || "?"} via ${t.type || "local"}${t.host ? " " + t.host : ""}`;
+    }
+    if (p.kind === "ping") {
+      const t = c.transport || {};
+      const target = c.host || `service IP (${(SERVICE.ip && SERVICE.ip.effective_ip) || "none yet"})`;
+      return `ping ${target}${t.type && t.type !== "local" ? ` via ${t.type} ${t.host || ""}` : ""}`;
     }
     const text = JSON.stringify(c);
     return text.length > 60 ? text.slice(0, 57) + "…" : text;
@@ -616,6 +810,7 @@
   async function reloadProbes() {
     SERVICE.probes = await apiFetch("GET", svcPath + "/probes", undefined, { suppressToast: true });
     renderProbes();
+    renderAddress();
   }
 
   // --- probe editor -------------------------------------------------------
@@ -656,6 +851,12 @@
       $("sd-user").value = t.user ?? "";
       $("sd-port").value = t.port ?? "";
       $("sd-jump").value = t.jump_host ?? "";
+    } else if (kind === "ping") {
+      const t = c.transport || {};
+      $("ping-host").value = c.host ?? "";
+      $("ping-count").value = c.count ?? 1;
+      $("ping-transport").value = t.type ?? "local";
+      $("ping-thost").value = t.host ?? "";
     } else {
       $("p-config-json").value = JSON.stringify(c, null, 2);
     }
@@ -706,6 +907,18 @@
         setOrDelete(t, "jump_host", $("sd-jump").value.trim());
       }
       c.transport = t;
+    } else if (kind === "ping") {
+      c.host = $("ping-host").value.trim();
+      const count = $("ping-count").value.trim();
+      c.count = count === "" ? 1 : Number(count);
+      const type = $("ping-transport").value;
+      if (type === "local") {
+        delete c.transport;
+      } else {
+        const t = { ...(c.transport || {}), type };
+        setOrDelete(t, "host", $("ping-thost").value.trim());
+        c.transport = t;
+      }
     }
     return c;
   }
@@ -1173,6 +1386,7 @@
   fillRequirements(SERVICE);
   loadPlan();
   renderProbes();
+  renderAddress();
   renderProxyHosts();
   loadBackups();
   loadHealthHistory();

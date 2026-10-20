@@ -153,6 +153,13 @@ class Service(SQLModel, table=True):
     # to `depends_on` above, which only affects health verdicts.
     backup_requires: list[str] = Field(default_factory=list, sa_column=Column(JSON))
 
+    # The operator's MANUAL address for this service ("" = none). Wins over
+    # anything discovered (ServiceState.discovered_ip), and is the only IP
+    # that lives in services.yaml — discovery is runtime state and never makes
+    # the registry dirty. Validated by registry.ip_address.validate_ip_address.
+    # See docs/service_ips.md.
+    ip_address: str = ""
+
     node_id: int | None = Field(
         default=None,
         sa_column=Column(ForeignKey("node.id", ondelete="RESTRICT")),
@@ -446,6 +453,18 @@ class ServiceState(SQLModel, table=True):
         sa_column=Column(ForeignKey("backup_record.id", ondelete="SET NULL")),
     )
     notes: str = ""
+
+    # --- IP discovery (orchestrator.ipdiscovery) — runtime only, never YAML.
+    # Last address found for the guest; kept when a later run finds nothing
+    # (a stopped agent does not mean the address changed).
+    discovered_ip: str = ""
+    #: Who answered: "guest_agent" | "lxc" | "arp" | "dhcp" ("" = nobody yet).
+    ip_source: str = ""
+    #: The guest's NIC MACs as Proxmox reports them (lowercase, colon form).
+    mac_addresses: list[str] = Field(default_factory=list, sa_column=Column(JSON))
+    ip_discovered_at: datetime | None = None
+    #: Why the last run found no address ("" when it did).
+    ip_discovery_error: str = ""
 
 
 class NodeState(SQLModel, table=True):

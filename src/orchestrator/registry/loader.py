@@ -169,6 +169,7 @@ def _spec_from_db(session: Session) -> RegistryFile:
                 depends_on=list(svc.depends_on or []),
                 backup_requires=list(svc.backup_requires or []),
                 backup_policy=policy_name,
+                ip_address=svc.ip_address or "",
                 probes=[
                     ProbeSpec(
                         name=p.name,
@@ -449,6 +450,7 @@ def reconcile_yaml_into_db(session: Session, path: Path) -> RegistryFile:
         svc.wake_on_hit_enabled = spec.wake_on_hit_enabled
         svc.depends_on = list(spec.depends_on)
         svc.backup_requires = clean_slug_list(spec.backup_requires)
+        svc.ip_address = spec.ip_address
         svc.node_id = node.id
         svc.backup_policy_id = policy.id if policy else None
         svc.updated_at = datetime.now(UTC)

@@ -52,6 +52,7 @@ SERVICE_ACTIONS = (
     "probes_required",
     "probes_optional",
     "update",
+    "discover_ip",
 )
 #: Fields the "update" action may set on many services at once.
 SERVICE_UPDATE_FIELDS = ("group", "backup_policy_id")
@@ -166,11 +167,13 @@ async def bulk_services(
     pipeline, returns once it is recorded) / ``backup`` (runs the backup now,
     one after another - this request returns when the last has finished) /
     ``probes_required`` / ``probes_optional`` / ``update`` with
-    ``params: {"group": "...", "backup_policy_id": 3 | null}``."""
+    ``params: {"group": "...", "backup_policy_id": 3 | null}`` /
+    ``discover_ip`` (IP discovery now; a stopped guest is reported, not failed)."""
     from orchestrator.web.routers.backup import run_backup
     from orchestrator.web.routers.dashboard import (
         ServiceUpdate,
         apply_service_update,
+        discover_service_ip,
         set_service_probes_required,
     )
     from orchestrator.web.routers.wake import start_wake
@@ -207,6 +210,14 @@ async def bulk_services(
                 session, admin.username, slug, body.action == "probes_required"
             )
             return str(out["message"])
+        if body.action == "discover_ip":
+            out = await discover_service_ip(session, adapters, settings, slug, actor=admin.username)
+            if out["status"] == "error":
+                raise RuntimeError(out["message"])
+            ip = out["effective_ip"]
+            if out["status"] == "found":
+                return f"{out['ip']} ({out['source']})" + (" - changed" if out["changed"] else "")
+            return f"{out['message']}" + (f" - keeps {ip}" if ip else "")
         if body.action == "wake":
             out = start_wake(session, adapters, settings, slug, actor=admin.username)
             return f"wake run #{out['run_id']} {'started' if out['started'] else 'already running'}"

@@ -38,12 +38,15 @@ from orchestrator.db.models import (
     Probe,
     ProxyHost,
     Service,
+    ServiceState,
 )
 from orchestrator.domain.enums import GuestKind, PipelineKind, PipelineStatus, ProbeKind
-from orchestrator.domain.schemas import HttpProbeConfig, TcpProbeConfig
+from orchestrator.domain.schemas import HttpProbeConfig, PingProbeConfig, TcpProbeConfig
 from orchestrator.health.engine import HealthEngine
+from orchestrator.ipdiscovery.discovery import IpDiscoverer, effective_ip, ip_view
 from orchestrator.pipelines.wake import wake_is_unsupported
 from orchestrator.registry.backup_plan import clean_slug_list, requires_problems_from_db
+from orchestrator.registry.ip_address import validate_ip_address
 from orchestrator.registry.loader import (
     _find_dependency_cycle,
     compute_registry_diff,
@@ -67,6 +70,7 @@ _TRANSPORT_TYPES = ("host_agent", "ssh", "local")
 _STRICT_CONFIG_MODELS: dict[ProbeKind, type[BaseModel]] = {
     ProbeKind.HTTP: HttpProbeConfig,
     ProbeKind.TCP: TcpProbeConfig,
+    ProbeKind.PING: PingProbeConfig,
 }
 
 
@@ -109,6 +113,7 @@ class ServiceCreate(_Body):
     backup_policy_id: int | None = None
     depends_on: list[str] = Field(default_factory=list)
     backup_requires: list[str] = Field(default_factory=list)
+    ip_address: str = ""
 
 
 class ServiceUpdate(_Body):
@@ -128,6 +133,8 @@ class ServiceUpdate(_Body):
     wake_on_hit_enabled: bool | None = None
     depends_on: list[str] | None = None
     backup_requires: list[str] | None = None
+    #: The manual IP ("" clears it). Discovered addresses are never set here.
+    ip_address: str | None = None
 
 
 class NodeCreate(_Body):
@@ -256,6 +263,10 @@ def service_detail(session: Session, svc: Service) -> dict[str, Any]:
         "backup_requires": list(svc.backup_requires or []),
         "node_id": svc.node_id,
         "node": _node_dict(node) if node else None,
+        "ip_address": svc.ip_address or "",
+        # Effective / discovered address, MACs and where it came from — see
+        # docs/service_ips.md. Runtime state, never part of the YAML.
+        "ip": ip_view(svc, session.get(ServiceState, svc.id) if svc.id is not None else None),
         # Same condition orchestrator.pipelines.wake.WakePipeline uses to
         # raise WakeUnsupportedError, computed here so an admin can see
         # upfront which services this applies to rather than only
@@ -409,6 +420,29 @@ def _check_backup_exclusion(excluded: bool, reason: str) -> None:
         raise _bad_request("backup_excluded=true needs a backup_excluded_reason")
 
 
+def _check_ip_address(raw: str | None) -> str:
+    """The manual IP through the one shared validator (registry/ip_address.py)."""
+    try:
+        return validate_ip_address(raw)
+    except ValueError as exc:
+        raise _bad_request(f"ip_address: {exc}") from None
+
+
+def _check_transport(kind: ProbeKind, transport: Any, allowed: tuple[str, ...]) -> None:
+    if not isinstance(transport, dict):
+        raise _bad_request(
+            f"{kind.value} probe runs a command and needs a 'transport' object in its config"
+        )
+    ttype = transport.get("type", "local")
+    if ttype not in allowed:
+        raise _bad_request(
+            f"transport.type {ttype!r} is not valid for {kind.value} "
+            f"(expected one of: {', '.join(allowed)})"
+        )
+    if ttype != "local" and not transport.get("host"):
+        raise _bad_request(f"transport.host is required for a {ttype} transport")
+
+
 def _validate_probe_config(kind: ProbeKind, config: dict[str, Any]) -> None:
     """Catch configs the probe would only reject at run time.
 
@@ -433,20 +467,10 @@ def _validate_probe_config(kind: ProbeKind, config: dict[str, Any]) -> None:
             raise _bad_request(f"invalid {kind.value} probe config — {problems}") from None
 
     if spec.needs_transport:
-        transport = config.get("transport")
-        if not isinstance(transport, dict):
-            raise _bad_request(
-                f"{kind.value} probe runs a command and needs a 'transport' object in its config"
-            )
-        ttype = transport.get("type", "local")
-        allowed = spec.transport_choices or _TRANSPORT_TYPES
-        if ttype not in allowed:
-            raise _bad_request(
-                f"transport.type {ttype!r} is not valid for {kind.value} "
-                f"(expected one of: {', '.join(allowed)})"
-            )
-        if ttype != "local" and not transport.get("host"):
-            raise _bad_request(f"transport.host is required for a {ttype} transport")
+        _check_transport(kind, config.get("transport"), spec.transport_choices or _TRANSPORT_TYPES)
+    elif kind is ProbeKind.PING and config.get("transport") is not None:
+        # Optional for ping (default: from the container), checked when given.
+        _check_transport(kind, config.get("transport"), _TRANSPORT_TYPES)
 
 
 def _check_probe_name_free(
@@ -515,18 +539,25 @@ async def reset_registry(session: SessionDep, settings: SettingsDep) -> dict[str
 async def list_services(session: SessionDep) -> list[dict[str, object]]:
     services = session.exec(select(Service).order_by(Service.slug)).all()
     nodes = {n.id: n.name for n in session.exec(select(Node)).all()}
-    return [
-        {
-            "slug": s.slug,
-            "name": s.name,
-            "enabled": s.enabled,
-            "group": s.group,
-            "node": nodes.get(s.node_id),
-            "guest_kind": s.guest_kind.value,
-            "guest_id": s.guest_id,
-        }
-        for s in services
-    ]
+    states = {st.service_id: st for st in session.exec(select(ServiceState)).all()}
+    out: list[dict[str, object]] = []
+    for s in services:
+        ip, source = effective_ip(s, states.get(s.id))
+        out.append(
+            {
+                "slug": s.slug,
+                "name": s.name,
+                "enabled": s.enabled,
+                "group": s.group,
+                "node": nodes.get(s.node_id),
+                "guest_kind": s.guest_kind.value,
+                "guest_id": s.guest_id,
+                "ip_address": s.ip_address or "",
+                "effective_ip": ip,
+                "ip_source": source,
+            }
+        )
+    return out
 
 
 @router.get("/registry/services/{slug}")
@@ -589,6 +620,7 @@ async def create_service(
         body.backup_requires,
         policy_id=body.backup_policy_id,
     )
+    ip_address = _check_ip_address(body.ip_address)
 
     svc = Service(
         slug=slug,
@@ -604,6 +636,7 @@ async def create_service(
         backup_policy_id=body.backup_policy_id,
         depends_on=depends_on,
         backup_requires=backup_requires,
+        ip_address=ip_address,
     )
     session.add(svc)
     session.flush()
@@ -650,6 +683,8 @@ def apply_service_update(
             raise _bad_request(f"{flag} must be true or false")
     if "guest_kind" in changes:
         changes["guest_kind"] = _parse_guest_kind(changes["guest_kind"] or "")
+    if "ip_address" in changes:
+        changes["ip_address"] = _check_ip_address(changes["ip_address"])
     if "node_id" in changes:
         _check_node_exists(session, changes["node_id"])
     if "backup_policy_id" in changes:
@@ -676,6 +711,8 @@ def apply_service_update(
         changes.get("backup_excluded_reason", svc.backup_excluded_reason),
     )
 
+    state = session.get(ServiceState, svc.id) if "ip_address" in changes else None
+    ip_before = effective_ip(svc, state)
     for key, value in changes.items():
         setattr(svc, key, value)
     svc.updated_at = _utcnow()
@@ -687,6 +724,15 @@ def apply_service_update(
         target=f"service:{slug}",
         details=body.model_dump(exclude_unset=True),
     )
+    ip_after = effective_ip(svc, state)
+    if "ip_address" in changes and ip_after[0] != ip_before[0]:
+        audit.record(
+            session,
+            actor=actor,
+            action="service.ip_changed",
+            target=f"service:{slug}",
+            details={"old": ip_before[0], "new": ip_after[0], "source": ip_after[1]},
+        )
     session.commit()
     session.refresh(svc)
     return service_detail(session, svc)
@@ -1098,3 +1144,41 @@ async def guest_power_for_service(
     )
     session.commit()
     return {"status": "ok", "service": slug, "action": action, "upid": handle.upid}
+
+
+# ---------------------------------------------------------------------------
+# Service IP (see docs/service_ips.md)
+# ---------------------------------------------------------------------------
+
+
+@router.get("/services/{slug}/ip")
+async def get_service_ip(slug: str, session: SessionDep) -> dict[str, Any]:
+    """Effective IP (manual, else discovered), where it came from, the MACs."""
+    svc = _get_service(session, slug)
+    return {"slug": slug, **ip_view(svc, session.get(ServiceState, svc.id))}
+
+
+@router.post("/services/{slug}/ip/discover")
+async def discover_service_ip_endpoint(
+    slug: str,
+    session: SessionDep,
+    adapters: AdaptersDep,
+    settings: SettingsDep,
+    admin: CurrentAdmin,
+) -> dict[str, Any]:
+    """Run IP discovery for this one service now (guest agent / LXC, then ARP,
+    then DHCP). A stopped guest is skipped, not an error. Never touches the
+    manual ``ip_address``."""
+    return await discover_service_ip(session, adapters, settings, slug, actor=admin.username)
+
+
+async def discover_service_ip(
+    session: Session, adapters: Any, settings: Any, slug: str, *, actor: str
+) -> dict[str, Any]:
+    """:func:`discover_service_ip_endpoint`, callable (the bulk ``discover_ip``
+    action runs exactly this per service)."""
+    svc = _get_service(session, slug)
+    discoverer = IpDiscoverer(settings=settings, proxmox=adapters.proxmox)
+    result = await discoverer.discover(session, svc, actor=actor)
+    session.refresh(svc)
+    return {**result.as_dict(), **ip_view(svc, session.get(ServiceState, svc.id))}

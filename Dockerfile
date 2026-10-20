@@ -31,8 +31,11 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 # This container serves a web listener, so anything it can read sits in that
 # blast radius. Work needing those credentials runs on the HOST, behind the host
 # runner, and the container only gets a socket. See docs/host_runner.md.
+# iputils-ping + iproute2: `kind: ping` probes and IP discovery's ARP read
+# (`ip neigh`) when their transport is `local`. ICMP needs NET_RAW, which
+# Docker grants by default (or ping_group_range) — see docs/service_ips.md.
 RUN apt-get update \
- && apt-get install -y --no-install-recommends curl ca-certificates \
+ && apt-get install -y --no-install-recommends curl ca-certificates iputils-ping iproute2 \
  && rm -rf /var/lib/apt/lists/* \
  && groupadd --system --gid 1000 orchestrator \
  && useradd --system --uid 1000 --gid orchestrator --home-dir /app --shell /usr/sbin/nologin orchestrator \

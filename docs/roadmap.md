@@ -294,5 +294,7 @@ but it should be made after hitting a concrete wall, not ahead of one.
 - [x] Bulk actions: selection checkboxes + action bar on services, nodes, proxy hosts and guests; `POST /api/bulk/*`; `orchestrator-cli bulk`. See docs/bulk_actions.md.
 - [ ] Proxy hosts: middlewares picker (auth, headers, rate limit) from Traefik's list.
 - [ ] Traefik redirects and middlewares management tabs (list/create/edit Traefik Manager's redirects and middlewares from the orchestrator).
+- [x] Service IPs: manual `ip_address` + discovery (guest agent / LXC, ARP with optional sweep, dnsmasq leases), "Use service IP" on the proxy-host form, `ping` probe kind. See docs/service_ips.md.
+- [ ] DHCP lease readers for OPNsense / pfSense (their APIs) and Kea — new `DhcpLeaseSource` implementations next to the dnsmasq one (`ipdiscovery/dhcp.py`).
 - [ ] Proxy hosts: show/edit a route's raw YAML from the orchestrator (TM `/api/routes/{id}/raw`) for options this form doesn't cover.
 

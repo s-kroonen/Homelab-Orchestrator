@@ -6,16 +6,24 @@ import asyncio
 import time
 from typing import Any
 
-from orchestrator.adapters.errors import TaskTimeout
+from orchestrator.adapters.errors import AdapterAuthError, AdapterError, TaskTimeout
 from orchestrator.adapters.proxmox.base import (
     BackupStorage,
     ClusterNode,
     ClusterStatus,
     Guest,
+    GuestNetwork,
     ProxmoxAdapter,
     TaskHandle,
     TaskStatus,
     VersionInfo,
+)
+from orchestrator.adapters.proxmox.net import (
+    parse_agent_interfaces,
+    parse_lxc_interfaces,
+    parse_lxc_net,
+    parse_qemu_net_macs,
+    qemu_agent_enabled,
 )
 from orchestrator.adapters.proxmox_family import ProxmoxFamilyClient
 from orchestrator.config import Settings
@@ -118,6 +126,62 @@ class LiveProxmoxAdapter(ProxmoxAdapter):
             if row.get("type", "pbs") == "pbs"
         ]
         return sorted(storages, key=lambda s: s.storage)
+
+    async def guest_network(self, node: str, vmid: int, kind: GuestKind) -> GuestNetwork:
+        """MACs from the guest config (needs VM.Audit), IPs from the QEMU guest
+        agent (needs VM.Monitor) or the container's config / interfaces.
+
+        Permission problems and a missing agent degrade to an answer with no
+        IPs instead of raising — the caller then tries ARP / DHCP with the MACs.
+        """
+        endpoint = self._endpoint_for(kind)
+        base = f"/nodes/{node}/{endpoint}/{vmid}"
+        try:
+            config = await self._client.request("GET", f"{base}/config") or {}
+        except AdapterAuthError as exc:
+            return GuestNetwork(
+                error=f"reading the {endpoint} config was refused ({exc.status_code}) — the "
+                f"API token needs VM.Audit on /vms/{vmid}"
+            )
+        except AdapterError as exc:
+            return GuestNetwork(error=f"could not read the {endpoint} config: {exc}")
+
+        if kind is GuestKind.CT:
+            macs, static_ips = parse_lxc_net(config)
+            if static_ips:
+                return GuestNetwork(macs=macs, ips=static_ips, source="lxc")
+            try:
+                rows = await self._client.request("GET", f"{base}/interfaces")
+            except AdapterAuthError as exc:
+                return GuestNetwork(
+                    macs=macs,
+                    error=f"reading the container's interfaces was refused "
+                    f"({exc.status_code}) — the API token needs VM.Audit on /vms/{vmid}",
+                )
+            except AdapterError as exc:
+                # Older PVE (no /interfaces) or a stopped container: a miss.
+                log.debug("proxmox.lxc_interfaces.unavailable", vmid=vmid, error=str(exc))
+                return GuestNetwork(macs=macs)
+            ips = parse_lxc_interfaces(rows, macs)
+            return GuestNetwork(macs=macs, ips=ips, source="lxc" if ips else None)
+
+        macs = parse_qemu_net_macs(config)
+        if not qemu_agent_enabled(config):
+            return GuestNetwork(macs=macs)
+        try:
+            payload = await self._client.request("GET", f"{base}/agent/network-get-interfaces")
+        except AdapterAuthError as exc:
+            return GuestNetwork(
+                macs=macs,
+                error=f"the guest agent read was refused ({exc.status_code}) — the API "
+                f"token needs VM.Monitor on /vms/{vmid}",
+            )
+        except AdapterError as exc:
+            # "QEMU guest agent is not running" (500) is the normal miss.
+            log.debug("proxmox.guest_agent.unavailable", vmid=vmid, error=str(exc))
+            return GuestNetwork(macs=macs)
+        ips = parse_agent_interfaces(payload, macs)
+        return GuestNetwork(macs=macs, ips=ips, source="guest_agent" if ips else None)
 
     async def start_guest(self, node: str, vmid: int, kind: GuestKind) -> TaskHandle:
         endpoint = self._endpoint_for(kind)

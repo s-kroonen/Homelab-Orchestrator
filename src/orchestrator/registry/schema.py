@@ -151,10 +151,20 @@ class ServiceSpec(BaseModel):
     #: policy's `requires`). Not the same as depends_on — see docs/backup_wake.md.
     backup_requires: list[str] = Field(default_factory=list)
     backup_policy: str | None = None  # -> BackupPolicySpec.name
+    #: The operator's manual address. See Service.ip_address — discovered
+    #: addresses are runtime state and never appear in this file.
+    ip_address: str = ""
     probes: list[ProbeSpec] = Field(default_factory=list)
     proxy_hosts: list[ProxyHostSpec] = Field(default_factory=list)
 
     _collapse_backup_requires = field_validator("backup_requires")(_collapse_slugs)
+
+    @field_validator("ip_address", mode="before")
+    @classmethod
+    def _check_ip(cls, value: Any) -> str:
+        from orchestrator.registry.ip_address import validate_ip_address
+
+        return validate_ip_address(value)
 
 
 class RegistryFile(BaseModel):

@@ -27,6 +27,7 @@ from orchestrator.db.session import build_engine, get_engine
 from orchestrator.domain.enums import ProbeKind
 from orchestrator.logging_setup import configure_logging
 from orchestrator.registry.editor import RegistryEditError, RegistryEditor
+from orchestrator.registry.ip_address import validate_ip_address
 from orchestrator.registry.probe_specs import (
     PROBE_SPECS,
     PROXY_FIELDS,
@@ -905,6 +906,15 @@ def service_list(path_override: str | None) -> None:
     default=None,
     help="Purely organisational tag the dashboard groups services by. Pass '' to clear.",
 )
+@click.option(
+    "--ip",
+    "ip_address",
+    default=None,
+    help=(
+        "Manual IP address (wins over a discovered one; used for proxy upstreams and "
+        "ping probes). Pass '' to clear and fall back to discovery."
+    ),
+)
 @click.option("--file", "path_override", default=None)
 def service_update(
     slug: str,
@@ -917,6 +927,7 @@ def service_update(
     name: str | None,
     description: str | None,
     group: str | None,
+    ip_address: str | None,
     path_override: str | None,
 ) -> None:
     """Update fields on SLUG. Only the flags you pass are touched."""
@@ -948,6 +959,11 @@ def service_update(
         fields["description"] = description
     if group is not None:
         fields["group"] = group
+    if ip_address is not None:
+        try:
+            fields["ip_address"] = validate_ip_address(ip_address)
+        except ValueError as exc:
+            raise click.BadParameter(str(exc), param_hint="--ip") from None
 
     if not fields:
         raise click.UsageError("nothing to change — pass at least one option")

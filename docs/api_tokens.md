@@ -28,9 +28,10 @@ task, and (from phase 3) start/stop guests once a node is awake.
 
 | Privilege | Why |
 |-----------|-----|
-| `VM.Audit` | list guests via `/cluster/resources`, read config |
+| `VM.Audit` | list guests via `/cluster/resources`, read config (incl. the NIC MACs and an LXC's `ip=` / `/interfaces` for [IP discovery](service_ips.md)) |
 | `VM.Backup` | run `vzdump` |
 | `VM.PowerMgmt` | start/stop guests after a node wake (phase 3) |
+| `VM.Monitor` (PVE 8) / `VM.GuestAgent.Audit` (PVE 9+) | *optional* — read a VM's IPs from the QEMU guest agent (`agent/network-get-interfaces`) for [IP discovery](service_ips.md) |
 | `Datastore.Audit` | see the PBS-backed storage entry |
 | `Datastore.AllocateSpace` | write the dump to that storage |
 | `Sys.Audit` | read node and task status |
@@ -45,6 +46,19 @@ Run on any PVE node as root:
 ```bash
 pveum role add OrchestratorBackup --privs "VM.Audit,VM.Backup,VM.PowerMgmt,Datastore.Audit,Datastore.AllocateSpace,Sys.Audit"
 ```
+
+To let IP discovery read VM addresses from the guest agent, add the agent
+read privilege too — `VM.Monitor` on PVE 8, `VM.GuestAgent.Audit` on PVE 9
+(which dropped `VM.Monitor`):
+
+```bash
+pveum role modify OrchestratorBackup --append 1 --privs "VM.Monitor"            # PVE 8
+pveum role modify OrchestratorBackup --append 1 --privs "VM.GuestAgent.Audit"   # PVE 9+
+```
+
+Without it nothing breaks: the agent read comes back 403, the service page
+says which privilege is missing, and discovery falls back to ARP / DHCP with
+the MACs from the config (see [service_ips.md](service_ips.md)).
 
 ```bash
 pveum user add orchestrator@pve --comment "homelab-orchestrator control plane"

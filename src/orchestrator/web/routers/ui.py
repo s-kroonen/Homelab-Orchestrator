@@ -32,6 +32,7 @@ from orchestrator.db.models import (
     ServiceState,
 )
 from orchestrator.domain.enums import BackupMode, GuestKind, RouterProvider
+from orchestrator.ipdiscovery.discovery import SOURCE_LABELS, effective_ip, transport_block
 from orchestrator.pipelines.wake import wake_is_unsupported
 from orchestrator.registry.backup_plan import BLOCKER_NO_POWER_TARGET
 from orchestrator.registry.loader import compute_registry_diff
@@ -60,6 +61,25 @@ _STATE_CLASS = {
     "unknown": "indeterminate",
     "down": "indeterminate",
 }
+
+
+def _service_choices(session: Session) -> list[dict[str, Any]]:
+    """Services for the proxy-host form's picker, each with its effective IP
+    (for "Use service IP")."""
+    states = {s.service_id: s for s in session.exec(select(ServiceState)).all()}
+    out: list[dict[str, Any]] = []
+    for s in session.exec(select(Service).order_by(Service.slug)).all():
+        ip, source = effective_ip(s, states.get(s.id))
+        out.append(
+            {
+                "id": s.id,
+                "slug": s.slug,
+                "name": s.name,
+                "ip": ip,
+                "ip_source": SOURCE_LABELS.get(source, source),
+            }
+        )
+    return out
 
 
 def _requirable_services(session: Session, *, exclude: str | None = None) -> list[dict[str, Any]]:
@@ -163,10 +183,13 @@ async def dashboard_page(
         last_backup = None
         if state is not None and state.last_backup_id is not None:
             last_backup = session.get(BackupRecord, state.last_backup_id)
+        ip, ip_source = effective_ip(svc, state)
         rows.append(
             {
                 "slug": svc.slug,
                 "name": svc.name,
+                "ip": ip,
+                "ip_source": SOURCE_LABELS.get(ip_source, ip_source),
                 "enabled": svc.enabled,
                 "group": svc.group,
                 "node": nodes.get(svc.node_id, "?"),
@@ -208,7 +231,7 @@ async def dashboard_page(
 
 @router.get("/services/{slug}", response_model=None)
 async def service_detail_page(
-    slug: str, request: Request, session: SessionDep
+    slug: str, request: Request, session: SessionDep, settings: SettingsDep
 ) -> HTMLResponse | RedirectResponse:
     """Edit view for one service and its probes. Server-renders the initial
     state; every change goes through the ``/api/registry/*`` JSON endpoints."""
@@ -267,8 +290,18 @@ async def service_detail_page(
             "providers": [p.value for p in RouterProvider],
             "registry_dirty": diff.dirty,
             "yaml_path": diff.yaml_path,
+            "ping_transport": _ping_transport(settings.ip_discovery_transport),
         },
     )
+
+
+def _ping_transport(raw: str) -> dict[str, Any] | None:
+    """The one-click ping probe's transport: IP_DISCOVERY_TRANSPORT (pinging
+    from where ARP is read), or None (= local) when unset or local."""
+    block = transport_block(raw)
+    if not block or str(block.get("type", "local")) in ("local", ""):
+        return None
+    return block
 
 
 @router.get("/proxy-hosts", response_model=None)
@@ -316,7 +349,6 @@ async def new_proxy_host_page(
     if admin is None:
         return RedirectResponse("/login?next=/proxy-hosts/new", status_code=303)
 
-    services = session.exec(select(Service).order_by(Service.slug)).all()
     return _templates.TemplateResponse(
         request,
         "proxy_host_form.html",
@@ -325,7 +357,7 @@ async def new_proxy_host_page(
             "mode": "new",
             "proxy_host": None,
             "initial_service_id": service_id,
-            "services": [{"id": s.id, "slug": s.slug, "name": s.name} for s in services],
+            "services": _service_choices(session),
             "providers": [p.value for p in RouterProvider],
         },
     )
@@ -346,7 +378,6 @@ async def edit_proxy_host_page(
     if ph is None:
         raise HTTPException(status_code=404, detail=f"proxy host {proxy_host_id} not found")
 
-    services = session.exec(select(Service).order_by(Service.slug)).all()
     return _templates.TemplateResponse(
         request,
         "proxy_host_form.html",
@@ -367,7 +398,7 @@ async def edit_proxy_host_page(
                 "route_options": RouteOptions.from_dict(ph.route_options).to_dict(),
             },
             "initial_service_id": None,
-            "services": [{"id": s.id, "slug": s.slug, "name": s.name} for s in services],
+            "services": _service_choices(session),
             "providers": [p.value for p in RouterProvider],
         },
     )

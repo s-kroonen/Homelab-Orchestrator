@@ -174,6 +174,33 @@ ENV_SECTIONS: tuple[EnvSection, ...] = (
         ),
     ),
     EnvSection(
+        "ipdiscovery",
+        "Service IP discovery",
+        (
+            EnvKey(
+                "IP_DISCOVERY_ENABLED",
+                "Periodically find each running guest's IP: QEMU guest agent / LXC first,\n"
+                "then its NIC MACs in an ARP table and a DHCP leases file. A service's\n"
+                "manual ip_address always wins. See docs/service_ips.md.",
+            ),
+            EnvKey("IP_DISCOVERY_INTERVAL_S", "How often the discovery pass runs."),
+            EnvKey(
+                "IP_DISCOVERY_TRANSPORT",
+                "Where the ARP / DHCP reads run, as a probe-style transport block in JSON,\n"
+                'e.g. {"type": "host_agent", "host": "gateway"}. Blank = Proxmox only.',
+            ),
+            EnvKey("IP_DISCOVERY_ARP_ENABLED", "Read the neighbour (ARP) table over it."),
+            EnvKey(
+                "IP_DISCOVERY_SWEEP_CIDRS",
+                "Comma-separated CIDRs to ping first so the ARP table is fresh (max /22).",
+            ),
+            EnvKey(
+                "IP_DISCOVERY_DHCP_LEASES_PATH",
+                "dnsmasq leases file on that host, e.g. /var/lib/misc/dnsmasq.leases.",
+            ),
+        ),
+    ),
+    EnvSection(
         "proxmox",
         "Proxmox VE",
         (

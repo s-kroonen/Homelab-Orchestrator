@@ -127,6 +127,17 @@ class CustomScriptProbeConfig(_ProbeBase):
     # Exit 0 is a pass. Non-zero is a fail. Non-existent/permission => UNKNOWN.
 
 
+class PingProbeConfig(_ProbeBase):
+    """ICMP echo. ``host`` blank = the service's effective IP (manual, else
+    discovered — see docs/service_ips.md), resolved when the probe runs."""
+
+    kind: Literal[ProbeKind.PING] = ProbeKind.PING
+    host: str = ""
+    count: int = Field(default=1, ge=1, le=10)
+    #: Optional — omitted means ping from the orchestrator container itself.
+    transport: dict[str, Any] | None = None
+
+
 ProbeConfig = Annotated[
     HttpProbeConfig
     | TcpProbeConfig
@@ -137,7 +148,8 @@ ProbeConfig = Annotated[
     | DbMongoProbeConfig
     | DbSqliteProbeConfig
     | DbMariadbProbeConfig
-    | CustomScriptProbeConfig,
+    | CustomScriptProbeConfig
+    | PingProbeConfig,
     Field(discriminator="kind"),
 ]
 

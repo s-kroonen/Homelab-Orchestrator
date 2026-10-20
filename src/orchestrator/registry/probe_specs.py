@@ -135,6 +135,25 @@ PROBE_SPECS: dict[ProbeKind, ProbeKindSpec] = {
             FieldSpec("within_seconds", "Seconds to wait for a message", default=30, parse=int),
         ),
     ),
+    ProbeKind.PING: ProbeKindSpec(
+        summary="Ping — ICMP echo; blank host = this service's IP (manual or discovered)",
+        suggested_name="ping",
+        default_timeout_s=10,
+        caution=(
+            "Runs inside the orchestrator container unless the config has a "
+            "`transport:` block — add one (host_agent / ssh) when the container "
+            "is not on the guests' network. Says the HOST is up, not the service."
+        ),
+        fields=(
+            FieldSpec(
+                "host",
+                "Host to ping (blank = the service's IP)",
+                default=None,
+                help="Leave blank to follow the service's IP as discovery updates it",
+            ),
+            FieldSpec("count", "Echo requests to send", default=1, parse=int),
+        ),
+    ),
     ProbeKind.SYSTEMD: ProbeKindSpec(
         summary="systemctl is-active — the unit must be running",
         suggested_name="systemd",
@@ -331,6 +350,7 @@ def kinds_by_menu_order() -> list[ProbeKind]:
     order = [
         ProbeKind.HTTP,
         ProbeKind.TCP,
+        ProbeKind.PING,
         ProbeKind.MQTT,
         ProbeKind.SYSTEMD,
         ProbeKind.DOCKER_PROJECT,

@@ -163,6 +163,12 @@ services:
     node: compute-a
     guest_kind: vm
     guest_id: 9001
+    # Manual IP. Optional: without it the orchestrator discovers the guest's
+    # address (QEMU guest agent / LXC, then ARP, then DHCP by the NIC MACs) and
+    # keeps that in its database, never in this file. A manual IP always wins.
+    # Used for "Use service IP" on proxy hosts and by `kind: ping` probes with
+    # a blank host. See docs/service_ips.md.
+    # ip_address: 10.0.0.21
     enabled: true
     backup_policy: daily-frequent
     # Cannot be judged until the gateway is up — see example-gateway above.

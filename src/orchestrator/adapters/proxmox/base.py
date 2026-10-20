@@ -78,6 +78,26 @@ class BackupStorage:
     server: str
 
 
+@dataclass(frozen=True)
+class GuestNetwork:
+    """What Proxmox can say about a guest's network: its NIC MACs and, when the
+    guest agent (VM) or the container's own config/interfaces (CT) know it, its
+    IP addresses.
+
+    ``ips`` is ordered best-first (the address on a NIC whose MAC matches the
+    guest's config comes first). ``source`` names who answered: ``guest_agent``
+    or ``lxc``; None when there are no IPs. ``error`` explains a failed read
+    (e.g. a 403 naming the missing privilege) — an agent that simply is not
+    installed or not running is a normal miss and leaves it None. Read-only;
+    see docs/service_ips.md.
+    """
+
+    macs: list[str] = field(default_factory=list)
+    ips: list[str] = field(default_factory=list)
+    source: str | None = None
+    error: str | None = None
+
+
 class ProxmoxAdapter(ABC):
     @abstractmethod
     async def start(self) -> None: ...
@@ -99,6 +119,12 @@ class ProxmoxAdapter(ABC):
     @abstractmethod
     async def list_backup_storages(self) -> list[BackupStorage]:
         """PVE storage entries that point at a PBS datastore."""
+
+    @abstractmethod
+    async def guest_network(self, node: str, vmid: int, kind: GuestKind) -> GuestNetwork:
+        """NIC MACs and (when Proxmox knows them) IPs of one guest. Never raises
+        for a permission problem or a missing guest agent — those come back in
+        :attr:`GuestNetwork.error` / as an empty ``ips`` list."""
 
     @abstractmethod
     async def start_guest(self, node: str, vmid: int, kind: GuestKind) -> TaskHandle: ...

@@ -11,7 +11,8 @@ Lifespan tasks in order:
     8. start the health scanner (if HEALTH_SCAN_ENABLED)
     9. start the access-log collector (if ACCESS_LOG_ENABLED and the proxy
        adapter is live; also writes GeoIP samples when GEOIP_ENABLED)
-Shutdown reverses 9 then 8 then 7 then 6 then 5.
+   10. start service IP discovery (if IP_DISCOVERY_ENABLED)
+Shutdown reverses 10 then 9 then 8 then 7 then 6 then 5.
 """
 
 from __future__ import annotations
@@ -34,6 +35,7 @@ from orchestrator.registry.loader import RegistryPathError, reconcile_yaml_into_
 from orchestrator.scheduler import BackupScheduler
 from orchestrator.scheduler.access_log_collector import AccessLogCollector
 from orchestrator.scheduler.health_scanner import HealthScanner
+from orchestrator.scheduler.ip_discovery import IpDiscoveryScheduler
 from orchestrator.scheduler.traffic_collector import TrafficCollector
 from orchestrator.web.routers import (
     activity,
@@ -210,10 +212,29 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         access_log_collector = None
     app.state.access_log_collector = access_log_collector
 
+    # Same resilience rule again: IP discovery is a convenience (proxy
+    # upstreams, ping probes), so a failure to start is logged, not fatal.
+    ip_discovery: IpDiscoveryScheduler | None = None
+    try:
+        ip_discovery = IpDiscoveryScheduler(settings=settings, adapters=adapters)
+        ip_discovery.start()
+    except Exception as exc:
+        log.error(
+            "ip_discovery.start.failed",
+            error=str(exc),
+            error_type=type(exc).__name__,
+            traceback=traceback.format_exc(),
+            impact="Service IPs are only discovered on a manual 'Discover now'.",
+        )
+        ip_discovery = None
+    app.state.ip_discovery = ip_discovery
+
     try:
         yield
     finally:
         log.info("orchestrator.stop")
+        if ip_discovery is not None:
+            await ip_discovery.shutdown()
         if access_log_collector is not None:
             await access_log_collector.shutdown()
         if health_scanner is not None:

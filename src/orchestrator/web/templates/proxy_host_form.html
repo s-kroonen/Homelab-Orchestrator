@@ -28,6 +28,10 @@
       <div class="field">
         <input id="ph-upstream" placeholder="http://10.0.0.12:8080"
                value="{{ proxy_host.upstream if proxy_host else '' }}">
+        <div class="ip-helper" id="ph-ip-helper" hidden>
+          <button type="button" class="secondary small" id="ph-use-ip">Use service IP</button>
+          <span class="msg" id="ph-ip-helper-text"></span>
+        </div>
         <div class="field-error" data-error-for="upstream" role="alert"></div>
       </div>
 
@@ -111,6 +115,7 @@
           </option>
           {% endfor %}
         </select>
+        <div class="msg svc-ip-note" id="ph-service-ip" aria-live="polite"></div>
         <div class="field-error" data-error-for="service_id" role="alert"></div>
       </div>
 
@@ -162,6 +167,11 @@
   #cert-custom { display: flex; flex-direction: column; gap: 0.4rem; margin-top: 0.4rem; }
   #cert-custom input, #cert-custom textarea { width: 100%; box-sizing: border-box; }
   .ep-tools { display: flex; gap: 0.6rem; align-items: center; flex-wrap: wrap; margin-bottom: 0.4rem; }
+  .ip-helper { display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; margin-top: 0.4rem; }
+  .ip-helper .msg, .svc-ip-note { font-size: 0.8rem; overflow-wrap: anywhere; }
+  .svc-ip-note { margin-top: 0.3rem; }
+  .svc-ip-note:empty { display: none; }
+  .svc-ip-note code, .ip-helper code { font-size: 0.8rem; }
   #ep-warning { margin-bottom: 0.5rem; background: #3b2e14; color: #e5a63e; padding: 0.5rem 0.7rem; border-radius: 0.4rem; font-size: 0.85rem; line-height: 1.4; }
   @media (max-width: 40rem) {
     form#ph-form { grid-template-columns: minmax(0, 1fr); }
@@ -530,7 +540,54 @@
     location.href = "/proxy-hosts";
   });
 
+  // --- "Use service IP" -----------------------------------------------------
+  // The linked service's effective IP (manual, else discovered — see
+  // docs/service_ips.md). Filling the upstream is always an explicit click:
+  // a typed upstream is never overwritten behind the operator's back.
+  const SERVICE_IPS = Object.fromEntries(
+    {{ services | tojson }}.map((s) => [String(s.id), { ip: s.ip, source: s.ip_source }]));
+
+  function urlHost(ip) { return ip.includes(":") ? `[${ip}]` : ip; }
+
+  function codeText(parent, prefix, code, suffix) {
+    parent.textContent = prefix;
+    const c = document.createElement("code");
+    c.textContent = code;
+    parent.append(c, suffix);
+  }
+
+  function syncServiceIp() {
+    const info = SERVICE_IPS[document.getElementById("ph-service").value];
+    const note = document.getElementById("ph-service-ip");
+    const helper = document.getElementById("ph-ip-helper");
+    if (!info) {
+      note.textContent = "";
+      helper.hidden = true;
+      return;
+    }
+    if (!info.ip) {
+      note.textContent = "This service has no IP yet — set one or run Discover on its page.";
+      helper.hidden = true;
+      return;
+    }
+    codeText(note, "Service IP: ", info.ip, info.source ? ` (${info.source})` : "");
+    codeText(document.getElementById("ph-ip-helper-text"), "fills ", `http://${urlHost(info.ip)}:`, " — then type the port");
+    helper.hidden = false;
+  }
+
+  document.getElementById("ph-service").addEventListener("change", syncServiceIp);
+  document.getElementById("ph-use-ip").addEventListener("click", () => {
+    const info = SERVICE_IPS[document.getElementById("ph-service").value];
+    if (!info || !info.ip) return;
+    const up = document.getElementById("ph-upstream");
+    up.value = `http://${urlHost(info.ip)}:`;
+    up.focus();
+    up.setSelectionRange(up.value.length, up.value.length);
+    up.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+
   syncVisibility();
   initEntryPoints();
+  syncServiceIp();
 </script>
 {% endblock %}
