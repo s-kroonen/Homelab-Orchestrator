@@ -26,6 +26,10 @@ class DryRunProxyAdapter(ProxyAdapter):
         # Routes "written" during this process, so the create/verify/edit flow
         # can be exercised end to end: they show up as healthy runtime routers.
         self._routes: dict[str, RouteInfo] = {}
+        # Routes switched off: parked here (absent from the runtime list, as
+        # Traefik would have them), plus every toggle in call order.
+        self._disabled: dict[str, RouteInfo] = {}
+        self.toggles: list[tuple[str, bool, bool]] = []
 
     async def start(self) -> None:
         log.info("proxy.dry_run.start")
@@ -151,6 +155,26 @@ class DryRunProxyAdapter(ProxyAdapter):
     async def delete_route(self, route_ref: str, *, with_redirect: bool = True) -> None:
         log.info("proxy.dry_run.delete_route", route_ref=route_ref)
         self._routes.pop(route_ref, None)
+        self._disabled.pop(route_ref, None)
+
+    async def set_route_enabled(
+        self, route_ref: str, enabled: bool, *, with_redirect: bool = False
+    ) -> None:
+        log.info(
+            "proxy.dry_run.set_route_enabled",
+            route_ref=route_ref,
+            enabled=enabled,
+            with_redirect=with_redirect,
+        )
+        self.toggles.append((route_ref, enabled, with_redirect))
+        if enabled:
+            parked = self._disabled.pop(route_ref, None)
+            if parked is not None:
+                self._routes[route_ref] = parked
+        else:
+            live = self._routes.pop(route_ref, None)
+            if live is not None:
+                self._disabled[route_ref] = live
 
     async def tail_access_log(self, lines: int = 200) -> list[str] | None:
         # Deliberately ``None``, not a fabricated ``[]`` or fake log lines:

@@ -228,6 +228,12 @@ class ProxyHost(SQLModel, table=True):
     # certificate request), http_redirect (companion HTTP -> HTTPS router).
     # Empty = "use the defaults" (every row that predates this).
     route_options: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))
+    # False = the route is switched off, not deleted. For a live-managed host
+    # Traefik Manager parks the router (and its service) in its own
+    # ``disabled_routes`` store, so Traefik stops serving it; the record and
+    # every setting stay here so Enable brings back exactly the same route.
+    # See docs/proxy_hosts.md "Enabling and disabling a host".
+    enabled: bool = Field(default=True)
 
 
 # ---------------------------------------------------------------------------

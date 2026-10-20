@@ -274,6 +274,9 @@ def _routes_to_route_info(apps: Any) -> list[RouteInfo]:
                 entry_points=(
                     tuple(e for e in eps if isinstance(e, str)) if isinstance(eps, list) else ()
                 ),
+                # A disabled route stays in /api/routes (from Traefik Manager's
+                # `disabled_routes` store) with "enabled": false.
+                enabled=app.get("enabled", True) is not False,
             )
         )
     return infos
@@ -457,6 +460,23 @@ class TraefikManagerProxyAdapter(ProxyAdapter):
         async with self._client() as client:
             await self._post_json(
                 client, f"/delete/{route_id}", data={}, headers={"X-Requested-With": "fetch"}
+            )
+
+    async def _toggle_route(self, route_id: str, enable: bool) -> None:
+        """``POST /api/routes/{route_id}/toggle`` with ``{"enable": bool}``.
+
+        Disabling moves the router (and its service, unless another router
+        shares it) out of the config file into Traefik Manager's own
+        ``disabled_routes`` settings store; enabling writes them back. Traefik
+        stops/starts serving it on its next file-provider reload. Idempotent on
+        Traefik Manager's side (toggling an unknown or already-in-that-state
+        route is a silent no-op), so a retry is always safe. JSON body."""
+        async with self._client() as client:
+            await self._post_json(
+                client,
+                f"/api/routes/{route_id}/toggle",
+                json={"enable": bool(enable)},
+                headers={"X-Requested-With": "fetch"},
             )
 
     async def _save_middleware(
@@ -942,6 +962,31 @@ class TraefikManagerProxyAdapter(ProxyAdapter):
             await self._delete_route(route_ref)
         except TraefikManagerNotFound as exc:
             raise ProxyRouteNotFound(str(exc)) from exc
+
+    async def set_route_enabled(
+        self, route_ref: str, enabled: bool, *, with_redirect: bool = False
+    ) -> None:
+        """Toggle the route (and its ``-redirect`` companion) on Traefik
+        Manager. Ordered so a half-done toggle never leaves a plain-HTTP
+        redirect pointing at a route that is gone: disable takes the redirect
+        away first, enable brings the main route back first. If the second
+        call fails the first is undone (best effort) and the error raised."""
+        if not with_redirect:
+            await self._toggle_route(route_ref, enabled)
+            return
+        pair = [redirect_route_id(route_ref), route_ref]
+        if enabled:
+            pair.reverse()
+        first, second = pair
+        await self._toggle_route(first, enabled)
+        try:
+            await self._toggle_route(second, enabled)
+        except Exception:
+            try:
+                await self._toggle_route(first, not enabled)
+            except Exception as exc:  # pragma: no cover - best effort
+                log.warning("traefik_manager.toggle_rollback_failed", route=first, error=str(exc))
+            raise
 
     async def list_domains(self) -> list[str] | None:
         if not self._settings.traefik_manager_url.strip():

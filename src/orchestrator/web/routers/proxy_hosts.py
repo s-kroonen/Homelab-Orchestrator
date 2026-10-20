@@ -84,6 +84,10 @@ log = get_logger(__name__)
 #: hosts" section.
 TRAEFIK_MANAGER_ROUTE_REF_KEY = "traefik_manager_route_id"
 
+#: ``live_status`` / ``traefik.state`` of a host that is switched off on
+#: purpose (``ProxyHost.enabled`` False): never "missing" / "not loaded".
+DISABLED = "disabled"
+
 
 @dataclass
 class LiveState:
@@ -274,6 +278,17 @@ def _traefik_block(
     status and error text (what Traefik Manager shows)."""
     if ph.router_provider is not RouterProvider.TRAEFIK:
         return None
+    if not ph.enabled:
+        # Switched off on purpose: Traefik is EXPECTED not to serve it, so its
+        # absence from the runtime routers is not an error or "not loaded".
+        return {
+            "state": DISABLED,
+            "message": "Disabled - the route is parked and Traefik is not serving it.",
+            "router": None,
+            "status": None,
+            "entry_points": list(ph.entry_points or []),
+            "cert_resolver": ph.cert_resolver or None,
+        }
     if live is None or live.runtime is None:
         return RouteVerification(
             UNVERIFIED, "Traefik's runtime routers are not readable."
@@ -288,6 +303,13 @@ def _traefik_block(
         route = match_runtime_router(live.routes, route_ref=ref, hostname=ph.hostname)
         if route is not None:
             out["entry_points"] = list(getattr(route, "entry_points", ()))
+            if not getattr(route, "enabled", True):
+                # Enabled here, switched off on Traefik Manager (by hand, or a
+                # Reset to saved re-enabled the record): say so plainly.
+                out["message"] = (
+                    "Traefik Manager has this route disabled although it is enabled here - "
+                    "use Enable to switch it back on."
+                )
     return out
 
 
@@ -318,7 +340,10 @@ def _serialize(
         # Computed fresh on each request, never persisted — see
         # orchestrator.registry.traefik_status. "unknown" means Traefik polling
         # is not configured or the poll failed, NOT that the route is missing.
-        "live_status": drift_status(ph.hostname, live_hostnames).value,
+        "live_status": (
+            DISABLED if not ph.enabled else drift_status(ph.hostname, live_hostnames).value
+        ),
+        "enabled": ph.enabled,
         # Traefik's verdict on the router itself (state ok / error / not_loaded
         # / unverified, with Traefik's own error text when it is broken).
         "traefik": _traefik_block(ph, live),
@@ -1021,6 +1046,17 @@ async def update_proxy_host(
     adapters: AdaptersDep,
 ) -> dict[str, Any]:
     ph = _get_or_404(session, proxy_host_id)
+    # A disabled host may still be edited when it is a local-only record and
+    # stays one; anything that would write a route to Traefik Manager waits
+    # until it is enabled again (docs/proxy_hosts.md "Editing a disabled host").
+    if not ph.enabled and (_live_route_ref(ph) or _is_live_managed(body)):
+        raise _fail(
+            status.HTTP_409_CONFLICT,
+            f"{ph.hostname} is disabled. Enable it first, then edit it: a disabled route is "
+            "parked on Traefik Manager, where an edit cannot be verified against Traefik and "
+            "could bring the route (or its HTTP -> HTTPS redirect) back to life unasked.",
+            {"_": "Enable the host before editing it."},
+        )
     svc = _validate_service(session, body)
     prep = await _prepare(session, settings, adapters, body, existing=ph)
     old_svc = session.get(Service, ph.service_id) if ph.service_id else None
@@ -1152,7 +1188,20 @@ async def delete_proxy_host(
     settings: SettingsDep,
     adapters: AdaptersDep,
 ) -> dict[str, Any]:
-    ph = _get_or_404(session, proxy_host_id)
+    return await delete_proxy_host_record(
+        session, admin, settings, adapters, _get_or_404(session, proxy_host_id)
+    )
+
+
+async def delete_proxy_host_record(
+    session: Session,
+    admin: CurrentAdmin,
+    settings: Any,
+    adapters: AdapterBundle,
+    ph: ProxyHost,
+) -> dict[str, Any]:
+    """``DELETE /api/proxy-hosts/{id}``, callable (the bulk endpoint reuses it)."""
+    proxy_host_id = ph.id
     hostname = ph.hostname
     old_svc = session.get(Service, ph.service_id) if ph.service_id else None
     details = {
@@ -1201,6 +1250,116 @@ async def delete_proxy_host(
     _audit_maintenance_sync_events(session, admin, maintenance_events)
     session.commit()
     return {"status": "deleted", "id": proxy_host_id, "hostname": hostname}
+
+
+class EnabledIn(BaseModel):
+    enabled: bool
+
+
+def _live_route_ref(ph: ProxyHost) -> str | None:
+    """The Traefik Manager route this host controls, or ``None`` when it is a
+    local-only record (another provider, or no route was ever written)."""
+    if ph.router_provider is not RouterProvider.TRAEFIK:
+        return None
+    ref = (ph.extra or {}).get(TRAEFIK_MANAGER_ROUTE_REF_KEY)
+    return str(ref) if ref else None
+
+
+async def set_proxy_host_enabled(
+    session: Session,
+    admin: CurrentAdmin,
+    settings: Any,
+    adapters: AdapterBundle,
+    ph: ProxyHost,
+    enabled: bool,
+) -> dict[str, Any]:
+    """Switch a host on or off. A live-managed host is toggled on Traefik
+    Manager FIRST (with its HTTP -> HTTPS companion when that option is on);
+    any failure there is a ``502`` and the DB is left exactly as it was.
+    Then the flag is stored and audited (``proxy_host.enabled`` /
+    ``proxy_host.disabled``). Always sent to the backend, even when the flag
+    already has that value - the toggle is idempotent there and this
+    re-converges a route someone flipped by hand."""
+    ref = _live_route_ref(ph)
+    with_redirect = RouteOptions.from_dict(ph.route_options).http_redirect
+    if ref:
+        try:
+            await adapters.proxy.set_route_enabled(ref, enabled, with_redirect=with_redirect)
+        except NotImplementedError as exc:
+            raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc)) from exc
+        except Exception as exc:
+            log.warning(
+                "proxy_host.toggle_failed", hostname=ph.hostname, enabled=enabled, error=str(exc)
+            )
+            verb = "enable" if enabled else "disable"
+            raise HTTPException(
+                status.HTTP_502_BAD_GATEWAY,
+                f"could not {verb} the route on Traefik Manager: {exc}",
+            ) from exc
+    was = ph.enabled
+    ph.enabled = enabled
+    session.add(ph)
+    audit.record(
+        session,
+        actor=admin.username,
+        action="proxy_host.enabled" if enabled else "proxy_host.disabled",
+        target=f"proxy_host:{ph.hostname}",
+        details={
+            "id": ph.id,
+            "live": bool(ref),
+            "route_ref": ref,
+            "with_redirect": bool(ref) and with_redirect,
+            "changed": was != enabled,
+        },
+    )
+    session.commit()
+    session.refresh(ph)
+    live = await _live_state(settings, adapters)
+    return _serialize(ph, _services_by_id(session), live.hostnames, live)
+
+
+async def set_proxy_host_wake_on_hit(
+    session: Session, admin: CurrentAdmin, ph: ProxyHost, wake_on_hit: bool
+) -> dict[str, Any]:
+    """Flip only ``wake_on_hit`` - a local setting, nothing to write to the
+    proxy, so it works on a disabled host too. Audited like the edit it is
+    (``proxy_host.updated`` with the same ``changes`` shape as ``PUT``)."""
+    before = ph.wake_on_hit
+    ph.wake_on_hit = wake_on_hit
+    session.add(ph)
+    svc = session.get(Service, ph.service_id) if ph.service_id else None
+    audit.record(
+        session,
+        actor=admin.username,
+        action="proxy_host.updated",
+        target=f"proxy_host:{ph.hostname}",
+        details={
+            "id": ph.id,
+            "service": svc.slug if svc else None,
+            "changes": (
+                {"wake_on_hit": {"from": before, "to": wake_on_hit}}
+                if before != wake_on_hit
+                else {}
+            ),
+        },
+    )
+    session.commit()
+    session.refresh(ph)
+    return {"id": ph.id, "hostname": ph.hostname, "wake_on_hit": ph.wake_on_hit}
+
+
+@router.post("/{proxy_host_id}/enabled")
+async def set_enabled(
+    proxy_host_id: int,
+    body: EnabledIn,
+    session: SessionDep,
+    admin: CurrentAdmin,
+    settings: SettingsDep,
+    adapters: AdaptersDep,
+) -> dict[str, Any]:
+    """Enable or disable one proxy host - see :func:`set_proxy_host_enabled`."""
+    ph = _get_or_404(session, proxy_host_id)
+    return await set_proxy_host_enabled(session, admin, settings, adapters, ph, body.enabled)
 
 
 catalog_router = APIRouter(

@@ -153,6 +153,11 @@ async def dashboard_page(
             "guest_kinds": [k.value for k in GuestKind],
             "registry_dirty": diff.dirty,
             "yaml_path": diff.yaml_path,
+            # For the bulk "Set policy" action.
+            "backup_policies": [
+                {"id": p.id, "name": p.name}
+                for p in session.exec(select(BackupPolicy).order_by(BackupPolicy.name)).all()
+            ],
         },
     )
 

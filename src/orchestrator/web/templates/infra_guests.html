@@ -6,7 +6,9 @@
     <p class="msg">
       The dashboard equivalent of <code>orchestrator-cli guests</code>: every guest
       <code>/api/infra/proxmox/guests</code> can see on the cluster, whether or not it is
-      registered as a service here.
+      registered as a service here. Tick guests to start or stop several at once: a guest
+      registered as a service goes through that service's own power action (which refuses to
+      stop a guest mid-backup); any other guest is started / shut down directly.
     </p>
     <div class="row">
       <label class="inline" for="node-filter">Node</label>
@@ -14,17 +16,18 @@
       <button class="secondary" id="refresh-btn">Refresh</button>
       <span class="msg" id="guests-msg"></span>
     </div>
-    <div class="table-scroll">
-    <table>
+    <div class="table-scroll" id="guest-scroll">
+    <table id="guest-table">
       <thead>
-        <tr><th>VMID</th><th>Kind</th><th>Node</th><th>Status</th><th>Name</th></tr>
+        <tr><th>VMID</th><th>Kind</th><th>Node</th><th>Status</th><th>Name</th><th>Service</th></tr>
       </thead>
-      <tbody id="guest-rows"><tr><td colspan="5">Loading…</td></tr></tbody>
+      <tbody id="guest-rows"><tr><td colspan="6">Loading…</td></tr></tbody>
     </table>
     </div>
   </section>
 {% endblock %}
 {% block scripts %}
+<script src="/static/bulk.js"></script>
 <script>
   function setMsg(text, kind) {
     const el = document.getElementById("guests-msg");
@@ -50,9 +53,10 @@
       body.innerHTML = "";
       const tr = document.createElement("tr");
       const td = cell(err.message);
-      td.colSpan = 5;
+      td.colSpan = 6;
       tr.appendChild(td);
       body.appendChild(tr);
+      guestBulk.decorate();
       setMsg("Could not reach the orchestrator API.", "error");
       return;
     }
@@ -64,14 +68,20 @@
         "No guests returned — /cluster/resources filters silently by VM.Audit, so this " +
         "can mean the token lacks it rather than the cluster being empty."
       );
-      td.colSpan = 5;
+      td.colSpan = 6;
       tr.appendChild(td);
       body.appendChild(tr);
+      guestBulk.decorate();
       setMsg("");
       return;
     }
+    guestsById = {};
     for (const g of rows) {
       const tr = document.createElement("tr");
+      const id = `${g.node}/${g.vmid}`;
+      guestsById[id] = g;
+      tr.dataset.bulkId = id;
+      tr.dataset.bulkLabel = `${g.vmid} ${g.name || ""}`.trim();
       tr.appendChild(cell(g.vmid));
       tr.appendChild(cell(g.kind));
       tr.appendChild(cell(g.node));
@@ -84,10 +94,39 @@
       tr.appendChild(statusTd);
 
       tr.appendChild(cell(g.name));
+      tr.appendChild(cell(g.service_slug || "—", g.service_slug ? "" : "muted"));
       body.appendChild(tr);
     }
+    guestBulk.decorate();
     setMsg(`${rows.length} guest(s).`, "ok");
   }
+
+  // --- bulk Start / Stop (static/bulk.js) ------------------------------------
+  // Per guest, two at a time: a registered guest goes through its service's
+  // endpoint (mid-backup guardrail), any other through the infra one.
+  let guestsById = {};
+  async function guestPower(id, _params, action) {
+    const g = guestsById[id];
+    if (!g) throw new Error("guest no longer listed - refresh");
+    const url = g.service_slug
+      ? `/api/services/${encodeURIComponent(g.service_slug)}/guest/power`
+      : `/api/infra/guests/${encodeURIComponent(g.node)}/${g.vmid}/power`;
+    await apiFetch("POST", url, { action }, { suppressToast: true });
+    return `${action} sent` + (g.service_slug ? ` (service ${g.service_slug})` : "");
+  }
+  const guestRun = Bulk.perItem(guestPower, 2);
+  const guestBulk = Bulk.attach({
+    key: "guests",
+    noun: "guest",
+    tables: [document.getElementById("guest-table")],
+    barHost: document.getElementById("guest-scroll"),
+    actions: [
+      { label: "Start", action: "start", run: guestRun },
+      { label: "Stop", action: "stop", run: guestRun, cls: "danger",
+        confirm: (ids) => `Shut down ${ids.length} guest(s)? A graceful shutdown is requested.` },
+    ],
+    onDone: () => setTimeout(loadGuests, 1500),
+  });
 
   document.getElementById("refresh-btn").addEventListener("click", loadGuests);
   document.getElementById("node-filter").addEventListener("keydown", (ev) => {

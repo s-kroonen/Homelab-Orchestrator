@@ -334,6 +334,67 @@ gated by any of this — it runs for any linked `ProxyHost` regardless of
 `router_provider`, same as before this feature, since it's a separate,
 independent, fail-open integration.
 
+## Enabling and disabling a host
+
+A proxy host can be switched off without deleting it: the **Enabled** switch on
+`/proxy-hosts`, the bulk **Enable / Disable** actions (see
+[bulk_actions.md](bulk_actions.md)), `POST /api/proxy-hosts/{id}/enabled`
+`{"enabled": false}`, or `orchestrator-cli bulk proxy-hosts disable ...`.
+The flag is `ProxyHost.enabled` (migration `0013_proxy_host_enabled`, default
+true) and the YAML field `enabled` on a proxy host (default `true`).
+
+**What Traefik Manager does.** A live-managed host (`router_provider: traefik`
+with a stored route reference) is toggled with Traefik Manager's
+`POST /api/routes/<route_id>/toggle` and JSON body `{"enable": true|false}` (same
+`X-Api-Key` and `X-Requested-With: fetch` headers as every other write).
+Disabling *moves* the router - and its service, unless another router still
+uses it - out of the config file into Traefik Manager's own `disabled_routes`
+settings store; enabling writes them back unchanged. So, while disabled:
+
+* Traefik itself has no runtime router for it (`/api/traefik/routers` does not
+  list it). That is the expected state: the list shows
+  `disabled` in the Traefik column and `route disabled` as the
+  router verdict, never `missing` / `router not loaded`.
+* Traefik Manager's `GET /api/routes` still lists it, with `"enabled": false`.
+  The adapter reads that flag (`RouteInfo.enabled`), so Resync still recognises
+  the route as ours (no "Discovered" entry, no drift) and a host that is enabled
+  here but disabled on Traefik Manager (flipped by hand, or brought back by a
+  *Reset to saved*) is explained in its status message, with Enable as the fix.
+* `POST /delete/<id>` also removes a disabled route (it falls back to the
+  disabled store), so deleting a disabled host works as usual.
+* The toggle is idempotent on Traefik Manager (an unknown route or one already
+  in that state is a silent no-op), so the orchestrator always sends it, even
+  when the stored flag already matches - a cheap re-converge.
+
+**Order and failure.** Traefik Manager is called first; any failure is a `502`
+and the database row is left exactly as it was (no audit entry). Only then is
+the flag stored and audited as `proxy_host.enabled` / `proxy_host.disabled`.
+A local-only host (another provider, or no route written yet) just stores the
+flag.
+
+**The redirect companion.** When the host's `route_options.http_redirect` is
+on, the `<route>-redirect` router is toggled too: on disable the redirect goes
+first (so plain HTTP never redirects to a route that is gone), on enable the
+main route goes first. If the second toggle fails, the first is undone (best
+effort) and the whole action reports the failure.
+
+### Editing a disabled host
+
+**Refused for a live-managed host** (`409`, "Enable it first, then edit it").
+Traefik Manager's own `/save` would keep an edited disabled route disabled, but
+everything the orchestrator does around a save cannot be applied safely to a
+parked route: post-save verification against Traefik's runtime routers would
+always say "not loaded"; the maintenance-fallback middleware is injected
+through the raw-route endpoint, which only sees enabled routes; a newly turned
+on HTTP -> HTTPS redirect would be created as a *live* router next to a disabled
+main route; and the "route is gone, re-create it" backfill path would create a
+fresh, enabled route. Any of those could bring the host back to life unasked, so
+the safe choice is to enable, edit, then disable again. A local-only disabled
+host can still be edited and stays disabled - unless the edit would make it
+live-managed (an upstream on a `traefik` host), which is refused for the same
+reason. Toggling **wake on hit** (including in bulk) is a local setting and
+works on a disabled host.
+
 ## Drift detection: Traefik Manager preferred, direct Traefik API as fallback
 
 **Traefik Manager** (https://github.com/chr0nzz/traefik-manager) now runs

@@ -276,6 +276,9 @@ but it should be made after hitting a concrete wall, not ahead of one.
    concrete, named reason.
 
 - [x] Proxy host route options: Host header passthrough (fixes redirects to the raw LAN IP), https upstream scheme, wildcard / multi-name certificate domains, skip upstream TLS verify, companion HTTP -> HTTPS redirect router. See docs/proxy_hosts.md.
+- [x] Proxy hosts: enable / disable without deleting (Traefik Manager's route toggle, redirect companion included). See docs/proxy_hosts.md.
+- [x] Bulk actions: selection checkboxes + action bar on services, nodes, proxy hosts and guests; `POST /api/bulk/*`; `orchestrator-cli bulk`. See docs/bulk_actions.md.
 - [ ] Proxy hosts: middlewares picker (auth, headers, rate limit) from Traefik's list.
+- [ ] Traefik redirects and middlewares management tabs (list/create/edit Traefik Manager's redirects and middlewares from the orchestrator).
 - [ ] Proxy hosts: show/edit a route's raw YAML from the orchestrator (TM `/api/routes/{id}/raw`) for options this form doesn't cover.
 

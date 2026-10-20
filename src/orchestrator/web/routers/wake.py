@@ -16,7 +16,7 @@ from __future__ import annotations
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, status
-from sqlmodel import desc, select
+from sqlmodel import Session, desc, select
 
 from orchestrator.db.models import PipelineRun, Service
 from orchestrator.domain.enums import PipelineKind
@@ -31,16 +31,24 @@ router = APIRouter(tags=["wake"])
 async def wake(
     service_slug: str, session: SessionDep, adapters: AdaptersDep, settings: SettingsDep
 ) -> dict[str, Any]:
+    return start_wake(session, adapters, settings, service_slug, actor="api")
+
+
+def start_wake(
+    session: Session, adapters: Any, settings: Any, service_slug: str, *, actor: str
+) -> dict[str, Any]:
+    """:func:`wake`, callable: record (or join) the wake run and fire the
+    pipeline in the background. Reused by ``POST /api/bulk/services``."""
     pipeline = WakePipeline(power=adapters.power, proxmox=adapters.proxmox, settings=settings)
     try:
-        run, started_new = pipeline.get_or_start(session, service_slug, actor="api")
+        run, started_new = pipeline.get_or_start(session, service_slug, actor=actor)
     except WakeError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
     if started_new:
-        fire_background(pipeline, run, service_slug, actor="api")
+        fire_background(pipeline, run, service_slug, actor=actor)
 
-    return {"service": service_slug, **run_to_dict(run)}
+    return {"service": service_slug, "started": started_new, **run_to_dict(run)}
 
 
 @router.get("/wake/{service_slug}")

@@ -17,12 +17,12 @@ from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, ConfigDict
-from sqlmodel import select
+from sqlmodel import Session, select
 
 from orchestrator.adapters.errors import AdapterError, AdapterUnreachable
 from orchestrator.audit import log as audit
-from orchestrator.db.models import Node
-from orchestrator.domain.enums import PowerState
+from orchestrator.db.models import Node, Service
+from orchestrator.domain.enums import GuestKind, PowerState
 from orchestrator.web.auth import CurrentAdmin, require_admin
 from orchestrator.web.deps import AdaptersDep, SessionDep, SettingsDep
 
@@ -170,45 +170,136 @@ async def node_power_action(
     what ``force=true`` means. ``wake`` is harmless and unconditional in the
     UI too.
     """
+    return await apply_node_power(
+        session, adapters, admin.username, name, body.action, force=body.force
+    )
+
+
+async def apply_node_power(
+    session: Session, adapters: Any, actor: str, name: str, action: str, *, force: bool = False
+) -> dict[str, Any]:
+    """:func:`node_power_action`, callable (reused by ``POST /api/bulk/nodes``)."""
     node = session.exec(select(Node).where(Node.name == name)).one_or_none()
     if node is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, f"no node named {name!r}")
 
-    reason = f"manual dashboard action by {admin.username}"
+    reason = f"manual dashboard action by {actor}"
     try:
-        if body.action == "wake":
+        if action == "wake":
             await adapters.power.wake(node.power_mgr_target, reason=reason)
-        elif body.action == "power_off":
-            await adapters.power.power_off(node.power_mgr_target, reason=reason, force=body.force)
+        elif action == "power_off":
+            await adapters.power.power_off(node.power_mgr_target, reason=reason, force=force)
+        elif action == "restart":
+            await adapters.power.restart(node.power_mgr_target, reason=reason, force=force)
         else:
-            await adapters.power.restart(node.power_mgr_target, reason=reason, force=body.force)
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, f"unknown power action {action!r}")
+    except AdapterError as exc:
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc)) from exc
+
+    audit.record(
+        session,
+        actor=actor,
+        action="node.power_action",
+        target=f"node:{node.name}",
+        details={"action": action, "force": force},
+    )
+    session.commit()
+    return {"status": "ok", "node": node.name, "action": action, "force": force}
+
+
+def _service_for_guest(session: Session, node: str, vmid: int) -> Service | None:
+    """The registered service running guest ``vmid`` on ``node``, if any."""
+    row = session.exec(select(Node).where(Node.name == node)).one_or_none()
+    if row is None:
+        return None
+    return session.exec(
+        select(Service).where(Service.node_id == row.id, Service.guest_id == vmid)
+    ).first()
+
+
+@router.get("/proxmox/guests")
+async def list_guests(
+    adapters: AdaptersDep, session: SessionDep, node: str | None = None
+) -> list[dict[str, Any]]:
+    guests = await adapters.proxmox.list_guests(node)
+    out = []
+    for g in guests:
+        svc = _service_for_guest(session, g.node, g.vmid)
+        out.append(
+            {
+                "node": g.node,
+                "vmid": g.vmid,
+                "kind": g.kind.value,
+                "name": g.name,
+                "status": g.status,
+                # Registered as a service? Power actions then go through the
+                # service's own endpoint (and its mid-backup guardrail).
+                "service_slug": svc.slug if svc else None,
+            }
+        )
+    return out
+
+
+class GuestPowerIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    action: Literal["start", "stop"]
+
+
+@router.post("/guests/{node}/{vmid}/power")
+async def guest_power_action(
+    node: str,
+    vmid: int,
+    body: GuestPowerIn,
+    session: SessionDep,
+    adapters: AdaptersDep,
+    admin: CurrentAdmin,
+) -> dict[str, Any]:
+    """Raw start/stop of any Proxmox guest, registered or not - the guests
+    page's Start/Stop. A guest that IS a registered service is handed to
+    ``POST /api/services/{slug}/guest/power``'s code path instead, so its
+    "never stop mid-backup" guardrail and audit entry still apply. Otherwise
+    ``adapters.proxmox.start_guest``/``stop_guest`` straight through (graceful
+    shutdown for stop), audited as ``infra.guest_power_action``."""
+    from orchestrator.web.routers.dashboard import guest_power_for_service
+
+    svc = _service_for_guest(session, node, vmid)
+    if svc is not None and svc.guest_id == vmid and svc.guest_kind is not GuestKind.NONE:
+        return await guest_power_for_service(
+            session, adapters, admin.username, svc.slug, body.action
+        )
+
+    try:
+        guests = await adapters.proxmox.list_guests(node)
+    except AdapterError as exc:
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc)) from exc
+    guest = next((g for g in guests if g.vmid == vmid and g.node == node), None)
+    if guest is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, f"no guest {vmid} on node {node!r}")
+    try:
+        if body.action == "start":
+            handle = await adapters.proxmox.start_guest(node, vmid, guest.kind)
+        else:
+            handle = await adapters.proxmox.stop_guest(node, vmid, guest.kind)
     except AdapterError as exc:
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc)) from exc
 
     audit.record(
         session,
         actor=admin.username,
-        action="node.power_action",
-        target=f"node:{node.name}",
-        details={"action": body.action, "force": body.force},
+        action="infra.guest_power_action",
+        target=f"guest:{node}/{vmid}",
+        details={
+            "action": body.action,
+            "node": node,
+            "vmid": vmid,
+            "guest_kind": guest.kind.value,
+            "name": guest.name,
+            "upid": handle.upid,
+        },
     )
     session.commit()
-    return {"status": "ok", "node": node.name, "action": body.action, "force": body.force}
-
-
-@router.get("/proxmox/guests")
-async def list_guests(adapters: AdaptersDep, node: str | None = None) -> list[dict[str, Any]]:
-    guests = await adapters.proxmox.list_guests(node)
-    return [
-        {
-            "node": g.node,
-            "vmid": g.vmid,
-            "kind": g.kind.value,
-            "name": g.name,
-            "status": g.status,
-        }
-        for g in guests
-    ]
+    return {"status": "ok", "node": node, "vmid": vmid, "action": body.action, "upid": handle.upid}
 
 
 @router.get("/pbs/snapshots")
