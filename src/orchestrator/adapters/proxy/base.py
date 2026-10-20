@@ -52,6 +52,10 @@ class RouteInfo:
     error: str | None = None
     #: The ``tls.certResolver`` the router carries, when reported.
     cert_resolver: str | None = None
+    #: False when the backend reports the route as switched off (Traefik
+    #: Manager lists a disabled route in ``/api/routes`` with
+    #: ``"enabled": false``; Traefik itself then has no runtime router for it).
+    enabled: bool = True
 
 
 @dataclass(frozen=True)
@@ -285,6 +289,21 @@ class ProxyAdapter(ABC):
         record can choose to treat "already gone on the backend" as
         success rather than blocking the local delete on it.
         """
+
+    async def set_route_enabled(
+        self, route_ref: str, enabled: bool, *, with_redirect: bool = False
+    ) -> None:
+        """Switch the route ``route_ref`` off (``enabled=False``) or back on,
+        WITHOUT deleting it: the backend keeps everything needed to bring the
+        exact same route back. ``with_redirect`` also toggles the companion
+        plain-HTTP -> HTTPS router (``RouteOptions.http_redirect``).
+
+        An explicit admin action like the CRUD trio above: raises on failure.
+        Default: the backend cannot do this, so it says so rather than
+        pretending (the caller turns it into a visible error)."""
+        raise NotImplementedError(
+            f"{type(self).__name__} does not support enabling/disabling a route"
+        )
 
     # -- Access-log read path (GeoIP traffic visibility) --------------------
 

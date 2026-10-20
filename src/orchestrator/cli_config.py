@@ -669,6 +669,8 @@ def proxy_list(slug: str | None, path_override: str | None) -> None:
             suffix = f" ep={eps}" if eps else ""
             if h.get("cert_resolver"):
                 suffix += f" resolver={h.get('cert_resolver')}"
+            if h.get("enabled") is False:
+                suffix += " DISABLED"
             click.echo(
                 f"    {h.get('hostname'):<34} -> {h.get('upstream'):<28} [{provider}]{suffix}"
             )

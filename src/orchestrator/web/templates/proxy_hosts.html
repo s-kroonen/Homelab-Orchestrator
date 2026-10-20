@@ -31,6 +31,14 @@
         exists). <strong>Entry points</strong> shows what the host is bound to.
       </p>
       <p>
+        <strong>Enabled</strong> switches a host off without deleting it. For a live-managed host
+        the route is parked on Traefik Manager (its own disabled-routes store), so Traefik stops
+        serving it and the Traefik column shows <span class="badge disabled">disabled</span> rather
+        than an error; Enable puts the exact same route back (with its HTTP&nbsp;&rarr;&nbsp;HTTPS
+        redirect, if it has one). A disabled live-managed host has to be enabled before it can be
+        edited. Tick several rows to enable, disable, delete or change wake on hit in one go.
+      </p>
+      <p>
         <strong>Resync</strong> pulls Traefik Manager's current routes into the DB: it imports
         routes with no local record yet ("Discovered" below) and catches drift on linked hosts.
         See <code>docs/proxy_hosts.md</code>.
@@ -48,12 +56,12 @@
       <input id="ph-filter" type="search" placeholder="hostname contains…">
     </div>
     <p class="msg" id="resync-msg"></p>
-    <div class="table-scroll">
-    <table>
+    <div class="table-scroll" id="ph-scroll">
+    <table id="ph-table">
       <thead>
-        <tr><th>Hostname</th><th>Upstream</th><th>Provider</th><th>Service</th><th>Entry points</th><th>Traefik</th><th>Last seen</th><th>Wake on hit</th><th></th></tr>
+        <tr><th>Hostname</th><th>Enabled</th><th>Upstream</th><th>Provider</th><th>Service</th><th>Entry points</th><th>Traefik</th><th>Last seen</th><th>Wake on hit</th><th></th></tr>
       </thead>
-      <tbody id="ph-rows"><tr><td colspan="9">Loading…</td></tr></tbody>
+      <tbody id="ph-rows"><tr><td colspan="10">Loading…</td></tr></tbody>
     </table>
     </div>
   </section>
@@ -84,6 +92,7 @@
 </style>
 {% endblock %}
 {% block scripts %}
+<script src="/static/bulk.js"></script>
 <script>
   function setMsg(id, text, kind) {
     const el = document.getElementById(id);
@@ -251,7 +260,11 @@
     wrap.className = "router-status";
     wrap.dataset.state = t.state;
     const b = document.createElement("span");
-    if (t.state === "ok") {
+    if (t.state === "disabled") {
+      // Switched off on purpose: Traefik is expected not to serve it.
+      b.className = "badge disabled";
+      b.textContent = "route disabled";
+    } else if (t.state === "ok") {
       b.className = "badge healthy";
       b.textContent = "router enabled";
     } else if (t.state === "error") {
@@ -265,7 +278,7 @@
       b.textContent = "router unverified";
     }
     wrap.appendChild(b);
-    if (t.state === "error" || t.state === "not_loaded") {
+    if (t.state === "error" || t.state === "not_loaded" || t.state === "disabled") {
       const msg = document.createElement("div");
       msg.className = "router-error" + (t.state === "error" ? " bad" : "");
       msg.textContent = t.message;
@@ -294,9 +307,10 @@
       body.innerHTML = "";
       const tr = document.createElement("tr");
       const td = cell(err.message);
-      td.colSpan = 9;
+      td.colSpan = 10;
       tr.appendChild(td);
       body.appendChild(tr);
+      phBulk.decorate();
       return;
     }
     hosts = data;
@@ -304,14 +318,18 @@
     if (!hosts.length) {
       const tr = document.createElement("tr");
       const td = cell("No proxy hosts recorded.");
-      td.colSpan = 9;
+      td.colSpan = 10;
       tr.appendChild(td);
       body.appendChild(tr);
+      phBulk.decorate();
       return;
     }
     for (const h of hosts) {
       const tr = document.createElement("tr");
       tr.dataset.hostname = h.hostname.toLowerCase();
+      tr.dataset.bulkId = String(h.id);
+      tr.dataset.bulkLabel = h.hostname;
+      if (!h.enabled) tr.classList.add("row-disabled");
       const hostTd = document.createElement("td");
       const code = document.createElement("code");
       code.textContent = h.hostname;
@@ -325,6 +343,7 @@
         hostTd.appendChild(warn);
       }
       tr.appendChild(hostTd);
+      tr.appendChild(enabledCell(h));
       tr.appendChild(cell(h.upstream || "—"));
       tr.appendChild(cell(h.router_provider));
 
@@ -342,9 +361,9 @@
       tr.appendChild(entryPointsCell(h));
 
       const statusTd = document.createElement("td");
-      const statusCls = { matched: "healthy", missing: "failed", unknown: "unknown" }[h.live_status]
+      const statusCls = { matched: "healthy", missing: "failed", unknown: "unknown", disabled: "disabled" }[h.live_status]
         || "unknown";
-      const statusLabel = { matched: "matched", missing: "missing", unknown: "unknown" }[h.live_status]
+      const statusLabel = { matched: "matched", missing: "missing", unknown: "unknown", disabled: "disabled" }[h.live_status]
         || "unknown";
       const statusBadge = document.createElement("span");
       statusBadge.className = "badge " + statusCls;
@@ -362,6 +381,9 @@
       edit.className = "btn secondary small";
       edit.href = `/proxy-hosts/${h.id}/edit`;
       edit.textContent = "Edit";
+      if (!h.enabled && h.router_provider === "traefik" && h.extra && h.extra.traefik_manager_route_id) {
+        edit.title = "Disabled: enable it first to edit the live route";
+      }
       const del = document.createElement("button");
       del.className = "danger small";
       del.textContent = "Delete";
@@ -371,6 +393,38 @@
       body.appendChild(tr);
     }
     applyFilter();
+    phBulk.decorate();
+  }
+
+  // Enabled switch: POST /api/proxy-hosts/{id}/enabled. A live-managed host
+  // is toggled on Traefik Manager first; a failure there changes nothing.
+  function enabledCell(h) {
+    const td = document.createElement("td");
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "small " + (h.enabled ? "toggle-on" : "toggle-off");
+    b.textContent = h.enabled ? "on" : "off";
+    b.setAttribute("aria-pressed", String(h.enabled));
+    b.title = h.enabled ? "Enabled - click to disable" : "Disabled - click to enable";
+    b.addEventListener("click", async () => {
+      const turnOn = !h.enabled;
+      if (!turnOn && !confirm(`Disable ${h.hostname}? ` + (h.router_provider === "traefik"
+        ? "Traefik stops serving it until you enable it again (the route is kept)."
+        : "This only marks the record disabled."))) return;
+      b.disabled = true;
+      try {
+        await apiFetch("POST", `/api/proxy-hosts/${h.id}/enabled`, { enabled: turnOn }, { suppressToast: true });
+        setMsg("registry-msg", `${h.hostname} ${turnOn ? "enabled" : "disabled"}. Save to YAML to persist.`, "ok");
+      } catch (err) {
+        setMsg("registry-msg", err.message, "error");
+        if (window.toast) toast(err.message, "error");
+        b.disabled = false;
+        return;
+      }
+      await loadHosts();
+    });
+    td.appendChild(b);
+    return td;
   }
 
   async function removeHost(h) {
@@ -394,8 +448,28 @@
     for (const tr of document.querySelectorAll("#ph-rows tr[data-hostname]")) {
       tr.hidden = needle !== "" && !tr.dataset.hostname.includes(needle);
     }
+    phBulk.sync();
   }
   document.getElementById("ph-filter").addEventListener("input", applyFilter);
+
+  // --- bulk actions (static/bulk.js) ----------------------------------------
+  const phApi = Bulk.viaApi("/api/bulk/proxy-hosts");
+  const phBulk = Bulk.attach({
+    key: "proxy-hosts",
+    noun: "proxy host",
+    tables: [document.getElementById("ph-table")],
+    barHost: document.getElementById("ph-scroll"),
+    actions: [
+      { label: "Enable", action: "enable", run: phApi },
+      { label: "Disable", action: "disable", run: phApi, cls: "danger",
+        confirm: (ids) => `Disable ${ids.length} proxy host(s)? Live-managed routes stop being served until enabled again (nothing is deleted).` },
+      { label: "Delete", action: "delete", run: phApi, cls: "danger",
+        confirm: (ids) => `Delete ${ids.length} proxy host(s)? Live-managed ones also lose their real route on Traefik Manager.` },
+      { label: "Wake on hit on", action: "wake_on_hit_on", run: phApi },
+      { label: "Wake on hit off", action: "wake_on_hit_off", run: phApi },
+    ],
+    onDone: () => loadHosts(),
+  });
 
   showFlash();
   loadHosts();

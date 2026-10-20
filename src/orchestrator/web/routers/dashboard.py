@@ -227,6 +227,7 @@ def _proxy_host_dict(ph: ProxyHost) -> dict[str, Any]:
         "upstream": ph.upstream,
         "router_provider": ph.router_provider.value,
         "wake_on_hit": ph.wake_on_hit,
+        "enabled": ph.enabled,
     }
 
 
@@ -622,6 +623,15 @@ async def create_service(
 async def update_service(
     slug: str, body: ServiceUpdate, session: SessionDep, admin: CurrentAdmin
 ) -> dict[str, Any]:
+    return apply_service_update(session, admin.username, slug, body)
+
+
+def apply_service_update(
+    session: Session, actor: str, slug: str, body: ServiceUpdate
+) -> dict[str, Any]:
+    """``PUT /api/registry/services/{slug}``, callable: every validation,
+    the write and the ``service.updated`` audit entry. The bulk endpoint
+    (``web/routers/bulk.py``) runs exactly this per service."""
     svc = _get_service(session, slug)
     changes = body.model_dump(exclude_unset=True)
     if not changes:
@@ -672,7 +682,7 @@ async def update_service(
     session.add(svc)
     audit.record(
         session,
-        actor=admin.username,
+        actor=actor,
         action="service.updated",
         target=f"service:{slug}",
         details=body.model_dump(exclude_unset=True),
@@ -766,6 +776,11 @@ async def create_node(body: NodeCreate, session: SessionDep, admin: CurrentAdmin
 async def update_node(
     name: str, body: NodeUpdate, session: SessionDep, admin: CurrentAdmin
 ) -> dict[str, Any]:
+    return apply_node_update(session, admin.username, name, body)
+
+
+def apply_node_update(session: Session, actor: str, name: str, body: NodeUpdate) -> dict[str, Any]:
+    """``PUT /api/registry/nodes/{name}``, callable (reused by the bulk endpoint)."""
     node = _get_node(session, name)
     changes = body.model_dump(exclude_unset=True)
     if not changes:
@@ -789,7 +804,7 @@ async def update_node(
     session.add(node)
     audit.record(
         session,
-        actor=admin.username,
+        actor=actor,
         action="node.updated",
         target=f"node:{name}",
         details=body.model_dump(exclude_unset=True),
@@ -890,6 +905,14 @@ async def create_probe(
 async def update_probe(
     probe_id: int, body: ProbeUpdate, session: SessionDep, admin: CurrentAdmin
 ) -> dict[str, Any]:
+    return apply_probe_update(session, admin.username, probe_id, body)
+
+
+def apply_probe_update(
+    session: Session, actor: str, probe_id: int, body: ProbeUpdate
+) -> dict[str, Any]:
+    """``PUT /api/registry/probes/{probe_id}``, callable (reused by the bulk
+    "set all probes required/optional" action, one call per probe)."""
     probe, svc = _get_probe(session, probe_id)
     changes = body.model_dump(exclude_unset=True)
     if not changes:
@@ -919,7 +942,7 @@ async def update_probe(
     session.add(probe)
     audit.record(
         session,
-        actor=admin.username,
+        actor=actor,
         action="probe.updated",
         target=f"service:{svc.slug}",
         details={"probe_id": probe_id, **body.model_dump(exclude_unset=True)},
@@ -927,6 +950,30 @@ async def update_probe(
     session.commit()
     session.refresh(probe)
     return _probe_dict(probe)
+
+
+def set_service_probes_required(
+    session: Session, actor: str, slug: str, required: bool
+) -> dict[str, Any]:
+    """Mark every probe of ``slug`` required (gates backups) or optional, via
+    :func:`apply_probe_update` for each probe that changes - same validation
+    and the same ``probe.updated`` audit entry as editing them one by one."""
+    svc = _get_service(session, slug)
+    probes = _service_probes(session, svc)
+    changed = 0
+    for probe in probes:
+        if probe.required != required:
+            assert probe.id is not None
+            apply_probe_update(session, actor, probe.id, ProbeUpdate(required=required))
+            changed += 1
+    word = "required" if required else "optional"
+    if not probes:
+        message = "no probes"
+    elif changed:
+        message = f"{changed} of {len(probes)} probe(s) now {word}"
+    else:
+        message = f"all {len(probes)} probe(s) already {word}"
+    return {"slug": slug, "probes": len(probes), "changed": changed, "message": message}
 
 
 @router.delete("/registry/probes/{probe_id}")
@@ -1000,6 +1047,15 @@ async def service_guest_power(
     under a live ``vzdump``. ``start`` has no such guard; there is no
     equivalent hazard for starting a guest back up.
     """
+    return await guest_power_for_service(session, adapters, admin.username, slug, body.action)
+
+
+async def guest_power_for_service(
+    session: Session, adapters: Any, actor: str, slug: str, action: str
+) -> dict[str, Any]:
+    """:func:`service_guest_power`, callable (the guests page's bulk Start/Stop
+    and ``POST /api/infra/guests/{node}/{vmid}/power`` reuse it so the
+    mid-backup guardrail always applies)."""
     svc = session.exec(select(Service).where(Service.slug == slug)).one_or_none()
     if svc is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, f"no service registered with slug {slug!r}")
@@ -1012,7 +1068,7 @@ async def service_guest_power(
         raise HTTPException(status.HTTP_400_BAD_REQUEST, f"service {slug!r} has no node")
     assert svc.id is not None
 
-    if body.action == "stop" and _backup_currently_running(session, svc.id):
+    if action == "stop" and _backup_currently_running(session, svc.id):
         raise HTTPException(
             status.HTTP_409_CONFLICT,
             f"a backup is currently running for {slug!r} — refusing to stop its "
@@ -1020,7 +1076,7 @@ async def service_guest_power(
         )
 
     try:
-        if body.action == "start":
+        if action == "start":
             handle = await adapters.proxmox.start_guest(node.name, svc.guest_id, svc.guest_kind)
         else:
             handle = await adapters.proxmox.stop_guest(node.name, svc.guest_id, svc.guest_kind)
@@ -1029,11 +1085,11 @@ async def service_guest_power(
 
     audit.record(
         session,
-        actor=admin.username,
+        actor=actor,
         action="service.guest_power_action",
         target=f"service:{slug}",
         details={
-            "action": body.action,
+            "action": action,
             "node": node.name,
             "vmid": svc.guest_id,
             "guest_kind": svc.guest_kind.value,
@@ -1041,4 +1097,4 @@ async def service_guest_power(
         },
     )
     session.commit()
-    return {"status": "ok", "service": slug, "action": body.action, "upid": handle.upid}
+    return {"status": "ok", "service": slug, "action": action, "upid": handle.upid}

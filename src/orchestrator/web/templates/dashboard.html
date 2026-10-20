@@ -16,11 +16,12 @@
       <summary><span class="group-name">{{ grp.name }}</span> <span class="msg">({{ grp.services|length }})</span>{% if grp.name != "Ungrouped" %} <a class="msg" href="/activity?group={{ grp.name }}">history</a>{% endif %}</summary>
       <table class="services-table">
         <thead>
-          <tr><th>Service</th><th class="hide-phone">Node</th><th>Health</th><th>Last backup</th></tr>
+          <tr><th class="bulk-col"></th><th>Service</th><th class="hide-phone">Node</th><th>Health</th><th>Last backup</th></tr>
         </thead>
         <tbody>
           {% for svc in grp.services %}
           <tr>
+            <td class="bulk-col"><input type="checkbox" class="bulk-cb" data-bulk-id="{{ svc.slug }}" data-bulk-label="{{ svc.name }}"></td>
             <td><a href="/services/{{ svc.slug }}">{{ svc.name }}</a> <code class="hide-phone">{{ svc.slug }}</code></td>
             <td class="hide-phone">{{ svc.node }}</td>
             <td>
@@ -80,7 +81,7 @@
 
   <section>
     <h2>Nodes</h2>
-    <table>
+    <table id="nodes-table">
       <thead>
         <tr><th>Name</th><th>State</th><th>Always on</th><th>Power target</th><th>Notes</th><th>Wake on hit</th><th>Services</th><th></th></tr>
       </thead>
@@ -127,6 +128,7 @@
 {% endblock %}
 {% block webauthn_script %}<script src="/static/webauthn.js"></script>{% endblock %}
 {% block scripts %}
+<script src="/static/bulk.js"></script>
 <script>
   function setMsg(id, text, kind) {
     const el = document.getElementById(id);
@@ -266,6 +268,9 @@
 
   function renderNodeRow(node, editing) {
     const tr = document.createElement("tr");
+    tr.dataset.bulkId = node.name;
+    // Re-rendered rows (Edit / Cancel) get their checkbox back.
+    queueMicrotask(() => nodeBulk && nodeBulk.decorate());
     const path = "/api/registry/nodes/" + encodeURIComponent(node.name);
     const actions = document.createElement("td");
     if (!editing) {
@@ -369,8 +374,56 @@
       return;
     }
     for (const n of nodes) body.appendChild(renderNodeRow(n, false));
+    nodeBulk.decorate();
     loadNodeStates();
   }
+
+  // --- bulk actions (static/bulk.js) ----------------------------------------
+  const servicesApi = Bulk.viaApi("/api/bulk/services");
+  const svcTables = [...document.querySelectorAll("table.services-table")];
+  const svcBulk = svcTables.length ? Bulk.attach({
+    key: "services",
+    noun: "service",
+    tables: svcTables,
+    barHost: document.querySelector("details.group"),
+    actions: [
+      { label: "Enable", action: "enable", run: servicesApi },
+      { label: "Disable", action: "disable", run: servicesApi, confirm: true, cls: "danger" },
+      { label: "Wake", action: "wake", run: servicesApi },
+      { label: "Run backup now", action: "backup", run: servicesApi, confirm: (ids) =>
+          `Run a backup now for ${ids.length} service(s)? They run one after another and this waits for all of them.` },
+      { label: "Probes required", action: "probes_required", run: servicesApi },
+      { label: "Probes optional", action: "probes_optional", run: servicesApi },
+      { label: "Set group", action: "update", run: servicesApi,
+        inputs: [{ key: "group", kind: "text", placeholder: "group (blank = none)", label: "Group" }] },
+      { label: "Set policy", action: "update", run: servicesApi,
+        inputs: [{ key: "backup_policy_id", kind: "select", number: true, label: "Backup policy",
+          options: [{ value: "", label: "(no policy)" }].concat(
+            {{ backup_policies|tojson }}.map((p) => ({ value: String(p.id), label: p.name }))) }] },
+    ],
+    // The table is server-rendered: reload to show the new state (the
+    // per-item results survive the reload).
+    onDone: (results) => { if (results.some((r) => r.ok)) setTimeout(() => location.reload(), 900); },
+  }) : null;
+
+  const nodesApi = Bulk.viaApi("/api/bulk/nodes");
+  const nodeBulk = Bulk.attach({
+    key: "nodes",
+    noun: "node",
+    tables: [document.getElementById("nodes-table")],
+    barHost: document.getElementById("nodes-table"),
+    actions: [
+      { label: "Wake", action: "wake", run: nodesApi },
+      { label: "Power off", action: "power_off", run: nodesApi, cls: "danger",
+        inputs: [{ key: "force", kind: "checkbox", label: "force" }],
+        confirm: (ids, p) => `Power off ${ids.length} node(s)?` + (p.force
+          ? " force=true SKIPS a graceful shutdown — this cuts power immediately, with no chance for a clean shutdown and possible data loss."
+          : " force=false asks for a graceful shutdown first.") },
+      { label: "Wake on hit on", action: "wake_on_hit_on", run: nodesApi },
+      { label: "Wake on hit off", action: "wake_on_hit_off", run: nodesApi },
+    ],
+    onDone: () => loadNodes(),
+  });
 
   document.getElementById("new-node-btn").addEventListener("click", async () => {
     try {
@@ -405,6 +458,7 @@
     const active = document.activeElement;
     if (active && /^(INPUT|TEXTAREA|SELECT)$/.test(active.tagName)) return true;
     if (document.querySelector("details.probes[open]")) return true;
+    if ((svcBulk && svcBulk.hasSelection()) || nodeBulk.hasSelection()) return true;
     return false;
   }
   setInterval(() => {

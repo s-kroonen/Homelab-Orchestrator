@@ -45,6 +45,10 @@ working (fail-open).
   [docs/dashboard_auth.md](docs/dashboard_auth.md)
 * `orchestrator-cli` — connectivity checks, health scans, manual backups, and
   guided builders for the whole config
+* **Bulk actions** — tick services, nodes, proxy hosts or guests and enable,
+  disable, wake, back up, power off, start/stop them in one go, with a per-item
+  result (also `orchestrator-cli bulk`); proxy hosts can be disabled without
+  being deleted. See [docs/bulk_actions.md](docs/bulk_actions.md)
 * FastAPI app: `/healthz`, `/readyz`, `/wake`, `/maintenance`, the dashboard,
   registry, infra, and backup endpoints (the latter four behind login)
 

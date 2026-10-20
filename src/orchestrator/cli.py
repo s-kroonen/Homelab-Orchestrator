@@ -13,6 +13,8 @@
     Operate     backup SLUG               wake what it needs, then run one backup end to end
                 backup plan SLUG          preview what a backup would wake (exit 1 on a blocker)
                 wake SLUG                 wake the node, start the guest, wait until healthy
+                bulk services|proxy-hosts ACTION --all|--group|--slug
+                                          one action on many items, per-item report
     Recover     admin reset               break-glass: wipe admins/passkeys, reopen signup
 
 Every command that acts on infrastructure honours ``DRY_RUN``. Setup discovery
@@ -30,6 +32,7 @@ from sqlmodel import Session, select
 
 from orchestrator.adapters.errors import AdapterError, AdapterTlsError, AdapterUnreachable
 from orchestrator.adapters.factory import build_adapters
+from orchestrator.cli_bulk import bulk
 from orchestrator.cli_config import policy as policy_group
 from orchestrator.cli_config import probe, proxy
 from orchestrator.cli_config import service as service_group
@@ -816,6 +819,7 @@ cli.add_command(proxy)
 cli.add_command(service_group, name="service")
 cli.add_command(policy_group, name="policy")
 cli.add_command(transport)
+cli.add_command(bulk)
 cli.add_command(admin_group, name="admin")
 
 

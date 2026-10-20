@@ -92,11 +92,28 @@ async def trigger_backup(
         ),
     ),
 ) -> dict[str, Any]:
+    return await run_backup(
+        session, adapters, settings, slug, actor="api", verify=verify, wake=wake
+    )
+
+
+async def run_backup(
+    session: Session,
+    adapters: Any,
+    settings: Any,
+    slug: str,
+    *,
+    actor: str,
+    verify: bool = True,
+    wake: bool = True,
+) -> dict[str, Any]:
+    """:func:`trigger_backup`, callable (reused by ``POST /api/bulk/services``).
+    Synchronous like the endpoint: returns when the run has finished."""
     pipeline = BackupPipeline(
         proxmox=adapters.proxmox, pbs=adapters.pbs, settings=settings, power=adapters.power
     )
     try:
-        run = await pipeline.run_for_service(session, slug, actor="api", verify=verify, wake=wake)
+        run = await pipeline.run_for_service(session, slug, actor=actor, verify=verify, wake=wake)
     except BackupError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except AdapterError as exc:

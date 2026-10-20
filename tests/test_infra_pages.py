@@ -135,7 +135,15 @@ def test_infra_guests_api_shows_real_adapter_data(client: TestClient) -> None:
     r = client.get("/api/infra/proxmox/guests")
     assert r.status_code == 200, r.text
     assert r.json() == [
-        {"node": "eve1", "vmid": 9001, "kind": "vm", "name": "media", "status": "running"}
+        {
+            "node": "eve1",
+            "vmid": 9001,
+            "kind": "vm",
+            "name": "media",
+            "status": "running",
+            # Not registered as a service here.
+            "service_slug": None,
+        }
     ]
 
 

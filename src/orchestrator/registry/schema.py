@@ -87,6 +87,8 @@ class ProxyHostSpec(BaseModel):
     cert_resolver: str = ""
     #: See ProxyHost.route_options. Empty = defaults.
     route_options: dict[str, Any] = Field(default_factory=dict)
+    #: See ProxyHost.enabled. False = switched off (kept, not deleted).
+    enabled: bool = True
 
     @field_validator("route_options", mode="before")
     @classmethod
