@@ -11,6 +11,7 @@ from orchestrator.health.probes import (  # noqa: F401
     databases,
     mqtt,
     network,
+    ping,
 )
 from orchestrator.health.probes.base import (
     Probe,

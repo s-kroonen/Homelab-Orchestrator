@@ -26,20 +26,23 @@ wake — it must never return a 5xx.
 ```
 adapters/           external systems, all mockable + dry-run
   power/{base,mqtt,dry_run}      # existing power manager, MQTT preferred
-  proxmox/{base,api,dry_run}     # PVE API — guests, vzdump, task status
+  proxmox/{base,api,dry_run,net} # PVE API — guests, vzdump, task status, guest NICs/IPs
   pbs/{base,api,dry_run}         # PBS API — datastore, snapshots, verify, prune
   proxy/{base,traefik_manager,dry_run}  # reverse proxy — Traefik Manager today
   notifier/{base,null}           # mailcow + ntfy (phase 9)
 db/                 SQLModel schema + engine
 domain/             enums + Pydantic DTOs shared across modules
 health/             probe engine (phase 4)
+ipdiscovery/        service IP discovery: guest agent / LXC, then ARP, then
+                    DHCP leases by NIC MAC (see "Service IPs" below)
 pipelines/          wake (phase 3), backup (phase 2/6), restore (phase 8)
 registry/           YAML <-> DB reconcile + save/reset; also the direct-
                     Traefik-API integration modules (status/probes) — the
                     Traefik Manager client/sync logic lives in
                     adapters/proxy/traefik_manager.py instead (see below)
 scheduler/          APScheduler wiring: backups (phase 6), Traefik traffic
-                    polling, periodic health scanning (HealthScanner)
+                    polling, periodic health scanning (HealthScanner),
+                    periodic IP discovery (IpDiscoveryScheduler)
 web/                FastAPI app: health, maintenance, wake, dashboard
 audit/              append-only audit writes
 ```
@@ -382,6 +385,27 @@ collector + dedup cursor), read endpoints `GET /api/traffic/geo`
 (`web/routers/geo_traffic.py`) and `GET /api/traffic/series` /
 `GET /api/traffic/collector-status` (`web/routers/traffic.py`).
 
+## Service IPs
+
+A service's **effective IP** is its manual `service.ip_address` (YAML-owned)
+when set, else the address IP discovery last found (`service_state.
+discovered_ip`, runtime). Discovery (`ipdiscovery/discovery.py`) asks, in
+order, and records the first answer and its source:
+
+1. Proxmox — `GET /nodes/{node}/{qemu|lxc}/{vmid}/config` for the NIC MACs
+   (and an LXC's static `ip=`), then the QEMU guest agent's
+   `network-get-interfaces` or the container's `/interfaces`;
+2. the ARP table on the host `IP_DISCOVERY_TRANSPORT` names (optionally after
+   an "ARP ping" sweep), looked up by MAC;
+3. a dnsmasq leases file on that host, by MAC (a pluggable `DhcpLeaseSource`).
+
+Only guests the guest-gate data says are RUNNING are asked; ARP/DHCP tables
+are read once per cycle (`DiscoveryCycle`). ARP/DHCP reads go through the same
+command transports probes use (host runner / ssh / local). An effective-IP
+change is audited as `service.ip_changed`. Consumers: the proxy-host form's
+"Use service IP" and `kind: ping` probes with a blank host (resolved when the
+probe runs). Full detail: [service_ips.md](service_ips.md).
+
 ## YAML-owned vs DB-owned tables
 
 | Table                | Ownership | Reconciled from YAML on boot? |
@@ -393,7 +417,7 @@ collector + dedup cursor), read endpoints `GET /api/traffic/geo`
 | `proxy_host`         | YAML      | Yes                           |
 | `admin`              | **DB**    | No — reloading YAML must not lock the operator out |
 | `webauthn_credential`| **DB**    | No — same reason              |
-| `service_state`      | **DB**    | No (runtime)                  |
+| `service_state`      | **DB**    | No (runtime — incl. the discovered IP, its source and the NIC MACs; only `service.ip_address`, the manual IP, is YAML) |
 | `node_state`         | **DB**    | No (runtime)                  |
 | `pipeline_run`       | **DB**    | No (history)                  |
 | `backup_record`      | **DB**    | No (history)                  |
@@ -428,6 +452,8 @@ Chosen so YAML edits stay safe and history stays intact:
 3. If `RUN_MIGRATIONS_ON_START=true`, `alembic upgrade head`.
 4. If `services.yaml` exists, run `reconcile_yaml_into_db()`.
 5. Build + start the adapter bundle.
+6. Start the schedulers (backups, traffic, health scan, access log, IP
+   discovery) — each non-fatal on failure.
 
 The maintenance responder starts *before* step 4 completes so it can serve a
 fallback page even if the reconcile fails.

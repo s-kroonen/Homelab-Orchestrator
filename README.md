@@ -49,6 +49,11 @@ working (fail-open).
   disable, wake, back up, power off, start/stop them in one go, with a per-item
   result (also `orchestrator-cli bulk`); proxy hosts can be disabled without
   being deleted. See [docs/bulk_actions.md](docs/bulk_actions.md)
+* **Service IPs** — each service has an address: a manual `ip_address`, or one
+  discovered from Proxmox (QEMU guest agent / LXC) and, by the NIC MACs, from
+  an ARP table or DHCP leases. Proxy hosts can use it as their upstream ("Use
+  service IP") and a `ping` probe pings it. See
+  [docs/service_ips.md](docs/service_ips.md)
 * FastAPI app: `/healthz`, `/readyz`, `/wake`, `/maintenance`, the dashboard,
   registry, infra, and backup endpoints (the latter four behind login)
 
@@ -77,7 +82,9 @@ mechanics behind the dashboard,
 [docs/probing_through_a_gateway.md](docs/probing_through_a_gateway.md) for
 probing services the orchestrator cannot reach directly,
 [docs/host_runner.md](docs/host_runner.md) for running credentialed checks
-off-container, and
+off-container,
+[docs/service_ips.md](docs/service_ips.md) for how service IPs are found
+(guest agent, LXC, ARP, DHCP) and the ping probe, and
 [docs/proxmox_connectivity.md](docs/proxmox_connectivity.md) for the single
 entry point / quorum / failover notes, and
 [docs/gateway_traefik_migration.md](docs/gateway_traefik_migration.md) for

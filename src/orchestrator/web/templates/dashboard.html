@@ -22,7 +22,8 @@
           {% for svc in grp.services %}
           <tr>
             <td class="bulk-col"><input type="checkbox" class="bulk-cb" data-bulk-id="{{ svc.slug }}" data-bulk-label="{{ svc.name }}"></td>
-            <td><a href="/services/{{ svc.slug }}">{{ svc.name }}</a> <code class="hide-phone">{{ svc.slug }}</code></td>
+            <td><a href="/services/{{ svc.slug }}">{{ svc.name }}</a> <code class="hide-phone">{{ svc.slug }}</code>{% if svc.ip %}
+              <span class="svc-ip" title="IP ({{ svc.ip_source }})">{{ svc.ip }}</span>{% endif %}</td>
             <td class="hide-phone">{{ svc.node }}</td>
             <td>
               {% if not svc.enabled %}{% set badge %}<span class="badge disabled">disabled</span>{% endset %}
@@ -124,6 +125,8 @@
   ul.invites li, ul.devices li { padding: 0.3rem 0; border-bottom: 1px solid #1a1e27; color: #9aa4b2; }
   td a, td a:visited { color: #5b8def; text-decoration: none; }
   td a:hover { text-decoration: underline; }
+  /* Effective IP under the service name: small and muted, its own line. */
+  .svc-ip { display: block; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.72rem; color: #9aa4b2; margin-top: 0.1rem; overflow-wrap: anywhere; }
 </style>
 {% endblock %}
 {% block webauthn_script %}<script src="/static/webauthn.js"></script>{% endblock %}
@@ -394,6 +397,7 @@
           `Run a backup now for ${ids.length} service(s)? They run one after another and this waits for all of them.` },
       { label: "Probes required", action: "probes_required", run: servicesApi },
       { label: "Probes optional", action: "probes_optional", run: servicesApi },
+      { label: "Discover IP", action: "discover_ip", run: servicesApi },
       { label: "Set group", action: "update", run: servicesApi,
         inputs: [{ key: "group", kind: "text", placeholder: "group (blank = none)", label: "Group" }] },
       { label: "Set policy", action: "update", run: servicesApi,

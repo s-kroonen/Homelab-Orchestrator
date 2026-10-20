@@ -63,6 +63,7 @@ class ProbeKind(StrEnum):
     COMMAND = "command"  # run an arbitrary argv via a transport; exit 0 = ok
     ANSIBLE_PLAYBOOK = "ansible_playbook"  # run a playbook on the control host
     ANSIBLE_PING = "ansible_ping"  # inventory host is reachable and answering
+    PING = "ping"  # ICMP echo to a host (blank = the service's IP) via a transport
 
 
 class PipelineKind(StrEnum):
