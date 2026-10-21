@@ -517,5 +517,24 @@ def test_link_buttons_keep_their_colour_when_visited() -> None:
     css = (
         Path(__file__).parent.parent / "src" / "orchestrator" / "web" / "static" / "app.css"
     ).read_text(encoding="utf-8")
-    assert "a.btn, a.btn:visited { color: #0b0e14; }" in css
-    assert "a.btn.secondary, a.btn.secondary:visited" in css
+    # The generic link colour never applies to a button-link...
+    assert "a:not(.btn), a:not(.btn):visited { color: #5b8def" in css
+    # ...and button colours are pinned in every link state.
+    assert "a.btn:visited" in css and "a.btn.secondary:visited" in css
+    assert "color: #0b0e14 !important" in css
+
+
+def test_static_files_are_always_revalidated(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A stale cached app.css made a fixed button "still broken" after an upgrade:
+    static files must carry Cache-Control: no-cache."""
+    from fastapi.testclient import TestClient
+
+    from orchestrator.db import session as session_module
+    from orchestrator.web.app import create_app
+
+    session_module.create_all_for_tests()
+    with TestClient(create_app()) as client:
+        r = client.get("/static/app.css")
+    assert r.status_code == 200
+    assert r.headers["cache-control"] == "no-cache"
+    assert "etag" in r.headers  # revalidation is cheap: unchanged files answer 304

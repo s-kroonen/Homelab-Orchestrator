@@ -197,16 +197,24 @@ details.help p { margin: 0 0 0.6rem; }
 
 code { background: #171b24; padding: 0.1rem 0.3rem; border-radius: 0.3rem; }
 
-a, a:visited { color: #5b8def; text-decoration: none; }
-a:hover { text-decoration: underline; }
+/* Plain links only. Button-links (`a.btn`) are excluded here instead of being
+   fought with a later override: the generic link colour must never reach them
+   in ANY link state (:link, :visited, :hover, :active, :focus), or a link-button
+   renders as blue text on a blue background. */
+a:not(.btn), a:not(.btn):visited { color: #5b8def; text-decoration: none; }
+a:not(.btn):hover { text-decoration: underline; }
 
-/* Link-styled buttons keep their own colours in every link state. The generic
-   `a:visited` rule above has the same specificity as `a.btn` and comes later,
-   so without these a button-link you had already opened turned blue on blue. */
-a.btn, a.btn:visited { color: #0b0e14; }
-a.btn.secondary, a.btn.secondary:visited { color: #e6e9ef; }
-a.btn.danger, a.btn.danger:visited { color: #e5534b; }
-a.btn:hover { text-decoration: none; }
+/* Link-buttons keep their own colours in every state. !important because the
+   colour of a button must not depend on cascade order or on any other
+   stylesheet / extension touching link colours. */
+.btn, a.btn, a.btn:link, a.btn:visited, a.btn:hover, a.btn:active, a.btn:focus {
+  color: #0b0e14 !important;
+  text-decoration: none;
+}
+.btn.secondary, a.btn.secondary, a.btn.secondary:link, a.btn.secondary:visited,
+a.btn.secondary:hover, a.btn.secondary:active, a.btn.secondary:focus { color: #e6e9ef !important; }
+.btn.danger, a.btn.danger, a.btn.danger:link, a.btn.danger:visited,
+a.btn.danger:hover, a.btn.danger:active, a.btn.danger:focus { color: #e5534b !important; }
 
 [hidden] { display: none !important; }
 
