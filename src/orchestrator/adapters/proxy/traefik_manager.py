@@ -230,6 +230,33 @@ def _split_host_port(url: str) -> tuple[str, str]:
     return host, port
 
 
+def _response_detail(response: httpx.Response) -> str:
+    """Traefik Manager's own explanation of a refusal (``{"ok": false, "error":
+    "..."}``, a 409 asking to confirm a shared change, a missing reference...),
+    so it reaches the operator instead of a bare status code."""
+    try:
+        body = response.json()
+    except ValueError:
+        return response.text.strip()[:300]
+    if not isinstance(body, dict):
+        return ""
+    parts: list[str] = []
+    for key in ("error", "message"):
+        value = body.get(key)
+        if isinstance(value, str) and value.strip():
+            parts.append(value.strip())
+    if body.get("needsConfirm"):
+        parts.append("it would change definitions shared with other routes (needs confirmation)")
+    missing = body.get("missingReferences")
+    if isinstance(missing, list) and missing:
+        names = ", ".join(
+            f"{m.get('kind')} {m.get('name')}" for m in missing if isinstance(m, dict)
+        )
+        if names:
+            parts.append(f"missing: {names}")
+    return "; ".join(dict.fromkeys(parts))[:400]
+
+
 def _split_upstream(url: str) -> tuple[str, str, str]:
     """``scheme://host:port`` -> ``(scheme, host, port)``. Unlike
     :func:`_split_host_port` this keeps the scheme: an ``https://`` upstream
@@ -277,6 +304,7 @@ def _routes_to_route_info(apps: Any) -> list[RouteInfo]:
         eps = app.get("entryPoints")
         route_id = app.get("id")
         config_file = app.get("configFile")
+        mws = app.get("middlewares")
         infos.append(
             RouteInfo(
                 name=name,
@@ -292,6 +320,9 @@ def _routes_to_route_info(apps: Any) -> list[RouteInfo]:
                 # A disabled route stays in /api/routes (from Traefik Manager's
                 # `disabled_routes` store) with "enabled": false.
                 enabled=app.get("enabled", True) is not False,
+                middlewares=(
+                    tuple(m for m in mws if isinstance(m, str)) if isinstance(mws, list) else None
+                ),
             )
         )
     return infos
@@ -334,9 +365,11 @@ class TraefikManagerProxyAdapter(ProxyAdapter):
             status_code = exc.response.status_code
             if status_code == 404:
                 raise TraefikManagerNotFound(f"{url}: not found") from exc
-            log.warning("traefik_manager.http_error", url=url, status=status_code)
+            detail = _response_detail(exc.response)
+            log.warning("traefik_manager.http_error", url=url, status=status_code, detail=detail)
             raise TraefikManagerUnavailable(
                 f"Traefik Manager returned {status_code} for {url}"
+                + (f": {detail}" if detail else "")
             ) from exc
         if isinstance(exc, httpx.HTTPError):
             log.warning("traefik_manager.request_failed", url=url, error=str(exc))
@@ -689,6 +722,18 @@ class TraefikManagerProxyAdapter(ProxyAdapter):
         buf = io.StringIO()
         _yaml.dump(doc, buf)
         await self._save_route_raw(route_id, buf.getvalue())
+        # Never trust the write: read the route back and confirm the middleware
+        # is really on it.
+        after = await self._get_route_raw(route_id)
+        after_block = self._router_block(
+            _yaml.load(after.get("raw", "") if isinstance(after, dict) else "")
+        )
+        after_mws = list(after_block[1].get("middlewares") or []) if after_block else []
+        if middleware_name not in after_mws:
+            raise TraefikManagerUnavailable(
+                f"Traefik Manager accepted the write but {middleware_name} is not on "
+                f"route {route_id} afterwards"
+            )
         return True
 
     async def _remove_middleware_from_route(self, route_id: str, middleware_name: str) -> bool:
@@ -769,12 +814,19 @@ class TraefikManagerProxyAdapter(ProxyAdapter):
                 )
         return events
 
+    def maintenance_middleware_name(self, service_slug: str) -> str | None:
+        return maintenance_middleware_name(service_slug)
+
     async def ensure_maintenance_fallback(
-        self, *, hostname: str, service_slug: str
+        self, *, hostname: str, service_slug: str, raise_errors: bool = False
     ) -> list[SyncEvent]:
         if not self._settings.traefik_manager_url.strip() or (
             not self._settings.orchestrator_public_url.strip()
         ):
+            if raise_errors:
+                raise TraefikManagerUnavailable(
+                    "the maintenance page needs TRAEFIK_MANAGER_URL and ORCHESTRATOR_PUBLIC_URL"
+                )
             return []
         events: list[SyncEvent] = []
         try:
@@ -793,6 +845,8 @@ class TraefikManagerProxyAdapter(ProxyAdapter):
                 service_slug=service_slug,
                 error=str(exc),
             )
+            if raise_errors:
+                raise
         return events
 
     async def remove_maintenance_fallback(
