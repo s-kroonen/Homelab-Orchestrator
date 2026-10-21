@@ -35,6 +35,7 @@ from orchestrator.adapters.proxy.traefik_manager import (
     route_name_for_hostname,
 )
 from orchestrator.config import Settings
+from tests.sim_tm import SimTM
 
 _REAL_ASYNC_CLIENT = httpx.AsyncClient
 
@@ -115,7 +116,9 @@ async def test_list_routes_sends_api_key_header_and_parses_apps(
     assert seen["path"] == "/api/routes"
     assert seen["api_key"] == "secret-key"
     assert routes == [
-        RouteInfo(name="r1", hostnames={"a.example.com"}, upstream="http://10.0.0.9:80")
+        RouteInfo(
+            name="r1", route_id="r1", hostnames={"a.example.com"}, upstream="http://10.0.0.9:80"
+        )
     ]
 
 
@@ -526,19 +529,11 @@ async def test_create_route_raises_on_unreachable_backend(
 
 
 async def test_update_route_request_shape(monkeypatch: pytest.MonkeyPatch) -> None:
-    save_calls: list[dict[str, str]] = []
-
-    def handle(request: httpx.Request) -> httpx.Response:
-        if request.url.path == "/save":
-            from urllib.parse import parse_qsl
-
-            save_calls.append(dict(parse_qsl(request.read().decode())))
-            return httpx.Response(200, json={"ok": True})
-        return httpx.Response(404, json={"ok": False})
-
-    _patch_transport(monkeypatch, handle)
-    adapter = TraefikManagerProxyAdapter(_settings())
+    sim = SimTM(multi=False)
     ref = route_name_for_hostname("app.example.com")
+    sim.add("dynamic.yml", ref, "app.example.com")
+    _patch_transport(monkeypatch, sim)
+    adapter = TraefikManagerProxyAdapter(_settings())
 
     await adapter.update_route(
         ref,
@@ -548,6 +543,7 @@ async def test_update_route_request_shape(monkeypatch: pytest.MonkeyPatch) -> No
         cert_resolver="letsencrypt",
     )
 
+    save_calls = sim.calls("save")
     assert len(save_calls) == 1
     call = save_calls[0]
     assert call["serviceName"] == ref
@@ -570,28 +566,27 @@ async def test_update_route_raises_on_invalid_upstream() -> None:
 
 
 async def test_delete_route_posts_to_delete_endpoint(monkeypatch: pytest.MonkeyPatch) -> None:
-    delete_calls: list[str] = []
-
-    def handle(request: httpx.Request) -> httpx.Response:
-        if request.url.path == "/delete/orchestrator-app-example-com":
-            delete_calls.append(request.url.path)
-            assert request.headers.get("x-requested-with") == "fetch"
-            return httpx.Response(200, json={"ok": True})
-        return httpx.Response(404, json={"ok": False})
-
-    _patch_transport(monkeypatch, handle)
+    sim = SimTM(multi=False)
+    sim.add("dynamic.yml", "orchestrator-app-example-com", "app.example.com")
+    _patch_transport(monkeypatch, sim)
     adapter = TraefikManagerProxyAdapter(_settings())
 
     await adapter.delete_route("orchestrator-app-example-com")
 
-    assert delete_calls == ["/delete/orchestrator-app-example-com"]
+    assert [rid for k, rid, _ in sim.requests if k == "delete"] == ["orchestrator-app-example-com"]
+    assert sim.enabled_ids() == set()
 
 
 async def test_delete_route_raises_proxy_route_not_found_on_404(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    sim = SimTM(multi=False)
+    sim.add("dynamic.yml", "gone-ref", "app.example.com")
+
     def handle(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(404, json={"ok": False, "error": "not found"})
+        if request.url.path.startswith("/delete/"):
+            return httpx.Response(404, json={"ok": False, "error": "not found"})
+        return sim(request)
 
     _patch_transport(monkeypatch, handle)
     adapter = TraefikManagerProxyAdapter(_settings())
@@ -777,3 +772,13 @@ async def test_list_runtime_routers_none_when_traefik_unreachable_from_tm(
         await TraefikManagerProxyAdapter(_settings(traefik_manager_url="")).list_runtime_routers()
         is None
     )
+
+
+async def test_delete_route_raises_proxy_route_not_found_when_it_is_gone(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_transport(monkeypatch, SimTM(multi=False))
+    adapter = TraefikManagerProxyAdapter(_settings())
+
+    with pytest.raises(ProxyRouteNotFound):
+        await adapter.delete_route("gone-ref")

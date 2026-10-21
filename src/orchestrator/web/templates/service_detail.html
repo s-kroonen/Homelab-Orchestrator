@@ -4,7 +4,7 @@
 {% block content %}
   <div class="row">
     {% if registry_dirty %}<span class="dirty-badge">unsaved changes vs {{ yaml_path }}</span>{% endif %}
-    <button id="save-btn">Save to YAML</button>
+    <button id="save-btn" title="Writes services.yaml, then pushes pending changes to Traefik Manager (and any other outside service)">Save to YAML</button>
     <button class="secondary" id="reset-btn">Reset to saved</button>
     <span class="msg" id="registry-msg">Edits here change the live registry; Save writes them to services.yaml.</span>
   </div>
@@ -284,8 +284,10 @@
   <section>
     <h2>Proxy hosts</h2>
     <p class="msg">
-      A <code>router_provider: traefik</code> host here is live-managed — creating, editing or
-      deleting it also creates/edits/deletes the real route on Traefik Manager. See
+      A <code>router_provider: traefik</code> host here is live-managed, but edits only change the
+      local record: the real route on Traefik Manager is created/updated/deleted when you
+      <strong>Save to YAML</strong> (which also pushes) or click <strong>Push now</strong> on the
+      proxy hosts page. The badge next to a hostname says whether it is pushed. See
       <code>docs/proxy_hosts.md</code>. Full management, including drift detection and Resync,
       lives on <a href="/proxy-hosts">/proxy-hosts</a>; this is a shortcut for this service's
       own hosts.
@@ -466,6 +468,7 @@
 </style>
 {% endblock %}
 {% block scripts %}
+<script src="/static/push.js"></script>
 <script>
   const SERVICE = {{ service|tojson }};
   const LAST_PROBE_RESULTS = {{ health.probe_results|tojson }};
@@ -484,15 +487,7 @@
   }
 
   // --- registry save/reset (same endpoints as the main dashboard) ---------
-  $("save-btn").addEventListener("click", async () => {
-    try {
-      await apiFetch("POST", "/api/registry/save");
-      setMsg("registry-msg", "Saved.", "ok");
-      setTimeout(() => location.reload(), 600);
-    } catch (err) {
-      setMsg("registry-msg", "Save failed: " + err.message, "error");
-    }
-  });
+  $("save-btn").addEventListener("click", () => PushUI.save({ msgId: "registry-msg" }));
   $("reset-btn").addEventListener("click", async () => {
     if (!confirm("Discard all unsaved registry edits and reload from YAML?")) return;
     try {
@@ -1002,6 +997,9 @@
       const code = document.createElement("code");
       code.textContent = h.hostname;
       hostTd.appendChild(code);
+      const syncSlot = document.createElement("span");
+      syncSlot.dataset.syncFor = String(h.id);
+      hostTd.append(" ", syncSlot);
       tr.appendChild(hostTd);
       for (const text of [h.upstream || "—", h.router_provider, h.wake_on_hit ? "yes" : "no"]) {
         const td = document.createElement("td");
@@ -1018,7 +1016,7 @@
       del.className = "danger small";
       del.textContent = "Delete";
       del.addEventListener("click", async () => {
-        if (!confirm(`Delete the proxy host ${h.hostname}? ${h.router_provider === "traefik" ? "This also deletes the real route on Traefik Manager." : "This does not touch any gateway."}`)) return;
+        if (!confirm(`Delete the proxy host ${h.hostname}? ${h.router_provider === "traefik" ? "The real route on Traefik Manager is removed on the next push (Save to YAML or Push now)." : "This does not touch any gateway."}`)) return;
         try {
           await apiFetch("DELETE", "/api/proxy-hosts/" + h.id, undefined, { suppressToast: true });
           await reloadProxyHosts();
@@ -1033,10 +1031,32 @@
     }
   }
 
+  // Push status per host (from the proxy-hosts list; best effort).
+  async function loadSyncBadges() {
+    let all;
+    try {
+      all = await apiFetch("GET", "/api/proxy-hosts", undefined, { suppressToast: true });
+    } catch (_e) { return; }
+    const label = { pending_create: ["warn", "not pushed"], pending_update: ["warn", "not pushed"],
+      detached: ["failed", "changed in Traefik Manager"], external: ["unknown", "external"],
+      in_sync: ["healthy", "pushed"] };
+    for (const h of all) {
+      const slot = document.querySelector(`[data-sync-for="${h.id}"]`);
+      const l = label[h.sync_state];
+      if (!slot || !l) continue;
+      const b = document.createElement("span");
+      b.className = "badge " + l[0];
+      b.textContent = l[1];
+      b.title = (h.sync_changes || []).join("\n");
+      slot.replaceChildren(b);
+    }
+  }
+
   async function reloadProxyHosts() {
     const updated = await apiFetch("GET", svcPath, undefined, { suppressToast: true });
     SERVICE.proxy_hosts = updated.proxy_hosts;
     renderProxyHosts();
+    loadSyncBadges();
   }
 
   // --- backups (read-only; the existing ?slug= filter on GET /api/backups,
@@ -1388,6 +1408,7 @@
   renderProbes();
   renderAddress();
   renderProxyHosts();
+  loadSyncBadges();
   loadBackups();
   loadHealthHistory();
   $("wake-unsupported-banner").hidden = !SERVICE.wake_unsupported;

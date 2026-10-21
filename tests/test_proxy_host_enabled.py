@@ -34,6 +34,8 @@ from orchestrator.db.models import AuditEntry, ProxyHost, Service
 from orchestrator.db.session import get_engine
 from orchestrator.registry.loader import read_yaml_file
 from orchestrator.registry.schema import ProxyHostSpec
+from tests.push_helpers import actions, failures, push, sync_state
+from tests.sim_tm import SimTM
 from tests.test_proxy_entrypoints_adapter import _patch, _settings
 from tests.test_proxy_entrypoints_api import ROUTE_REF_KEY, FakeTM, _body, _client
 
@@ -106,67 +108,64 @@ def _row(ph_id: int) -> ProxyHost:
 # ---------------------------------------------------------------------------
 
 
-class _Rec:
-    def __init__(self, fail: set[str] | None = None) -> None:
-        self.requests: list[httpx.Request] = []
-        self.fail = fail or set()
-
-    def __call__(self, request: httpx.Request) -> httpx.Response:
-        self.requests.append(request)
-        rid = request.url.path.removeprefix("/api/routes/").removesuffix("/toggle")
-        if rid in self.fail:
-            return httpx.Response(500, json={"ok": False})
-        return httpx.Response(200, json={"ok": True})
-
-    def calls(self) -> list[tuple[str, bool]]:
-        return [(r.url.path, json.loads(r.read())["enable"]) for r in self.requests]
-
-
 async def test_toggle_request_shape(monkeypatch: pytest.MonkeyPatch) -> None:
-    rec = _Rec()
-    _patch(monkeypatch, rec)
+    sim = SimTM(multi=False)
+    sim.add("dynamic.yml", "orchestrator-app-example-com", "app.example.com")
+    _patch(monkeypatch, sim)
     adapter = TraefikManagerProxyAdapter(_settings(traefik_manager_api_key="secret"))
     await adapter.set_route_enabled("orchestrator-app-example-com", False)
-    (req,) = rec.requests
+    (req,) = sim.toggle_requests
     assert req.method == "POST"
     assert req.url.path == "/api/routes/orchestrator-app-example-com/toggle"
     assert json.loads(req.read()) == {"enable": False}
     assert req.headers["X-Api-Key"] == "secret"
     assert req.headers["X-Requested-With"] == "fetch"
     assert req.headers["content-type"] == "application/json"
+    assert sim.is_enabled("orchestrator-app-example-com") is False
 
 
 async def test_toggle_takes_the_redirect_companion_along_in_a_safe_order(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    rec = _Rec()
-    _patch(monkeypatch, rec)
-    adapter = TraefikManagerProxyAdapter(_settings())
+    sim = SimTM(multi=False)
     ref = "orchestrator-app-example-com"
+    sim.add("dynamic.yml", ref, "app.example.com")
+    sim.add("dynamic.yml", redirect_route_id(ref), "app.example.com", eps=("web",))
+    _patch(monkeypatch, sim)
+    adapter = TraefikManagerProxyAdapter(_settings())
     await adapter.set_route_enabled(ref, False, with_redirect=True)
     await adapter.set_route_enabled(ref, True, with_redirect=True)
-    assert rec.calls() == [
+    assert [(rid, en) for k, rid, en in sim.requests if k == "toggle"] == [
         # Disable: the plain-HTTP redirect first, never pointing at nothing.
-        (f"/api/routes/{redirect_route_id(ref)}/toggle", False),
-        (f"/api/routes/{ref}/toggle", False),
+        (redirect_route_id(ref), False),
+        (ref, False),
         # Enable: the route first, then its redirect.
-        (f"/api/routes/{ref}/toggle", True),
-        (f"/api/routes/{redirect_route_id(ref)}/toggle", True),
+        (ref, True),
+        (redirect_route_id(ref), True),
     ]
 
 
 async def test_a_failed_second_toggle_undoes_the_first(monkeypatch: pytest.MonkeyPatch) -> None:
     ref = "orchestrator-app-example-com"
-    rec = _Rec(fail={ref})
-    _patch(monkeypatch, rec)
+    sim = SimTM(multi=False)
+    sim.add("dynamic.yml", ref, "app.example.com")
+    sim.add("dynamic.yml", redirect_route_id(ref), "app.example.com", eps=("web",))
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        if request.url.path == f"/api/routes/{ref}/toggle":
+            return httpx.Response(500, json={"ok": False})
+        return sim(request)
+
+    _patch(monkeypatch, handle)
     adapter = TraefikManagerProxyAdapter(_settings())
     with pytest.raises(Exception, match="500"):
         await adapter.set_route_enabled(ref, False, with_redirect=True)
-    assert rec.calls() == [
-        (f"/api/routes/{redirect_route_id(ref)}/toggle", False),
-        (f"/api/routes/{ref}/toggle", False),
-        (f"/api/routes/{redirect_route_id(ref)}/toggle", True),  # put back
+    # The redirect that was switched off first is put back.
+    assert [(rid, en) for k, rid, en in sim.requests if k == "toggle"] == [
+        (redirect_route_id(ref), False),
+        (redirect_route_id(ref), True),
     ]
+    assert sim.is_enabled(redirect_route_id(ref)) is True
 
 
 def test_list_routes_reports_a_disabled_route() -> None:
@@ -250,66 +249,30 @@ def _live_host(client: Any, service: Service, hostname: str = "app.example.com")
     return r.json()
 
 
-def test_disable_toggles_traefik_manager_first_then_stores(
-    service: Service, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    tm = ToggleTM()
-    client = _client(monkeypatch, tm)
-    ph = _live_host(client, service)
-    ref = ph["extra"][ROUTE_REF_KEY]
-
-    r = client.post(f"/api/proxy-hosts/{ph['id']}/enabled", json={"enabled": False})
-    assert r.status_code == 200, r.text
-    body = r.json()
-    assert tm.toggles == [(ref, False)]
-    assert body["enabled"] is False
-    # Absent from Traefik's runtime routers on purpose: not an error.
-    assert body["live_status"] == "disabled"
-    assert body["traefik"]["state"] == "disabled"
-    assert _row(ph["id"]).enabled is False
-    (entry,) = _audit("proxy_host.disabled")
-    assert entry.details["route_ref"] == ref and entry.details["live"] is True
-
-    listed = client.get("/api/proxy-hosts").json()
-    assert listed[0]["traefik"]["state"] == "disabled"
-
-    r = client.post(f"/api/proxy-hosts/{ph['id']}/enabled", json={"enabled": True})
-    assert r.status_code == 200, r.text
-    assert tm.toggles[-1] == (ref, True)
-    assert r.json()["traefik"]["state"] == "ok"
-    assert r.json()["live_status"] == "matched"
-    assert len(_audit("proxy_host.enabled")) == 1
-
-
-def test_a_failed_toggle_leaves_the_db_alone(
-    service: Service, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    tm = ToggleTM()
-    client = _client(monkeypatch, tm)
-    ph = _live_host(client, service)
-    tm.fail_toggle.add(ph["extra"][ROUTE_REF_KEY])
-
-    r = client.post(f"/api/proxy-hosts/{ph['id']}/enabled", json={"enabled": False})
-    assert r.status_code == 502
-    assert "could not disable the route on Traefik Manager" in r.json()["detail"]
-    assert _row(ph["id"]).enabled is True
-    assert _audit("proxy_host.disabled") == []
-
-
 def test_redirect_companion_is_toggled_too(
     service: Service, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     tm = ToggleTM()
+    ref = "orchestrator-app-example-com"
+    tm.seed(ref, "app.example.com", ["websecure"])
+    tm.seed(redirect_route_id(ref), "app.example.com", ["web"])
     client = _client(monkeypatch, tm)
-    ph = _live_host(client, service)
-    ref = ph["extra"][ROUTE_REF_KEY]
-    with Session(get_engine()) as s:
-        row = s.get(ProxyHost, ph["id"])
-        assert row is not None
-        row.route_options = {"http_redirect": True}
+    with Session(get_engine()) as s:  # a host recorded earlier, whose pair already exists
+        row = ProxyHost(
+            hostname="app.example.com",
+            upstream="http://1.2.3.4:80",
+            service_id=service.id,
+            entry_points=["websecure"],
+            route_options={"http_redirect": True},
+            extra={ROUTE_REF_KEY: ref},
+        )
         s.add(row)
         s.commit()
+        s.refresh(row)
+    ph = client.get(f"/api/proxy-hosts/{row.id}").json()
+    assert ph["sync_state"] == "in_sync"  # what Traefik Manager has already matches
     client.post(f"/api/proxy-hosts/{ph['id']}/enabled", json={"enabled": False})
+    push(client)
     assert [rid for rid, _ in tm.toggles] == [redirect_route_id(ref), ref]
 
 
@@ -322,30 +285,11 @@ def test_local_only_host_just_stores(service: Service, monkeypatch: pytest.Monke
     ph = r.json()
     r = client.post(f"/api/proxy-hosts/{ph['id']}/enabled", json={"enabled": False})
     assert r.status_code == 200, r.text
+    assert r.json()["sync_state"] == "local"
+    push(client)
     assert tm.toggle_requests == []
     assert _row(ph["id"]).enabled is False
-    (entry,) = _audit("proxy_host.disabled")
-    assert entry.details["live"] is False
-
-
-def test_editing_a_disabled_live_host_is_refused(
-    service: Service, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    tm = ToggleTM()
-    client = _client(monkeypatch, tm)
-    ph = _live_host(client, service)
-    client.post(f"/api/proxy-hosts/{ph['id']}/enabled", json={"enabled": False})
-    saves_before = len(tm.saves)
-
-    r = client.put(
-        f"/api/proxy-hosts/{ph['id']}", json=_body(service, upstream="http://10.0.0.7:80")
-    )
-    assert r.status_code == 409
-    assert "Enable it first" in r.json()["detail"]["message"]
-    # Nothing was written anywhere: no /save, the route is still parked.
-    assert len(tm.saves) == saves_before
-    assert ph["extra"][ROUTE_REF_KEY] in tm.disabled
-    assert _row(ph["id"]).upstream == "http://10.0.0.9:8080"
+    assert len(_audit("proxy_host.disabled")) == 1
 
 
 def test_editing_a_disabled_local_host_is_allowed_and_keeps_it_disabled(
@@ -362,10 +306,15 @@ def test_editing_a_disabled_local_host_is_allowed_and_keeps_it_disabled(
     )
     assert r.status_code == 200, r.text
     assert r.json()["enabled"] is False
-    # Turning it into a live route while disabled would create an ENABLED
-    # route on Traefik Manager: refused too.
+    # Turning it into a live route while disabled is fine too: the push
+    # creates the route and switches it off again straight away.
     r = client.put(f"/api/proxy-hosts/{ph['id']}", json=_body(service))
-    assert r.status_code == 409
+    assert r.status_code == 200, r.text
+    assert r.json()["sync_state"] == "pending_create"
+    result = push(client)
+    assert actions(result) == [("app.example.com", "create"), ("app.example.com", "disable")]
+    assert r.json()["extra"][ROUTE_REF_KEY] in tm.disabled
+    assert tm.routes == {}
 
 
 def test_resync_does_not_flag_a_disabled_host(
@@ -374,7 +323,9 @@ def test_resync_does_not_flag_a_disabled_host(
     tm = ToggleTM()
     client = _client(monkeypatch, tm)
     ph = _live_host(client, service)
+    push(client)
     client.post(f"/api/proxy-hosts/{ph['id']}/enabled", json={"enabled": False})
+    push(client)
     r = client.post("/api/proxy-hosts/resync")
     assert r.status_code == 200, r.text
     body = r.json()
@@ -382,19 +333,6 @@ def test_resync_does_not_flag_a_disabled_host(
     (updated,) = body["updated"]
     assert updated["traefik"]["state"] == "disabled"
     assert _row(ph["id"]).enabled is False
-
-
-def test_route_disabled_on_tm_but_enabled_here_is_explained(
-    service: Service, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    tm = ToggleTM()
-    client = _client(monkeypatch, tm)
-    ph = _live_host(client, service)
-    ref = ph["extra"][ROUTE_REF_KEY]
-    tm.disabled[ref] = tm.routes.pop(ref)  # someone flipped it in Traefik Manager
-    (row,) = client.get("/api/proxy-hosts").json()
-    assert row["traefik"]["state"] == "not_loaded"
-    assert "Traefik Manager has this route disabled" in row["traefik"]["message"]
 
 
 def test_route_info_enabled_defaults_true() -> None:
@@ -427,22 +365,28 @@ def test_toggle_reaches_tm_for_a_host_without_a_stored_route_reference(
     service: Service, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Regression: the switch only changed the local flag for adopted hosts, so
-    Traefik Manager never saw the disable."""
+    Traefik Manager never saw the disable. Now the push switches every route
+    serving the hostname - and leaves their content alone."""
     fake = ToggleTM()
     fake.seed("hand-made", "pbs.example.com", ["websecure"])
     fake.seed("hand-made-redirect", "pbs.example.com", ["web"])  # a separate redirect router
     client = _client(monkeypatch, fake)
     pid = _adopted_host(service)
+    assert sync_state(client, pid) == "external"
 
     r = client.post(f"/api/proxy-hosts/{pid}/enabled", json={"enabled": False})
     assert r.status_code == 200, r.text
+    assert fake.toggles == []
+    push(client)
     assert sorted(t for t in fake.toggles) == [("hand-made", False), ("hand-made-redirect", False)]
+    assert fake.saves == []  # never overwritten
     assert _row(pid).enabled is False
-    body = r.json()
+    body = client.get(f"/api/proxy-hosts/{pid}").json()
     assert body["tm_state"] == "disabled" and body["enabled"] is False
 
     fake.toggles.clear()
     assert client.post(f"/api/proxy-hosts/{pid}/enabled", json={"enabled": True}).status_code == 200
+    push(client)
     assert sorted(t for t in fake.toggles) == [("hand-made", True), ("hand-made-redirect", True)]
 
 
@@ -456,11 +400,14 @@ def test_list_shows_traefik_managers_state_and_a_mismatch(
 
     row = next(h for h in client.get("/api/proxy-hosts").json() if h["id"] == pid)
     assert row["enabled"] is True and row["tm_state"] == "enabled"
+    assert row["sync_state"] == "external"
 
     # Switched off in Traefik Manager by hand: the orchestrator still says "on".
     fake.disabled["hand-made"] = fake.routes.pop("hand-made")
     row = next(h for h in client.get("/api/proxy-hosts").json() if h["id"] == pid)
     assert row["enabled"] is True and row["tm_state"] == "disabled"
+    assert row["sync_state"] == "external" and row["sync_pending"] is True
+    assert any("enabled state differs" in c for c in row["sync_changes"])
 
 
 def test_partial_state_when_only_some_routes_are_off(
@@ -506,7 +453,7 @@ def test_edit_page_has_the_enable_switch(service: Service, monkeypatch: pytest.M
     assert 'id="toggle-enabled"' in html and "Disable" in html
     client.post(f"/api/proxy-hosts/{pid}/enabled", json={"enabled": False})
     html = client.get(f"/proxy-hosts/{pid}/edit").text
-    assert "cannot be edited" in html and ">Enable</button>" in html
+    assert "parked" in html and ">Enable</button>" in html
 
 
 def test_link_buttons_keep_their_colour_when_visited() -> None:
@@ -538,3 +485,104 @@ def test_static_files_are_always_revalidated(monkeypatch: pytest.MonkeyPatch) ->
     assert r.status_code == 200
     assert r.headers["cache-control"] == "no-cache"
     assert "etag" in r.headers  # revalidation is cheap: unchanged files answer 304
+
+
+def test_disable_is_db_only_then_toggles_traefik_manager_on_push(
+    service: Service, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    tm = ToggleTM()
+    client = _client(monkeypatch, tm)
+    ph = _live_host(client, service)
+    ref = ph["extra"][ROUTE_REF_KEY]
+    push(client)
+
+    r = client.post(f"/api/proxy-hosts/{ph['id']}/enabled", json={"enabled": False})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert tm.toggles == []  # the switch itself never touches Traefik Manager
+    assert body["enabled"] is False and body["sync_state"] == "pending_update"
+    assert any("enabled state differs" in c for c in body["sync_changes"])
+    assert _row(ph["id"]).enabled is False
+    assert len(_audit("proxy_host.disabled")) == 1
+
+    result = push(client)
+    assert actions(result) == [("app.example.com", "disable")]
+    assert tm.toggles == [(ref, False)]
+    body = client.get(f"/api/proxy-hosts/{ph['id']}").json()
+    # Absent from Traefik's runtime routers on purpose: not an error.
+    assert body["live_status"] == "disabled" and body["traefik"]["state"] == "disabled"
+    assert body["sync_state"] == "in_sync"
+
+    client.post(f"/api/proxy-hosts/{ph['id']}/enabled", json={"enabled": True})
+    assert tm.toggles == [(ref, False)]
+    push(client)
+    assert tm.toggles[-1] == (ref, True)
+    body = client.get(f"/api/proxy-hosts/{ph['id']}").json()
+    assert body["traefik"]["state"] == "ok" and body["live_status"] == "matched"
+    assert len(_audit("proxy_host.enabled")) == 1
+
+
+def test_a_failed_toggle_is_reported_by_the_push_and_stays_pending(
+    service: Service, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    tm = ToggleTM()
+    client = _client(monkeypatch, tm)
+    ph = _live_host(client, service)
+    push(client)
+    sig_before = _row(ph["id"]).pushed_sig
+    tm.fail_toggle.add(ph["extra"][ROUTE_REF_KEY])
+
+    client.post(f"/api/proxy-hosts/{ph['id']}/enabled", json={"enabled": False})
+    result = push(client)
+    (fail,) = failures(result)
+    assert fail["action"] == "disable" and "could not disable" in fail["message"]
+    assert _row(ph["id"]).enabled is False  # the DB keeps what the operator asked for
+    assert _row(ph["id"]).pushed_sig == sig_before  # ...and it is still pending
+    assert sync_state(client, ph["id"]) == "pending_update"
+
+
+def test_editing_a_disabled_live_host_is_allowed_and_pushed_in_a_safe_order(
+    service: Service, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The old "enable it first" 409 is gone: the edit lands in the DB and the
+    push updates the parked route, then makes sure it is parked again."""
+    tm = ToggleTM()
+    client = _client(monkeypatch, tm)
+    ph = _live_host(client, service)
+    ref = ph["extra"][ROUTE_REF_KEY]
+    push(client)
+    client.post(f"/api/proxy-hosts/{ph['id']}/enabled", json={"enabled": False})
+    push(client)
+    assert ref in tm.disabled
+
+    r = client.put(
+        f"/api/proxy-hosts/{ph['id']}", json=_body(service, upstream="http://10.0.0.7:80")
+    )
+    assert r.status_code == 200, r.text
+    assert _row(ph["id"]).upstream == "http://10.0.0.7:80"
+    assert r.json()["sync_state"] == "pending_update"
+
+    push(client)
+    assert ref in tm.disabled  # still parked
+    assert tm.disabled[ref]["upstream"] == "http://10.0.0.7:80"
+    assert sync_state(client, ph["id"]) == "in_sync"
+
+
+def test_route_disabled_on_tm_but_enabled_here_is_detached(
+    service: Service, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    tm = ToggleTM()
+    client = _client(monkeypatch, tm)
+    ph = _live_host(client, service)
+    push(client)
+    ref = ph["extra"][ROUTE_REF_KEY]
+    tm.disabled[ref] = tm.routes.pop(ref)  # someone flipped it in Traefik Manager
+    (row,) = client.get("/api/proxy-hosts").json()
+    assert row["traefik"]["state"] == "not_loaded"
+    assert "Traefik Manager has this route disabled" in row["traefik"]["message"]
+    assert row["sync_state"] == "detached"
+    assert any("enabled state differs" in c for c in row["sync_changes"])
+    # Push re-applies our state (and verifies it).
+    assert actions(push(client)) == [("app.example.com", "enable")]
+    assert tm.toggles[-1] == (ref, True)
+    assert sync_state(client, ph["id"]) == "in_sync"

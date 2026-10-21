@@ -241,6 +241,14 @@ class ProxyHost(SQLModel, table=True):
     # every setting stay here so Enable brings back exactly the same route.
     # See docs/proxy_hosts.md "Enabling and disabling a host".
     enabled: bool = Field(default=True)
+    # Fingerprint of everything the orchestrator last PUSHED to the outside
+    # service for this host (hostname, upstream, entry points, cert resolver,
+    # route options, enabled), recorded only after a push succeeded. Empty =
+    # unknown (never pushed from here). Runtime state like the discovered IP:
+    # NOT part of services.yaml, so it never makes the registry dirty. Edits
+    # change the DB only; the difference between this and the host's current
+    # fingerprint is what "pending push" means. See registry/proxy_push.py.
+    pushed_sig: str = Field(default="", sa_column_kwargs={"server_default": ""})
 
 
 # ---------------------------------------------------------------------------
@@ -602,3 +610,7 @@ class Setting(SQLModel, table=True):
 # Well-known Setting keys, so callers don't stringly-type them.
 SETTING_LAST_YAML_LOAD = "registry.last_yaml_load"  # {"path", "sha256", "at"}
 SETTING_LAST_YAML_SAVE = "registry.last_yaml_save"  # {"path", "sha256", "at", "by"}
+#: Proxy hosts deleted here whose Traefik Manager route has not been removed
+#: yet: {"items": [{"hostname", "route_ref", "with_redirect", "service_slug"}]}.
+#: Cleared by anything that replaces the DB from YAML (Reset, boot reconcile).
+SETTING_PROXY_PENDING_DELETES = "proxy.pending_deletes"

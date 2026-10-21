@@ -51,8 +51,7 @@ At most 200 items per request. Response:
 ```
 
 An unknown action, an empty selection or bad `params` is a `400` for the whole
-request; anything about one item (not found, validation, Traefik Manager or
-Proxmox refusing) is that item's `ok: false`.
+request; anything about one item (not found, validation, Proxmox refusing) is that item's `ok: false`.
 
 Guests have no bulk endpoint: the page calls, per guest and two at a time,
 `POST /api/services/{slug}/guest/power` for a guest registered as a service (its
@@ -67,8 +66,7 @@ Every bulk action calls the same function as its single-item endpoint (the
 handlers were split into callables: `apply_service_update`,
 `apply_probe_update`, `apply_node_update`, `apply_node_power`, `start_wake`,
 `run_backup`, `set_proxy_host_enabled`, `delete_proxy_host_record`,
-`guest_power_for_service`), so validation, live write-through (Traefik Manager
-before the database) and audit entries are identical: one entry per item with
+`guest_power_for_service`), so validation and audit entries are identical: one entry per item with
 the single-item action name (`service.updated`, `probe.updated`,
 `proxy_host.disabled`, `proxy_host.deleted`, `node.power_action`, ...), plus one
 `bulk.services` / `bulk.proxy_hosts` / `bulk.nodes` summary per request with the
@@ -87,6 +85,6 @@ One line per item (`ok` / `FAILED: why`), exit code 1 if any item failed,
 `--dry-run` only prints the selection. Services `enable`/`disable`/`probes-*`
 edit `services.yaml` like `service update`; `wake` runs the wake pipeline per
 service like `wake SLUG`. Proxy hosts go through the same function as the web
-(Traefik Manager first, then the database, audited with actor `cli`) and the new
-flag is mirrored into `services.yaml` so a later YAML reload agrees. `DRY_RUN`
-is honoured: with it on, no power/Proxmox/Traefik Manager call is made.
+(database only, audited with actor `cli`; Traefik Manager is written on the next
+push) and the new flag is mirrored into `services.yaml` so a later YAML reload
+agrees. `DRY_RUN` is honoured: with it on, no power/Proxmox call is made.

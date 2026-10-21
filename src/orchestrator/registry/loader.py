@@ -30,6 +30,7 @@ from sqlmodel import Session, select
 from orchestrator.db.models import (
     SETTING_LAST_YAML_LOAD,
     SETTING_LAST_YAML_SAVE,
+    SETTING_PROXY_PENDING_DELETES,
     BackupPolicy,
     Node,
     Probe,
@@ -424,6 +425,18 @@ def reconcile_yaml_into_db(session: Session, path: Path) -> RegistryFile:
     # --- Services + Probes + ProxyHosts -------------------------------------
     yaml_service_slugs = {s.slug for s in parsed.services}
     existing_services = {s.slug: s for s in session.exec(select(Service)).all()}
+    # What was last pushed to Traefik Manager is a fact about THAT system, not
+    # about the YAML: carry each host's fingerprint across the wipe & replace
+    # below, so Reset marks exactly the hosts whose saved state differs from
+    # what was pushed (instead of forgetting everything).
+    pushed_sigs = {
+        ph.hostname: ph.pushed_sig for ph in session.exec(select(ProxyHost)).all() if ph.pushed_sig
+    }
+    # Hosts deleted here and not yet removed from Traefik Manager come back
+    # with the YAML, so there is nothing left to delete.
+    stale_deletes = session.get(Setting, SETTING_PROXY_PENDING_DELETES)
+    if stale_deletes is not None:
+        session.delete(stale_deletes)
 
     for spec in parsed.services:
         node = nodes_by_name.get(spec.node)
@@ -489,6 +502,7 @@ def reconcile_yaml_into_db(session: Session, path: Path) -> RegistryFile:
                     cert_resolver=phspec.cert_resolver,
                     route_options=dict(phspec.route_options),
                     enabled=phspec.enabled,
+                    pushed_sig=pushed_sigs.get(phspec.hostname, ""),
                 )
             )
 

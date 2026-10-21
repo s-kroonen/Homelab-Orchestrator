@@ -38,7 +38,15 @@ def _form(request: httpx.Request) -> dict[str, str]:
 class Recorder:
     """Records every /save and /delete the adapter makes; optionally fails."""
 
-    def __init__(self, *, fail_second_save: bool = False, missing: set[str] | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        fail_second_save: bool = False,
+        missing: set[str] | None = None,
+        routes: list[str] | None = None,
+    ) -> None:
+        # Names Traefik Manager lists in /api/routes (single config file: id == name).
+        self.routes = routes or []
         self.saves: list[dict[str, str]] = []
         self.deletes: list[str] = []
         self.fail_second_save = fail_second_save
@@ -48,6 +56,20 @@ class Recorder:
         path = request.url.path
         if path == "/api/traefik/entrypoints":
             return httpx.Response(200, json=TRAEFIK_EPS)
+        if path == "/api/routes":
+            apps = [
+                {
+                    "id": n,
+                    "name": n,
+                    "protocol": "http",
+                    "rule": f"Host(`{n}.example.com`)",
+                    "servers": ["http://10.0.0.5:80"],
+                }
+                for n in self.routes
+            ]
+            return httpx.Response(
+                200, json={"apps": apps, "middlewares": [], "services": {"http": []}}
+            )
         if path == "/save":
             form = _form(request)
             if self.fail_second_save and form["serviceName"].endswith("-redirect"):
@@ -116,7 +138,7 @@ async def test_options_become_form_fields(monkeypatch: pytest.MonkeyPatch) -> No
 
 
 async def test_update_also_posts_the_options(monkeypatch: pytest.MonkeyPatch) -> None:
-    rec = Recorder()
+    rec = Recorder(routes=["orchestrator-pbs-example-com"])
     _patch(monkeypatch, rec)
     adapter = TraefikManagerProxyAdapter(_settings())
     await adapter.update_route(
@@ -185,7 +207,7 @@ async def test_a_failed_redirect_takes_the_main_route_back(monkeypatch: pytest.M
 
 
 async def test_update_turning_the_redirect_off_removes_it(monkeypatch: pytest.MonkeyPatch) -> None:
-    rec = Recorder()
+    rec = Recorder(routes=["orchestrator-a-example-com", "orchestrator-a-example-com-redirect"])
     _patch(monkeypatch, rec)
     adapter = TraefikManagerProxyAdapter(_settings())
     await adapter.update_route(
@@ -203,7 +225,7 @@ async def test_update_turning_the_redirect_off_removes_it(monkeypatch: pytest.Mo
 async def test_update_never_blind_deletes_when_there_was_no_redirect(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    rec = Recorder()
+    rec = Recorder(routes=["orchestrator-a-example-com"])
     _patch(monkeypatch, rec)
     adapter = TraefikManagerProxyAdapter(_settings())
     await adapter.update_route(
@@ -221,7 +243,7 @@ async def test_update_never_blind_deletes_when_there_was_no_redirect(
 async def test_update_turning_the_redirect_on_creates_it_when_missing(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    rec = Recorder(missing={"orchestrator-a-example-com-redirect"})
+    rec = Recorder(routes=["orchestrator-a-example-com"])
     _patch(monkeypatch, rec)
     adapter = TraefikManagerProxyAdapter(_settings())
     await adapter.update_route(
@@ -242,7 +264,7 @@ async def test_update_turning_the_redirect_on_creates_it_when_missing(
 async def test_delete_removes_the_redirect_first_only_when_asked(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    rec = Recorder()
+    rec = Recorder(routes=["orchestrator-a-example-com", "orchestrator-a-example-com-redirect"])
     _patch(monkeypatch, rec)
     adapter = TraefikManagerProxyAdapter(_settings())
     await adapter.delete_route("orchestrator-a-example-com", with_redirect=True)
@@ -403,6 +425,8 @@ class FakeTMWithOptions(FakeTM):
 def test_create_stores_the_options_and_sends_them(
     service: Service, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    from tests.push_helpers import push
+
     fake = FakeTMWithOptions()
     client = _client(monkeypatch, fake)
     r = client.post(
@@ -421,27 +445,33 @@ def test_create_stores_the_options_and_sends_them(
         ),
     )
     assert r.status_code == 201, r.text
+    assert fake.saves == []  # stored now, sent on the push
+    stored = _rows()[0].route_options
+    assert stored["http_redirect"] is True and stored["tls_main"] == "example.com"
+    assert r.json()["route_options"]["pass_host_header"] is True
+
+    push(client)
     main = fake.saves[0]
     assert main["scheme"] == "https" and main["passHostHeader"] == "true"
     assert main["insecureSkipVerify"] == "true"
     assert main["tlsWildcardMain"] == "example.com"
     assert fake.saves[1]["serviceName"].endswith("-redirect")
-    stored = _rows()[0].route_options
-    assert stored["http_redirect"] is True and stored["tls_main"] == "example.com"
-    assert r.json()["route_options"]["pass_host_header"] is True
 
 
 def test_create_defaults_pass_the_host_header_and_store_nothing(
     service: Service, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    from tests.push_helpers import push
+
     fake = FakeTMWithOptions()
     client = _client(monkeypatch, fake)
     r = client.post("/api/proxy-hosts", json=_body(service, entry_points=["websecure"]))
     assert r.status_code == 201, r.text
-    assert fake.saves[0]["passHostHeader"] == "true"
-    assert len(fake.saves) == 1  # no redirect router unless asked
     assert _rows()[0].route_options == {}  # all-defaults stays empty
     assert r.json()["route_options"]["pass_host_header"] is True
+    push(client)
+    assert fake.saves[0]["passHostHeader"] == "true"
+    assert len(fake.saves) == 1  # no redirect router unless asked
 
 
 def test_redirect_with_a_missing_middleware_is_refused_before_anything_is_written(
@@ -483,11 +513,14 @@ def test_editing_a_legacy_host_fixes_the_host_header(
 ) -> None:
     """The reported incident: a route created before this change has no stored
     options. Re-saving it must now write passHostHeader=true."""
+    from tests.push_helpers import push
+
     fake = FakeTMWithOptions()
     client = _client(monkeypatch, fake)
     created = client.post("/api/proxy-hosts", json=_body(service, entry_points=["websecure"]))
     assert created.status_code == 201, created.text
     pid = created.json()["id"]
+    push(client)
     with Session(get_engine()) as s:
         ph = s.get(ProxyHost, pid)
         assert ph is not None
@@ -498,6 +531,8 @@ def test_editing_a_legacy_host_fixes_the_host_header(
     body = _body(service, upstream="https://10.0.0.9:8006", entry_points=["websecure"])
     r = client.put(f"/api/proxy-hosts/{pid}", json=body)
     assert r.status_code == 200, r.text
+    assert fake.saves == []
+    push(client)
     assert fake.saves[0]["isEdit"] == "true"
     assert fake.saves[0]["passHostHeader"] == "true"
     assert fake.saves[0]["scheme"] == "https"
@@ -506,6 +541,8 @@ def test_editing_a_legacy_host_fixes_the_host_header(
 def test_edit_keeps_stored_options_when_the_body_omits_them(
     service: Service, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    from tests.push_helpers import push
+
     fake = FakeTMWithOptions()
     client = _client(monkeypatch, fake)
     created = client.post(
@@ -518,16 +555,23 @@ def test_edit_keeps_stored_options_when_the_body_omits_them(
     )
     assert created.status_code == 201, created.text
     pid = created.json()["id"]
+    push(client)
     assert fake.saves[0]["passHostHeader"] == "false"
     fake.saves.clear()
-    r = client.put(f"/api/proxy-hosts/{pid}", json=_body(service, entry_points=["websecure"]))
+    r = client.put(
+        f"/api/proxy-hosts/{pid}",
+        json=_body(service, entry_points=["websecure"], upstream="http://10.0.0.9:9000"),
+    )
     assert r.status_code == 200, r.text
+    push(client)
     assert fake.saves[0]["passHostHeader"] == "false"  # kept, not silently reset
 
 
 def test_turning_the_redirect_off_in_an_edit_removes_the_router(
     service: Service, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    from tests.push_helpers import push
+
     fake = FakeTMWithOptions()
     client = _client(monkeypatch, fake)
     created = client.post(
@@ -536,12 +580,16 @@ def test_turning_the_redirect_off_in_an_edit_removes_the_router(
     )
     assert created.status_code == 201, created.text
     pid = created.json()["id"]
+    push(client)
+    assert "orchestrator-app-example-com-redirect" in fake.routes
     fake.deletes.clear()
     r = client.put(
         f"/api/proxy-hosts/{pid}",
         json=_body(service, entry_points=["websecure"], route_options={"http_redirect": False}),
     )
     assert r.status_code == 200, r.text
+    assert fake.deletes == []  # the edit itself touches nothing
+    push(client)
     assert fake.deletes == ["orchestrator-app-example-com-redirect"]
     assert _rows()[0].route_options == {}
 
@@ -549,6 +597,8 @@ def test_turning_the_redirect_off_in_an_edit_removes_the_router(
 def test_deleting_a_host_with_a_redirect_removes_both_routers(
     service: Service, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    from tests.push_helpers import push
+
     fake = FakeTMWithOptions()
     client = _client(monkeypatch, fake)
     created = client.post(
@@ -556,8 +606,11 @@ def test_deleting_a_host_with_a_redirect_removes_both_routers(
         json=_body(service, entry_points=["websecure"], route_options={"http_redirect": True}),
     )
     pid = created.json()["id"]
+    push(client)
     fake.deletes.clear()
     assert client.delete(f"/api/proxy-hosts/{pid}").status_code == 200
+    assert fake.deletes == []
+    push(client)
     assert fake.deletes == ["orchestrator-app-example-com-redirect", "orchestrator-app-example-com"]
 
 

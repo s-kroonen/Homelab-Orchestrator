@@ -3,7 +3,7 @@
 Every action here is the SAME code path as its single-item endpoint - the
 handlers in ``dashboard.py``, ``proxy_hosts.py``, ``infra.py``, ``wake.py`` and
 ``backup.py`` were split into callable functions that both use - so
-validation, live write-through (Traefik Manager first, DB second) and audit
+validation and audit
 entries are identical to doing it one row at a time.
 
 Items run **sequentially**, in the order given, each in its own transaction:
@@ -240,8 +240,8 @@ async def bulk_proxy_hosts(
     adapters: AdaptersDep,
     settings: SettingsDep,
 ) -> dict[str, Any]:
-    """Proxy hosts by id: ``enable`` / ``disable`` (Traefik Manager first for a
-    live-managed host - its failure fails only that item, DB untouched) /
+    """Proxy hosts by id: ``enable`` / ``disable`` (database only: a live-managed
+    host's route is switched on the next push) /
     ``delete`` / ``wake_on_hit_on`` / ``wake_on_hit_off``."""
     from orchestrator.web.routers.proxy_hosts import (
         delete_proxy_host_record,

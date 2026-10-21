@@ -260,6 +260,8 @@ def test_default_setting_that_does_not_exist_falls_back_to_websecure(
 def test_create_sends_the_chosen_entry_points_and_resolver_and_stores_them(
     service: Service, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    from tests.push_helpers import push
+
     fake = FakeTM()
     client = _client(monkeypatch, fake)
     r = client.post(
@@ -268,21 +270,29 @@ def test_create_sends_the_chosen_entry_points_and_resolver_and_stores_them(
     )
     assert r.status_code == 201, r.text
     body = r.json()
-    assert fake.saves[0]["entryPoints"] == "websecure"
-    assert fake.saves[0]["certResolver"] == "letsencrypt"
+    assert fake.saves == []  # DB only until the push
     assert body["entry_points"] == ["websecure"] and body["cert_resolver"] == "letsencrypt"
     assert body["entry_points_stored"] is True
-    assert body["traefik"]["state"] == "ok" and body["warnings"] == []
     assert _rows()[0].entry_points == ["websecure"]
+
+    push(client)
+    assert fake.saves[0]["entryPoints"] == "websecure"
+    assert fake.saves[0]["certResolver"] == "letsencrypt"
+    listed = client.get("/api/proxy-hosts").json()[0]
+    assert listed["traefik"]["state"] == "ok" and listed["sync_state"] == "in_sync"
 
 
 def test_create_without_entry_points_resolves_the_default_rule_never_blank(
     service: Service, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    from tests.push_helpers import push
+
     fake = FakeTM()
     client = _client(monkeypatch, fake)
     r = client.post("/api/proxy-hosts", json=_body(service))
     assert r.status_code == 201, r.text
+    assert r.json()["entry_points"] == ["websecure"]  # resolved at edit time, not left blank
+    push(client)
     assert fake.saves[0]["entryPoints"] == "websecure"  # not TM's `https`
     assert fake.saves[0]["certResolver"] == "__none__"  # TLS, no resolver chosen
 
@@ -290,10 +300,13 @@ def test_create_without_entry_points_resolves_the_default_rule_never_blank(
 def test_create_on_plain_web_sends_no_tls(
     service: Service, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    from tests.push_helpers import push
+
     fake = FakeTM()
     client = _client(monkeypatch, fake)
     r = client.post("/api/proxy-hosts", json=_body(service, entry_points=["web"]))
     assert r.status_code == 201, r.text
+    push(client)
     assert fake.saves[0]["entryPoints"] == "web"
     assert fake.saves[0]["certResolver"] == "__disabled__"
 
@@ -313,11 +326,14 @@ def test_create_without_a_choice_and_without_a_live_list_is_refused(
 def test_create_unreadable_list_trusts_the_typed_entry_points(
     service: Service, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    from tests.push_helpers import push
+
     fake = FakeTM()
     fake.entrypoints_down = True
     client = _client(monkeypatch, fake)
     r = client.post("/api/proxy-hosts", json=_body(service, entry_points="websecure"))
     assert r.status_code == 201, r.text
+    push(client)
     assert fake.saves[0]["entryPoints"] == "websecure"
 
 
@@ -420,50 +436,63 @@ def test_create_refuses_a_hostname_served_by_another_provider(
 def test_create_rolls_back_when_traefik_rejects_the_router(
     service: Service, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """Rejection is found at push time: the new route is taken back, the DB
+    row stays (pending), and the push item carries Traefik's text."""
+    from tests.push_helpers import failures, push
+
     fake = FakeTM(reject_all=True)
     client = _client(monkeypatch, fake)
     r = client.post("/api/proxy-hosts", json=_body(service, entry_points=["websecure"]))
-    assert r.status_code == 422, r.text
-    detail = r.json()["detail"]
-    assert detail["traefik_error"] == "simulated Traefik refusal"
-    assert "simulated Traefik refusal" in detail["message"]
-    assert detail["rolled_back"] is True
+    assert r.status_code == 201, r.text
+    result = push(client)
+    (fail,) = failures(result)
+    assert fail["action"] == "create"
+    assert "simulated Traefik refusal" in fail["message"]
+    assert "removed again" in fail["message"]
     assert fake.deletes == ["orchestrator-app-example-com"]  # the TM route was removed again
     assert fake.routes == {}
-    assert _rows() == []  # no DB row committed
+    assert len(_rows()) == 1 and _rows()[0].pushed_sig == ""  # not recorded as pushed
+    assert client.get(f"/api/proxy-hosts/{r.json()['id']}").json()["sync_state"] == "pending_create"
 
 
 def test_create_reports_the_exact_traefik_text_for_a_stale_entry_point(
     service: Service, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """The incident: our list said `https` was fine (stale cache), Traefik says no."""
+    from tests.push_helpers import failures, push
+
     fake = FakeTM(entrypoints=[*DEFAULT_EPS, {"name": "https", "address": ":8443"}])
     client = _client(monkeypatch, fake)
     client.get("/api/proxy/entrypoints")  # warm the cache with `https` present
     fake.entrypoints = DEFAULT_EPS  # ...then Traefik drops it
     r = client.post("/api/proxy-hosts", json=_body(service, entry_points=["https"]))
-    assert r.status_code == 422, r.text
-    err = r.json()["detail"]["traefik_error"]
-    assert err == 'entryPoint "https" doesn\'t exist · no valid entryPoint for this router'
-    assert "entry_points" in r.json()["detail"]["errors"]
-    assert _rows() == [] and fake.routes == {}
+    assert r.status_code == 201, r.text
+    (fail,) = failures(push(client))
+    assert 'entryPoint "https" doesn\'t exist · no valid entryPoint for this router' in (
+        fail["message"]
+    )
+    assert fake.routes == {}
 
 
 def test_create_warns_when_it_cannot_verify(
     service: Service, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    from tests.push_helpers import push
+
     fake = FakeTM(runtime_available=False)
     client = _client(monkeypatch, fake)
     r = client.post("/api/proxy-hosts", json=_body(service, entry_points=["websecure"]))
     assert r.status_code == 201, r.text
-    warnings = r.json()["warnings"]
-    assert len(warnings) == 1 and warnings[0].startswith("Saved, but could not be verified")
-    assert len(_rows()) == 1
+    (item,) = push(client)["results"]
+    assert item["ok"] is True and "could not verify" in item["message"]
+    assert len(_rows()) == 1 and _rows()[0].pushed_sig  # still recorded: it was written
 
 
 def test_create_warns_when_traefik_has_not_loaded_the_router(
     service: Service, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    from tests.push_helpers import push
+
     fake = FakeTM()
     base_call = fake.__call__
 
@@ -476,7 +505,8 @@ def test_create_warns_when_traefik_has_not_loaded_the_router(
     _patch_tm_transport(monkeypatch, handle)
     r = client.post("/api/proxy-hosts", json=_body(service, entry_points=["websecure"]))
     assert r.status_code == 201, r.text
-    assert "not loaded the router yet" in r.json()["warnings"][0]
+    (item,) = push(client)["results"]
+    assert "not loaded the router yet" in item["message"]
 
 
 # ---------------------------------------------------------------------------
@@ -493,47 +523,59 @@ def _create(client: TestClient, service: Service, **over: Any) -> dict[str, Any]
 def test_edit_resends_the_stored_entry_points_when_the_request_omits_them(
     service: Service, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    from tests.push_helpers import push
+
     fake = FakeTM()
     client = _client(monkeypatch, fake)
     created = _create(client, service, cert_resolver="letsencrypt")
+    push(client)
     fake.saves.clear()
     r = client.put(
         f"/api/proxy-hosts/{created['id']}", json=_body(service, upstream="http://10.0.0.9:9999")
     )
     assert r.status_code == 200, r.text
+    assert fake.saves == []
+    push(client)
     assert fake.saves[0]["entryPoints"] == "websecure"  # NOT reset to `https`
     assert fake.saves[0]["certResolver"] == "letsencrypt"
     assert fake.saves[0]["isEdit"] == "true"
 
 
 def test_edit_can_change_entry_points(service: Service, monkeypatch: pytest.MonkeyPatch) -> None:
+    from tests.push_helpers import push
+
     fake = FakeTM()
     client = _client(monkeypatch, fake)
     created = _create(client, service)
+    push(client)
     r = client.put(
         f"/api/proxy-hosts/{created['id']}",
         json=_body(service, entry_points=["web", "websecure"], cert_resolver=""),
     )
     assert r.status_code == 200, r.text
     assert r.json()["entry_points"] == ["web", "websecure"]
+    push(client)
     assert fake.saves[-1]["entryPoints"] == "web,websecure"
 
 
 def test_edit_failure_keeps_the_new_config_and_returns_traefiks_message(
     service: Service, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    from tests.push_helpers import failures, push
+
     fake = FakeTM()
     client = _client(monkeypatch, fake)
     created = _create(client, service)
+    push(client)
     fake.reject_all = True
     r = client.put(
         f"/api/proxy-hosts/{created['id']}", json=_body(service, upstream="http://10.0.0.9:9999")
     )
-    assert r.status_code == 422, r.text
-    detail = r.json()["detail"]
-    assert detail["traefik_error"] == "simulated Traefik refusal"
-    assert detail["rolled_back"] is False
-    # The new configuration is on Traefik Manager and in our DB: kept.
+    assert r.status_code == 200, r.text  # the edit itself only touches the DB
+    (fail,) = failures(push(client))
+    assert fail["action"] == "verify" and "simulated Traefik refusal" in fail["message"]
+    # The new configuration is on Traefik Manager and in our DB: kept, but not
+    # recorded as pushed (it stays pending until Traefik accepts it).
     assert _rows()[0].upstream == "http://10.0.0.9:9999"
     assert fake.routes["orchestrator-app-example-com"]["upstream"] == "http://10.0.0.9:9999"
     assert fake.deletes == []
@@ -573,6 +615,8 @@ def test_list_shows_the_broken_router_error_text_for_a_preexisting_route(
 def test_edit_of_a_legacy_host_with_a_broken_route_makes_you_pick_a_real_entry_point(
     service: Service, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    from tests.push_helpers import push
+
     fake = FakeTM()
     fake.seed("orchestrator-app-example-com", "app.example.com", ["https"])
     client = _client(monkeypatch, fake)
@@ -591,11 +635,13 @@ def test_edit_of_a_legacy_host_with_a_broken_route_makes_you_pick_a_real_entry_p
     r = client.put(f"/api/proxy-hosts/{ph_id}", json=_body(service))
     assert r.status_code == 422
     assert 'Entry point "https" does not exist' in r.json()["detail"]["errors"]["entry_points"]
-    # Picking the right one fixes the route.
+    # Picking the right one is saved here and fixes the route on the next push.
     r = client.put(f"/api/proxy-hosts/{ph_id}", json=_body(service, entry_points=["websecure"]))
     assert r.status_code == 200, r.text
+    assert fake.routes["orchestrator-app-example-com"]["eps"] == ["https"]
+    push(client)
     assert fake.routes["orchestrator-app-example-com"]["eps"] == ["websecure"]
-    assert r.json()["traefik"]["state"] == "ok"
+    assert client.get(f"/api/proxy-hosts/{ph_id}").json()["traefik"]["state"] == "ok"
 
 
 def test_edit_hostname_change_to_one_traefik_already_serves_is_refused(
@@ -647,9 +693,12 @@ def test_adopt_records_an_existing_route_without_writing_to_traefik_manager(
 def test_resync_discovers_entry_points_and_reports_per_host_router_status(
     service: Service, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    from tests.push_helpers import push
+
     fake = FakeTM()
     client = _client(monkeypatch, fake)
     created = _create(client, service)
+    push(client)
     fake.seed("hand-made", "other.example.com", ["web"])
     calls_before = fake.entrypoint_calls
     r = client.post("/api/proxy-hosts/resync")
@@ -659,6 +708,8 @@ def test_resync_discovers_entry_points_and_reports_per_host_router_status(
     assert body["discovered"][0]["entry_points"] == ["web"]
     assert fake.entrypoint_calls > calls_before  # Resync busts the catalog cache
     assert created["hostname"] == body["updated"][0]["hostname"]
+    # Resync adopts what Traefik Manager has: nothing to push afterwards.
+    assert client.get(f"/api/proxy-hosts/{created['id']}").json()["sync_state"] == "in_sync"
 
 
 # ---------------------------------------------------------------------------
@@ -667,10 +718,16 @@ def test_resync_discovers_entry_points_and_reports_per_host_router_status(
 
 
 def test_dry_run_create_edit_flow_end_to_end(dry_client: TestClient, service: Service) -> None:
+    from tests.push_helpers import push
+
     r = dry_client.post("/api/proxy-hosts", json=_body(service))
     assert r.status_code == 201, r.text
     assert r.json()["entry_points"] == ["websecure"]
-    assert r.json()["traefik"]["state"] == "ok"
+    assert r.json()["sync_state"] == "pending_create"
+    result = push(dry_client)
+    assert [i["action"] for i in result["results"]] == ["create"]
+    listed = dry_client.get(f"/api/proxy-hosts/{r.json()['id']}").json()
+    assert listed["traefik"]["state"] == "ok" and listed["sync_state"] == "in_sync"
     bad = dry_client.post(
         "/api/proxy-hosts", json=_body(service, hostname="b.example.com", entry_points=["https"])
     )

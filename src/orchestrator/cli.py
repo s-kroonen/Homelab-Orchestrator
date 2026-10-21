@@ -5,6 +5,7 @@
                 scaffold                  pull new/moved guests into services.yaml
     Registry    service | probe | proxy   edit entries in services.yaml
                 proxy resync-maintenance  backfill the Traefik maintenance middleware (DB, not YAML)
+                proxy status | push       what is not pushed to Traefik Manager yet / push it now
     Diagnose    check                     can I reach Proxmox and PBS?
                 transport check           is the host runner / ssh plumbing usable?
                 guests | snapshots        what do Proxmox and PBS see?

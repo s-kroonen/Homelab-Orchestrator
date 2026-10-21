@@ -5,20 +5,21 @@ named router (`traefik`, `pangolin`, `npm`, `other`) — that fronts a service
 in the registry. The table is `proxy_host`; in `services.yaml` the records sit
 under each service's `proxy_hosts:` list.
 
-## What they are today: live-managed when the backend supports it
+## What they are today: a working copy that is pushed to Traefik Manager
 
 A `ProxyHost` whose `router_provider` is `traefik` and has an `upstream` is
-**live-managed**: creating, editing or deleting it here creates, edits or
-deletes the real route on Traefik Manager, not just a local record you
-separately reconcile. This replaced the original "pure reference record,
-reconciled by a one-way Resync button" model — see
-["Live-managed proxy hosts"](#live-managed-proxy-hosts) below for the full
-write-through/rollback/backfill behaviour. A `traefik` host with no
-`upstream` yet, and every `pangolin`/`npm`/`other` host (no adapter exists
-for those backends yet), stay plain reference records: maintained by hand,
-nothing pushed to any gateway, same as every `ProxyHost` used to be.
-`last_seen_at` is still only ever set by Resync, never by a live-managed
-write.
+**live-managed**: the orchestrator owns a route for it on Traefik Manager. But
+**the database is the working copy and Traefik Manager is written only when
+you push** - on **Save to YAML**, on **Push now** (`POST /api/push`) or with
+`orchestrator-cli proxy push`. Adding, editing, enabling/disabling or deleting
+a host here (UI, API, bulk actions, CLI bulk) changes the DB and nothing else;
+every read-only check (hostname, upstream, entry points, resolver, route
+options, conflicts, the redirect middleware) still runs at edit time. See
+["Pushing to Traefik Manager"](#pushing-to-traefik-manager) for the sync
+states, the push order and what "detached" means. A `traefik` host with no
+`upstream` yet, and every `pangolin`/`npm`/`other` host (no adapter exists for
+those backends yet), stay plain reference records: nothing is ever pushed for
+them. `last_seen_at` is still only ever set by Resync.
 
 Separately, linking a `ProxyHost` to a `Service` also keeps a small,
 surgical maintenance-page fallback middleware in sync on the gateway —
@@ -51,10 +52,12 @@ up "which hostname reaches which service, through what":
 |---------------------------------|--------------------|---------------------------------------|
 | `orchestrator-cli proxy add/list/remove` | `services.yaml` directly | Reconciled into the DB on next boot / Reset |
 | `orchestrator-cli proxy add --entry-point websecure --cert-resolver letsencrypt` | `services.yaml`; validated first with the same rules as the API (entry points checked against the live Traefik when readable) | As above. `orchestrator-cli proxy entrypoints` lists what the manager reports (exit 1 + a message when unavailable); non-interactive runs use the default rule when no `--entry-point` is given |
-| Dashboard → **Proxy hosts** (`/proxy-hosts`) — list page | reads the live DB | **Save to YAML** writes it out; **Reset to saved** discards it; **Resync from Traefik** is the bulk-discovery/drift-catch-up path (see below) |
-| Dashboard → **Add a proxy host** (`/proxy-hosts/new`) / **Edit** (`/proxy-hosts/{id}/edit`) — dedicated pages | live DB, and (for a `traefik` host with an upstream) the real route | same underlying API as below; these are the normal way to create/edit one now |
+| Dashboard → **Proxy hosts** (`/proxy-hosts`) — list page | reads the live DB (+ a push-status badge per host) | **Save to YAML** writes it out **and pushes** pending changes to Traefik Manager; **Push now** pushes only; **Reset to saved** discards unsaved edits and pending deletions; **Resync from Traefik** is the bulk-discovery/drift-catch-up path (see below) |
+| Dashboard → **Add a proxy host** (`/proxy-hosts/new`) / **Edit** (`/proxy-hosts/{id}/edit`) — dedicated pages | live DB only ("Saved here. Pushed to Traefik Manager on Save to YAML (or Push now).") | same underlying API as below; these are the normal way to create/edit one now |
 | Dashboard → a service's own page (`/services/{slug}`), **Proxy hosts** section | read-only list + a link to `/proxy-hosts/new?service_id=<id>` | same create/edit flow as above, pre-filled for this service |
-| `GET/POST/PUT/DELETE /api/proxy-hosts[/{id}]` | live DB, and (for a `traefik` host with an upstream) the real route | the API every page above calls — see ["Live-managed proxy hosts"](#live-managed-proxy-hosts) |
+| `GET/POST/PUT/DELETE /api/proxy-hosts[/{id}]` | live DB only; list/get carry `sync_state` + `sync_changes` | the API every page above calls — see ["Live-managed proxy hosts"](#live-managed-proxy-hosts) |
+| `GET /api/push/status`, `POST /api/push` | status: nothing. Push: Traefik Manager (and any other registered pusher) | **Push now** / the CLI use these — see ["Pushing to Traefik Manager"](#pushing-to-traefik-manager) |
+| `orchestrator-cli proxy status` / `proxy push [--yes]` | status: nothing. Push: Traefik Manager | the same engine in-process; `status` exits 1 when anything is not in sync |
 | `orchestrator-cli proxy resync-maintenance` | nothing in the DB; re-syncs the gateway's maintenance middleware for every already-linked host | DB-only operation, no YAML involved — see ["Backfilling existing proxy hosts"](#backfilling-existing-proxy-hosts) below |
 
 **Dedicated add/edit pages, not an inline form.** Creating or editing a
@@ -102,55 +105,137 @@ service; `router_provider` must be one of the enum values above.
 
 ## Live-managed proxy hosts
 
-`web/routers/proxy_hosts.py`'s create/update/delete endpoints write through
-to `adapters.proxy` (`ProxyAdapter.create_route`/`update_route`/
-`delete_route` — `orchestrator.adapters.proxy.base`) whenever **both**
-hold:
+A host is live-managed when **both** hold:
 
-* `router_provider` is `traefik` — the only backend with a real adapter
-  today (`TraefikManagerProxyAdapter`); `pangolin`/`npm`/`other` have none,
-  so those rows stay plain reference records, same as every `ProxyHost`
-  used to be — not blocked or errored, just skipped;
-* `upstream` is non-empty — a route cannot be created on Traefik Manager
-  with no backend target. A `traefik` host created/edited with a blank
-  `upstream` (a bare hostname reference filled in later, or imported via
-  Resync) stays local-only until an `upstream` is set.
+* `router_provider` is `traefik` - the only backend with a real adapter today
+  (`TraefikManagerProxyAdapter`); `pangolin`/`npm`/`other` rows stay plain
+  reference records;
+* `upstream` is non-empty - a route cannot be created on Traefik Manager with
+  no backend target.
 
-Unlike the maintenance-fallback middleware sync further down (a quiet side
-effect of an unrelated edit, fail-open by design), route CRUD **is** the
-explicit action the admin just took, so a failure is never swallowed:
+What the endpoints do now (`web/routers/proxy_hosts.py`):
 
-* **Create**: the `ProxyHost` row is written AND `create_route` is called.
-  The returned opaque route reference is stored in
-  `ProxyHost.extra["traefik_manager_route_id"]` — the key this app's own
-  code looks for; the value itself is `TraefikManagerProxyAdapter`-specific
-  (today, a deterministic name derived from the hostname, e.g.
-  `orchestrator-app-example-com` — see
-  `orchestrator.adapters.proxy.traefik_manager.route_name_for_hostname`).
-  Create also requires explicit entry points / certificate resolver, is
-  validated first and verified afterwards (see below).
-  **If `create_route` fails, the whole request fails** (`502`) and the
-  `ProxyHost` row is never committed — closing this session's DB
-  transaction without a commit rolls back the row the same way any other
-  failed request in this app already does, so there is no orphaned
-  local-only record pointing at nothing real.
-* **Update**: the real route is updated FIRST, using the stored
-  `extra["traefik_manager_route_id"]` as both the route's name and
-  `originalId` (a hostname rename does **not** rename the underlying
-  route — the reference is opaque and reused, never re-derived from the
-  new hostname). Only once that succeeds are the `ProxyHost` row's fields
-  changed; a failure (`502`) leaves both sides exactly as they were. If
-  `extra` has no stored reference yet — a host that predates this
-  feature, or one whose `router_provider` is only now switching onto
-  `traefik` — a route is **created** instead of erroring (same backfill
-  behaviour if the stored reference comes back `ProxyRouteNotFound`, e.g.
-  the route was deleted by hand on Traefik Manager since).
-* **Delete**: the real route is deleted first, via the stored reference,
-  then the `ProxyHost` row. A `ProxyRouteNotFound` (already gone on the
-  Traefik Manager side somehow) is logged and does **not** block deleting
-  the local record — the operator's intent ("this host should no longer
-  exist") is still satisfiable. Every other failure (`502`) blocks the
-  local delete.
+* **Create** validates everything read-only (see below), stores the row and the
+  *planned* route reference in `extra["traefik_manager_route_id"]`
+  (`ProxyAdapter.route_ref_for`; for Traefik Manager the deterministic name
+  `orchestrator-app-example-com`, so the saved YAML already carries it and a
+  later push does not make the registry dirty). The host is `pending_create`.
+  Re-creating a hostname that was just deleted (its route not yet removed)
+  takes that route over instead of conflicting with it.
+* **Update** validates, stores, keeps the stored reference (a hostname rename
+  does **not** rename the route) and leaves the host `pending_update`. A host
+  that stops being live-managed (provider changed, upstream cleared) gets a
+  pending deletion for the route this orchestrator created. There is no longer
+  an "enable it first" refusal for a disabled host: the push orders the
+  operations safely.
+* **Delete** removes the row and, for a route this orchestrator created that
+  Traefik Manager really has, records a **pending deletion**
+  (`{hostname, route_ref, with_redirect}` in the `Setting` row
+  `proxy.pending_deletes`). Routes that were adopted or hand-written are never
+  deleted. **Reset to saved** clears the pending deletions (the YAML reconcile
+  recreates the hosts).
+* **Enable / disable** and the bulk actions only flip `ProxyHost.enabled`.
+
+## Pushing to Traefik Manager
+
+`orchestrator.registry.proxy_push` (the `proxy` pusher) brings Traefik Manager
+in line with the DB rows. It runs on **Save to YAML** (after the YAML was
+written and committed - a push failure never undoes the save and is reported
+in the response), on **Push now**, and from the CLI.
+
+### What is remembered
+
+`ProxyHost.pushed_sig` (migration `0015_proxy_host_pushed_sig`, default empty =
+unknown) is a fingerprint of everything pushed for the host - hostname,
+upstream, entry points, cert resolver, route options, linked service (the
+maintenance fallback depends on it) - followed by `:1`/`:0` for enabled. It is
+recorded only after every step for that host succeeded, is runtime state (not
+in `services.yaml`) and survives Reset/boot reconcile by hostname.
+
+### Sync states (`sync_state` / `sync_changes` on every list/get payload)
+
+| State | Meaning | A push does |
+|---|---|---|
+| `in_sync` | the route exists; nothing readable differs | nothing |
+| `pending_create` | live-managed, Traefik Manager has no route (never pushed, or removed there) | creates it |
+| `pending_update` | edited here since the last push (fingerprint differs); for a host never pushed from here: readable fields differ from Traefik Manager | updates it |
+| `detached` | **our fingerprint is unchanged but Traefik Manager's live state differs** - someone changed it there | puts our state back |
+| `external` | the hostname's route is not ours (adopted by Resync, hand-written, or no route reference) | only its on/off state (and the maintenance fallback); **content is never overwritten or deleted** |
+| `local` | not live-managed | nothing (unless a hand-written route serves the hostname and the maintenance fallback is not applied yet) |
+
+**Exactly what "detached" compares** (only what can be read back from
+`GET /api/routes`): the enabled/disabled state (the `-redirect` companion
+included when `http_redirect` is on; partly-off counts as a difference), the
+upstream (normalised `scheme://host:port`, any difference in the server list),
+the entry points (as sets, when both sides report them) and - when
+`http_redirect` is on - a missing companion router. Cert resolver, route
+options and middlewares are not readable, so they are tracked by the
+fingerprint only.
+
+`sync_changes` holds human strings such as `upstream differs: Traefik Manager
+has http://a, we have http://b`. Pending deletions are listed separately.
+
+### Apply order (per host, idempotent, one host failing never stops the others)
+
+1. **create** the route if missing (the conflict refusal is repeated; if
+   Traefik rejects the new router after verification it is deleted again and
+   the host reports the error);
+2. **enable** it first when we want it on and Traefik Manager has it parked;
+3. **update** the content (`update_route`) when pending/detached;
+4. ensure the **maintenance-page fallback** for the service (a route rewrite
+   drops the middleware);
+5. **disable** LAST (route + redirect companion) when we want it off - and only
+   if something is still on;
+6. **verify** enabled routes with `verify_route` (skipped for disabled ones);
+7. record `pushed_sig`.
+
+Then pending deletions are processed (route + redirect deleted, "not found"
+tolerated, tombstone cleared) and the maintenance fallback is removed for them.
+The result is a per-item list `{target, hostname, action, ok, message}`.
+
+### API and CLI
+
+* `GET /api/push/status` -> `{"targets": [{"name": "proxy", "reachable": bool,
+  "in_sync": n, "pending": [{"hostname", "state", "changes"}], "detached":
+  [...], "pending_deletes": [...]}]}`.
+* `POST /api/push` `{"targets": ["proxy"], "hostnames": [...], "dry_run": false}`
+  -> `{"results": [...], "summary": {"attempted", "ok", "failed"}}`.
+  `dry_run: true` returns what would be done without writing (the UI confirm).
+* `POST /api/registry/save` -> the original keys plus `push_results` and
+  `push` (`{"attempted","ok","failed"}`).
+* `orchestrator-cli proxy status` (exit 1 unless in sync) and
+  `orchestrator-cli proxy push [--yes] [--hostname H]` (exit 1 if an item
+  failed). Under `DRY_RUN=true` / `PROXY_ADAPTER=dry_run` the push goes through
+  the dry-run adapter, which only records what it was given.
+
+### Other outside services
+
+The engine is a tiny protocol (`orchestrator.registry.push`): a `Pusher` has a
+`name`, `status(session, adapters) -> PushStatus` and `apply(session, adapters,
+only=None, *, dry_run=False, actor=...) -> list[PushResult]`; `register_pusher`
+adds it to the registry. Save to YAML, `/api/push` and the status endpoint run
+every registered pusher, so a future backup or power adapter that wants the same
+"edit locally, push on save" behaviour only implements the protocol.
+
+### Traefik Manager with several config files (`file::name` ids)
+
+With `MULTI_CONFIG` Traefik Manager gives every route in `GET /api/routes`
+`id = "<configfile>::<name>"` and `name = "<name>"` (one file: they are equal).
+Its toggle only acts on the listed id - a bare name is a **silent no-op that
+still answers 200**, and enabling only finds a route whose disabled-routes
+record is keyed by that id. The adapter therefore:
+
+* keeps `RouteInfo.route_id` / `config_file` and resolves a stored or bare
+  reference against `GET /api/routes` (`id == ref` or `name == ref`; if several
+  files hold the same name, the one whose rule matches the host);
+* toggles by the real id and **reads the route back**: if `enabled` is not what
+  was asked it raises `Traefik Manager accepted the request but the route is
+  still enabled/disabled` (also for the redirect companion, undoing the first
+  toggle);
+* edits (`/save`) with `originalId` = the id and `configFile` = the route's own
+  file (otherwise it would write a second copy into the default file) and
+  deletes (`/delete/<id>`) with `configFile` set, so a same-named router in
+  another file survives.
 
 ### Entry points and certificate resolver
 
@@ -256,25 +341,23 @@ Editing keeps what is stored when the request omits `route_options`; turning
 both, and a failed redirect write takes the main route back so there is never a
 half-made pair.
 
-### Enabled state is kept in step with Traefik Manager
+### Enabled state and Traefik Manager
 
-Traefik Manager is the source of truth for whether a route is on:
+Traefik Manager is where a route is really on or off, so:
 
-* **The switch reaches every route that serves the hostname.** The route this
-  orchestrator created (and its `-redirect` companion), **plus any other
-  Traefik Manager route with that hostname** — so a host adopted by Resync, or a
-  hand-written setup with a separate `…-redirect` router, is switched as a whole.
-  (Previously a host without a stored route reference only changed the local flag.)
-* **The list and the edit page show Traefik Manager's state** (`tm_state`:
-  `enabled` / `disabled` / `partial`). If it differs from the orchestrator's flag
-  an amber badge says so (`off in Traefik Manager`, `on in Traefik Manager`,
-  `partly off in TM`). Clicking the switch makes both match.
-* **Resync adopts Traefik Manager's state** for hosts it matches (only when
-  Traefik Manager itself was read). A `partial` state is left alone.
-* The edit page has the same Enable / Disable button; a disabled host cannot be
-  saved until it is enabled.
+* **Resync adopts Traefik Manager's state** (enabled/disabled, upstream) for
+  hosts it matches - only when Traefik Manager itself was read; a `partial`
+  state is left alone - and a host whose last push still matched is re-stamped,
+  so adopted state counts as `in_sync`.
+* The list and the edit page show `tm_state` (`enabled` / `disabled` /
+  `partial`) next to the push status. A difference between that and our flag is
+  a `detached` (or, for an external route, pending) host.
+* The push switches every route that serves the hostname for an `external`
+  host (its separate `…-redirect` router included) and the route plus its
+  `-redirect` companion for one of ours - using the real ids and verifying each
+  toggle.
 
-### Validation — before anything is written
+### Validation — at edit time, before anything is stored
 
 One validator module (`orchestrator.registry.proxy_validation`) is used by the
 API, `orchestrator-cli proxy add` and the YAML loader. The API answers
@@ -295,25 +378,24 @@ renders each message next to its field *and* as a toast, the CLI prints
 When the live entry-point list cannot be read only the *shape* is checked and
 what you typed is trusted.
 
-### Post-save verification and rollback
+### Verification and rollback (at push time)
 
-Traefik Manager accepts a router that Traefik then refuses, so after `/save` the
-runtime router is polled (`GET /api/traefik/routers`, every ~0.5 s for up to
-~5 s — Traefik reloads the file provider asynchronously) until it is `enabled`
-with no `error`, and bound to the entry points just written
-(`orchestrator.adapters.proxy.verify.verify_route`, also what the list's
-**Router** status and Resync use):
+Traefik Manager accepts a router that Traefik then refuses, so after a push
+writes a route the runtime router is polled (`GET /api/traefik/routers`, every
+~0.5 s for up to ~5 s) until it is `enabled` with no `error` and bound to the
+entry points just written (`orchestrator.adapters.proxy.verify.verify_route`,
+also what the list's **Router** status and Resync use):
 
-* **Create, router rejected** — the route just created is deleted again on
-  Traefik Manager (best effort), **no DB row is committed**, and the API returns
-  `422` with Traefik's own text (`traefik_error`, `rolled_back: true`).
-* **Edit, router rejected** — the new configuration is kept (the previous one
-  cannot be safely guessed): the DB row is updated, the API returns `422`
-  (`rolled_back: false`) including Traefik's message, and the host's Traefik
-  status stays red in the list until fixed.
-* **Cannot verify** — the runtime router list is unreadable, or Traefik has not
-  loaded the router within the window — the save succeeds (`2xx`) with a
-  `warnings` entry ("Saved, but could not be verified …"). Never silent success.
+* **Create, router rejected** - the route just created is deleted again on
+  Traefik Manager (best effort), the item reports Traefik's own text, the host
+  keeps its DB row and stays `pending_create`.
+* **Update, router rejected** - the new configuration is kept (the previous one
+  cannot be safely guessed); the item is a failed `verify` with Traefik's
+  message, the fingerprint is **not** recorded (the host stays pending) and the
+  list shows the router red until fixed.
+* **Cannot verify** - the runtime list is unreadable or Traefik has not loaded
+  the router within the window: the item succeeds with a "could not verify ..."
+  note.
 
 The list's **Traefik** column shows the router's own verdict for every host:
 `router enabled`, `router error` with Traefik's message (red), `router not
@@ -334,23 +416,20 @@ rewrites the route on Traefik Manager with explicit values, then verifies it.
 ### Adopting a route Traefik Manager already has
 
 Create refuses to touch a router that is not ours. **Resync** lists such routes
-under "Discovered"; its **Add** button records one with `adopt: true` — no write to
-Traefik Manager at all; the route reference and entry points are taken from the
-existing router.
+under "Discovered"; its **Add** button records one with `adopt: true` - no write
+to Traefik Manager at all; the route reference and entry points are taken from
+the existing router. An adopted (or hand-written, or reference-less) route is
+`external`: **its content is never overwritten and never deleted** - deleting
+the host here leaves the route alone and a push only switches it on/off (and
+applies the maintenance fallback). A route reference counts as ours when the
+adapter created it (`ProxyAdapter.owns_route_ref`; Traefik Manager: the
+`orchestrator-` prefix).
 
-**Known gap**: switching `router_provider` away from `traefik` on an
-existing live-managed host does not delete the real route it created —
-the stale route is simply no longer touched or tracked (its reference in
-`extra` is dropped). There was no safe automatic choice here (the
-operator may want to keep the route and manage it by hand going forward),
-so this is left as a manual cleanup on Traefik Manager if the route truly
-should go away, the same kind of residual gap the "deleting the linked
-service" case above already documents.
+Switching `router_provider` away from `traefik` (or clearing the upstream) on a
+host with a route this orchestrator created records a pending deletion for it.
 
-The maintenance-fallback middleware sync (further down) is **not**
-gated by any of this — it runs for any linked `ProxyHost` regardless of
-`router_provider`, same as before this feature, since it's a separate,
-independent, fail-open integration.
+The maintenance-fallback middleware sync (further down) now also runs at push
+time, per host, instead of on every edit.
 
 ## Enabling and disabling a host
 
@@ -361,57 +440,40 @@ A proxy host can be switched off without deleting it: the **Enabled** switch on
 The flag is `ProxyHost.enabled` (migration `0013_proxy_host_enabled`, default
 true) and the YAML field `enabled` on a proxy host (default `true`).
 
-**What Traefik Manager does.** A live-managed host (`router_provider: traefik`
-with a stored route reference) is toggled with Traefik Manager's
-`POST /api/routes/<route_id>/toggle` and JSON body `{"enable": true|false}` (same
-`X-Api-Key` and `X-Requested-With: fetch` headers as every other write).
-Disabling *moves* the router - and its service, unless another router still
-uses it - out of the config file into Traefik Manager's own `disabled_routes`
-settings store; enabling writes them back unchanged. So, while disabled:
+**All of these change the DB only.** The change is `pending` until a push
+(Save to YAML, Push now, `proxy push`); until then Traefik keeps serving the
+route and the list says "Disabled here - Traefik Manager still serves the route
+until you push."
 
-* Traefik itself has no runtime router for it (`/api/traefik/routers` does not
-  list it). That is the expected state: the list shows
-  `disabled` in the Traefik column and `route disabled` as the
-  router verdict, never `missing` / `router not loaded`.
-* Traefik Manager's `GET /api/routes` still lists it, with `"enabled": false`.
-  The adapter reads that flag (`RouteInfo.enabled`), so Resync still recognises
-  the route as ours (no "Discovered" entry, no drift) and a host that is enabled
-  here but disabled on Traefik Manager (flipped by hand, or brought back by a
-  *Reset to saved*) is explained in its status message, with Enable as the fix.
-* `POST /delete/<id>` also removes a disabled route (it falls back to the
-  disabled store), so deleting a disabled host works as usual.
-* The toggle is idempotent on Traefik Manager (an unknown route or one already
-  in that state is a silent no-op), so the orchestrator always sends it, even
-  when the stored flag already matches - a cheap re-converge.
+**What the push does.** Traefik Manager's
+`POST /api/routes/<route_id>/toggle` with `{"enable": true|false}` (same
+`X-Api-Key` and `X-Requested-With: fetch` headers as every other write), by the
+id `GET /api/routes` lists, followed by a read-back. Disabling *moves* the
+router - and its service, unless another router still uses it - out of the
+config file into Traefik Manager's own `disabled_routes` settings store;
+enabling writes them back unchanged. While disabled:
 
-**Order and failure.** Traefik Manager is called first; any failure is a `502`
-and the database row is left exactly as it was (no audit entry). Only then is
-the flag stored and audited as `proxy_host.enabled` / `proxy_host.disabled`.
-A local-only host (another provider, or no route written yet) just stores the
-flag.
+* Traefik itself has no runtime router for it. The list shows `disabled` in the
+  Traefik column and `route disabled` as the router verdict, never `missing` /
+  `router not loaded`.
+* Traefik Manager's `GET /api/routes` still lists it, with `"enabled": false`
+  (`RouteInfo.enabled`), so Resync still recognises the route as ours.
+* `POST /delete/<id>` also removes a disabled route.
 
-**The redirect companion.** When the host's `route_options.http_redirect` is
-on, the `<route>-redirect` router is toggled too: on disable the redirect goes
-first (so plain HTTP never redirects to a route that is gone), on enable the
-main route goes first. If the second toggle fails, the first is undone (best
-effort) and the whole action reports the failure.
+**The redirect companion.** When `route_options.http_redirect` is on, the
+`<route>-redirect` router is toggled with it: on disable the redirect goes first
+(plain HTTP never redirects to a route that is gone), on enable the main route
+goes first. If the second toggle fails (or its read-back does not match) the
+first is undone (best effort) and the item reports the failure.
 
 ### Editing a disabled host
 
-**Refused for a live-managed host** (`409`, "Enable it first, then edit it").
-Traefik Manager's own `/save` would keep an edited disabled route disabled, but
-everything the orchestrator does around a save cannot be applied safely to a
-parked route: post-save verification against Traefik's runtime routers would
-always say "not loaded"; the maintenance-fallback middleware is injected
-through the raw-route endpoint, which only sees enabled routes; a newly turned
-on HTTP -> HTTPS redirect would be created as a *live* router next to a disabled
-main route; and the "route is gone, re-create it" backfill path would create a
-fresh, enabled route. Any of those could bring the host back to life unasked, so
-the safe choice is to enable, edit, then disable again. A local-only disabled
-host can still be edited and stays disabled - unless the edit would make it
-live-managed (an upstream on a `traefik` host), which is refused for the same
-reason. Toggling **wake on hit** (including in bulk) is a local setting and
-works on a disabled host.
+Allowed. Traefik Manager's `/save` keeps an edited disabled route parked when
+`originalId` is its id, and the push orders the work safely: enable first (when
+we want it on), update, disable **last** - re-reading the routes first and
+switching off anything an update brought back to life (for example a freshly
+created redirect companion). Wake on hit is a local setting and works on a
+disabled host as before.
 
 ## Drift detection: Traefik Manager preferred, direct Traefik API as fallback
 
@@ -590,16 +652,13 @@ above), and it only ever runs when an admin clicks the **Resync from
 Traefik** button on `/proxy-hosts` (`POST /api/proxy-hosts/resync`).
 Nothing changes on a schedule, on page load, or as a side effect of any
 other request. This is unrelated to, and does not touch, the
-maintenance-page fallback middleware further down, or live-managed route
-CRUD above — that's a write to Traefik's own config/routes, not to this
+maintenance-page fallback middleware further down, or the push to Traefik
+Manager above — that's a write to Traefik's own config/routes, not to this
 database.
 
-**Resync's role, now that live-managed route CRUD exists above:** it used
-to be the *only* way to reach parity between the DB and Traefik — adding
-a `ProxyHost` never pushed anything to the gateway, so Resync's "pull
-Traefik's current state in" was the one bridge. That is no longer true:
-**Add a proxy host**/**Edit** now create/edit the real route directly.
-Resync is now the **bulk/catch-up path**: importing routes that exist on
+**Resync's role next to the push engine:** the push goes DB -> Traefik
+Manager (on Save to YAML / Push now); Resync is the opposite direction. It is the
+**bulk/catch-up path**: importing routes that exist on
 Traefik Manager but have no local `ProxyHost` yet (the "Discovered"
 table), and catching real drift — a local record whose `upstream` was
 changed by someone editing Traefik Manager directly, bypassing this app
@@ -620,6 +679,9 @@ entirely. Nothing about what Resync itself does (below) changed.
      administrator wants Resync to reflect Traefik's current truth for any
      host it already knows about, trading away manual overrides on matched
      hosts for that guarantee.
+   - Traefik Manager's enabled/disabled state is adopted too (when TM itself
+     was read), and a host whose last push still matched is re-stamped, so
+     what Resync adopted counts as `in_sync` rather than as a local edit.
    - `last_seen_at` is set to the resync time, whether or not `upstream`
      actually changed.
    - `router_provider` and `extra` are **never** touched by Resync.
@@ -638,8 +700,9 @@ entirely. Nothing about what Resync itself does (below) changed.
    action stays a direct API call rather than a navigation to that page,
    since it's part of Resync's own bulk flow). There is no second creation
    endpoint, and since `upstream` is already known here, this create IS
-   write-through for a `traefik`-provider discovered host (see
-   ["Live-managed proxy hosts"](#live-managed-proxy-hosts)).
+   DB-only for a `traefik`-provider discovered host: `adopt: true` records the
+   existing route as `external` (see
+   ["Adopting a route Traefik Manager already has"](#adopting-a-route-traefik-manager-already-has)).
 5. Every resync run is audit-logged (`proxy_host.resynced`) with
    `updated_count`, `discovered_count`, and the matching hostname lists —
    same `orchestrator.audit.log.record` mechanism as every other mutation
@@ -883,8 +946,15 @@ as every other optional integration in this app.
 
 ### Lifecycle
 
-Mirrors the existing auto-managed Traefik probe's lifecycle (above) and the
-same trigger points in `web/routers/proxy_hosts.py`:
+Mirrors the existing auto-managed Traefik probe's lifecycle (above), but the
+Traefik Manager side no longer runs on an edit: it runs **at push time**
+(`registry/proxy_push.py`), per host, whenever a push created/updated/enabled
+its route (a route rewrite drops the middleware, so it is re-applied). A
+service re-link is part of the host's fingerprint, so it is a pending update.
+For a host with no route of its own that a hand-written route serves, the
+fallback is the only thing pushed (`local` state with a "maintenance page
+fallback not applied yet" note). A deleted host's middleware name is removed
+when its pending deletion is pushed. The meaning of each case:
 
 * **Create** a linked `ProxyHost` → ensure the shared backend service +
   this service's middleware exist, inject the middleware name into every
@@ -920,18 +990,16 @@ file, target `traefik_manager:<name>`.
 ### Fail-open, by design
 
 Unlike Resync (an explicit, admin-watched action that surfaces a real
-`503` on failure), this sync is a *side effect* of an ordinary `ProxyHost`
-create/update/delete — the same kind of request this app has always
-allowed to succeed even when Traefik is completely unconfigured. A Traefik
-Manager outage (or misconfiguration) is caught and logged here, never
-raised into that request: editing proxy hosts in the database must keep
-working even when the gateway integration is unreachable. An operator who
+`503` on failure), this sync is a *side effect* of a push: an unreachable or
+misconfigured Traefik Manager is caught and logged here and never fails the
+push item or the Save to YAML that triggered it (editing proxy hosts in the
+database never needs the gateway at all any more). An operator who
 needs to know whether a particular sync actually happened should check the
 audit log for the expected `middleware.*` entries, or the activity page.
 
 ### Backfilling existing proxy hosts
 
-Because this sync only runs on a `ProxyHost` create/update/delete/re-link,
+Because this sync only runs when a push touches a host,
 two situations leave a host without the middleware, with no automatic way
 to notice or fix it:
 

@@ -297,6 +297,25 @@ pattern as every other list-only page: the server renders the shell only,
 the table is filled client-side by `apiFetch` against the existing
 endpoints — no new API surface, no mutation.
 
+## Deferred push (DB = working copy, outside services written on Save / Push)
+
+Dashboard edits only change the DB, as they always did for the registry; what
+is new is that this now holds for outside services too. `orchestrator.registry.
+push` defines a small `Pusher` protocol (`name`, `status(session, adapters)`,
+`apply(session, adapters, only=None, *, dry_run, actor)`) and a registry
+(`register_pusher`, `status_all`, `apply_all`). `ProxyPusher`
+(`registry/proxy_push.py`) is the only one today: it classifies every proxy
+host (`in_sync`, `pending_create`, `pending_update`, `detached`, `external`,
+`local`) by comparing the DB row, the fingerprint of what was last pushed
+(`ProxyHost.pushed_sig`) and what Traefik Manager lists, and applies the
+difference in a safe order (create, enable, update, maintenance fallback,
+disable last, verify). Pending deletions are kept in the `Setting` row
+`proxy.pending_deletes`. `POST /api/registry/save` writes the YAML first and
+then runs every registered pusher; `GET /api/push/status`, `POST /api/push` and
+`orchestrator-cli proxy status|push` use the same engine. Backup or power
+adapters that later want "edit locally, push on save" register their own
+pusher. Details: `docs/proxy_hosts.md` "Pushing to Traefik Manager".
+
 ## Traefik Manager (write path)
 
 Until this phase, every Traefik integration in this app was read-only
@@ -309,10 +328,12 @@ routes; the orchestrator talks to it through a `ProxyAdapter`
 shape `adapters.{power,proxmox,pbs}` already use. Its methods:
 `list_routes` (read path), `ensure_maintenance_fallback`/
 `remove_maintenance_fallback` (the maintenance-page fallback middleware,
-fail-open), and `create_route`/`update_route`/`delete_route` (general
-route CRUD backing live-managed proxy hosts — raises on failure, since
-that's the explicit action an admin just took; see
-`docs/proxy_hosts.md`'s "Live-managed proxy hosts" section). See
+fail-open), and `create_route`/`update_route`/`delete_route`/
+`set_route_enabled` (general route CRUD backing live-managed proxy hosts —
+raises on failure; a toggle is read back, never trusted on a 200). **These
+writes no longer happen on an edit.** The database is the working copy and the
+adapter is only called by the push engine (below). Traefik Manager's
+`file::name` route ids (several config files) are resolved by the adapter. See
 `src/orchestrator/adapters/proxy/traefik_manager.py`
 (`TraefikManagerProxyAdapter` — the REST calls and the maintenance-middleware
 feature built on top of them) and `docs/proxy_hosts.md` for the full

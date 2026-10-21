@@ -208,26 +208,31 @@ def test_bulk_requires_admin() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_bulk_disable_proxy_hosts_one_fails_on_traefik_manager(
+def test_bulk_disable_proxy_hosts_is_db_only_and_the_push_reports_the_failing_one(
     service: Service, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    from tests.push_helpers import actions, failures, push
+
     tm = ToggleTM()
     client = _client(monkeypatch, tm)
     a = client.post("/api/proxy-hosts", json=_body(service, hostname="a.example.com")).json()
     b = client.post("/api/proxy-hosts", json=_body(service, hostname="b.example.com")).json()
+    push(client)
     tm.fail_toggle.add(b["extra"][ROUTE_REF_KEY])
 
     r = client.post("/api/bulk/proxy-hosts", json={"ids": [a["id"], b["id"]], "action": "disable"})
     assert r.status_code == 200, r.text
-    results = r.json()["results"]
-    assert [x["ok"] for x in results] == [True, False]
-    assert "could not disable the route on Traefik Manager" in results[1]["message"]
+    assert [x["ok"] for x in r.json()["results"]] == [True, True]
+    assert tm.toggles == []  # bulk actions only touch the DB
     with Session(get_engine()) as s:
         assert s.get(ProxyHost, a["id"]).enabled is False  # type: ignore[union-attr]
-        assert s.get(ProxyHost, b["id"]).enabled is True  # type: ignore[union-attr]
-    assert len(_audit("proxy_host.disabled")) == 1
-    (summary,) = _audit("bulk.proxy_hosts")
-    assert summary.details["failed"][0]["id"] == b["id"]
+        assert s.get(ProxyHost, b["id"]).enabled is False  # type: ignore[union-attr]
+    assert len(_audit("proxy_host.disabled")) == 2
+
+    result = push(client)
+    assert actions(result) == [("a.example.com", "disable")]  # one host failing did not stop a
+    (fail,) = failures(result)
+    assert fail["hostname"] == "b.example.com" and "could not disable" in fail["message"]
 
 
 def test_bulk_proxy_host_wake_on_hit_and_delete(client: TestClient, service: Service) -> None:
@@ -448,7 +453,7 @@ def test_cli_bulk_proxy_hosts_disable(registry: Path) -> None:
         s.commit()
     result = CliRunner().invoke(cli, ["bulk", "proxy-hosts", "disable", "--service", "media"])
     assert result.exit_code == 0, result.output
-    assert "DRY_RUN is on" in result.output and "1 ok, 0 failed" in result.output
+    assert "1 ok, 0 failed" in result.output
     with Session(get_engine()) as s:
         (ph,) = s.exec(select(ProxyHost)).all()
         assert ph.enabled is False and ph.router_provider is RouterProvider.NPM

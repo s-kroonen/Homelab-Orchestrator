@@ -1,25 +1,26 @@
 """Proxy-host CRUD — the DB-backed web equivalent of ``orchestrator-cli proxy``.
 
-A ``ProxyHost`` whose ``router_provider`` is ``traefik`` is now
-**live-managed**: creating/editing/deleting it here creates/edits/deletes
-the actual route on Traefik Manager too (``POST``/``PUT``/``DELETE`` below
-write-through to ``adapters.proxy.create_route``/``update_route``/
-``delete_route``, raising a clear error rather than silently leaving the DB
-and the gateway disagreeing). A ``ProxyHost`` whose ``router_provider`` is
-``pangolin``/``npm``/``other`` is still a plain reference record — no
-adapter exists for those backends yet, so those rows are DB-only, same as
-every ``ProxyHost`` used to be. See ``docs/proxy_hosts.md``'s "Live-managed
-proxy hosts" section for the full write-through/rollback/backfill
-behaviour. The ``live_status`` field computed into every response (see
-``orchestrator.registry.traefik_status``) and ``POST /resync`` below
-remain read-only/bulk-discovery, as before — see that doc for how Resync's
-role changes now that write-through exists.
+The database is the WORKING COPY. ``POST``/``PUT``/``DELETE`` here, the enable
+switch and the bulk actions change the DB and nothing else: a ``ProxyHost``
+whose ``router_provider`` is ``traefik`` and that has an upstream is
+**live-managed**, and its route on Traefik Manager is written only by a push
+(``orchestrator.registry.proxy_push``) - on "Save to YAML"
+(``POST /api/registry/save``) or "Push now" (``POST /api/push``). Every
+read-only check still happens at edit time (hostname, upstream, entry points,
+resolver, route options, conflicts with routes that are not ours, the
+redirect middleware), so a push rarely fails on something the form could have
+said. Each host in the list carries a ``sync_state`` (``in_sync`` /
+``pending_create`` / ``pending_update`` / ``detached`` / ``external`` /
+``local``) with human ``sync_changes``. A host with provider
+``pangolin``/``npm``/``other`` is a plain reference record: no adapter exists
+for those backends yet. See ``docs/proxy_hosts.md`` "Pushing to Traefik
+Manager". The ``live_status`` field (see ``orchestrator.registry.
+traefik_status``) and ``POST /resync`` remain read-only/bulk-discovery.
 
-``proxy_host`` is YAML-owned (``docs/architecture.md``), but this router only
-touches the DB, the same way every other dashboard edit does: the existing
-``POST /api/registry/save`` / ``/api/registry/reset`` endpoints round-trip
-the live DB to ``services.yaml``. The YAML schema nests proxy hosts under
-their service, so ``service_id`` is required here too — matching
+``proxy_host`` is YAML-owned (``docs/architecture.md``), and the existing
+``POST /api/registry/save`` / ``/api/registry/reset`` endpoints round-trip the
+live DB to ``services.yaml``. The YAML schema nests proxy hosts under their
+service, so ``service_id`` is required here too — matching
 ``orchestrator-cli proxy add <slug>``, which always takes one. Without this,
 a proxy host with no service would silently never reach the saved YAML.
 """
@@ -36,27 +37,32 @@ from pydantic import BaseModel, Field, field_validator
 from sqlmodel import Session, select
 
 from orchestrator.adapters.factory import AdapterBundle
-from orchestrator.adapters.proxy.base import (
-    ProxyRouteNotFound,
-    RouteInfo,
-    RouteOptions,
-    SyncEvent,
-)
+from orchestrator.adapters.proxy.base import RouteInfo, RouteOptions, find_route
 from orchestrator.adapters.proxy.traefik_manager import is_plain_http_entrypoint
 from orchestrator.adapters.proxy.verify import (
-    ERROR,
-    NOT_LOADED,
     UNVERIFIED,
     RouteVerification,
     bare_router_name,
     match_runtime_router,
     router_state,
-    verify_route,
 )
 from orchestrator.audit import log as audit
 from orchestrator.db.models import ProxyHost, Service
 from orchestrator.domain.enums import RouterProvider
 from orchestrator.logging_setup import get_logger
+from orchestrator.registry.proxy_push import (
+    TRAEFIK_MANAGER_ROUTE_REF_KEY,
+    HostSync,
+    add_pending_delete,
+    conflict_message,
+    desired_signature,
+    evaluate,
+    is_live_managed,
+    pending_deletes,
+    ref_of,
+    slug_of,
+    take_pending_delete,
+)
 from orchestrator.registry.proxy_validation import (
     normalize_hostname,
     parse_entry_points,
@@ -73,16 +79,6 @@ from orchestrator.web.deps import AdaptersDep, SessionDep, SettingsDep
 from orchestrator.web.proxy_catalog import ProxyCatalog, get_catalog
 
 log = get_logger(__name__)
-
-#: The ``ProxyHost.extra`` key a live-managed route's opaque backend
-#: reference is stored under (today, the route name
-#: ``ProxyAdapter.create_route`` returned from Traefik Manager — see
-#: ``orchestrator.adapters.proxy.traefik_manager.route_name_for_hostname``).
-#: A later update/delete reads this back rather than re-deriving a route
-#: from the hostname, since a hostname rename does NOT rename the
-#: underlying route. See ``docs/proxy_hosts.md``'s "Live-managed proxy
-#: hosts" section.
-TRAEFIK_MANAGER_ROUTE_REF_KEY = "traefik_manager_route_id"
 
 #: ``live_status`` / ``traefik.state`` of a host that is switched off on
 #: purpose (``ProxyHost.enabled`` False): never "missing" / "not loaded".
@@ -161,56 +157,6 @@ async def _router_details_or_503(settings: Any, adapters: AdapterBundle) -> list
             "docs/proxy_hosts.md#resync-manual-admin-triggered-write.",
         )
     return routers
-
-
-async def _sync_maintenance_fallback(
-    adapters: AdapterBundle,
-    *,
-    hostname: str | None,
-    service_slug: str | None,
-    old_hostname: str | None = None,
-    old_service_slug: str | None = None,
-) -> list[SyncEvent]:
-    """Lifecycle orchestration around ``ProxyAdapter.ensure/remove_
-    maintenance_fallback`` — create/rename/re-link/unlink/delete, exactly
-    the same shape ``orchestrator.registry.traefik_manager_sync.
-    sync_maintenance_middleware`` used to implement itself (see its
-    docstring, preserved here since the adapter's two methods are
-    deliberately simpler single-purpose verbs and don't know about "old"
-    values themselves).
-
-    Call with the ``ProxyHost``'s CURRENT ``(hostname, service_slug)`` and,
-    when either changed, the PREVIOUS values. No-op, returns ``[]``, when
-    there is nothing to do (everything — new and old — is unset).
-    """
-    if old_service_slug is None and old_hostname is None:
-        old_service_slug, old_hostname = service_slug, hostname
-    if service_slug is None and old_service_slug is None:
-        return []
-
-    events: list[SyncEvent] = []
-    moved_or_cleared = old_service_slug is not None and old_service_slug != service_slug
-    renamed_in_place = (
-        not moved_or_cleared
-        and old_hostname is not None
-        and hostname is not None
-        and old_hostname != hostname
-    )
-    if (moved_or_cleared or renamed_in_place) and old_service_slug and old_hostname:
-        events.extend(
-            await adapters.proxy.remove_maintenance_fallback(
-                hostname=old_hostname, service_slug=old_service_slug
-            )
-        )
-
-    if service_slug is None or not hostname:
-        return events
-    events.extend(
-        await adapters.proxy.ensure_maintenance_fallback(
-            hostname=hostname, service_slug=service_slug
-        )
-    )
-    return events
 
 
 router = APIRouter(
@@ -343,9 +289,22 @@ def _serialize(
     services: dict[int, Service],
     live_hostnames: set[str] | None,
     live: LiveState | None = None,
+    sync: HostSync | None = None,
 ) -> dict[str, Any]:
     svc = services.get(ph.service_id)
+    traefik = _traefik_block(ph, live)
+    if traefik is not None and sync is not None and "disable" in sync.actions:
+        # Switched off here, but the push that parks the route has not run yet.
+        traefik["message"] = (
+            "Disabled here - Traefik Manager still serves the route until you push."
+        )
     return {
+        # Where this host stands against Traefik Manager (registry/proxy_push.py):
+        # in_sync / pending_create / pending_update / detached / external / local,
+        # with human strings saying what differs.
+        "sync_state": sync.state if sync is not None else None,
+        "sync_changes": list(sync.changes) if sync is not None else [],
+        "sync_pending": bool(sync is not None and sync.pending),
         "id": ph.id,
         "hostname": ph.hostname,
         "upstream": ph.upstream,
@@ -379,12 +338,43 @@ def _serialize(
         ),
         # Traefik's verdict on the router itself (state ok / error / not_loaded
         # / unverified, with Traefik's own error text when it is broken).
-        "traefik": _traefik_block(ph, live),
+        "traefik": traefik,
     }
 
 
 def _services_by_id(session: Session) -> dict[int, Service]:
     return {s.id: s for s in session.exec(select(Service)).all() if s.id is not None}
+
+
+async def _sync_routes(
+    settings: Any, adapters: AdapterBundle, live: LiveState
+) -> list[RouteInfo] | None:
+    """Traefik Manager's routes for sync classification: the read the page
+    already made when a URL is configured, else the adapter's own (the dry-run
+    adapter lists what it recorded; an unconfigured real one answers ``None``
+    without touching the network)."""
+    if settings.traefik_manager_url.strip():
+        return live.routes
+    return await adapters.proxy.list_routes()
+
+
+def _sync_for(
+    adapters: AdapterBundle,
+    ph: ProxyHost,
+    routes: list[RouteInfo] | None,
+    services: dict[int, Service],
+) -> HostSync:
+    svc = services.get(ph.service_id) if ph.service_id else None
+    return evaluate(adapters.proxy, ph, routes, svc.slug if svc else None)
+
+
+async def _serialize_one(
+    session: Session, settings: Any, adapters: AdapterBundle, ph: ProxyHost
+) -> dict[str, Any]:
+    services = _services_by_id(session)
+    live = await _live_state(settings, adapters)
+    routes = await _sync_routes(settings, adapters, live)
+    return _serialize(ph, services, live.hostnames, live, _sync_for(adapters, ph, routes, services))
 
 
 def _audit_probe_sync_events(
@@ -422,137 +412,8 @@ def _audit_probe_sync_events(
         )
 
 
-def _audit_maintenance_sync_events(
-    session: Session, admin: CurrentAdmin, events: list[SyncEvent]
-) -> None:
-    """Audit each maintenance-middleware create/update/injection/removal.
-
-    Same ``orchestrator.audit.log.record`` mechanism as every other mutation
-    in this file. Action names are ``middleware.<action>`` /
-    ``backend_service.<action>`` — see
-    ``orchestrator.adapters.proxy.base.SyncEvent``.
-    """
-    for event in events:
-        audit.record(
-            session,
-            actor=admin.username,
-            action=event.action,
-            target=f"traefik_manager:{event.name}",
-            details=event.details,
-        )
-
-
-async def _write_through_create(
-    adapters: AdapterBundle,
-    *,
-    hostname: str,
-    upstream: str,
-    entry_points: Sequence[str],
-    cert_resolver: str,
-    options: RouteOptions | None = None,
-) -> str:
-    """Create the real route on Traefik Manager for a new, live-managed
-    (``router_provider == traefik``) ``ProxyHost``. Raises a ``502`` — the
-    caller must not commit the local row when this raises (see
-    ``docs/proxy_hosts.md``'s "Live-managed proxy hosts" section)."""
-    try:
-        return await adapters.proxy.create_route(
-            hostname=hostname,
-            upstream=upstream,
-            entry_points=entry_points,
-            cert_resolver=cert_resolver,
-            options=options,
-        )
-    except HTTPException:  # pragma: no cover - defensive, adapters don't raise this
-        raise
-    except Exception as exc:
-        log.warning("proxy_host.live_route_create_failed", hostname=hostname, error=str(exc))
-        raise HTTPException(
-            status.HTTP_502_BAD_GATEWAY,
-            f"could not create the route on Traefik Manager: {exc}",
-        ) from exc
-
-
-async def _write_through_update(
-    adapters: AdapterBundle,
-    ph: ProxyHost,
-    *,
-    hostname: str,
-    upstream: str,
-    entry_points: Sequence[str],
-    cert_resolver: str,
-    options: RouteOptions | None = None,
-) -> tuple[str, bool]:
-    """Live-managed update write-through for ``PUT``. Returns ``(route_ref,
-    created)``.
-
-    If ``ph.extra`` has no stored route reference yet — a host that
-    predates this feature, or one whose ``router_provider`` is only just
-    now switching to ``traefik`` — a route is CREATED instead of erroring.
-    The same backfill-by-creating happens if the stored reference no
-    longer resolves on the backend (:class:`ProxyRouteNotFound` — e.g. the
-    route was deleted by hand on Traefik Manager since). See
-    ``docs/proxy_hosts.md``'s "Live-managed proxy hosts" section.
-    """
-    existing_ref = (ph.extra or {}).get(TRAEFIK_MANAGER_ROUTE_REF_KEY)
-    if existing_ref:
-        try:
-            await adapters.proxy.update_route(
-                existing_ref,
-                hostname=hostname,
-                upstream=upstream,
-                entry_points=entry_points,
-                cert_resolver=cert_resolver,
-                options=options,
-                previous_options=RouteOptions.from_dict(ph.route_options),
-            )
-            return str(existing_ref), False
-        except ProxyRouteNotFound:
-            log.info(
-                "proxy_host.live_route_missing_backfilling",
-                route_ref=existing_ref,
-                hostname=hostname,
-            )
-        except Exception as exc:
-            log.warning("proxy_host.live_route_update_failed", hostname=hostname, error=str(exc))
-            raise HTTPException(
-                status.HTTP_502_BAD_GATEWAY,
-                f"could not update the route on Traefik Manager: {exc}",
-            ) from exc
-    ref = await _write_through_create(
-        adapters,
-        hostname=hostname,
-        upstream=upstream,
-        entry_points=entry_points,
-        cert_resolver=cert_resolver,
-        options=options,
-    )
-    return ref, True
-
-
-async def _write_through_delete(
-    adapters: AdapterBundle, route_ref: str, *, with_redirect: bool = False
-) -> None:
-    """Delete the real route for a live-managed ``ProxyHost`` being deleted.
-
-    A :class:`ProxyRouteNotFound` (the route is already gone on the
-    backend) is logged and swallowed — the operator's intent ("this host
-    should no longer exist") is still satisfiable from the local side.
-    Every other failure raises a ``502`` and blocks the local delete."""
-    try:
-        await adapters.proxy.delete_route(route_ref, with_redirect=with_redirect)
-    except ProxyRouteNotFound:
-        log.info("proxy_host.live_route_already_gone", route_ref=route_ref)
-    except Exception as exc:
-        log.warning("proxy_host.live_route_delete_failed", route_ref=route_ref, error=str(exc))
-        raise HTTPException(
-            status.HTTP_502_BAD_GATEWAY,
-            f"could not delete the route on Traefik Manager: {exc}",
-        ) from exc
-
-
 def _is_live_managed(body: ProxyHostIn) -> bool:
-    """A ``ProxyHost`` write-through to the real backend applies only when
+    """A ``ProxyHost`` is pushed to the real backend only when
     ALL hold: ``router_provider`` is ``traefik`` (the only backend with an
     adapter today), an ``upstream`` is actually given — a route cannot
     be created on Traefik Manager with no backend target — and the request is
@@ -601,30 +462,6 @@ def _find_route(routes: list[RouteInfo] | None, ref: str | None, hostname: str) 
     if not routes:
         return None
     return match_runtime_router(routes, route_ref=ref, hostname=hostname)
-
-
-async def _conflict_message(
-    adapters: AdapterBundle, hostname: str, route_name: str, own_ref: str | None
-) -> str | None:
-    """Refuse to write over a router that is not ours: Traefik Manager (or any
-    other provider Traefik runs) already serves this hostname, or already has a
-    route with the name we would create."""
-    from orchestrator.adapters.proxy.traefik_manager import route_name_for_hostname
-
-    candidates: list[RouteInfo] = []
-    for routes in (await adapters.proxy.list_routes(), await adapters.proxy.list_runtime_routers()):
-        candidates.extend(routes or [])
-    for info in candidates:
-        bare = bare_router_name(info.name)
-        if own_ref and bare == own_ref:
-            continue
-        if hostname in info.hostnames or bare == route_name_for_hostname(hostname):
-            return (
-                f'Traefik already has a router "{info.name}" for {hostname}. Refusing to '
-                "overwrite a route this orchestrator did not create - use “Resync from "
-                "Traefik” to adopt it, or remove/rename it in Traefik Manager first."
-            )
-    return None
 
 
 async def _prepare(
@@ -747,7 +584,14 @@ async def _prepare(
         renamed = existing is not None and existing.hostname != hostname
         creating = existing is None or not own_ref
         if creating or renamed:
-            msg = await _conflict_message(
+            if not own_ref:
+                # Re-creating a host deleted here but not yet removed from
+                # Traefik Manager reuses that route (it is not a conflict).
+                tomb = next(
+                    (t for t in pending_deletes(session) if t.get("hostname") == hostname), None
+                )
+                own_ref = tomb["route_ref"] if tomb else None
+            msg = await conflict_message(
                 adapters, hostname, route_name_for_hostname(hostname), own_ref
             )
             if msg:
@@ -770,74 +614,6 @@ async def _prepare(
     )
 
 
-def _verification_error(verification: RouteVerification) -> dict[str, str]:
-    field = "entry_points" if "entrypoint" in verification.message.lower() else "_"
-    return {field: verification.message}
-
-
-async def _verify_written(
-    adapters: AdapterBundle,
-    *,
-    route_ref: str,
-    hostname: str,
-    entry_points: Sequence[str],
-) -> RouteVerification:
-    return await verify_route(
-        adapters.proxy,
-        route_ref=route_ref,
-        hostname=hostname,
-        expect_entry_points=entry_points,
-    )
-
-
-def _verification_warning(verification: RouteVerification) -> str | None:
-    if verification.state == UNVERIFIED:
-        return (
-            "Saved, but could not be verified: Traefik's runtime routers could not be read, "
-            "so it is unknown whether Traefik accepted the route."
-        )
-    if verification.state == NOT_LOADED:
-        return (
-            "Saved, but could not be verified: Traefik has not loaded the router yet. Check "
-            "the Traefik status column in a moment (and that Traefik watches the file "
-            "provider directory Traefik Manager writes to)."
-        )
-    return None
-
-
-async def _rollback_created_route(
-    adapters: AdapterBundle, route_ref: str, hostname: str, *, with_redirect: bool = False
-) -> None:
-    """Best effort: remove the route we just created so a rejected create
-    leaves nothing broken behind on Traefik Manager."""
-    try:
-        await adapters.proxy.delete_route(route_ref, with_redirect=with_redirect)
-    except ProxyRouteNotFound:
-        pass
-    except Exception as exc:
-        log.warning(
-            "proxy_host.rollback_delete_failed",
-            route_ref=route_ref,
-            hostname=hostname,
-            error=str(exc),
-        )
-
-
-def _rejected_by_traefik(verification: RouteVerification, *, rolled_back: bool) -> HTTPException:
-    detail = (
-        "Traefik rejected the new route and it was removed again: "
-        if rolled_back
-        else "Traefik reports the router as broken: "
-    )
-    return _fail(
-        422,
-        detail + verification.message,
-        _verification_error(verification),
-        traefik_error=verification.message,
-        rolled_back=rolled_back,
-    )
-
-
 @router.get("")
 async def list_proxy_hosts(
     session: SessionDep, settings: SettingsDep, adapters: AdaptersDep
@@ -846,17 +622,18 @@ async def list_proxy_hosts(
     hosts = session.exec(select(ProxyHost).order_by(ProxyHost.hostname)).all()
     # One poll for the whole page load, not one per row.
     live = await _live_state(settings, adapters)
-    return [_serialize(ph, services, live.hostnames, live) for ph in hosts]
+    routes = await _sync_routes(settings, adapters, live)
+    return [
+        _serialize(ph, services, live.hostnames, live, _sync_for(adapters, ph, routes, services))
+        for ph in hosts
+    ]
 
 
 @router.get("/{proxy_host_id}")
 async def get_proxy_host(
     proxy_host_id: int, session: SessionDep, settings: SettingsDep, adapters: AdaptersDep
 ) -> dict[str, Any]:
-    live = await _live_state(settings, adapters)
-    return _serialize(
-        _get_or_404(session, proxy_host_id), _services_by_id(session), live.hostnames, live
-    )
+    return await _serialize_one(session, settings, adapters, _get_or_404(session, proxy_host_id))
 
 
 @router.post("", status_code=status.HTTP_201_CREATED)
@@ -867,9 +644,14 @@ async def create_proxy_host(
     settings: SettingsDep,
     adapters: AdaptersDep,
 ) -> dict[str, Any]:
+    """Record a proxy host in the DB. Nothing is written to Traefik Manager
+    here: a live-managed host becomes ``pending_create`` and is pushed on
+    "Save to YAML" / "Push now" (``registry/proxy_push.py``). Everything that
+    can be checked read-only IS checked now - hostname, upstream, entry
+    points, resolver, route options, conflicts with routes that are not ours -
+    so a push does not fail on something the form could have said."""
     svc = _validate_service(session, body)
     prep = await _prepare(session, settings, adapters, body, existing=None)
-    warnings: list[str] = []
     ph = ProxyHost(
         hostname=prep.hostname,
         upstream=body.upstream,
@@ -883,47 +665,15 @@ async def create_proxy_host(
     )
     if prep.adopt_ref:
         ph.extra = {**ph.extra, TRAEFIK_MANAGER_ROUTE_REF_KEY: prep.adopt_ref}
+    elif prep.live_managed:
+        # Re-creating a host that was deleted here but not yet removed from
+        # Traefik Manager takes that route over; otherwise the reference the
+        # push will create is known (and saved to YAML) up front.
+        taken = take_pending_delete(session, prep.hostname)
+        ref = taken["route_ref"] if taken else adapters.proxy.route_ref_for(prep.hostname)
+        ph.extra = {**ph.extra, TRAEFIK_MANAGER_ROUTE_REF_KEY: ref}
     session.add(ph)
     session.flush()
-
-    # Write-through: a live-managed (traefik) ProxyHost's create actually
-    # creates the route on Traefik Manager. On failure, this request's
-    # session is never committed (see web/deps.py's get_session — closing
-    # an uncommitted session rolls it back), so no orphaned local-only row
-    # is left behind pointing at nothing real. See docs/proxy_hosts.md.
-    verification: RouteVerification | None = None
-    if prep.live_managed:
-        route_ref = await _write_through_create(
-            adapters,
-            hostname=ph.hostname,
-            upstream=ph.upstream,
-            entry_points=prep.entry_points,
-            cert_resolver=prep.cert_resolver,
-            options=RouteOptions.from_dict(prep.route_options),
-        )
-        # Did Traefik actually accept it? Traefik Manager happily writes a
-        # router Traefik then refuses (unknown entry point, ...).
-        verification = await _verify_written(
-            adapters, route_ref=route_ref, hostname=ph.hostname, entry_points=prep.entry_points
-        )
-        if verification.state == ERROR:
-            await _rollback_created_route(
-                adapters,
-                route_ref,
-                ph.hostname,
-                with_redirect=RouteOptions.from_dict(prep.route_options).http_redirect,
-            )
-            log.warning(
-                "proxy_host.create_rejected_by_traefik",
-                hostname=ph.hostname,
-                error=verification.message,
-            )
-            raise _rejected_by_traefik(verification, rolled_back=True)
-        warning = _verification_warning(verification)
-        if warning:
-            warnings.append(warning)
-        ph.extra = {**ph.extra, TRAEFIK_MANAGER_ROUTE_REF_KEY: route_ref}
-        session.add(ph)
 
     audit.record(
         session,
@@ -946,14 +696,8 @@ async def create_proxy_host(
     _audit_probe_sync_events(session, admin, probe_events)
     session.commit()
     session.refresh(ph)
-    maintenance_events = await _sync_maintenance_fallback(
-        adapters, hostname=ph.hostname, service_slug=svc.slug
-    )
-    _audit_maintenance_sync_events(session, admin, maintenance_events)
-    session.commit()
-    live = await _live_state(settings, adapters)
-    out = _serialize(ph, _services_by_id(session), live.hostnames, live)
-    out["warnings"] = warnings
+    out = await _serialize_one(session, settings, adapters, ph)
+    out["warnings"] = []
     return out
 
 
@@ -998,6 +742,7 @@ async def resync_proxy_hosts(
     existing_hostnames = {ph.hostname for ph in hosts}
 
     now = datetime.now(UTC)
+    services_map = _services_by_id(session)
     updated: list[dict[str, Any]] = []
     probe_events: list[ProbeSyncEvent] = []
     for ph in hosts:
@@ -1012,6 +757,11 @@ async def resync_proxy_hosts(
         match = hostname_to_router.get(ph.hostname)
         if match is None:
             continue
+        svc_slug = slug_of(ph, services_map)
+        # Adopting Traefik Manager's state means "in sync" for a host whose
+        # last push still matched: re-stamp it, or the adopted values would
+        # read as local edits.
+        was_current = bool(ph.pushed_sig) and ph.pushed_sig == desired_signature(ph, svc_slug)
         upstream_changed = bool(match.upstream) and match.upstream != ph.upstream
         if upstream_changed:
             ph.upstream = match.upstream  # type: ignore[assignment]
@@ -1025,6 +775,8 @@ async def resync_proxy_hosts(
                 ph.enabled = state == "enabled"
                 enabled_changed = True
         ph.last_seen_at = now
+        if was_current and (upstream_changed or enabled_changed):
+            ph.pushed_sig = desired_signature(ph, svc_slug)
         session.add(ph)
         updated.append(
             {
@@ -1088,21 +840,12 @@ async def update_proxy_host(
     settings: SettingsDep,
     adapters: AdaptersDep,
 ) -> dict[str, Any]:
+    """Edit a proxy host in the DB only; the change is pushed to Traefik
+    Manager on "Save to YAML" / "Push now" (a disabled host included - the
+    push orders enable -> update -> disable so a parked route is safe)."""
     ph = _get_or_404(session, proxy_host_id)
-    # A disabled host may still be edited when it is a local-only record and
-    # stays one; anything that would write a route to Traefik Manager waits
-    # until it is enabled again (docs/proxy_hosts.md "Editing a disabled host").
-    if not ph.enabled and (_live_route_ref(ph) or _is_live_managed(body)):
-        raise _fail(
-            status.HTTP_409_CONFLICT,
-            f"{ph.hostname} is disabled. Enable it first, then edit it: a disabled route is "
-            "parked on Traefik Manager, where an edit cannot be verified against Traefik and "
-            "could bring the route (or its HTTP -> HTTPS redirect) back to life unasked.",
-            {"_": "Enable the host before editing it."},
-        )
     svc = _validate_service(session, body)
     prep = await _prepare(session, settings, adapters, body, existing=ph)
-    old_svc = session.get(Service, ph.service_id) if ph.service_id else None
 
     before = {
         "hostname": ph.hostname,
@@ -1116,49 +859,20 @@ async def update_proxy_host(
         "route_options": dict(ph.route_options or {}),
     }
 
-    # Write-through: a live-managed (traefik) ProxyHost's update actually
-    # updates the route on Traefik Manager BEFORE any local field changes,
-    # so a failure here leaves both the DB row and the gateway exactly as
-    # they were (request never commits) instead of disagreeing. Non-traefik
-    # providers skip this entirely — reference-record-only, as before. See
-    # docs/proxy_hosts.md's "Live-managed proxy hosts" section.
     new_extra = dict(body.extra)
-    warnings: list[str] = []
-    broken: RouteVerification | None = None
+    old_ref = ref_of(ph)
     if prep.live_managed:
-        route_ref, created = await _write_through_update(
-            adapters,
-            ph,
-            hostname=prep.hostname,
-            upstream=body.upstream,
-            entry_points=prep.entry_points,
-            cert_resolver=prep.cert_resolver,
-            options=RouteOptions.from_dict(prep.route_options),
+        # The stored reference stays (a rename does not rename the route); a
+        # host that has none yet gets the one the push will create.
+        new_extra[TRAEFIK_MANAGER_ROUTE_REF_KEY] = old_ref or adapters.proxy.route_ref_for(
+            prep.hostname
         )
-        new_extra[TRAEFIK_MANAGER_ROUTE_REF_KEY] = route_ref
-        verification = await _verify_written(
-            adapters, route_ref=route_ref, hostname=prep.hostname, entry_points=prep.entry_points
-        )
-        if verification.state == ERROR:
-            if created:
-                # We just made this route (no previous one to keep): take it back.
-                await _rollback_created_route(
-                    adapters,
-                    route_ref,
-                    prep.hostname,
-                    with_redirect=RouteOptions.from_dict(prep.route_options).http_redirect,
-                )
-                raise _rejected_by_traefik(verification, rolled_back=True)
-            # An edit: the new configuration IS on Traefik Manager now and we
-            # cannot safely guess the previous one, so keep it, record it, and
-            # report Traefik's verdict (raised after the commit below).
-            broken = verification
-        else:
-            warning = _verification_warning(verification)
-            if warning:
-                warnings.append(warning)
     elif body.adopt and prep.adopt_ref:
         new_extra[TRAEFIK_MANAGER_ROUTE_REF_KEY] = prep.adopt_ref
+    elif old_ref and is_live_managed(ph) and adapters.proxy.owns_route_ref(old_ref):
+        # No longer live-managed (provider changed / upstream cleared): the
+        # route this orchestrator made for it goes away on the next push.
+        await _tombstone(session, adapters, ph)
 
     ph.hostname = prep.hostname
     ph.upstream = body.upstream
@@ -1203,23 +917,8 @@ async def update_proxy_host(
     _audit_probe_sync_events(session, admin, probe_events)
     session.commit()
     session.refresh(ph)
-    maintenance_events = await _sync_maintenance_fallback(
-        adapters,
-        hostname=ph.hostname,
-        service_slug=svc.slug,
-        old_hostname=before["hostname"],
-        old_service_slug=old_svc.slug if old_svc else None,
-    )
-    _audit_maintenance_sync_events(session, admin, maintenance_events)
-    session.commit()
-    if broken is not None:
-        log.warning(
-            "proxy_host.update_rejected_by_traefik", hostname=ph.hostname, error=broken.message
-        )
-        raise _rejected_by_traefik(broken, rolled_back=False)
-    live = await _live_state(settings, adapters)
-    out = _serialize(ph, _services_by_id(session), live.hostnames, live)
-    out["warnings"] = warnings
+    out = await _serialize_one(session, settings, adapters, ph)
+    out["warnings"] = []
     return out
 
 
@@ -1236,6 +935,29 @@ async def delete_proxy_host(
     )
 
 
+async def _tombstone(session: Session, adapters: AdapterBundle, ph: ProxyHost) -> bool:
+    """Remember that ``ph``'s Traefik Manager route has to be deleted on the
+    next push. Only a route this orchestrator created is ever deleted (an
+    adopted one is left alone), and only if Traefik Manager really has it -
+    a host that was never pushed leaves nothing behind. The read is the only
+    contact with Traefik Manager."""
+    ref = ref_of(ph)
+    if not ref or not adapters.proxy.owns_route_ref(ref):
+        return False
+    routes = await adapters.proxy.list_routes()
+    if routes is not None and find_route(routes, ref, ph.hostname) is None:
+        return False
+    svc = session.get(Service, ph.service_id) if ph.service_id else None
+    add_pending_delete(
+        session,
+        hostname=ph.hostname,
+        route_ref=ref,
+        with_redirect=RouteOptions.from_dict(ph.route_options).http_redirect,
+        service_slug=svc.slug if svc else "",
+    )
+    return True
+
+
 async def delete_proxy_host_record(
     session: Session,
     admin: CurrentAdmin,
@@ -1243,27 +965,20 @@ async def delete_proxy_host_record(
     adapters: AdapterBundle,
     ph: ProxyHost,
 ) -> dict[str, Any]:
-    """``DELETE /api/proxy-hosts/{id}``, callable (the bulk endpoint reuses it)."""
+    """``DELETE /api/proxy-hosts/{id}``, callable (the bulk endpoint reuses it).
+    DB only: a live-managed host's route is recorded as a pending deletion and
+    removed from Traefik Manager on the next push."""
     proxy_host_id = ph.id
     hostname = ph.hostname
-    old_svc = session.get(Service, ph.service_id) if ph.service_id else None
     details = {
         "id": ph.id,
         "upstream": ph.upstream,
         "router_provider": ph.router_provider.value,
         "service_id": ph.service_id,
     }
-
-    # Write-through: delete the real route first. A ProxyRouteNotFound is
-    # tolerated (see _write_through_delete) — every other failure raises
-    # and the local row is never touched. See docs/proxy_hosts.md.
-    route_ref = (ph.extra or {}).get(TRAEFIK_MANAGER_ROUTE_REF_KEY)
-    if ph.router_provider is RouterProvider.TRAEFIK and route_ref:
-        await _write_through_delete(
-            adapters,
-            str(route_ref),
-            with_redirect=RouteOptions.from_dict(ph.route_options).http_redirect,
-        )
+    pending_delete = False
+    if is_live_managed(ph):
+        pending_delete = await _tombstone(session, adapters, ph)
 
     probe_events = sync_traefik_probe(
         session,
@@ -1280,60 +995,19 @@ async def delete_proxy_host_record(
         actor=admin.username,
         action="proxy_host.deleted",
         target=f"proxy_host:{hostname}",
-        details=details,
+        details={**details, "pending_route_delete": pending_delete},
     )
     session.commit()
-    maintenance_events = await _sync_maintenance_fallback(
-        adapters,
-        hostname=None,
-        service_slug=None,
-        old_hostname=hostname,
-        old_service_slug=old_svc.slug if old_svc else None,
-    )
-    _audit_maintenance_sync_events(session, admin, maintenance_events)
-    session.commit()
-    return {"status": "deleted", "id": proxy_host_id, "hostname": hostname}
+    return {
+        "status": "deleted",
+        "id": proxy_host_id,
+        "hostname": hostname,
+        "pending_route_delete": pending_delete,
+    }
 
 
 class EnabledIn(BaseModel):
     enabled: bool
-
-
-def _live_route_ref(ph: ProxyHost) -> str | None:
-    """The Traefik Manager route this host controls, or ``None`` when it is a
-    local-only record (another provider, or no route was ever written)."""
-    if ph.router_provider is not RouterProvider.TRAEFIK:
-        return None
-    ref = (ph.extra or {}).get(TRAEFIK_MANAGER_ROUTE_REF_KEY)
-    return str(ref) if ref else None
-
-
-async def _toggle_targets(
-    adapters: AdapterBundle, ph: ProxyHost, ref: str | None, with_redirect: bool
-) -> list[tuple[str, bool]]:
-    """Every Traefik Manager route to switch for this host: the one we created
-    (plus its redirect companion) AND any other TM route serving the hostname -
-    a host adopted by Resync has no stored reference, and a hand-written setup
-    has a separate redirect router. ``[]`` = nothing to toggle (a local-only
-    record). The reads are best-effort: unreadable TM just means fewer targets."""
-    if ph.router_provider is not RouterProvider.TRAEFIK:
-        return []
-    from orchestrator.adapters.proxy.traefik_manager import redirect_route_id
-
-    targets: list[tuple[str, bool]] = []
-    known: set[str] = set()
-    if ref:
-        targets.append((ref, with_redirect))
-        known |= {ref, redirect_route_id(ref)}
-    try:
-        routes = await adapters.proxy.list_routes()
-    except Exception:  # pragma: no cover - adapters degrade themselves
-        routes = None
-    for route in tm_routes_for(routes, ph.hostname):
-        if route.name not in known:
-            targets.append((route.name, False))
-            known.add(route.name)
-    return targets
 
 
 async def set_proxy_host_enabled(
@@ -1344,35 +1018,10 @@ async def set_proxy_host_enabled(
     ph: ProxyHost,
     enabled: bool,
 ) -> dict[str, Any]:
-    """Switch a host on or off. A live-managed host is toggled on Traefik
-    Manager FIRST (with its HTTP -> HTTPS companion when that option is on);
-    any failure there is a ``502`` and the DB is left exactly as it was.
-    Then the flag is stored and audited (``proxy_host.enabled`` /
-    ``proxy_host.disabled``). Always sent to the backend, even when the flag
-    already has that value - the toggle is idempotent there and this
-    re-converges a route someone flipped by hand."""
-    ref = _live_route_ref(ph)
-    with_redirect = RouteOptions.from_dict(ph.route_options).http_redirect
-    targets = await _toggle_targets(adapters, ph, ref, with_redirect)
-    toggled: list[str] = []
-    if targets:
-        try:
-            for target_ref, target_redirect in targets:
-                await adapters.proxy.set_route_enabled(
-                    target_ref, enabled, with_redirect=target_redirect
-                )
-                toggled.append(target_ref)
-        except NotImplementedError as exc:
-            raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc)) from exc
-        except Exception as exc:
-            log.warning(
-                "proxy_host.toggle_failed", hostname=ph.hostname, enabled=enabled, error=str(exc)
-            )
-            verb = "enable" if enabled else "disable"
-            raise HTTPException(
-                status.HTTP_502_BAD_GATEWAY,
-                f"could not {verb} the route on Traefik Manager: {exc}",
-            ) from exc
+    """Switch a host on or off in the DB. Traefik Manager is not contacted:
+    the new state is pending until the next push (``proxy_host.enabled`` /
+    ``proxy_host.disabled`` are audited now; ``proxy_host.pushed`` when it is
+    applied)."""
     was = ph.enabled
     ph.enabled = enabled
     session.add(ph)
@@ -1381,19 +1030,11 @@ async def set_proxy_host_enabled(
         actor=admin.username,
         action="proxy_host.enabled" if enabled else "proxy_host.disabled",
         target=f"proxy_host:{ph.hostname}",
-        details={
-            "id": ph.id,
-            "live": bool(toggled),
-            "route_ref": ref,
-            "routes": toggled,
-            "with_redirect": bool(ref) and with_redirect,
-            "changed": was != enabled,
-        },
+        details={"id": ph.id, "changed": was != enabled},
     )
     session.commit()
     session.refresh(ph)
-    live = await _live_state(settings, adapters)
-    return _serialize(ph, _services_by_id(session), live.hostnames, live)
+    return await _serialize_one(session, settings, adapters, ph)
 
 
 async def set_proxy_host_wake_on_hit(

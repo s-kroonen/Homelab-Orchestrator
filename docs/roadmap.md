@@ -50,7 +50,9 @@ every other optional integration here. Once it's set:
   only). Resync's role shifts from "the only way to reach parity" to the
   bulk-discovery/drift-catch-up path. See
   [proxy_hosts.md](proxy_hosts.md#live-managed-proxy-hosts) for the full
-  write-through/rollback/backfill behaviour.
+  write-through/rollback/backfill behaviour. **Superseded:** edits no longer
+  write through; the same adapter calls now run from the push engine (Save to
+  YAML / Push now) — see the "Deferred push" item below.
 - ~~**Proxy hosts: explicit entry points + verified writes.**~~ **Done.** A
   first live-managed host showed up in Traefik Manager as broken
   (`entryPoint "https" doesn't exist`): `/save` was posted with an empty
@@ -289,6 +291,9 @@ but it should be made after hitting a concrete wall, not ahead of one.
 4. Re-evaluate a dedicated SPA/rewrite only if (3) proves insufficient for a
    concrete, named reason.
 
+- [x] Deferred push: proxy-host edits only change the DB; Traefik Manager is written on Save to YAML or Push now (`POST /api/push`, `orchestrator-cli proxy push`), with per-host sync states (pending / detached / external / in sync), pending deletions, and a `Pusher` protocol other outside services (backup, power, ...) can register with. Also fixes enable/disable never reaching a multi-file Traefik Manager (`file::name` ids, read-back after toggle). See docs/proxy_hosts.md#pushing-to-traefik-manager.
+- [ ] Deferred push for other adapters: a backup / power `Pusher` (edit policies and power targets locally, push on Save).
+- [ ] Proxy hosts: when Reset or a restart drops a host that was already pushed but never saved to the YAML, remove its route on the next push (today it is left behind and shows up under Discovered).
 - [x] Proxy host route options: Host header passthrough (fixes redirects to the raw LAN IP), https upstream scheme, wildcard / multi-name certificate domains, skip upstream TLS verify, companion HTTP -> HTTPS redirect router. See docs/proxy_hosts.md.
 - [x] Proxy hosts: enable / disable without deleting (Traefik Manager's route toggle, redirect companion included). See docs/proxy_hosts.md.
 - [x] Bulk actions: selection checkboxes + action bar on services, nodes, proxy hosts and guests; `POST /api/bulk/*`; `orchestrator-cli bulk`. See docs/bulk_actions.md.
