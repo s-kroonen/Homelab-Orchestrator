@@ -83,7 +83,7 @@ async def test_entrypoints_and_resolvers_are_a_fake_but_plausible_traefik() -> N
         ("websecure", ":443"),
         ("traefik", ":8080"),
     ]
-    assert await adapter.list_cert_resolvers() == ["letsencrypt"]
+    assert await adapter.list_cert_resolvers() == ["letsencrypt", "letsencrypt-dns"]
 
 
 async def test_written_routes_show_up_as_healthy_runtime_routers_until_deleted() -> None:

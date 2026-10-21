@@ -19,6 +19,7 @@ from typing import Any
 from urllib.parse import urlsplit
 
 from orchestrator.adapters.proxy.base import EntryPointInfo
+from orchestrator.registry.config_files import normalize_config_file
 
 #: Traefik's own API/dashboard entry point. Never a place to serve a router.
 INTERNAL_ENTRYPOINT = "traefik"
@@ -166,7 +167,8 @@ def validate_cert_resolver(resolver: str, known: Sequence[str] | None) -> str | 
         return f"Certificate resolver {resolver!r} is not a valid name."
     if known is not None and resolver not in known:
         return (
-            f'Certificate resolver "{resolver}" is not configured on Traefik Manager. '
+            f'Certificate resolver "{resolver}" is not known to Traefik (not in Traefik Manager\'s '
+            "settings, Traefik's static config or any router). "
             f"Known: {', '.join(known) or '(none)'}"
         )
     return None
@@ -245,6 +247,11 @@ def validate_route_options(
             errors["tls_main"] = errors.get("tls_main") or (
                 "Certificate domains only apply to a TLS entry point (websecure)."
             )
+    if opts.config_file:
+        try:
+            normalize_config_file(opts.config_file)
+        except ValueError as exc:
+            errors["config_file"] = str(exc)
     if opts.http_redirect and not secure:
         errors["http_redirect"] = (
             "There is nothing to redirect to: select an HTTPS entry point (websecure) as well."

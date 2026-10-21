@@ -67,6 +67,8 @@ class ProbeSyncEvent:
     service_id: int
     name: str
     config: dict[str, Any] | None = None
+    #: The probe's ``enabled`` flag after the sync (it follows its proxy host).
+    enabled: bool | None = None
 
 
 def probe_name_for_hostname(hostname: str) -> str:
@@ -125,7 +127,7 @@ def _remove(session: Session, service_id: int, hostname: str) -> ProbeSyncEvent 
 
 
 def _upsert(
-    session: Session, service_id: int, hostname: str, settings: Settings
+    session: Session, service_id: int, hostname: str, settings: Settings, enabled: bool
 ) -> ProbeSyncEvent | None:
     name = probe_name_for_hostname(hostname)
     config = _probe_config(settings, hostname)
@@ -139,23 +141,26 @@ def _upsert(
             timeout_s=PROBE_SPECS[ProbeKind.HTTP].default_timeout_s,
             order=_AUTO_PROBE_ORDER,
             config=config,
+            enabled=enabled,
         )
         session.add(probe)
         session.flush()
         assert probe.id is not None
-        return ProbeSyncEvent("created", probe.id, service_id, name, config)
+        return ProbeSyncEvent("created", probe.id, service_id, name, config, enabled)
 
-    # Only what this sync derives (the URL/Host header) is rewritten. ``required``
-    # and ``timeout_s`` are the operator's: a Resync or proxy-host edit must never
-    # undo "this route gates the service".
-    changed = probe.config != config or probe.kind is not ProbeKind.HTTP
+    # Only what this sync derives (the URL/Host header, and ``enabled`` - a
+    # disabled host is not served, so its probe must not run) is rewritten.
+    # ``required`` and ``timeout_s`` are the operator's: a Resync, a proxy-host
+    # edit or a disable -> enable must never undo "this route gates the service".
+    changed = probe.config != config or probe.kind is not ProbeKind.HTTP or probe.enabled != enabled
     if not changed:
         return None
     probe.config = config
     probe.kind = ProbeKind.HTTP
+    probe.enabled = enabled
     session.add(probe)
     session.flush()
-    return ProbeSyncEvent("updated", probe.id, service_id, name, config)
+    return ProbeSyncEvent("updated", probe.id, service_id, name, config, enabled)
 
 
 def sync_traefik_probe(
@@ -166,6 +171,7 @@ def sync_traefik_probe(
     service_id: int | None,
     old_hostname: str | None = None,
     old_service_id: int | None = None,
+    enabled: bool = True,
 ) -> list[ProbeSyncEvent]:
     """Create, update or remove the one auto-managed probe for a ``ProxyHost``.
 
@@ -188,6 +194,11 @@ def sync_traefik_probe(
       from the old service and (re)created on the new one.
     * **update, service_id cleared** (``None``) — the old probe is removed;
       nothing is created (no service to attach it to).
+    * **enabled** — ``enabled`` is the proxy host's own flag; the probe's
+      ``enabled`` is set to it on every run, so a disabled host's probe is not
+      run (and does not affect the verdict) while ``required`` / timeout are
+      kept for when the host is switched back on. This is a local change, not
+      a push to the proxy.
     * **delete** — pass ``hostname=None, service_id=None`` with the
       ``ProxyHost``'s last known values as ``old_*``: only the removal runs.
 
@@ -221,7 +232,7 @@ def sync_traefik_probe(
     if service_id is None or not hostname:
         return events
 
-    upserted = _upsert(session, service_id, hostname, settings)
+    upserted = _upsert(session, service_id, hostname, settings, enabled)
     if upserted is not None:
         events.append(upserted)
     return events

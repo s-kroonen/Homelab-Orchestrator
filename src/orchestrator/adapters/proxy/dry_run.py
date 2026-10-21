@@ -10,13 +10,16 @@ from collections.abc import Sequence
 
 from orchestrator.adapters.proxy.base import (
     AccessLogTail,
+    ConfigFiles,
     EntryPointInfo,
     ProxyAdapter,
+    ProxyRouteNotFound,
     RouteInfo,
     RouteOptions,
     SyncEvent,
 )
 from orchestrator.logging_setup import get_logger
+from orchestrator.registry.config_files import normalize_config_file, unknown_file_problem
 
 log = get_logger(__name__)
 
@@ -33,6 +36,11 @@ class DryRunProxyAdapter(ProxyAdapter):
         # Raw (ref -> (hostname, upstream, entry_points, cert_resolver)) so
         # list_routes can describe a route whether it is on or parked.
         self._specs: dict[str, tuple[str, str, tuple[str, ...], str]] = {}
+        # Which config file each route "lives in" ('' = the default file).
+        self.route_files: dict[str, str] = {}
+        # Every create/move in call order, for tests and the dev harness.
+        self.created: list[dict[str, object]] = []
+        self.moves: list[tuple[str, str]] = []
 
     async def start(self) -> None:
         log.info("proxy.dry_run.start")
@@ -61,9 +69,35 @@ class DryRunProxyAdapter(ProxyAdapter):
                     entry_points=eps,
                     cert_resolver=resolver or None,
                     enabled=ref not in self._disabled,
+                    config_file=self.route_files.get(ref, ""),
                 )
             )
         return out
+
+    async def list_config_files(self) -> ConfigFiles | None:
+        # A plausible TM with a config directory: shared middlewares plus
+        # whatever routes were "written" here.
+        names = {"_shared.yml", *(f for f in self.route_files.values() if f)}
+        return ConfigFiles(files=tuple(sorted(names)), can_create=True, default="_shared.yml")
+
+    async def move_route(
+        self,
+        route_ref: str,
+        *,
+        hostname: str,
+        upstream: str,
+        entry_points: Sequence[str],
+        cert_resolver: str = "",
+        options: RouteOptions | None = None,
+        config_file: str,
+    ) -> str:
+        log.info("proxy.dry_run.move_route", route_ref=route_ref, config_file=config_file)
+        if route_ref not in self._specs:
+            raise ProxyRouteNotFound(f"{route_ref}: not found")
+        target = normalize_config_file(config_file)
+        self.route_files[route_ref] = target
+        self.moves.append((route_ref, target))
+        return target
 
     async def ensure_maintenance_fallback(
         self, *, hostname: str, service_slug: str
@@ -105,6 +139,7 @@ class DryRunProxyAdapter(ProxyAdapter):
         entry_points: Sequence[str],
         cert_resolver: str = "",
         options: RouteOptions | None = None,
+        config_file: str = "",
     ) -> str:
         log.info(
             "proxy.dry_run.create_route",
@@ -113,9 +148,16 @@ class DryRunProxyAdapter(ProxyAdapter):
             entry_points=list(entry_points),
             cert_resolver=cert_resolver,
             options=(options or RouteOptions()).to_dict(),
+            config_file=config_file,
         )
+        cfile = normalize_config_file(config_file)
+        problem = unknown_file_problem(cfile, await self.list_config_files())
+        if problem:
+            raise ValueError(problem)
         ref = self.route_ref_for(hostname)
         self._remember(ref, hostname, upstream, entry_points, cert_resolver)
+        self.route_files[ref] = cfile
+        self.created.append({"hostname": hostname, "config_file": cfile})
         return ref
 
     async def update_route(
@@ -172,9 +214,9 @@ class DryRunProxyAdapter(ProxyAdapter):
             EntryPointInfo("traefik", ":8080"),
         ]
 
-    async def list_cert_resolvers(self) -> list[str] | None:
-        log.info("proxy.dry_run.list_cert_resolvers")
-        return ["letsencrypt"]
+    async def list_cert_resolver_sources(self) -> dict[str, list[str]] | None:
+        log.info("proxy.dry_run.list_cert_resolver_sources")
+        return {"letsencrypt": ["tm_settings"], "letsencrypt-dns": ["static_config"]}
 
     async def list_domains(self) -> list[str] | None:
         return ["example.com"]
@@ -189,6 +231,7 @@ class DryRunProxyAdapter(ProxyAdapter):
         self._routes.pop(route_ref, None)
         self._disabled.pop(route_ref, None)
         self._specs.pop(route_ref, None)
+        self.route_files.pop(route_ref, None)
 
     async def set_route_enabled(
         self,

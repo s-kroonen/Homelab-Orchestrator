@@ -299,6 +299,10 @@ but it should be made after hitting a concrete wall, not ahead of one.
 - [x] Bulk actions: selection checkboxes + action bar on services, nodes, proxy hosts and guests; `POST /api/bulk/*`; `orchestrator-cli bulk`. See docs/bulk_actions.md.
 - [ ] Proxy hosts: middlewares picker (auth, headers, rate limit) from Traefik's list.
 - [ ] Traefik redirects and middlewares management tabs (list/create/edit Traefik Manager's redirects and middlewares from the orchestrator).
+- [x] Proxy hosts: new routes are created in one Traefik Manager config file per service (`TRAEFIK_MANAGER_CONFIG_FILE`, default `{service}.yml`, per-host override), the file each route lives in is shown and flagged when it is not the configured one, and an explicit "Move to configured file" relocates it (verified). See docs/proxy_hosts.md#config-files-where-a-route-lives.
+- [x] Certificate resolvers: the union of Traefik Manager's setting, Traefik's static config (`/api/static/config`), the resolvers routers use and `TRAEFIK_DEFAULT_CERT_RESOLVER`, each tagged with its source; `orchestrator-cli proxy resolvers`. See docs/proxy_hosts.md.
+- [x] Probes can be disabled (`Probe.enabled`): not run, not counted, settings kept. The auto-created `traefik:<host>` probe follows its proxy host's enabled switch. See docs/proxy_hosts.md.
+- [ ] Update the orchestrator from the UI and the CLI (pull new image / restart; show current vs latest version).
 - [x] Service IPs: manual `ip_address` + discovery (guest agent / LXC, ARP with optional sweep, dnsmasq leases), "Use service IP" on the proxy-host form, `ping` probe kind. See docs/service_ips.md.
 - [ ] DHCP lease readers for OPNsense / pfSense (their APIs) and Kea — new `DhcpLeaseSource` implementations next to the dnsmasq one (`ipdiscovery/dhcp.py`).
 - [ ] Proxy hosts: show/edit a route's raw YAML from the orchestrator (TM `/api/routes/{id}/raw`) for options this form doesn't cover.

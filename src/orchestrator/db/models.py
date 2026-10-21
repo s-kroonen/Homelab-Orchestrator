@@ -177,6 +177,7 @@ class Probe(SQLModel, table=True):
 
     ``required=False`` marks the probe as diagnostic-only: its result is recorded and
     surfaced on the dashboard but does not affect the aggregated verdict / gate.
+    ``enabled=False`` goes further: the probe is not run at all.
     """
 
     __tablename__ = "probe"
@@ -191,6 +192,12 @@ class Probe(SQLModel, table=True):
     timeout_s: int = Field(default=15)
     order: int = Field(default=0)
     config: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))
+    #: False = switched off, not deleted: the health engine records the probe as
+    #: skipped ("disabled") and it never counts towards the verdict, the backup
+    #: gate, the health history or the service badge. ``required`` / timeout
+    #: survive a disable -> enable. The auto-managed ``traefik:<hostname>`` probe
+    #: follows its proxy host's ``enabled`` flag.
+    enabled: bool = Field(default=True)
 
 
 class ProxyHost(SQLModel, table=True):

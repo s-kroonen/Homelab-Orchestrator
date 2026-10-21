@@ -947,7 +947,9 @@ def report_gate_readiness(editor: RegistryEditor) -> None:
         str(svc.get("slug"))
         for svc in (editor.doc.get("services") or [])
         if not svc.get("backup_excluded")
-        and not any(p.get("required", True) for p in (svc.get("probes") or []))
+        and not any(
+            p.get("required", True) and p.get("enabled", True) for p in (svc.get("probes") or [])
+        )
     ]
     if not blocked:
         return

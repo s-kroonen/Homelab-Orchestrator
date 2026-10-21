@@ -32,6 +32,12 @@ Apply order per host, each step idempotent: create (conflict check, rolled
 back if Traefik rejects it) -> enable -> update -> maintenance fallback ->
 disable LAST (read back) -> verify. ``pushed_sig`` is recorded only when every
 step succeeded. One host failing never stops the others.
+
+Config files: a NEW route is created in the file ``TRAEFIK_MANAGER_CONFIG_FILE``
+(or the host's own ``route_options.config_file``) resolves to
+(:func:`resolve_file_for`); an existing route stays in the file it is in, on
+every update. Moving it is a separate, explicit, opt-in action
+(:func:`move_to_configured_file`) - never part of a normal push.
 """
 
 from __future__ import annotations
@@ -47,6 +53,7 @@ from sqlmodel import Session, select
 
 from orchestrator.adapters.factory import AdapterBundle
 from orchestrator.adapters.proxy.base import (
+    ConfigFiles,
     ProxyAdapter,
     ProxyRouteNotFound,
     RouteInfo,
@@ -67,6 +74,7 @@ from orchestrator.config import Settings, get_settings
 from orchestrator.db.models import SETTING_PROXY_PENDING_DELETES, ProxyHost, Service, Setting
 from orchestrator.domain.enums import RouterProvider
 from orchestrator.logging_setup import get_logger
+from orchestrator.registry.config_files import effective_file, resolve_config_file, same_file
 from orchestrator.registry.push import PushResult, PushStatus, register_pusher
 
 log = get_logger(__name__)
@@ -108,7 +116,9 @@ def content_signature(ph: ProxyHost, service_slug: str | None = None) -> str:
         "upstream": (ph.upstream or "").strip(),
         "entry_points": sorted(ph.entry_points or []),
         "cert_resolver": (ph.cert_resolver or "").strip(),
-        "route_options": RouteOptions.from_dict(ph.route_options).to_dict(),
+        # Without config_file: where a NEW route goes is not part of its content,
+        # and an existing route is not rewritten when only that changes.
+        "route_options": RouteOptions.from_dict(ph.route_options).content_dict(),
         "service": service_slug or "",
     }
     return hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()[:16]
@@ -398,6 +408,88 @@ def evaluate(
 # ---------------------------------------------------------------------------
 
 
+async def move_to_configured_file(
+    session: Session,
+    adapters: AdapterBundle,
+    settings: Settings,
+    ph: ProxyHost,
+    *,
+    actor: str = "system",
+) -> PushResult:
+    """Opt-in: re-save this host's route into the file it RESOLVES to
+    (``route_options.config_file`` or ``TRAEFIK_MANAGER_CONFIG_FILE``), taking it
+    out of the file it is in now, and verify it afterwards. The route is
+    rewritten from our record - like an update - so middlewares added by hand in
+    Traefik Manager are not carried along (the maintenance-page fallback is put
+    back). Never run by a normal push, and never for a route that is not ours
+    (an adopted, hand-written one)."""
+    host = ph.hostname
+
+    def fail(message: str) -> PushResult:
+        return PushResult(TARGET, host, "move", False, message)
+
+    services = services_by_id(session)
+    slug = slug_of(ph, services)
+    ref = ref_of(ph)
+    if not is_live_managed(ph) or not ref:
+        return fail("only a route this orchestrator created can be moved")
+    if not adapters.proxy.owns_route_ref(ref):
+        return fail(
+            "this route was adopted from a hand-written one - it is never moved automatically; "
+            "move it in Traefik Manager"
+        )
+    if not ph.enabled:
+        return fail("the host is disabled - enable and push it first (a parked route has no file)")
+    known = await adapters.proxy.list_config_files()
+    target, problem = resolve_file_for(settings, ph, slug, known)
+    if problem:
+        return fail(problem)
+    if not target:
+        return fail("no config file is configured for this host (TRAEFIK_MANAGER_CONFIG_FILE)")
+    routes = await adapters.proxy.list_routes()
+    if routes is None:
+        return fail("Traefik Manager is not configured or could not be read")
+    current = find_route(routes, ref, host)
+    if current is None:
+        return fail("Traefik Manager has no route for this host yet - push it first")
+    if same_file(current.config_file, target):
+        return PushResult(TARGET, host, "move", True, f"already in {target} - nothing to move")
+    eps = list(ph.entry_points or [])
+    if not eps:
+        return fail("no entry point is stored for this host")
+    opts = RouteOptions.from_dict(ph.route_options)
+    try:
+        landed = await adapters.proxy.move_route(
+            ref,
+            hostname=host,
+            upstream=ph.upstream,
+            entry_points=eps,
+            cert_resolver=(ph.cert_resolver or "").strip(),
+            options=opts,
+            config_file=target,
+        )
+    except Exception as exc:
+        log.warning("proxy_push.move_failed", hostname=host, error=str(exc))
+        return fail(f"could not move the route: {exc}")
+    if slug:
+        events = await adapters.proxy.ensure_maintenance_fallback(hostname=host, service_slug=slug)
+        audit_sync_events(session, actor, events)
+    audit.record(
+        session,
+        actor=actor,
+        action="proxy_host.moved",
+        target=f"proxy_host:{host}",
+        details={"id": ph.id, "from": current.config_file, "to": landed},
+    )
+    return PushResult(
+        TARGET,
+        host,
+        "move",
+        True,
+        f"moved from {current.config_file or '(default file)'} to {landed} and verified",
+    )
+
+
 async def conflict_message(
     adapters: AdapterBundle, hostname: str, route_name: str, own_ref: str | None
 ) -> str | None:
@@ -449,6 +541,69 @@ def services_by_id(session: Session) -> dict[int, Service]:
 def slug_of(ph: ProxyHost, services: dict[int, Service]) -> str | None:
     svc = services.get(ph.service_id) if ph.service_id else None
     return svc.slug if svc else None
+
+
+# ---------------------------------------------------------------------------
+# Config files
+# ---------------------------------------------------------------------------
+
+
+def resolve_file_for(
+    settings: Settings,
+    ph: ProxyHost,
+    service_slug: str | None,
+    known: ConfigFiles | None,
+) -> tuple[str, str | None]:
+    """``(file to create the route in, problem)`` for a host: its own
+    ``route_options.config_file``, else the ``TRAEFIK_MANAGER_CONFIG_FILE``
+    template. ``""`` = Traefik Manager's default file (blank template, or a
+    manager with a single fixed file where the template has nothing to choose).
+    ``problem`` is set when Traefik Manager would not write to that file."""
+    override = RouteOptions.from_dict(ph.route_options).config_file
+    try:
+        wanted = resolve_config_file(
+            settings.traefik_manager_config_file,
+            service_slug=service_slug,
+            hostname=ph.hostname,
+            override=override,
+        )
+    except ValueError as exc:
+        return "", f"cannot work out the config file: {exc}"
+    return effective_file(wanted, known, explicit=bool(override))
+
+
+def config_file_view(
+    proxy: ProxyAdapter,
+    settings: Settings,
+    ph: ProxyHost,
+    service_slug: str | None,
+    route: RouteInfo | None,
+    known: ConfigFiles | None,
+) -> dict[str, Any]:
+    """Where a host's route lives in Traefik Manager vs where it would be
+    created: purely informational (never an error), for the list and edit form."""
+    resolved, problem = resolve_file_for(settings, ph, service_slug, known)
+    current = route.config_file if route is not None else ""
+    ref = ref_of(ph)
+    owned = bool(ref) and proxy.owns_route_ref(ref or "")
+    misplaced = bool(
+        route is not None and resolved and current and not same_file(current, resolved)
+    )
+    movable = bool(misplaced and owned and is_live_managed(ph))
+    note = None
+    if misplaced:
+        note = f"Lives in {current}; a new route for this host would go to {resolved}."
+        if not owned:
+            note += " It was adopted from a hand-written route, so it is never moved automatically."
+    return {
+        "config_file": RouteOptions.from_dict(ph.route_options).config_file,
+        "config_file_resolved": resolved,
+        "config_file_problem": problem,
+        "tm_config_file": current if route is not None else None,
+        "config_file_misplaced": misplaced,
+        "config_file_movable": movable,
+        "config_file_note": note,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -653,6 +808,12 @@ class ProxyPusher:
             if msg:
                 add("create", False, msg)
                 return
+            config_file, problem = resolve_file_for(
+                settings, ph, slug, await proxy.list_config_files()
+            )
+            if problem:
+                add("create", False, problem)
+                return
             try:
                 new_ref = await proxy.create_route(
                     hostname=host,
@@ -660,6 +821,7 @@ class ProxyPusher:
                     entry_points=eps,
                     cert_resolver=resolver,
                     options=opts,
+                    config_file=config_file,
                 )
             except Exception as exc:
                 add("create", False, f"could not create the route on Traefik Manager: {exc}")
@@ -681,7 +843,8 @@ class ProxyPusher:
                     + verification.message,
                 )
                 return
-            add("create", True, f"created route {ref}" + verification_note(verification))
+            where = f" in {config_file}" if config_file else ""
+            add("create", True, f"created route {ref}{where}" + verification_note(verification))
             done.append("create")
 
         if ph.enabled and not created and hs.tm != "enabled" and "enable" in hs.actions:

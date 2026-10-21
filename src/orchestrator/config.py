@@ -224,6 +224,14 @@ class Settings(BaseSettings):
     # on the plain-HTTP entry point with this middleware. Must already exist
     # in Traefik (e.g. a shared ``redirect-to-https`` defined once).
     traefik_redirect_middleware: str = "redirect-to-https"
+    # Which Traefik Manager config file a NEW route is created in. A template:
+    # ``{service}`` = the linked service's slug, ``{hostname}`` = the hostname
+    # with dots turned into dashes. The default keeps one file per service
+    # (``media.yml``), leaving ``_shared.yml`` for shared middlewares. Blank =
+    # Traefik Manager's own default file. A host can override it
+    # (``route_options.config_file``). An existing route stays in the file it is
+    # in until it is explicitly moved. See docs/proxy_hosts.md.
+    traefik_manager_config_file: str = "{service}.yml"
 
     # The orchestrator's own base URL, as REACHABLE FROM THE GATEWAY VM (e.g.
     # http://10.0.0.5:8000) — not necessarily the same as anything a browser
@@ -352,6 +360,13 @@ class Settings(BaseSettings):
         if v is None or v == "":
             return None
         return Path(v).expanduser() if isinstance(v, str) else v
+
+    @field_validator("traefik_manager_config_file")
+    @classmethod
+    def _check_config_file_template(cls, v: str) -> str:
+        from orchestrator.registry.config_files import check_template
+
+        return check_template(v)
 
     @field_validator("geoip_traffic_poll_interval_s", "geoip_access_log_lines", mode="before")
     @classmethod

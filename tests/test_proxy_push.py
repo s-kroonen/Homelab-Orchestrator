@@ -720,7 +720,7 @@ def test_end_to_end_disable_and_enable_reach_a_multi_file_traefik_manager(
     service: Service, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     sim = SimTM()
-    client = _client(monkeypatch, sim)
+    client = _client(monkeypatch, sim, TRAEFIK_MANAGER_CONFIG_FILE="")
     host = _create(client, service)
     push(client)
     route_id = f"dynamic.yml::{MULTI_REF}"  # created into the default file

@@ -56,6 +56,14 @@ working (fail-open).
   external / in sync) shows what is not pushed or was changed behind your back
   (`orchestrator-cli proxy status` / `proxy push`). Other outside services can
   plug into the same engine. See [docs/proxy_hosts.md](docs/proxy_hosts.md#pushing-to-traefik-manager)
+* **Config files and certificate resolvers** — new proxy routes are created in
+  one Traefik Manager config file per service (`<service>.yml`, template
+  `TRAEFIK_MANAGER_CONFIG_FILE`, per-host override; routes that already exist stay
+  put and can be moved on request), and the certificate resolver list is the union
+  of Traefik Manager's setting, Traefik's static config, the resolvers routers use
+  and the configured default. A disabled proxy host switches its auto-created probe
+  off (probes can be disabled by hand too) so it no longer affects the verdict. See
+  [docs/proxy_hosts.md](docs/proxy_hosts.md#config-files-where-a-route-lives)
 * **Service IPs** — each service has an address: a manual `ip_address`, or one
   discovered from Proxmox (QEMU guest agent / LXC) and, by the NIC MACs, from
   an ARP table or DHCP leases. Proxy hosts can use it as their upstream ("Use
@@ -232,6 +240,8 @@ orchestrator-cli probe add <slug>       # guided probe builder
 orchestrator-cli proxy add <slug>       # record a Traefik / Pangolin route
 orchestrator-cli proxy status           # what is not pushed to Traefik Manager yet
 orchestrator-cli proxy push --yes       # push the live DB's proxy hosts now
+orchestrator-cli proxy resolvers        # certificate resolvers and where each was seen
+orchestrator-cli probe disable <slug> <name>   # switch a probe off (kept, never run)
 orchestrator-cli transport check        # is the host runner / ssh plumbing usable?
 ```
 

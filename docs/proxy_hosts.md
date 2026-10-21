@@ -201,11 +201,15 @@ The result is a per-item list `{target, hostname, action, ok, message}`.
 * `POST /api/push` `{"targets": ["proxy"], "hostnames": [...], "dry_run": false}`
   -> `{"results": [...], "summary": {"attempted", "ok", "failed"}}`.
   `dry_run: true` returns what would be done without writing (the UI confirm).
+* `POST /api/push` also takes `"move_config_files": ["host", ...]`: after the
+  normal push, those hosts' existing routes are **moved** into the config file
+  they resolve to (see [Config files](#config-files-where-a-route-lives)). It is
+  the only way a push ever moves a route.
 * `POST /api/registry/save` -> the original keys plus `push_results` and
   `push` (`{"attempted","ok","failed"}`).
 * `orchestrator-cli proxy status` (exit 1 unless in sync) and
-  `orchestrator-cli proxy push [--yes] [--hostname H]` (exit 1 if an item
-  failed). Under `DRY_RUN=true` / `PROXY_ADAPTER=dry_run` the push goes through
+  `orchestrator-cli proxy push [--yes] [--hostname H] [--move-config-file H]`
+  (exit 1 if an item failed). Under `DRY_RUN=true` / `PROXY_ADAPTER=dry_run` the push goes through
   the dry-run adapter, which only records what it was given.
 
 ### Other outside services
@@ -237,6 +241,82 @@ record is keyed by that id. The adapter therefore:
   deletes (`/delete/<id>`) with `configFile` set, so a same-named router in
   another file survives.
 
+### Config files: where a route lives
+
+Traefik Manager (TM) writes every route into one of its dynamic-config files.
+Until now every route this orchestrator created was posted with no `configFile`,
+so it landed in TM's **default** file - the one you see as `_shared`. The
+convention here is one file per service (`<service-slug>.yml`) with `_shared.yml`
+kept for shared middlewares, so a **new** route is now created in the file named
+by:
+
+1. the host's own **Config file** (form field, `route_options.config_file`), else
+2. the `TRAEFIK_MANAGER_CONFIG_FILE` template - default **`{service}.yml`**.
+   `{service}` is the linked service's slug, `{hostname}` the hostname with dots
+   turned into dashes (`media.example.com` -> `media-example-com`). A missing
+   `.yml` / `.yaml` extension is added. **Blank** = TM's own default file, as
+   before.
+
+The form shows the resolved default as the field's placeholder and the known
+files as suggestions (a datalist); `GET /api/proxy/entrypoints` returns them as
+`config_files`, `config_files_known`, `config_files_can_create`,
+`config_file_template` and - for `?service=<slug>&hostname=<name>` -
+`default_config_file`. The files are read from TM's `GET /api/configs`
+(`{"files": [{"label", "path"}], "configDirSet": bool}`); on a TM without that
+endpoint the `configFile` values of `GET /api/routes` are used instead.
+
+**What TM does with a file it does not know** (read from its `/save` and
+`resolve_config_path`):
+
+* a name in its `CONFIG_PATHS` / config directory -> that file;
+* a bare name while TM runs with **`CONFIG_DIR`** (`configDirSet: true`) -> TM
+  **creates** `<name>.yml` in that directory (and registers it);
+* anything else - a fixed `CONFIG_PATHS` list without that file, or a name with a
+  slash - -> TM quietly falls back to its **default file** and answers 200. The
+  route would land somewhere nobody asked for.
+
+So the orchestrator checks the name itself and never posts one TM would replace:
+with a fixed `CONFIG_PATHS` it fails with *"Traefik Manager has no config file
+`X` and cannot create it: it can only write to the files in its CONFIG_PATHS
+(`a.yml, b.yml`). Add X to CONFIG_PATHS (or switch to CONFIG_DIR) or pick one of
+the existing files."* - in the form (`422`, field `config_file`, when you typed it
+there) and at push time (the item fails, nothing is written, **never a silent
+fall-back to `_shared`**). With `CONFIG_DIR` the file is simply created. A file you
+just added to TM is picked up without waiting for the 30 s catalog cache. After a
+create into a named file the route is read back; if TM put it elsewhere it is
+removed again and the push reports it.
+
+A TM with **one fixed config file** has nothing to choose, so the *template* is not
+applied there (the route goes into that file); a name you typed yourself is still
+checked.
+
+The HTTP -> HTTPS companion router (`<route>-redirect`) is always created in the
+**same file as its main route**.
+
+**Existing routes stay where they are.** Editing or pushing a route that already
+lives in some file posts that file back (`originalId` + `configFile` of the route
+itself), so an edit never relocates it. Changing a host's wanted file alone is not
+a pending change (it is not part of the route's content). The list and the edit
+form show the file each route is in (`tm_config_file`, from `/api/routes`) and
+**flag** a route in `_shared.yml` - or any file other than the one the host
+resolves to - with an informational note, never an error. Adopted (hand-written,
+`external`) routes are flagged too but never moved.
+
+**Move to configured file** is the opt-in way to relocate one: the edit form's
+button, the list's **Move**, `POST /api/proxy-hosts/{id}/move-config-file`,
+`POST /api/push` with `move_config_files`, or `orchestrator-cli proxy push
+--move-config-file HOST`. It re-saves the route into the resolved file with TM's own
+move behaviour - `/save` with `isEdit=true`, `originalId=<old file>::<name>` and
+`configFile=<new file>` (TM then removes the router, and its service unless
+another router shares it, from the old file) - the redirect companion **first**
+(it references the main route's service, which would otherwise count as shared and
+stay behind), then the main route. The result is **read back**: exactly one copy of
+each router, in the new file, or the move fails and says where it found them.
+Notes: the route is rewritten from our record like any update, so middlewares
+added by hand in TM are not carried (the maintenance-page fallback is put back);
+a route that is switched off (parked by TM outside any file), a disabled host and a
+route that is not ours are refused with a message.
+
 ### Entry points and certificate resolver
 
 Every live-managed host carries two stored fields, chosen by the operator and
@@ -267,8 +347,11 @@ what the live proxy reports, cached for ~30 s (the form's
 
 ```json
 {"entrypoints": [{"name": "web", "address": ":80"}, ...],
- "cert_resolvers": ["letsencrypt"], "cert_resolvers_known": true,
+ "cert_resolvers": ["letsencrypt", "letsencrypt-dns"], "cert_resolvers_known": true,
+ "cert_resolver_sources": {"letsencrypt": ["tm_settings"],
+                           "letsencrypt-dns": ["static_config"]},
  "default_entrypoints": ["websecure"], "default_cert_resolver": "",
+ "config_files": ["_shared.yml", "media.yml"], "config_file_template": "{service}.yml",
  "source": "traefik_manager"}
 ```
 
@@ -279,18 +362,40 @@ free-text comma field (still sent explicitly — nothing is defaulted for you).
 * Entry points: `GET /api/traefik/entrypoints` on Traefik Manager, which proxies
   Traefik's own `/api/entrypoints` (or answers `502 Traefik API unreachable`,
   which reads as unavailable).
-* Certificate resolvers: `GET /api/settings` → `cert_resolver` (the comma list
-  configured in Traefik Manager's Settings). Traefik Manager does not expose the
-  resolvers declared in Traefik's static config over its API, so a resolver that
-  is only there will not be offered; if the setting cannot be read the form falls
-  back to a free-text field.
+* Certificate resolvers: the **union** (de-duplicated, stable order) of every
+  place one can be seen, each name tagged with the sources that report it
+  (`cert_resolver_sources`; the form shows the first as a suffix - `letsencrypt-dns
+  (static config)` - and all of them in a tooltip):
+  1. `tm_settings` - `GET /api/settings` -> `cert_resolver`, TM's own comma list;
+  2. `static_config` - `GET /api/static/config` -> `parsed.certificatesResolvers`,
+     the resolvers **declared in Traefik's static configuration**. TM answers
+     `{"raw", "parsed", "path"}` only when it has a static config path
+     (`STATIC_CONFIG_PATH` / Settings -> static config path) and that file is
+     mounted into **its** container; otherwise `404 {"error": ...}` (`500` when the
+     file is not valid YAML). Same API key as every other read, no extra
+     permission. "Not available" is never an error - that source just adds
+     nothing. If your newly added resolver is missing, this is almost certainly
+     why: give TM the static config path;
+  3. `runtime_router` - `tls.certResolver` of the routers Traefik actually serves
+     (`GET /api/traefik/routers`, the same read the access-log collector uses);
+  4. `default_setting` - `TRAEFIK_DEFAULT_CERT_RESOLVER`, added whenever at least
+     one of the three live sources could be read.
+
+  The list is `None` (the form falls back to a free-text field and any well-formed
+  name is accepted) only when **none** of those live sources is readable - a
+  configured default alone proves nothing about what exists. The catalog cache is
+  30 s; the form's ↻ button, **Resync** and the push status (`GET /api/push/status`)
+  re-read it, and the validator (`422` on `cert_resolver`) looks again with a
+  fresh read before it rejects a resolver, so one added a moment ago is accepted.
+  `orchestrator-cli proxy resolvers` (and `proxy entrypoints`) print the names with
+  where each was seen.
 
 **Default selection for a new host.** `TRAEFIK_DEFAULT_ENTRYPOINTS` (comma list)
 if set *and* it still exists on the live Traefik; otherwise `websecure` if it
 exists; otherwise the first live entry point that is not `traefik`; otherwise
 there is no default and the operator must choose. `TRAEFIK_DEFAULT_CERT_RESOLVER`
-likewise pre-selects a resolver (ignored when it is not a known one, or when
-every selected entry point is plain HTTP). A create/update **API call that omits
+likewise pre-selects a resolver (it is itself one of the resolver sources above;
+ignored when every selected entry point is plain HTTP). A create/update **API call that omits
 `entry_points`** resolves them the same way — for an edit: what is stored, else
 what the route has on Traefik Manager, else the default — and then validates the
 result like any explicit choice.
@@ -465,6 +570,13 @@ enabling writes them back unchanged. While disabled:
 (plain HTTP never redirects to a route that is gone), on enable the main route
 goes first. If the second toggle fails (or its read-back does not match) the
 first is undone (best effort) and the item reports the failure.
+
+**Its probe follows.** The auto-created `traefik:<hostname>` probe (see
+[Feeding Traefik's view into the service's own HEALTH verdict](#feeding-traefiks-view-into-the-services-own-health-verdict))
+is switched **off** (`Probe.enabled = false`) the moment the host is disabled and
+back **on** when it is enabled - immediately, as a local change (it is not part
+of the push, which only writes Traefik Manager). A disabled host is not served, so
+that probe would fail for no reason - and it may be `required`.
 
 ### Editing a disabled host
 
@@ -770,6 +882,24 @@ local IP, which commonly carries a self-signed certificate or one that only
 validates for the public hostname; a diagnostic probe should not FAIL on a
 cert mismatch unrelated to whether the route actually works.
 
+**It follows the host's enabled switch.** `Probe.enabled` (migration
+`0016_probe_enabled`, default true; YAML `enabled`, written only when false) is set
+to the proxy host's `enabled` every time the sync runs - on create, edit,
+enable/disable (single and bulk, `orchestrator-cli bulk`), Resync and a registry
+reload. A disabled probe is **kept, not deleted**: its `required` flag and timeout
+survive disable -> enable, and the next scan runs it again. While it is disabled
+the health engine does not run it, records it in the verdict's probe results as
+*skipped (disabled)*, and never counts it - not in the aggregation (even when
+`required`), not in the backup gate, not in the health history strip and not in the
+service badge. If every probe of a service is disabled the usual rule applies
+unchanged: no required probe -> UNKNOWN. The Probes tab shows a *disabled* badge and
+an **Enable / Disable** button for any probe (also for hand-written ones;
+`PUT /api/registry/probes/{id}` `{"enabled": false}`,
+`orchestrator-cli probe disable|enable <slug> <name>`); the probe list API and
+`probe list` show it; "probes required / optional" is about `required` only. Because
+the sync owns `enabled` for these probes, manually enabling the probe of a disabled
+host is undone by the next sync - enable the host instead.
+
 **It never gates anything by default.** The probe is always created with
 `required=false` — a service can have several `ProxyHost` records (two
 hostnames fronting the same app, say) and none of them individually has to
@@ -798,6 +928,8 @@ The probe tracks the `ProxyHost` it was created from:
 - **Unlink** (`service_id` cleared) → the probe is removed; there is no
   service left to attach it to.
 - **Delete** the `ProxyHost` → its probe is removed.
+- **Disable / enable** the `ProxyHost` → its probe is switched off / on (kept,
+  with its `required` / timeout settings).
 - **Resync from Traefik** also backfills: every currently-linked
   `ProxyHost` — including ones linked before this feature existed — gets its
   probe ensured as part of the existing per-host loop, whether or not

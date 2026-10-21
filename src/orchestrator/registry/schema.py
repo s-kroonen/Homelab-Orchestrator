@@ -70,6 +70,9 @@ class ProbeSpec(BaseModel):
     timeout_s: int = 15
     order: int = 0
     config: dict[str, Any] = Field(default_factory=dict)
+    #: See Probe.enabled. False = switched off (kept, not run). Omitted from
+    #: the YAML when true.
+    enabled: bool = True
 
 
 class ProxyHostSpec(BaseModel):
@@ -105,6 +108,10 @@ class ProxyHostSpec(BaseModel):
         if unknown:
             raise ValueError(f"unknown route_options key(s): {', '.join(sorted(unknown))}")
         normal = RouteOptions.from_dict(value).to_dict()
+        if normal["config_file"]:
+            from orchestrator.registry.config_files import normalize_config_file
+
+            normal["config_file"] = normalize_config_file(normal["config_file"])
         return {} if normal == RouteOptions().to_dict() else normal
 
     @field_validator("entry_points", mode="before")

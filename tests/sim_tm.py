@@ -14,7 +14,15 @@ Reproduces the behaviours of the real app (``app.py``) that matter here:
   back to the disabled store;
 * ``POST /save``: writes into ``configFile`` (default ``dynamic.yml``), and an
   edit whose ``originalId`` lives in another file is not found there - it
-  creates a second copy in the default file.
+  creates a second copy in the default file. A ``configFile`` TM does not know
+  is created when it runs with ``CONFIG_DIR`` (``config_dir=True``) and is
+  SILENTLY replaced by the default file otherwise (``resolve_config_path``
+  returning ``''``). An edit whose ``originalId`` carries ``<old>::`` and a
+  different ``configFile`` MOVES the route (the router is removed from ``<old>``).
+* ``GET /api/configs`` lists the config files and ``configDirSet``;
+  ``GET /api/settings`` carries ``cert_resolver``; ``GET /api/static/config``
+  answers the parsed static config (``static_resolvers``) or 404 when TM has no
+  static config path; ``GET /api/traefik/routers`` shows ``tls.certResolver``.
 
 ``ignore_toggle`` makes toggles do nothing at all (a 200 that lied).
 """
@@ -31,8 +39,28 @@ DEFAULT_FILE = "dynamic.yml"
 
 
 class SimTM:
-    def __init__(self, files: tuple[str, ...] = (DEFAULT_FILE, "apps.yml"), multi: bool = True):
+    def __init__(
+        self,
+        files: tuple[str, ...] = (DEFAULT_FILE, "apps.yml"),
+        multi: bool = True,
+        *,
+        config_dir: bool = False,
+        resolvers: str = "",
+        static_resolvers: list[str] | None = None,
+        static_status: int = 200,
+        runtime_only_resolvers: tuple[str, ...] = (),
+        settings_status: int = 200,
+        configs_status: int = 200,
+    ):
         self.multi = multi
+        self.config_dir = config_dir
+        self.resolvers = resolvers
+        self.static_resolvers = static_resolvers
+        self.static_status = static_status
+        self.runtime_only_resolvers = runtime_only_resolvers
+        self.settings_status = settings_status
+        self.configs_status = configs_status
+        self.leak_on_move = False  # a move that leaves the old copy behind
         self.files: dict[str, dict[str, dict[str, Any]]] = {f: {} for f in files}
         self.disabled: dict[str, dict[str, Any]] = {}
         self.requests: list[tuple[str, str, Any]] = []
@@ -96,7 +124,37 @@ class SimTM:
                 ],
             )
         if path == "/api/settings":
-            return httpx.Response(200, json={"cert_resolver": "", "domains": ["example.com"]})
+            if self.settings_status != 200:
+                return httpx.Response(self.settings_status, json={"error": "nope"})
+            return httpx.Response(
+                200, json={"cert_resolver": self.resolvers, "domains": ["example.com"]}
+            )
+        if path == "/api/configs":
+            if self.configs_status != 200:
+                return httpx.Response(self.configs_status, json={"error": "nope"})
+            return httpx.Response(
+                200,
+                json={
+                    "files": [
+                        {"label": f, "path": f"/etc/traefik/dynamic/{f}"} for f in self.files
+                    ],
+                    "configDirSet": self.config_dir,
+                },
+            )
+        if path == "/api/static/config":
+            if self.static_resolvers is None or self.static_status != 200:
+                status = self.static_status if self.static_status != 200 else 404
+                return httpx.Response(
+                    status, json={"error": "Static config not found or STATIC_CONFIG_PATH not set"}
+                )
+            return httpx.Response(
+                200,
+                json={
+                    "raw": "",
+                    "parsed": {"certificatesResolvers": {n: {} for n in self.static_resolvers}},
+                    "path": "/etc/traefik/traefik.yml",
+                },
+            )
         if path == "/api/traefik/middlewares":
             return httpx.Response(200, json={"http": [{"name": "redirect-to-https@file"}]})
         if path == "/api/traefik/routers":
@@ -155,17 +213,37 @@ class SimTM:
         return {"apps": apps, "middlewares": [], "services": {"http": []}}
 
     def _runtime(self) -> list[dict[str, Any]]:
-        return [
+        out = [
             {
                 "name": f"{name}@file",
                 "rule": r["rule"],
                 "service": f"{name}-service@file",
                 "entryPoints": r["eps"],
                 "status": "enabled",
+                **({"tls": {"certResolver": r["resolver"]}} if r.get("resolver") else {}),
             }
             for routes in self.files.values()
             for name, r in routes.items()
         ]
+        for i, resolver in enumerate(self.runtime_only_resolvers):
+            out.append(
+                {
+                    "name": f"hand-{i}@file",
+                    "rule": f"Host(`hand-{i}.example.com`)",
+                    "service": f"hand-{i}@file",
+                    "entryPoints": ["websecure"],
+                    "status": "enabled",
+                    "tls": {"certResolver": resolver},
+                }
+            )
+        return out
+
+    def file_of(self, name: str) -> str | None:
+        """The config file that holds router ``name`` (None = nowhere)."""
+        return self.locate(name)
+
+    def copies_of(self, name: str) -> list[str]:
+        return [f for f, routes in self.files.items() if name in routes]
 
     def _toggle(self, route_id: str, enable: bool) -> None:
         rname = route_id.split("::", 1)[1] if "::" in route_id else route_id
@@ -196,9 +274,23 @@ class SimTM:
                 return httpx.Response(200, json={"ok": True})
         return httpx.Response(404, json={"ok": False})
 
+    def _resolve_file(self, wanted: str) -> str:
+        """TM's ``resolve_config_path`` + the ``or env.CONFIG_PATH`` fallback."""
+        if not wanted:
+            return DEFAULT_FILE
+        if wanted in self.files:
+            return wanted
+        if self.config_dir and "/" not in wanted and "\\" not in wanted:
+            name = wanted if wanted.endswith((".yml", ".yaml")) else wanted + ".yml"
+            self.files.setdefault(name, {})  # TM creates it
+            return name
+        return DEFAULT_FILE  # silently: the route lands in the DEFAULT file
+
     def _save(self, form: dict[str, str]) -> None:
         name = form["serviceName"]
-        file = form.get("configFile") or DEFAULT_FILE
+        file = self._resolve_file(form.get("configFile", ""))
+        cfg_filename = form.get("configFile") or DEFAULT_FILE
+        resolver = form.get("certResolver", "")
         route = {
             "rule": form["httpRule"],
             "eps": [e for e in form["entryPoints"].split(",") if e],
@@ -207,10 +299,16 @@ class SimTM:
                 if form.get("targetIp")
                 else "http://shared:80"
             ),
+            "resolver": "" if resolver.startswith("__") else resolver,
         }
         original = form.get("originalId", "")
         # An existing disabled record under this id stays parked (edited in place).
         if form.get("isEdit") == "true" and original in self.disabled:
             self.disabled[original]["route"] = route
             return
+        if form.get("isEdit") == "true" and "::" in original:
+            old_file, plain = original.split("::", 1)
+            if old_file != cfg_filename and old_file in self.files and not self.leak_on_move:
+                # TM's move: the router leaves the file named in the id prefix.
+                self.files[old_file].pop(plain, None)
         self.files.setdefault(file, {})[name] = route
