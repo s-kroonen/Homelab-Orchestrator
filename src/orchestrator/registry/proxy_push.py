@@ -120,6 +120,14 @@ def desired_signature(ph: ProxyHost, service_slug: str | None = None) -> str:
     return f"{content_signature(ph, service_slug)}:{'1' if ph.enabled else '0'}"
 
 
+def fallback_signature(ph: ProxyHost, service_slug: str | None) -> str:
+    """Fingerprint of "the maintenance-page fallback was applied for this
+    hostname + service" - the only thing pushed for a host whose route is not
+    ours (``external``) or that has no route of its own (``local``)."""
+    raw = f"{ph.hostname}|{service_slug or ''}"
+    return "fb:" + hashlib.sha256(raw.encode()).hexdigest()[:16]
+
+
 def _split_sig(sig: str) -> tuple[str, str]:
     content, _, flag = sig.partition(":")
     return content, flag
@@ -203,7 +211,7 @@ class HostSync:
 
     @property
     def pending(self) -> bool:
-        return bool(self.actions) and self.state not in (LOCAL, IN_SYNC)
+        return bool(self.actions)
 
 
 def _norm_upstream(url: str) -> str:
@@ -253,7 +261,24 @@ def evaluate(
 ) -> HostSync:
     """Classify one host against what Traefik Manager listed (``None`` = it
     could not be read). Pure: no writes."""
+    fb_sig = fallback_signature(ph, service_slug)
+    service_slug_for_fb = None if not proxy.maintenance_fallback_available() else service_slug
     if not is_live_managed(ph):
+        # No route of ours - but a hand-written one may serve the hostname and
+        # still deserves the maintenance page when the service is down.
+        if (
+            routes is not None
+            and service_slug_for_fb
+            and ph.router_provider is RouterProvider.TRAEFIK
+        ):
+            serving = _routes_for_host(routes, ph.hostname)
+            if serving and ph.enabled and ph.pushed_sig != fb_sig:
+                return HostSync(
+                    LOCAL,
+                    ["maintenance page fallback not applied yet"],
+                    ["fallback"],
+                    host_routes=serving,
+                )
         return HostSync(LOCAL)
     ref = ref_of(ph)
     want = desired_signature(ph, service_slug)
@@ -289,14 +314,12 @@ def evaluate(
             )
         tm = _tm_state(host_routes)
         change = _enabled_change(ph, tm)
-        return HostSync(
-            EXTERNAL,
-            [change] if change else [],
-            (["enable"] if ph.enabled else ["disable"]) if change else [],
-            route=route,
-            host_routes=host_routes,
-            tm=tm,
-        )
+        changes = [change] if change else []
+        actions = (["enable"] if ph.enabled else ["disable"]) if change else []
+        if service_slug_for_fb and ph.enabled and ph.pushed_sig != fb_sig:
+            changes.append("maintenance page fallback not applied yet")
+            actions.append("fallback")
+        return HostSync(EXTERNAL, changes, actions, route=route, host_routes=host_routes, tm=tm)
 
     # --- ours, but not in Traefik Manager yet ---------------------------------
     if route is None:
@@ -489,6 +512,7 @@ class ProxyPusher:
             (ph, hs)
             for ph in hosts
             if (hs := evaluate(adapters.proxy, ph, routes, slug_of(ph, services))).state != LOCAL
+            or hs.actions
         ]
         needs = [(ph, hs) for ph, hs in work if hs.pending]
         if routes is None and (needs or tombstones):
@@ -570,19 +594,31 @@ class ProxyPusher:
         def add(action: str, ok: bool, message: str = "") -> None:
             out.append(PushResult(TARGET, host, action, ok, message))
 
-        if hs.state == EXTERNAL:
-            # Never touch its content: only switch it on or off.
-            verb = "enable" if ph.enabled else "disable"
-            for route in hs.host_routes or ([hs.route] if hs.route else []):
-                try:
-                    await proxy.set_route_enabled(
-                        route.ref, ph.enabled, with_redirect=False, hostname=host
-                    )
-                except Exception as exc:
-                    add(verb, False, f"could not {verb} {route.name}: {exc}")
-                    return
-            add(verb, True, f"{verb}d the existing Traefik Manager route (content left alone)")
-            self._audit(session, actor, ph, [verb], external=True)
+        if hs.state in (EXTERNAL, LOCAL):
+            # Not our route: never touch its content - only switch it on or
+            # off, and put the maintenance-page fallback on it.
+            slug = slug_of(ph, services)
+            done: list[str] = []
+            if hs.state == EXTERNAL and ("enable" in hs.actions or "disable" in hs.actions):
+                verb = "enable" if ph.enabled else "disable"
+                for route in hs.host_routes or ([hs.route] if hs.route else []):
+                    try:
+                        await proxy.set_route_enabled(
+                            route.ref, ph.enabled, with_redirect=False, hostname=host
+                        )
+                    except Exception as exc:
+                        add(verb, False, f"could not {verb} {route.name}: {exc}")
+                        return
+                add(verb, True, f"{verb}d the existing Traefik Manager route (content left alone)")
+                done.append(verb)
+            if "fallback" in hs.actions and slug:
+                events = await proxy.ensure_maintenance_fallback(hostname=host, service_slug=slug)
+                audit_sync_events(session, actor, events)
+                ph.pushed_sig = fallback_signature(ph, slug)
+                session.add(ph)
+                add("fallback", True, "maintenance page fallback applied to the existing route")
+                done.append("fallback")
+            self._audit(session, actor, ph, done, external=True)
             return
 
         slug = slug_of(ph, services)
@@ -610,7 +646,7 @@ class ProxyPusher:
         created = False
         enabled_step = False
         updated = False
-        done: list[str] = []
+        done = []
 
         if hs.state == PENDING_CREATE:
             msg = await conflict_message(adapters, host, ref, None)

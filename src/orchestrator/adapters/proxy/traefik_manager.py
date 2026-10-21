@@ -958,6 +958,12 @@ class TraefikManagerProxyAdapter(ProxyAdapter):
                 )
             )
 
+    def maintenance_fallback_available(self) -> bool:
+        return bool(
+            self._settings.traefik_manager_url.strip()
+            and self._settings.orchestrator_public_url.strip()
+        )
+
     def route_ref_for(self, hostname: str) -> str:
         return route_name_for_hostname(hostname)
 

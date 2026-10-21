@@ -228,6 +228,12 @@ class ProxyAdapter(ABC):
     async def stop(self) -> None:  # noqa: B027 - deliberate default no-op, see start()
         """Close whatever :meth:`start` opened. Idempotent. Default no-op."""
 
+    def maintenance_fallback_available(self) -> bool:
+        """Is the maintenance-page fallback configured for this backend at all?
+        (Traefik Manager needs its URL and ORCHESTRATOR_PUBLIC_URL.) When it is
+        not, nothing about it is ever "pending"."""
+        return True
+
     def route_ref_for(self, hostname: str) -> str:
         """The reference :meth:`create_route` will return for ``hostname``,
         known BEFORE anything is written. The DB stamps it onto a new
