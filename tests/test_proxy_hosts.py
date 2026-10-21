@@ -330,7 +330,7 @@ def test_page_renders_for_logged_in_admin(client: TestClient, service: Service) 
     r = client.get("/proxy-hosts")
     assert r.status_code == 200
     assert "storm" in r.text
-    assert "source of truth for routes" in r.text
+    assert "working copy" in r.text and "Push now" in r.text
     assert 'href="/proxy-hosts/new"' in r.text  # dedicated add page, not an inline form
     assert "Resync from Traefik" in r.text
     assert (
