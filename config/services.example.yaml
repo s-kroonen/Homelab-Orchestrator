@@ -230,6 +230,9 @@ services:
         #                               (a wildcard needs a resolver with a DNS challenge)
         #   http_redirect: true         also answer plain HTTP and redirect it to HTTPS
         #                               (needs the TRAEFIK_REDIRECT_MIDDLEWARE middleware)
+        #   config_file: media.yml      the Traefik Manager config file a NEW route is created
+        #                               in (default: TRAEFIK_MANAGER_CONFIG_FILE, one file per
+        #                               service). An existing route stays where it is.
         route_options:
           http_redirect: true
 

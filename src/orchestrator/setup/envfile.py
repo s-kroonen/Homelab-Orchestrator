@@ -332,6 +332,15 @@ ENV_SECTIONS: tuple[EnvSection, ...] = (
                 "middleware). See docs/proxy_hosts.md.",
             ),
             EnvKey(
+                "TRAEFIK_MANAGER_CONFIG_FILE",
+                "Traefik Manager config file a NEW route is created in. {service} = the\n"
+                "linked service's slug, {hostname} = the hostname with dots as dashes.\n"
+                "Default keeps one file per service (media.yml) and leaves _shared.yml for\n"
+                "shared middlewares. Blank = Traefik Manager's own default file. A route\n"
+                "that already exists stays where it is until you move it. A host can\n"
+                "override this in its form. See docs/proxy_hosts.md.",
+            ),
+            EnvKey(
                 "ORCHESTRATOR_PUBLIC_URL",
                 "This orchestrator's own base URL AS REACHABLE FROM THE GATEWAY VM, e.g.\n"
                 "http://10.0.0.5:8000 — not necessarily what a browser uses. Backend\n"

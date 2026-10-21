@@ -37,7 +37,7 @@ from pydantic import BaseModel, Field, field_validator
 from sqlmodel import Session, select
 
 from orchestrator.adapters.factory import AdapterBundle
-from orchestrator.adapters.proxy.base import RouteInfo, RouteOptions, find_route
+from orchestrator.adapters.proxy.base import ConfigFiles, RouteInfo, RouteOptions, find_route
 from orchestrator.adapters.proxy.traefik_manager import is_plain_http_entrypoint
 from orchestrator.adapters.proxy.verify import (
     UNVERIFIED,
@@ -50,14 +50,17 @@ from orchestrator.audit import log as audit
 from orchestrator.db.models import ProxyHost, Service
 from orchestrator.domain.enums import RouterProvider
 from orchestrator.logging_setup import get_logger
+from orchestrator.registry.config_files import normalize_config_file, unknown_file_problem
 from orchestrator.registry.proxy_push import (
     TRAEFIK_MANAGER_ROUTE_REF_KEY,
     HostSync,
     add_pending_delete,
+    config_file_view,
     conflict_message,
     desired_signature,
     evaluate,
     is_live_managed,
+    move_to_configured_file,
     pending_deletes,
     ref_of,
     slug_of,
@@ -66,6 +69,7 @@ from orchestrator.registry.proxy_push import (
 from orchestrator.registry.proxy_validation import (
     normalize_hostname,
     parse_entry_points,
+    validate_cert_resolver,
     validate_proxy_host,
 )
 from orchestrator.registry.traefik_probes import ProbeSyncEvent, sync_traefik_probe
@@ -95,6 +99,8 @@ class LiveState:
     routes: list[RouteInfo] | None
     #: Traefik's runtime routers with status/error, when readable.
     runtime: list[RouteInfo] | None
+    #: Traefik Manager's config files, when readable (for the "lives in" note).
+    config_files: ConfigFiles | None = None
 
 
 async def _live_state(settings: Any, adapters: AdapterBundle) -> LiveState:
@@ -110,7 +116,8 @@ async def _live_state(settings: Any, adapters: AdapterBundle) -> LiveState:
     else:
         hostnames = await fetch_router_hostnames(settings)
     runtime = await adapters.proxy.list_runtime_routers()
-    return LiveState(hostnames=hostnames, routes=routes, runtime=runtime)
+    config_files = await adapters.proxy.list_config_files() if routes is not None else None
+    return LiveState(hostnames=hostnames, routes=routes, runtime=runtime, config_files=config_files)
 
 
 async def _live_hostnames(settings: Any, adapters: AdapterBundle) -> set[str] | None:
@@ -290,6 +297,7 @@ def _serialize(
     live_hostnames: set[str] | None,
     live: LiveState | None = None,
     sync: HostSync | None = None,
+    files: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     svc = services.get(ph.service_id)
     traefik = _traefik_block(ph, live)
@@ -339,7 +347,43 @@ def _serialize(
         # Traefik's verdict on the router itself (state ok / error / not_loaded
         # / unverified, with Traefik's own error text when it is broken).
         "traefik": traefik,
+        # Which Traefik Manager config file the route lives in vs where a new
+        # route would go (informational): config_file (the host's own override),
+        # config_file_resolved, tm_config_file, config_file_misplaced / _movable,
+        # config_file_note.
+        **(files if files is not None else _NO_FILES),
     }
+
+
+_NO_FILES: dict[str, Any] = {
+    "config_file": "",
+    "config_file_resolved": "",
+    "config_file_problem": None,
+    "tm_config_file": None,
+    "config_file_misplaced": False,
+    "config_file_movable": False,
+    "config_file_note": None,
+}
+
+
+def _files_view(
+    settings: Any,
+    adapters: AdapterBundle,
+    ph: ProxyHost,
+    services: dict[int, Service],
+    live: LiveState,
+    sync: HostSync,
+) -> dict[str, Any]:
+    if ph.router_provider is not RouterProvider.TRAEFIK:
+        return dict(_NO_FILES)
+    return config_file_view(
+        adapters.proxy,
+        settings,
+        ph,
+        slug_of(ph, services),
+        sync.route,
+        live.config_files,
+    )
 
 
 def _services_by_id(session: Session) -> dict[int, Service]:
@@ -374,7 +418,9 @@ async def _serialize_one(
     services = _services_by_id(session)
     live = await _live_state(settings, adapters)
     routes = await _sync_routes(settings, adapters, live)
-    return _serialize(ph, services, live.hostnames, live, _sync_for(adapters, ph, routes, services))
+    sync = _sync_for(adapters, ph, routes, services)
+    files = _files_view(settings, adapters, ph, services, live, sync)
+    return _serialize(ph, services, live.hostnames, live, sync, files)
 
 
 def _audit_probe_sync_events(
@@ -401,6 +447,8 @@ def _audit_probe_sync_events(
             "name": event.name,
             "source": "traefik",
         }
+        if event.enabled is not None:
+            details["enabled"] = event.enabled
         if event.config is not None:
             details["config"] = event.config
         audit.record(
@@ -410,6 +458,18 @@ def _audit_probe_sync_events(
             target=f"service:{slug}",
             details=details,
         )
+
+
+def _sync_probe_of(session: Session, settings: Any, ph: ProxyHost) -> list[ProbeSyncEvent]:
+    """Ensure the auto-managed probe of ``ph`` matches it right now (URL, Host
+    header and ``enabled``)."""
+    return sync_traefik_probe(
+        session,
+        settings,
+        hostname=ph.hostname,
+        service_id=ph.service_id,
+        enabled=ph.enabled,
+    )
 
 
 def _is_live_managed(body: ProxyHostIn) -> bool:
@@ -550,6 +610,13 @@ async def _prepare(
     else:
         raw_options = dict((existing.route_options if existing else None) or {})
     options = RouteOptions.from_dict(raw_options)
+    if options.config_file:
+        try:
+            raw_options["config_file"] = normalize_config_file(options.config_file)
+        except ValueError as exc:
+            errors["config_file"] = str(exc)
+        else:
+            options = RouteOptions.from_dict(raw_options)
     # All-defaults is stored as {} so the YAML / DB copies of an untouched host
     # stay empty.
     route_options = {} if options == RouteOptions() else options.to_dict()
@@ -568,6 +635,25 @@ async def _prepare(
             route_options=raw_options,
         )
     )
+    if catalog is not None:
+        # A resolver / file added to Traefik Manager a moment ago is not in the
+        # 30 s cache yet: look again before telling the operator it does not exist.
+        if "cert_resolver" in errors or (
+            options.config_file
+            and "config_file" not in errors
+            and unknown_file_problem(options.config_file, catalog.config_files)
+        ):
+            catalog = await get_catalog(settings, adapters.proxy, refresh=True)
+            if "cert_resolver" in errors:
+                again = validate_cert_resolver(cert_resolver, catalog.cert_resolvers)
+                if again is None:
+                    del errors["cert_resolver"]
+                else:
+                    errors["cert_resolver"] = again
+        if options.config_file and "config_file" not in errors:
+            problem = unknown_file_problem(options.config_file, catalog.config_files)
+            if problem:
+                errors["config_file"] = problem
     if live_managed and options.http_redirect and "http_redirect" not in errors:
         wanted = (settings.traefik_redirect_middleware or "redirect-to-https").strip()
         have = await adapters.proxy.list_middlewares()
@@ -623,10 +709,12 @@ async def list_proxy_hosts(
     # One poll for the whole page load, not one per row.
     live = await _live_state(settings, adapters)
     routes = await _sync_routes(settings, adapters, live)
-    return [
-        _serialize(ph, services, live.hostnames, live, _sync_for(adapters, ph, routes, services))
-        for ph in hosts
-    ]
+    out: list[dict[str, Any]] = []
+    for ph in hosts:
+        sync = _sync_for(adapters, ph, routes, services)
+        files = _files_view(settings, adapters, ph, services, live, sync)
+        out.append(_serialize(ph, services, live.hostnames, live, sync, files))
+    return out
 
 
 @router.get("/{proxy_host_id}")
@@ -691,7 +779,7 @@ async def create_proxy_host(
         },
     )
     probe_events = sync_traefik_probe(
-        session, settings, hostname=ph.hostname, service_id=ph.service_id
+        session, settings, hostname=ph.hostname, service_id=ph.service_id, enabled=ph.enabled
     )
     _audit_probe_sync_events(session, admin, probe_events)
     session.commit()
@@ -751,11 +839,9 @@ async def resync_proxy_hosts(
         # matches — this is what closes the gap for rows that already had a
         # service_id before this feature existed. A no-op when the probe
         # already matches, or when the host isn't linked to a service.
-        probe_events.extend(
-            sync_traefik_probe(session, settings, hostname=ph.hostname, service_id=ph.service_id)
-        )
         match = hostname_to_router.get(ph.hostname)
         if match is None:
+            probe_events.extend(_sync_probe_of(session, settings, ph))
             continue
         svc_slug = slug_of(ph, services_map)
         # Adopting Traefik Manager's state means "in sync" for a host whose
@@ -778,6 +864,8 @@ async def resync_proxy_hosts(
         if was_current and (upstream_changed or enabled_changed):
             ph.pushed_sig = desired_signature(ph, svc_slug)
         session.add(ph)
+        # After the enabled state was adopted, so the probe follows it.
+        probe_events.extend(_sync_probe_of(session, settings, ph))
         updated.append(
             {
                 "id": ph.id,
@@ -913,6 +1001,7 @@ async def update_proxy_host(
         service_id=ph.service_id,
         old_hostname=before["hostname"],
         old_service_id=before["service_id"],
+        enabled=ph.enabled,
     )
     _audit_probe_sync_events(session, admin, probe_events)
     session.commit()
@@ -1032,6 +1121,13 @@ async def set_proxy_host_enabled(
         target=f"proxy_host:{ph.hostname}",
         details={"id": ph.id, "changed": was != enabled},
     )
+    # The host's diagnostic probe follows immediately (a local change, not a
+    # push): a disabled host is not served, so its probe must not fail the
+    # service. ``required`` / timeout are kept for the way back.
+    probe_events = sync_traefik_probe(
+        session, settings, hostname=ph.hostname, service_id=ph.service_id, enabled=enabled
+    )
+    _audit_probe_sync_events(session, admin, probe_events)
     session.commit()
     session.refresh(ph)
     return await _serialize_one(session, settings, adapters, ph)
@@ -1067,6 +1163,31 @@ async def set_proxy_host_wake_on_hit(
     return {"id": ph.id, "hostname": ph.hostname, "wake_on_hit": ph.wake_on_hit}
 
 
+@router.post("/{proxy_host_id}/move-config-file")
+async def move_config_file(
+    proxy_host_id: int,
+    session: SessionDep,
+    admin: CurrentAdmin,
+    settings: SettingsDep,
+    adapters: AdaptersDep,
+) -> dict[str, Any]:
+    """Opt-in: re-save this host's route into the config file it resolves to
+    (its own ``config_file``, else ``TRAEFIK_MANAGER_CONFIG_FILE``) and verify the
+    result. Traefik Manager IS written to here, immediately - this is an
+    explicit action like Push now, not a local edit. Refused (409) for a route
+    that is not ours, a disabled host, or when the move cannot be verified."""
+    ph = _get_or_404(session, proxy_host_id)
+    result = await move_to_configured_file(session, adapters, settings, ph, actor=admin.username)
+    if not result.ok:
+        session.rollback()
+        raise _fail(status.HTTP_409_CONFLICT, result.message)
+    session.commit()
+    session.refresh(ph)
+    out = await _serialize_one(session, settings, adapters, ph)
+    out["move"] = result.as_dict()
+    return out
+
+
 @router.post("/{proxy_host_id}/enabled")
 async def set_enabled(
     proxy_host_id: int,
@@ -1088,12 +1209,22 @@ catalog_router = APIRouter(
 
 @catalog_router.get("/entrypoints")
 async def proxy_entrypoints(
-    settings: SettingsDep, adapters: AdaptersDep, refresh: bool = False
+    settings: SettingsDep,
+    adapters: AdaptersDep,
+    refresh: bool = False,
+    service: str | None = None,
+    hostname: str = "example.com",
 ) -> dict[str, Any]:
     """What the live proxy offers for a new route: its entry points (name +
-    address), the known certificate resolvers, and the pre-selection for a new
-    host. ``source`` is ``"unavailable"`` when Traefik Manager (or Traefik
+    address), the known certificate resolvers (``cert_resolvers`` plus
+    ``cert_resolver_sources`` - where each was seen), Traefik Manager's config
+    files (``config_files``, ``config_file_template`` and ``default_config_file``
+    for the optional ``service`` slug / ``hostname``), and the pre-selection for a
+    new host. ``source`` is ``"unavailable"`` when Traefik Manager (or Traefik
     behind it) could not be read - the form then falls back to a free-text
     field. Cached ~30s; ``?refresh=true`` re-reads."""
     catalog = await get_catalog(settings, adapters.proxy, refresh=refresh)
-    return catalog.as_dict()
+    slug = service
+    if slug is not None and not slug.strip():
+        slug = None
+    return catalog.as_dict(service_slug=slug, hostname=hostname)

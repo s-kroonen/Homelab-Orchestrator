@@ -50,6 +50,7 @@ from orchestrator.registry.schema import (
     RegistryFile,
     ServiceSpec,
 )
+from orchestrator.registry.traefik_probes import probe_name_for_hostname
 
 log = get_logger(__name__)
 
@@ -112,6 +113,11 @@ def write_yaml_file(path: Path, registry: RegistryFile) -> str:
     # mode="json" so enums serialise to their string values and datetimes/
     # paths are stringified — ruamel's default representer only handles primitives.
     body = registry.model_dump(mode="json", exclude_defaults=False)
+    for svc in body.get("services", []):
+        for probe in svc.get("probes", []):
+            # ``enabled: true`` is the default - only a switched-off probe says so.
+            if probe.get("enabled", True):
+                probe.pop("enabled", None)
     buf = io.BytesIO()
     _yaml.dump(body, buf)
     data = buf.getvalue()
@@ -179,6 +185,7 @@ def _spec_from_db(session: Session) -> RegistryFile:
                         timeout_s=p.timeout_s,
                         order=p.order,
                         config=p.config,
+                        enabled=p.enabled,
                     )
                     for p in probes
                 ],
@@ -477,6 +484,10 @@ def reconcile_yaml_into_db(session: Session, path: Path) -> RegistryFile:
             session.delete(old_ph)
         session.flush()
 
+        # A registry saved before probes had ``enabled`` still lists the
+        # ``traefik:<hostname>`` probe of a disabled host as on: the host is not
+        # served, so the probe follows it (the same rule the proxy-host sync applies).
+        parked = {probe_name_for_hostname(h.hostname) for h in spec.proxy_hosts if not h.enabled}
         for pspec in spec.probes:
             session.add(
                 Probe(
@@ -487,6 +498,7 @@ def reconcile_yaml_into_db(session: Session, path: Path) -> RegistryFile:
                     timeout_s=pspec.timeout_s,
                     order=pspec.order,
                     config=pspec.config,
+                    enabled=pspec.enabled and pspec.name not in parked,
                 )
             )
         for phspec in spec.proxy_hosts:

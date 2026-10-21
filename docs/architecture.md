@@ -70,6 +70,12 @@ A scan runs three stages in order; each one short-circuits the rest:
 2. **Dependencies** — any `depends_on` service not HEALTHY makes this one
    UNKNOWN (`blocked: dependency 'nas' is DOWN (guest vm 9001 is stopped)…`).
 3. **Probes** — the required probes aggregate into one of the states below.
+   A probe with `enabled: false` is not run: it is recorded as `skipped —
+   disabled` and never counted (not in the aggregation, the backup gate, the
+   health history or the badge); with every probe disabled the "no required
+   probe -> UNKNOWN" rule applies. The auto-created `traefik:<hostname>` probe
+   follows its proxy host's `enabled` flag (kept with its `required` / timeout
+   while off) - see [proxy_hosts.md](proxy_hosts.md#feeding-traefiks-view-into-the-services-own-health-verdict).
 
 | State    | Meaning                                                                                          | Backup gate |
 | -------- | ------------------------------------------------------------------------------------------------ | ----------- |
@@ -456,7 +462,7 @@ probe runs). Full detail: [service_ips.md](service_ips.md).
 Chosen so YAML edits stay safe and history stays intact:
 
 * `service.node_id` → `RESTRICT` (removing a node while services reference it is a YAML error, not a silent orphan).
-* `probe.service_id` → `CASCADE` (probes are meaningless without their service).
+* `probe.service_id` → `CASCADE` (probes are meaningless without their service). `probe.enabled` (migration `0016`, server default true) switches a probe off without deleting it.
 * `service_state.service_id` → `CASCADE` (state is per-service).
 * `proxy_host.service_id` → `SET NULL` (a route observed for a removed service is still worth keeping until scan re-verifies it's gone).
 * `backup_record.service_id` → `SET NULL` + denormalised `service_slug` (backup history survives the service being removed from YAML).

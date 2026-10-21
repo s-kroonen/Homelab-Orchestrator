@@ -40,6 +40,13 @@
         exists). <strong>Entry points</strong> shows what the host is bound to.
       </p>
       <p>
+        <strong>file:</strong> under a hostname is the Traefik Manager config file its route lives in.
+        New routes are created in the file <code>TRAEFIK_MANAGER_CONFIG_FILE</code> resolves to
+        (default <code>&lt;service&gt;.yml</code>; a host can override it in its form). A route that is
+        somewhere else - say <code>_shared.yml</code> - is only flagged, never touched by a push;
+        <strong>Move</strong> relocates it, on request.
+      </p>
+      <p>
         <strong>Enabled</strong> switches a host off without deleting it - locally; the route is
         parked on Traefik Manager (its own disabled-routes store) when the change is pushed.
         Tick several rows to enable, disable, delete or change wake on hit in one go (also
@@ -105,6 +112,8 @@
   .router-status { margin-top: 0.3rem; }
   .router-error { font-size: 0.78rem; color: #9aa4b2; margin-top: 0.25rem; max-width: 22rem; overflow-wrap: anywhere; white-space: normal; }
   .router-error.bad { color: #e5534b; }
+  .host-file { font-size: 0.75rem; margin-top: 0.2rem; max-width: 16rem; overflow-wrap: anywhere; white-space: normal; }
+  .host-file.file-off { color: #e5a63e; }
   .host-err { display: none; font-size: 0.78rem; color: #e5534b; margin-top: 0.3rem; max-width: 14rem; overflow-wrap: anywhere; white-space: normal; }
   @media (max-width: 40rem) { .host-err { display: block; } }
   .ep-badge { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
@@ -547,6 +556,17 @@
         warn.textContent = "Router error: " + h.traefik.message;
         hostTd.appendChild(warn);
       }
+      if (h.router_provider === "traefik" && h.tm_config_file) {
+        // Which Traefik Manager config file the route lives in. A route in
+        // _shared.yml (or any file other than the one this host resolves to) is
+        // flagged - informationally, never as an error.
+        const file = document.createElement("div");
+        file.className = "msg host-file" + (h.config_file_misplaced ? " file-off" : " muted");
+        file.textContent = "file: " + h.tm_config_file
+          + (h.config_file_misplaced ? " (new routes: " + h.config_file_resolved + ")" : "");
+        file.title = h.config_file_note || ("The route lives in " + h.tm_config_file + " in Traefik Manager.");
+        hostTd.appendChild(file);
+      }
       tr.appendChild(hostTd);
       tr.appendChild(enabledCell(h));
       tr.appendChild(cell(h.upstream || "—", "c-up nowrap"));
@@ -610,6 +630,15 @@
         pushBtn.addEventListener("click", () => pushNow([h.hostname]));
         actions.append(pushBtn, " ");
       }
+      if (h.config_file_movable) {
+        const mv = document.createElement("button");
+        mv.className = "secondary small";
+        mv.textContent = "Move";
+        mv.title = "Move the route to " + h.config_file_resolved + " in Traefik Manager now "
+          + "(opt-in; it is verified afterwards). " + (h.config_file_note || "");
+        mv.addEventListener("click", () => moveHost(h));
+        actions.append(mv, " ");
+      }
       actions.append(edit, " ", del);
       tr.appendChild(actions);
       body.appendChild(tr);
@@ -649,6 +678,23 @@
     td.appendChild(b);
     td.className = "c-en";
     return td;
+  }
+
+  // Opt-in: re-save the route into the config file this host resolves to.
+  // POST /api/proxy-hosts/{id}/move-config-file writes Traefik Manager right away.
+  async function moveHost(h) {
+    if (!confirm(`Move ${h.hostname} from ${h.tm_config_file} to ${h.config_file_resolved}? `
+      + "Traefik Manager is written immediately; middlewares added to the route by hand "
+      + "in Traefik Manager are not carried along.")) return;
+    try {
+      await apiFetch("POST", `/api/proxy-hosts/${h.id}/move-config-file`, undefined, { suppressToast: true });
+    } catch (err) {
+      setMsg("registry-msg", err.message, "error");
+      if (window.toast) toast(err.message, "error");
+      return;
+    }
+    setMsg("registry-msg", `${h.hostname} moved to ${h.config_file_resolved} and verified.`, "ok");
+    await refreshAll();
   }
 
   async function removeHost(h) {

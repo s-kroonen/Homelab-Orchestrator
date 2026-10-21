@@ -436,15 +436,45 @@ def probe_list(slug: str | None, path_override: str | None) -> None:
             click.secho(f"{s}: not in the registry", fg="red")
             continue
         probes = svc.get("probes") or []
-        gating = sum(1 for p in probes if p.get("required", True))
+        gating = sum(1 for p in probes if p.get("required", True) and p.get("enabled", True))
         if not probes:
             # This is the state that makes the gate refuse a backup, so say so.
             click.secho(f"{s}: no probes — backups will be REFUSED (UNKNOWN)", fg="yellow")
             continue
-        click.secho(f"{s}: {len(probes)} probe(s), {gating} gating", bold=True)
+        off = sum(1 for p in probes if not p.get("enabled", True))
+        off_note = f", {off} disabled" if off else ""
+        click.secho(f"{s}: {len(probes)} probe(s), {gating} gating{off_note}", bold=True)
         for p in probes:
-            mark = "REQ " if p.get("required", True) else "diag"
+            if not p.get("enabled", True):
+                mark = "off "
+            else:
+                mark = "REQ " if p.get("required", True) else "diag"
             click.echo(f"    {mark} {p.get('name'):<22} {p.get('kind')}")
+
+
+@probe.command("disable")
+@click.argument("slug")
+@click.argument("name")
+@click.option("--file", "path_override", default=None)
+def probe_disable(slug: str, name: str, path_override: str | None) -> None:
+    """Switch probe NAME off without deleting it (it is not run and never
+    affects the verdict; its required/timeout settings are kept)."""
+    editor = open_editor(path_override)
+    if not editor.set_probe_enabled(slug, name, False):
+        raise click.ClickException(f"no probe named {name!r} on {slug!r}")
+    save(editor, f"probe {name!r} on {slug!r} disabled")
+
+
+@probe.command("enable")
+@click.argument("slug")
+@click.argument("name")
+@click.option("--file", "path_override", default=None)
+def probe_enable(slug: str, name: str, path_override: str | None) -> None:
+    """Switch probe NAME back on."""
+    editor = open_editor(path_override)
+    if not editor.set_probe_enabled(slug, name, True):
+        raise click.ClickException(f"no probe named {name!r} on {slug!r}")
+    save(editor, f"probe {name!r} on {slug!r} enabled")
 
 
 @probe.command("remove")
@@ -492,6 +522,62 @@ def _live_catalog() -> tuple[list[Any] | None, list[str] | None]:
         return None, None
 
 
+def _live_resolver_sources() -> dict[str, list[str]] | None:
+    """Every certificate resolver the proxy can be seen to have, with where each
+    was seen (Traefik Manager settings, Traefik's static config, a router that
+    uses it, TRAEFIK_DEFAULT_CERT_RESOLVER). ``None`` when no source is readable."""
+    settings = get_settings()
+
+    async def _go() -> dict[str, list[str]] | None:
+        adapters = build_adapters(settings)
+        await adapters.proxy.start()
+        try:
+            return await adapters.proxy.list_cert_resolver_sources()
+        finally:
+            await adapters.proxy.stop()
+
+    try:
+        return asyncio.run(_go())
+    except Exception:
+        return None
+
+
+def _print_resolvers(sources: dict[str, list[str]] | None) -> None:
+    from orchestrator.adapters.proxy.base import CERT_RESOLVER_SOURCE_LABELS
+
+    click.secho("Certificate resolvers:", bold=True)
+    if sources is None:
+        click.echo("    (unknown - no source could be read)")
+    elif not sources:
+        click.echo("    (none configured)")
+    else:
+        for name, tags in sources.items():
+            seen = ", ".join(CERT_RESOLVER_SOURCE_LABELS.get(t, t) for t in tags)
+            click.echo(f"    {name:<24} {seen}")
+
+
+@proxy.command("resolvers")
+def proxy_resolvers() -> None:
+    """List the certificate resolvers and where each one was seen.
+
+    The union of Traefik Manager's own setting, the resolvers declared in
+    Traefik's static config (needs Traefik Manager's static config path), the
+    resolvers routers really use, and TRAEFIK_DEFAULT_CERT_RESOLVER. Exits 1 when
+    none of those can be read, so scripts can tell.
+    """
+    configure_logging()
+    sources = _live_resolver_sources()
+    _print_resolvers(sources)
+    if sources is None:
+        click.secho(
+            "Resolvers unavailable: Traefik Manager is not configured (TRAEFIK_MANAGER_URL) "
+            "or could not be reached.",
+            fg="yellow",
+            err=True,
+        )
+        raise SystemExit(1)
+
+
 @proxy.command("entrypoints")
 def proxy_entrypoints() -> None:
     """List the entry points (and cert resolvers) the proxy reports.
@@ -514,14 +600,10 @@ def proxy_entrypoints() -> None:
     for ep in eps:
         note = "  (Traefik's internal API/dashboard - not usable for routers)"
         click.echo(f"    {ep.name:<16} {ep.address}{note if ep.name == 'traefik' else ''}")
-    click.secho("Certificate resolvers:", bold=True)
     if resolvers is None:
-        click.echo("    (unknown - the manager does not report them)")
-    elif not resolvers:
-        click.echo("    (none configured)")
+        _print_resolvers(None)
     else:
-        for name in resolvers:
-            click.echo(f"    {name}")
+        _print_resolvers(_live_resolver_sources() or {n: [] for n in resolvers})
     default = resolve_default_entry_points(settings.default_entry_points_list, eps)
     click.echo(
         f"Default for a new host: {', '.join(default) if default else '(none - choose one)'}"
@@ -837,7 +919,16 @@ def proxy_status() -> None:
 @proxy.command("push")
 @click.option("--yes", is_flag=True, help="Skip the confirmation.")
 @click.option("--hostname", "hostnames", multiple=True, help="Only these hostnames (repeatable).")
-def proxy_push(yes: bool, hostnames: tuple[str, ...]) -> None:
+@click.option(
+    "--move-config-file",
+    "moves",
+    multiple=True,
+    metavar="HOSTNAME",
+    help="Opt-in: also move this host's existing route into the Traefik Manager config "
+    "file it resolves to (TRAEFIK_MANAGER_CONFIG_FILE or its own config_file), then verify "
+    "(repeatable). A normal push never moves a route.",
+)
+def proxy_push(yes: bool, hostnames: tuple[str, ...], moves: tuple[str, ...]) -> None:
     """Push the live DB's proxy hosts to Traefik Manager now.
 
     Same engine as the dashboard's Save to YAML / Push now, run in-process: it
@@ -846,7 +937,8 @@ def proxy_push(yes: bool, hostnames: tuple[str, ...]) -> None:
     One failing host does not stop the others; exits 1 if any item failed.
     services.yaml is NOT written (Save to YAML does that).
     """
-    from orchestrator.registry.push import apply_all, status_all
+    from orchestrator.registry.proxy_push import move_to_configured_file
+    from orchestrator.registry.push import PushResult, apply_all, status_all
 
     configure_logging()
     build_engine()
@@ -870,6 +962,19 @@ def proxy_push(yes: bool, hostnames: tuple[str, ...]) -> None:
                     session, adapters, names=["proxy"], only=only, actor="cli"
                 )
                 session.commit()
+                for hostname in moves:
+                    ph = session.exec(
+                        select(ProxyHost).where(ProxyHost.hostname == hostname.strip().lower())
+                    ).first()
+                    if ph is None:
+                        results.append(
+                            PushResult("proxy", hostname, "move", False, "no such proxy host")
+                        )
+                        continue
+                    results.append(
+                        await move_to_configured_file(session, adapters, settings, ph, actor="cli")
+                    )
+                    session.commit()
                 return results
         finally:
             await adapters.proxy.stop()
@@ -958,7 +1063,7 @@ def service_list(path_override: str | None) -> None:
     click.echo(f"{'SLUG':<24} {'NODE':<10} {'GUEST':<10} {'BACKUP':<10} {'PROBES':<14} NEEDS")
     for svc in services:
         probes = svc.get("probes") or []
-        gating = sum(1 for p in probes if p.get("required", True))
+        gating = sum(1 for p in probes if p.get("required", True) and p.get("enabled", True))
         guest = f"{svc.get('guest_kind', '?')}/{svc.get('guest_id', '?')}"
         needs = _effective_requires(editor, svc)
         stuck = [n for n in needs if n in unwakeable]

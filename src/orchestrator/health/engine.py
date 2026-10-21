@@ -18,6 +18,13 @@ Two deliberate choices in that rule:
 
 Non-required probes are recorded for the dashboard and ignored by the verdict.
 
+A **disabled** probe (``Probe.enabled = False``) is not run at all. It is recorded
+in the verdict's probe results as skipped ("disabled") so the dashboard can say
+so, but it is never counted: not in the aggregation (even if it is ``required``),
+not in the backup gate, not in the health history and not in the service badge —
+those all derive from the verdict. If every probe is disabled the ordinary "no
+required probe -> UNKNOWN" rule applies, unchanged.
+
 Order of a scan (each stage short-circuits the ones after it):
 
     guest gate    node offline / guest not running -> DOWN    (no probes run)
@@ -238,6 +245,9 @@ class HealthEngine:
 
         results: list[ProbeResult] = []
         for row in rows:
+            if not row.enabled:
+                results.append(self._disabled_result(row))
+                continue
             results.append(await self.run_probe(row))
 
         verdict = self.aggregate(rows, results)
@@ -275,6 +285,17 @@ class HealthEngine:
             node_name=node.name if node else None,
             guest_kind=service.guest_kind,
             guest_id=service.guest_id,
+        )
+
+    @staticmethod
+    def _disabled_result(row: ProbeRow) -> ProbeResult:
+        """A switched-off probe: recorded as skipped, never run, never counted."""
+        return ProbeResult(
+            probe_name=row.name,
+            kind=row.kind,
+            state=HealthState.UNKNOWN,
+            message="skipped — disabled",
+            details={"skipped": True, "skipped_because": "disabled"},
         )
 
     @staticmethod
@@ -437,8 +458,13 @@ class HealthEngine:
         self, rows: list[ProbeRow] | tuple[ProbeRow, ...], results: list[ProbeResult]
     ) -> ServiceVerdict:
         """Combine probe results into one verdict. See the module docstring."""
-        required_by_name = {r.name for r in rows if r.required}
-        required = [r for r in results if r.probe_name in required_by_name]
+        # A disabled probe never counts, even when it is required: its result is
+        # only a "skipped" marker. With nothing else required this falls through to
+        # the "no required probe -> UNKNOWN" rule below.
+        required_by_name = {r.name for r in rows if r.required and r.enabled}
+        required = [
+            r for r in results if r.probe_name in required_by_name and not r.details.get("skipped")
+        ]
 
         if not required:
             return ServiceVerdict(

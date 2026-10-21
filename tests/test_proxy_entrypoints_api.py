@@ -175,11 +175,24 @@ def test_entrypoints_endpoint_shape(service: Service, monkeypatch: pytest.Monkey
         ],
         "cert_resolvers": ["letsencrypt", "cloudflare"],
         "cert_resolvers_known": True,
+        "cert_resolver_sources": {"letsencrypt": ["tm_settings"], "cloudflare": ["tm_settings"]},
+        "cert_resolver_source_labels": {
+            "tm_settings": "Traefik Manager settings",
+            "static_config": "static config",
+            "runtime_router": "used by a router",
+            "default_setting": "TRAEFIK_DEFAULT_CERT_RESOLVER",
+        },
         "default_entrypoints": ["websecure"],
         "default_cert_resolver": "",
         "domains": [],
         "redirect_middleware": "redirect-to-https",
         "redirect_available": None,
+        "config_files": [],
+        "config_files_known": True,
+        "config_files_can_create": None,
+        "config_file_default": "",
+        "config_file_template": "{service}.yml",
+        "default_config_file": "",
         "source": "traefik_manager",
     }
 
@@ -239,17 +252,24 @@ def test_default_setting_wins_when_valid_and_is_ignored_when_not(
     assert body["default_entrypoints"] == ["web"] and body["default_cert_resolver"] == "letsencrypt"
 
 
-def test_default_setting_that_does_not_exist_falls_back_to_websecure(
+def test_default_entry_point_that_does_not_exist_falls_back_to_websecure(
     service: Service, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    c = _client(
-        monkeypatch,
-        FakeTM(),
-        TRAEFIK_DEFAULT_ENTRYPOINTS="https",
-        TRAEFIK_DEFAULT_CERT_RESOLVER="nope",
-    )
+    c = _client(monkeypatch, FakeTM(), TRAEFIK_DEFAULT_ENTRYPOINTS="https")
     body = c.get("/api/proxy/entrypoints").json()
-    assert body["default_entrypoints"] == ["websecure"] and body["default_cert_resolver"] == ""
+    assert body["default_entrypoints"] == ["websecure"]
+
+
+def test_the_configured_default_resolver_is_itself_one_of_the_sources(
+    service: Service, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """TRAEFIK_DEFAULT_CERT_RESOLVER is part of the union (tagged), so a default
+    only Traefik's static config knows about is still offered and pre-selected."""
+    c = _client(monkeypatch, FakeTM(), TRAEFIK_DEFAULT_CERT_RESOLVER="mine")
+    body = c.get("/api/proxy/entrypoints").json()
+    assert body["default_cert_resolver"] == "mine"
+    assert body["cert_resolvers"] == ["letsencrypt", "mine"]
+    assert body["cert_resolver_sources"]["mine"] == ["default_setting"]
 
 
 # ---------------------------------------------------------------------------

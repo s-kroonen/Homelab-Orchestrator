@@ -290,6 +290,19 @@ class RegistryEditor:
         probes.append(_to_commented(probe))
         return "added"
 
+    def set_probe_enabled(self, slug: str, name: str, enabled: bool) -> bool:
+        """Switch a probe on or off. ``enabled: true`` is the default, so
+        enabling removes the key instead of writing it. False when there is no
+        probe by that name."""
+        for probe in self.probes(slug):
+            if probe.get("name") == name:
+                if enabled:
+                    probe.pop("enabled", None)
+                else:
+                    probe["enabled"] = False
+                return True
+        return False
+
     def remove_probe(self, slug: str, name: str) -> bool:
         svc = self.require_service(slug)
         probes = self.probes(slug)

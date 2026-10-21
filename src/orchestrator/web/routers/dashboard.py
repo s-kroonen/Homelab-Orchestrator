@@ -54,9 +54,11 @@ from orchestrator.registry.loader import (
     save_registry_to_yaml,
 )
 from orchestrator.registry.probe_specs import PROBE_SPECS
-from orchestrator.registry.push import apply_all, get_pushers, status_all, summarize
+from orchestrator.registry.proxy_push import move_to_configured_file
+from orchestrator.registry.push import PushResult, apply_all, get_pushers, status_all, summarize
 from orchestrator.web.auth import CurrentAdmin, require_admin
 from orchestrator.web.deps import AdaptersDep, SessionDep, SettingsDep
+from orchestrator.web.proxy_catalog import get_catalog
 
 router = APIRouter(prefix="/api", tags=["dashboard"], dependencies=[Depends(require_admin)])
 
@@ -163,6 +165,8 @@ class ProbeCreate(_Body):
     #: None -> appended after the service's existing probes.
     order: int | None = None
     config: dict[str, Any] = Field(default_factory=dict)
+    #: False = created switched off (not run, never in the verdict).
+    enabled: bool = True
 
 
 class ProbeUpdate(_Body):
@@ -172,6 +176,7 @@ class ProbeUpdate(_Body):
     timeout_s: int | None = None
     order: int | None = None
     config: dict[str, Any] | None = None
+    enabled: bool | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -200,6 +205,7 @@ def _probe_dict(probe: Probe) -> dict[str, Any]:
         "timeout_s": probe.timeout_s,
         "order": probe.order,
         "config": probe.config,
+        "enabled": probe.enabled,
     }
 
 
@@ -540,18 +546,31 @@ class PushIn(BaseModel):
     hostnames: list[str] | None = None
     #: Only report what would be done.
     dry_run: bool = False
+    #: Opt-in: also move these hosts' routes into the config file they resolve to
+    #: (``TRAEFIK_MANAGER_CONFIG_FILE`` / their own ``config_file``), after the
+    #: normal push. Existing routes are never moved otherwise.
+    move_config_files: list[str] | None = None
 
 
 @router.get("/push/status")
-async def push_status(session: SessionDep, adapters: AdaptersDep) -> dict[str, object]:
-    """What is not pushed yet, per outside service. Read-only."""
+async def push_status(
+    session: SessionDep, adapters: AdaptersDep, settings: SettingsDep
+) -> dict[str, object]:
+    """What is not pushed yet, per outside service. Read-only. Also re-reads the
+    proxy catalog (entry points, certificate resolvers, config files), so a
+    resolver or file added in Traefik Manager shows up in the next form."""
+    await get_catalog(settings, adapters.proxy, refresh=True)
     statuses = await status_all(session, adapters)
     return {"targets": [st.as_dict() for st in statuses]}
 
 
 @router.post("/push")
 async def push_now(
-    body: PushIn, session: SessionDep, adapters: AdaptersDep, admin: CurrentAdmin
+    body: PushIn,
+    session: SessionDep,
+    adapters: AdaptersDep,
+    admin: CurrentAdmin,
+    settings: SettingsDep,
 ) -> dict[str, object]:
     """Push now: bring the outside services in line with the DB, without
     touching services.yaml. Returns one item per thing done (or, with
@@ -573,11 +592,36 @@ async def push_now(
         actor=admin.username,
     )
     session.commit()
+    if body.move_config_files:
+        await get_catalog(settings, adapters.proxy, refresh=True)
+        results.extend(await _move_hosts(session, adapters, settings, admin, body))
     return {
         "dry_run": body.dry_run,
         "results": [r.as_dict() for r in results],
         "summary": summarize(results),
     }
+
+
+async def _move_hosts(
+    session: Session, adapters: Any, settings: Any, admin: CurrentAdmin, body: PushIn
+) -> list[PushResult]:
+    """The opt-in "Move to configured file" part of a push, one result per host."""
+    out: list[PushResult] = []
+    for hostname in body.move_config_files or []:
+        host = hostname.strip().lower()
+        ph = session.exec(select(ProxyHost).where(ProxyHost.hostname == host)).first()
+        if ph is None:
+            out.append(PushResult("proxy", host, "move", False, "no such proxy host"))
+        elif body.dry_run:
+            out.append(
+                PushResult("proxy", host, "move", True, "would move to its configured file", True)
+            )
+        else:
+            out.append(
+                await move_to_configured_file(session, adapters, settings, ph, actor=admin.username)
+            )
+            session.commit()
+    return out
 
 
 @router.post("/registry/reset")
@@ -1001,6 +1045,7 @@ async def create_probe(
         timeout_s=timeout_s,
         order=order,
         config=body.config,
+        enabled=body.enabled,
     )
     session.add(probe)
     session.flush()
@@ -1038,7 +1083,7 @@ def apply_probe_update(
         _check_probe_name_free(session, probe.service_id, changes["name"], exclude_id=probe.id)
     if "kind" in changes:
         changes["kind"] = _parse_probe_kind(changes["kind"] or "")
-    for key in ("required", "timeout_s", "order"):
+    for key in ("required", "timeout_s", "order", "enabled"):
         if key in changes and changes[key] is None:
             raise _bad_request(f"{key} must not be null")
     if "timeout_s" in changes and changes["timeout_s"] <= 0:

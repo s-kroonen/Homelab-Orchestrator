@@ -72,6 +72,7 @@ from ruamel.yaml import YAML
 
 from orchestrator.adapters.proxy.base import (
     AccessLogTail,
+    ConfigFiles,
     EntryPointInfo,
     ProxyAdapter,
     ProxyRouteNotFound,
@@ -82,6 +83,11 @@ from orchestrator.adapters.proxy.base import (
 )
 from orchestrator.config import Settings
 from orchestrator.logging_setup import get_logger
+from orchestrator.registry.config_files import (
+    normalize_config_file,
+    same_file,
+    unknown_file_problem,
+)
 from orchestrator.registry.traefik_status import extract_hostnames
 
 log = get_logger(__name__)
@@ -876,14 +882,24 @@ class TraefikManagerProxyAdapter(ProxyAdapter):
         hostname: str,
         existing: RouteInfo | None,
         config_file: str = "",
+        move_to: str = "",
     ) -> None:
         """The companion router on the plain-HTTP entry point that redirects to
         HTTPS and shares the main route's service - the pair every hand-written
         ``<name>-redirect`` / ``<name>`` setup has. ``existing`` is the
         companion Traefik Manager already lists (edit it by its real id and
         file), or ``None`` to create it (next to the main route, in
-        ``config_file``)."""
+        ``config_file``). ``move_to`` re-saves ``existing`` into that file
+        (Traefik Manager removes it from the file named in the ``<file>::``
+        prefix of ``originalId``)."""
         rid = redirect_route_id(route_ref)
+        original_id = existing.ref if existing is not None else ""
+        target_file = existing.config_file if existing is not None else config_file
+        if existing is not None and move_to:
+            original_id = (
+                f"{existing.config_file}::{existing.name}" if existing.config_file else existing.ref
+            )
+            target_file = move_to
         await self._save_route(
             service_name=rid,
             protocol="http",
@@ -893,8 +909,8 @@ class TraefikManagerProxyAdapter(ProxyAdapter):
             middlewares=self._settings.traefik_redirect_middleware.strip() or "redirect-to-https",
             service_ref=f"{route_ref}-service",
             is_edit=existing is not None,
-            original_id=existing.ref if existing is not None else "",
-            config_file=existing.config_file if existing is not None else config_file,
+            original_id=original_id,
+            config_file=target_file,
         )
 
     async def _sync_redirect_route(
@@ -981,11 +997,13 @@ class TraefikManagerProxyAdapter(ProxyAdapter):
         entry_points: Sequence[str],
         cert_resolver: str = "",
         options: RouteOptions | None = None,
+        config_file: str = "",
     ) -> str:
         opts = options or RouteOptions()
         scheme, host, port = self._target_or_raise(upstream)
         eps, resolver = await self._route_fields(entry_points, cert_resolver)
         name = route_name_for_hostname(hostname)
+        cfile = await self._checked_config_file(config_file)
         await self._save_route(
             service_name=name,
             protocol="http",
@@ -995,24 +1013,181 @@ class TraefikManagerProxyAdapter(ProxyAdapter):
             entry_points=eps,
             cert_resolver=resolver,
             is_edit=False,
+            config_file=cfile,
             scheme=scheme,
             pass_host_header=opts.pass_host_header,
             skip_verify=opts.skip_upstream_tls_verify,
             tls_main=opts.tls_main,
             tls_sans=opts.tls_sans,
         )
-        if opts.http_redirect:
+        try:
+            if opts.http_redirect:
+                # The companion goes into the SAME file as its main route.
+                await self._save_redirect_route(
+                    name, hostname=hostname, existing=None, config_file=cfile
+                )
+            if cfile:
+                await self._confirm_created_in(name, hostname, cfile)
+        except Exception:
+            # Never leave a half-made pair (or a route in the wrong file) behind:
+            # the caller treats this create as failed and keeps no record of it.
             try:
-                await self._save_redirect_route(name, hostname=hostname, existing=None)
-            except Exception:
-                # Never leave a half-made pair behind: the caller treats this
-                # create as failed and keeps no record of it.
-                try:
-                    await self._delete_route(name)
-                except Exception as exc:  # pragma: no cover - best effort
-                    log.warning("traefik_manager.redirect_rollback_failed", error=str(exc))
-                raise
+                await self._delete_route(name, cfile)
+            except Exception as exc:  # pragma: no cover - best effort
+                log.warning("traefik_manager.create_rollback_failed", error=str(exc))
+            raise
         return name
+
+    async def _checked_config_file(self, config_file: str) -> str:
+        """The config file name to post, or ``ValueError`` when Traefik Manager
+        would NOT write to it (a fixed ``CONFIG_PATHS`` without it): its ``/save``
+        then quietly uses its default file - never let that happen unnoticed."""
+        cfile = normalize_config_file(config_file)
+        if not cfile:
+            return ""
+        problem = unknown_file_problem(cfile, await self.list_config_files())
+        if problem:
+            raise ValueError(problem)
+        return cfile
+
+    async def _confirm_created_in(self, name: str, hostname: str, cfile: str) -> None:
+        """Read the new route back and make sure it is in ``cfile``. A manager
+        that reports no config files (single fixed file) says ``""`` - nothing
+        to compare then."""
+        routes = await self._read_routes()
+        here = [r for r in routes if r.name == name and hostname in r.hostnames]
+        if here and all(r.config_file and not same_file(r.config_file, cfile) for r in here):
+            raise TraefikManagerUnavailable(
+                f"Traefik Manager saved the new route {name} into {here[0].config_file} instead "
+                f"of {cfile} (it only writes to the files it knows) - it was removed again."
+            )
+
+    async def list_config_files(self) -> ConfigFiles | None:
+        """``GET /api/configs`` - ``{"files": [{"label", "path"}], "configDirSet"}``.
+        With ``CONFIG_DIR`` set Traefik Manager creates an unknown ``<name>.yml``
+        in it; with only ``CONFIG_PATHS`` it uses its DEFAULT file for a name it
+        does not know. Older versions without the endpoint are read from the
+        ``configFile`` of ``GET /api/routes`` (``can_create`` then unknown)."""
+        if not self._settings.traefik_manager_url.strip():
+            return None
+        response: Any = None
+        try:
+            async with self._client() as client:
+                response = await self._get_json(client, "/api/configs")
+        except TraefikManagerNotConfigured:
+            return None
+        except TraefikManagerError as exc:
+            log.info("traefik_manager.configs_unavailable", error=str(exc))
+        files_raw = response.get("files") if isinstance(response, dict) else None
+        if isinstance(files_raw, list):
+            names: list[str] = []
+            for item in files_raw:
+                label = item.get("label") if isinstance(item, dict) else item
+                if isinstance(label, str) and label.strip() and label.strip() not in names:
+                    names.append(label.strip())
+            return ConfigFiles(
+                files=tuple(names),
+                can_create=bool(response.get("configDirSet")),
+                default=names[0] if names else "",
+            )
+        routes = await self.list_routes()
+        if routes is None:
+            return None
+        seen = sorted({r.config_file for r in routes if r.config_file})
+        return ConfigFiles(files=tuple(seen), can_create=None)
+
+    async def move_route(
+        self,
+        route_ref: str,
+        *,
+        hostname: str,
+        upstream: str,
+        entry_points: Sequence[str],
+        cert_resolver: str = "",
+        options: RouteOptions | None = None,
+        config_file: str,
+    ) -> str:
+        """Move a route (and its redirect companion) into ``config_file``.
+
+        Traefik Manager's ``/save`` moves a route when ``originalId`` carries the
+        ``<old file>::<name>`` prefix and ``configFile`` names another file: it
+        removes the router (and its service, unless another router shares it)
+        from the old file and writes both into the new one. The prefix is built
+        here even when Traefik Manager lists bare ids (a ``CONFIG_DIR`` with one
+        file), or it would treat the save as an edit in the NEW file and leave
+        the old copy behind.
+
+        The companion is moved FIRST: it references the main route's service by
+        name, and while it still sits in the old file that service counts as
+        shared and would not be removed from there. Everything is read back
+        afterwards - exactly one copy of each router, in ``config_file``."""
+        target = await self._checked_config_file(config_file)
+        if not target:
+            raise ValueError("a target config file is required to move a route")
+        opts = options or RouteOptions()
+        scheme, host, port = self._target_or_raise(upstream)
+        eps, resolver = await self._route_fields(entry_points, cert_resolver)
+        routes = await self._read_routes()
+        main = find_route(routes, route_ref, hostname)
+        if main is None:
+            raise ProxyRouteNotFound(f"{route_ref}: not found")
+        if same_file(main.config_file, target):
+            return main.config_file
+        if not main.config_file:
+            raise TraefikManagerUnavailable(
+                "Traefik Manager does not report which config file this route is in "
+                "(it has a single config file), so there is nothing to move it between."
+            )
+        if not main.enabled:
+            raise TraefikManagerUnavailable(
+                "the route is switched off in Traefik Manager - it is parked outside its config "
+                "file there. Enable it (push), move it, then disable it again."
+            )
+        rid = redirect_route_id(main.name)
+        siblings = [r for r in routes if rid in (r.route_id, r.name)]
+        beside = [r for r in siblings if r.config_file == main.config_file]
+        companion = (beside or [None])[0]
+        if companion is not None and not companion.enabled:
+            raise TraefikManagerUnavailable(
+                "the HTTP -> HTTPS redirect router is switched off in Traefik Manager - enable it "
+                "first (push), then move the route."
+            )
+        old_file = main.config_file
+        if companion is not None:
+            await self._save_redirect_route(
+                main.name, hostname=hostname, existing=companion, move_to=target
+            )
+        try:
+            await self._save_route(
+                service_name=main.name,
+                protocol="http",
+                target_ip=host,
+                target_port=port,
+                http_rule=f"Host(`{hostname}`)",
+                entry_points=eps,
+                cert_resolver=resolver,
+                is_edit=True,
+                original_id=f"{old_file}::{main.name}",
+                config_file=target,
+                scheme=scheme,
+                pass_host_header=opts.pass_host_header,
+                skip_verify=opts.skip_upstream_tls_verify,
+                tls_main=opts.tls_main,
+                tls_sans=opts.tls_sans,
+            )
+        except TraefikManagerNotFound as exc:
+            raise ProxyRouteNotFound(str(exc)) from exc
+        # Read it back: Traefik Manager answers 200 even when it wrote elsewhere.
+        after = await self._read_routes()
+        for name in (main.name, *([rid] if companion is not None else [])):
+            copies = [r for r in after if r.name == name and hostname in r.hostnames]
+            if len(copies) != 1 or not same_file(copies[0].config_file, target):
+                where = ", ".join(r.config_file or "(default)" for r in copies) or "nowhere"
+                raise TraefikManagerUnavailable(
+                    f"Traefik Manager accepted the move but {name} is now in {where}, expected "
+                    f"only {target} (it was in {old_file}) - check both files in Traefik Manager."
+                )
+        return target
 
     async def update_route(
         self,
@@ -1274,9 +1449,11 @@ class TraefikManagerProxyAdapter(ProxyAdapter):
     # ``GET /api/traefik/entrypoints`` - Traefik Manager proxies Traefik's own
     # ``/api/entrypoints`` (a JSON list of ``{"name": "web", "address": ":80",
     # ...}``), or answers 502 ``{"error": "Traefik API unreachable"}``.
-    # ``GET /api/settings`` carries the operator's configured
-    # ``cert_resolver`` (comma-separated); Traefik Manager exposes no list of
-    # the resolvers declared in Traefik's static config over its API.
+    # Certificate resolvers have no endpoint of their own: they are the union of
+    # ``GET /api/settings`` (``cert_resolver``, comma-separated), the static
+    # config (``GET /api/static/config`` -> ``parsed.certificatesResolvers``,
+    # only when Traefik Manager has the static config path set) and the
+    # resolvers the runtime routers use - see :meth:`list_cert_resolver_sources`.
 
     async def list_entrypoints(self) -> list[EntryPointInfo] | None:
         if not self._settings.traefik_manager_url.strip():
@@ -1300,9 +1477,9 @@ class TraefikManagerProxyAdapter(ProxyAdapter):
                 )
         return found
 
-    async def list_cert_resolvers(self) -> list[str] | None:
-        if not self._settings.traefik_manager_url.strip():
-            return None
+    async def _resolvers_from_settings(self) -> list[str] | None:
+        """(a) ``GET /api/settings`` -> ``cert_resolver``, Traefik Manager's own
+        comma list. ``None`` = not readable."""
         try:
             async with self._client() as client:
                 response = await self._get_json(client, "/api/settings")
@@ -1312,9 +1489,71 @@ class TraefikManagerProxyAdapter(ProxyAdapter):
         raw = response.get("cert_resolver") if isinstance(response, dict) else None
         if not isinstance(raw, str):
             return None
-        names: list[str] = []
-        for part in raw.split(","):
-            part = part.strip()
-            if part and part.lower() != "none" and part not in names:
-                names.append(part)
-        return names
+        return [
+            part.strip()
+            for part in raw.split(",")
+            if part.strip() and part.strip().lower() != "none"
+        ]
+
+    async def _resolvers_from_static_config(self) -> list[str] | None:
+        """(b) ``certificatesResolvers`` of Traefik's static configuration.
+
+        ``GET /api/static/config`` answers ``{"raw", "parsed", "path"}`` when
+        Traefik Manager has ``STATIC_CONFIG_PATH`` (or Settings -> static config
+        path) configured and the file is mounted into ITS container; otherwise
+        404 ``{"error": ...}`` (500 when the file is not valid YAML). Any of
+        those is "not available", never an error. Needs only the same API key as
+        every other read."""
+        try:
+            async with self._client() as client:
+                response = await self._get_json(client, "/api/static/config")
+        except TraefikManagerError as exc:
+            log.info("traefik_manager.static_config_unavailable", error=str(exc))
+            return None
+        parsed = response.get("parsed") if isinstance(response, dict) else None
+        if not isinstance(parsed, dict):
+            return None
+        resolvers = parsed.get("certificatesResolvers")
+        if not isinstance(resolvers, dict):
+            return []
+        return [str(k).strip() for k in resolvers if str(k).strip()]
+
+    async def list_cert_resolver_sources(self) -> dict[str, list[str]] | None:
+        """The union of every place a certificate resolver can be seen, each name
+        tagged with the sources that report it (stable order: Traefik Manager's
+        setting, Traefik's static config, resolvers routers really use, then
+        ``TRAEFIK_DEFAULT_CERT_RESOLVER``):
+
+        * ``tm_settings`` - ``/api/settings`` ``cert_resolver``;
+        * ``static_config`` - ``/api/static/config`` ``certificatesResolvers``;
+        * ``runtime_router`` - ``tls.certResolver`` of a router Traefik serves;
+        * ``default_setting`` - the orchestrator's own default.
+
+        ``None`` when none of the three live sources could be read (the
+        configured default alone proves nothing about what exists) - the caller
+        then offers free text. A source that cannot be read just adds nothing."""
+        if not self._settings.traefik_manager_url.strip():
+            return None
+        from_settings = await self._resolvers_from_settings()
+        from_static = await self._resolvers_from_static_config()
+        runtime = await self.list_runtime_routers()
+        from_runtime = (
+            None if runtime is None else [r.cert_resolver for r in runtime if r.cert_resolver]
+        )
+        if from_settings is None and from_static is None and from_runtime is None:
+            return None
+        out: dict[str, list[str]] = {}
+        for tag, names in (
+            ("tm_settings", from_settings),
+            ("static_config", from_static),
+            ("runtime_router", from_runtime),
+            ("default_setting", [self._settings.traefik_default_cert_resolver]),
+        ):
+            for raw in names or []:
+                name = str(raw).strip()
+                if not name or name.lower() == "none":
+                    continue
+                tags = out.setdefault(name, [])
+                if tag not in tags:
+                    tags.append(tag)
+        return out

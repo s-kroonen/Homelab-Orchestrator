@@ -197,6 +197,8 @@
         <span class="hint" id="p-kind-summary"></span>
         <label for="p-required">Required</label>
         <span><input id="p-required" type="checkbox"> <span class="muted">(required probes gate backups)</span></span>
+        <label for="p-enabled">Enabled</label>
+        <span><input id="p-enabled" type="checkbox"> <span class="muted">(a disabled probe is not run and never affects the verdict; its settings are kept)</span></span>
         <label for="p-timeout">Timeout (s)</label>
         <input id="p-timeout" type="number" min="1" style="width: 6rem">
         <label for="p-order">Order</label>
@@ -705,11 +707,20 @@
     }
     for (const p of SERVICE.probes) {
       const tr = document.createElement("tr");
+      if (p.enabled === false) tr.className = "probe-off";
       const cells = [String(p.order), p.name, p.kind, p.required ? "yes" : "no", `${p.timeout_s}s`];
       for (const text of cells) {
         const td = document.createElement("td");
         td.textContent = text;
         tr.appendChild(td);
+      }
+      if (p.enabled === false) {
+        const off = document.createElement("span");
+        off.className = "badge disabled";
+        off.textContent = "disabled";
+        off.title = "Not run and not counted in the verdict. Its required/timeout settings are kept."
+          + (p.name.startsWith("traefik:") ? " This probe follows its proxy host's enabled switch." : "");
+        tr.children[1].append(" ", off);
       }
       // Last scan's outcome for this probe, under its name.
       const last = LAST_PROBE_RESULTS[p.name];
@@ -755,6 +766,24 @@
           test.textContent = "Test";
         }
       });
+      const toggle = document.createElement("button");
+      toggle.className = "secondary";
+      toggle.textContent = p.enabled === false ? "Enable" : "Disable";
+      toggle.title = p.enabled === false
+        ? "Run this probe again"
+        : "Stop running this probe; keep its settings";
+      toggle.addEventListener("click", async () => {
+        toggle.disabled = true;
+        const turningOn = p.enabled === false;
+        try {
+          await apiFetch("PUT", "/api/registry/probes/" + p.id, { enabled: turningOn }, { suppressToast: true });
+          await reloadProbes();
+          setMsg("probes-msg", `${p.name} ${turningOn ? "enabled" : "disabled"}. Remember to Save to YAML.`, "ok");
+        } catch (err) {
+          toggle.disabled = false;
+          setMsg("probes-msg", err.message, "error");
+        }
+      });
       const edit = document.createElement("button");
       edit.className = "secondary";
       edit.textContent = "Edit";
@@ -772,7 +801,7 @@
           setMsg("probes-msg", err.message, "error");
         }
       });
-      actions.append(test, " ", edit, " ", del);
+      actions.append(test, " ", toggle, " ", edit, " ", del);
       tr.appendChild(actions);
       body.appendChild(tr);
       body.appendChild(resultRow);
@@ -925,6 +954,7 @@
     $("p-name").value = probe ? probe.name : "";
     $("p-kind").value = kind;
     $("p-required").checked = probe ? probe.required : true;
+    $("p-enabled").checked = probe ? probe.enabled !== false : true;
     $("p-timeout").value = probe ? probe.timeout_s : kindInfo(kind).default_timeout_s;
     const nextOrder = SERVICE.probes.reduce((m, p) => Math.max(m, p.order), -1) + 1;
     $("p-order").value = probe ? probe.order : nextOrder;
@@ -959,6 +989,7 @@
         name: $("p-name").value.trim(),
         kind,
         required: $("p-required").checked,
+        enabled: $("p-enabled").checked,
         timeout_s: Number($("p-timeout").value),
         order: Number($("p-order").value),
         config: collectConfig(kind, base),

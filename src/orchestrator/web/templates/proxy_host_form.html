@@ -120,6 +120,20 @@
         <div class="field-error" data-error-for="http_redirect" role="alert"></div>
       </div>
 
+      <label for="ph-config-file" class="ep-row">Config file</label>
+      <div class="field ep-row">
+        <input id="ph-config-file" list="ph-config-files" autocomplete="off" spellcheck="false"
+               placeholder="(from TRAEFIK_MANAGER_CONFIG_FILE)">
+        <datalist id="ph-config-files"></datalist>
+        <div class="msg" id="cf-note"></div>
+        <div class="notice cf-current" id="cf-current" hidden>
+          <span id="cf-current-text"></span>
+          <button type="button" class="secondary small" id="cf-move" hidden></button>
+          <span class="msg" id="cf-move-msg"></span>
+        </div>
+        <div class="field-error" data-error-for="config_file" role="alert"></div>
+      </div>
+
       <label for="ph-service">Linked service</label>
       <div class="field">
         <select id="ph-service" required>
@@ -190,6 +204,8 @@
   .svc-ip-note { margin-top: 0.3rem; }
   .svc-ip-note:empty { display: none; }
   .svc-ip-note code, .ip-helper code { font-size: 0.8rem; }
+  .cf-current { margin-top: 0.4rem; font-size: 0.85rem; line-height: 1.4; display: flex; flex-wrap: wrap; gap: 0.4rem 0.6rem; align-items: center; }
+  .cf-current #cf-current-text { min-width: 0; overflow-wrap: anywhere; }
   #ep-warning { margin-bottom: 0.5rem; background: #3b2e14; color: #e5a63e; padding: 0.5rem 0.7rem; border-radius: 0.4rem; font-size: 0.85rem; line-height: 1.4; }
   @media (max-width: 40rem) {
     form#ph-form { grid-template-columns: minmax(0, 1fr); }
@@ -311,11 +327,19 @@
     sel.add(none);
     const names = [...cat.cert_resolvers];
     if (state.resolver && !names.includes(state.resolver)) names.push(state.resolver);
+    const labels = cat.cert_resolver_source_labels || {};
     for (const n of names) {
       const known_ = cat.cert_resolvers.includes(n);
-      sel.add(new Option(known_ ? n : `${n} (not known to Traefik Manager)`, n));
+      // Where Traefik / Traefik Manager reports it: "letsencrypt-dns (static config)".
+      const where = ((cat.cert_resolver_sources || {})[n] || []).map((s) => labels[s] || s);
+      const opt = new Option(
+        known_ ? (where.length ? `${n} (${where[0]})` : n) : `${n} (not known to Traefik)`, n);
+      if (where.length) opt.title = `Seen in: ${where.join(", ")}`;
+      sel.add(opt);
     }
     sel.value = state.resolver;
+    const src = (cat.cert_resolver_sources || {})[state.resolver] || [];
+    sel.title = src.length ? `Seen in: ${src.map((s) => labels[s] || s).join(", ")}` : "";
   }
 
   function currentEntryPoints() {
@@ -390,8 +414,60 @@
       pass_host_header: document.getElementById("opt-pass-host").checked,
       skip_upstream_tls_verify: document.getElementById("opt-skip-verify").checked,
       http_redirect: document.getElementById("opt-redirect").checked,
+      config_file: document.getElementById("ph-config-file").value.trim(),
       ...currentTls(),
     };
+  }
+
+  // --- config file ----------------------------------------------------------
+  // Mirrors registry/config_files.py: the per-host override, else the
+  // TRAEFIK_MANAGER_CONFIG_FILE template with {service} / {hostname}.
+  function normFile(name) {
+    const n = name.trim();
+    if (!n) return "";
+    return /\.ya?ml$/i.test(n) ? n : n + ".yml";
+  }
+
+  function singleFileManager(cat) {
+    return !!cat && cat.config_files_known && cat.config_files_can_create === false
+      && cat.config_files.length <= 1;
+  }
+
+  function defaultConfigFile() {
+    const cat = state.catalog || {};
+    if (singleFileManager(cat)) return cat.config_files[0] || "";
+    const tpl = cat.config_file_template === undefined ? "{service}.yml" : cat.config_file_template;
+    if (!tpl.trim()) return "";
+    const svc = SERVICE_IPS[document.getElementById("ph-service").value];
+    const slug = svc ? svc.slug : "";
+    const host = document.getElementById("ph-hostname").value.trim().toLowerCase().replaceAll(".", "-");
+    return normFile(tpl.replaceAll("{service}", slug).replaceAll("{hostname}", host));
+  }
+
+  function renderConfigFile() {
+    const cat = state.catalog || {};
+    const input = document.getElementById("ph-config-file");
+    const list = document.getElementById("ph-config-files");
+    list.innerHTML = "";
+    for (const f of cat.config_files || []) list.appendChild(new Option(f, f));
+    const def = defaultConfigFile();
+    input.placeholder = def
+      ? `${def} (default)`
+      : "Traefik Manager's own default file";
+    const note = document.getElementById("cf-note");
+    const typed = normFile(input.value);
+    const effective = typed || def;
+    let text = effective
+      ? `A new route is created in ${effective}.`
+      : "A new route is created in Traefik Manager's default file.";
+    text += " A route that already exists stays in its file until you move it.";
+    if (cat.config_files_known && cat.config_files_can_create === true) {
+      text += " Traefik Manager creates a file that does not exist yet.";
+    } else if (cat.config_files_known && cat.config_files_can_create === false) {
+      text += " Traefik Manager can only write to the files it already has"
+        + (cat.config_files.length ? ` (${cat.config_files.join(", ")}).` : ".");
+    }
+    note.textContent = text;
   }
 
   function initRouteOptions() {
@@ -406,6 +482,8 @@
     document.getElementById("opt-redirect").checked = stored
       ? !!o.http_redirect
       : cat.redirect_available === true;
+    document.getElementById("ph-config-file").value = (stored && o.config_file) || "";
+    renderConfigFile();
     document.getElementById("redirect-mw").textContent = cat.redirect_middleware || "redirect-to-https";
     document.getElementById("redirect-note").textContent = cat.redirect_available === false
       ? `The "${cat.redirect_middleware}" middleware was not found in Traefik — create it once, ` +
@@ -429,7 +507,10 @@
     } catch (err) {
       state.catalog = { source: "unavailable", entrypoints: [], cert_resolvers: [],
                         cert_resolvers_known: false, default_entrypoints: [], default_cert_resolver: "",
-                        domains: [], redirect_middleware: "redirect-to-https", redirect_available: null };
+                        domains: [], redirect_middleware: "redirect-to-https", redirect_available: null,
+                        cert_resolver_sources: {}, cert_resolver_source_labels: {},
+                        config_files: [], config_files_known: false, config_files_can_create: null,
+                        config_file_template: "{service}.yml" };
     }
   }
 
@@ -481,6 +562,7 @@
     await loadCatalog(true);
     renderEntryPoints();
     renderCertModes();
+    renderConfigFile();
     toast(state.catalog.source === "unavailable"
       ? "Traefik Manager did not answer — entry points are unavailable."
       : "Entry points refreshed.", state.catalog.source === "unavailable" ? "error" : "ok");
@@ -564,7 +646,7 @@
   // docs/service_ips.md). Filling the upstream is always an explicit click:
   // a typed upstream is never overwritten behind the operator's back.
   const SERVICE_IPS = Object.fromEntries(
-    {{ services | tojson }}.map((s) => [String(s.id), { ip: s.ip, source: s.ip_source }]));
+    {{ services | tojson }}.map((s) => [String(s.id), { ip: s.ip, source: s.ip_source, slug: s.slug }]));
 
   function urlHost(ip) { return ip.includes(":") ? `[${ip}]` : ip; }
 
@@ -594,7 +676,9 @@
     helper.hidden = false;
   }
 
-  document.getElementById("ph-service").addEventListener("change", syncServiceIp);
+  document.getElementById("ph-service").addEventListener("change", () => { syncServiceIp(); renderConfigFile(); });
+  document.getElementById("ph-hostname").addEventListener("input", renderConfigFile);
+  document.getElementById("ph-config-file").addEventListener("input", renderConfigFile);
   document.getElementById("ph-use-ip").addEventListener("click", () => {
     const info = SERVICE_IPS[document.getElementById("ph-service").value];
     if (!info || !info.ip) return;
@@ -605,6 +689,43 @@
     up.dispatchEvent(new Event("input", { bubbles: true }));
   });
 
+  // --- where the route lives now (edit mode) --------------------------------
+  // Informational: a route in _shared.yml (or any file other than the one this host
+  // resolves to) is flagged, never treated as an error. Moving is an explicit click.
+  function showCurrentFile(h) {
+    const box = document.getElementById("cf-current");
+    if (h.router_provider !== "traefik" || !h.tm_config_file) {
+      box.hidden = true;
+      return;
+    }
+    const text = document.getElementById("cf-current-text");
+    text.textContent = h.config_file_misplaced
+      ? h.config_file_note
+      : `The route currently lives in ${h.tm_config_file} in Traefik Manager.`;
+    box.hidden = false;
+    const btn = document.getElementById("cf-move");
+    btn.hidden = !h.config_file_movable;
+    if (!h.config_file_movable) return;
+    btn.textContent = `Move to ${h.config_file_resolved}`;
+    btn.title = "Re-saves the route into that file in Traefik Manager right now (its redirect "
+      + "router goes with it) and checks the result. Save this form first if you changed the file above.";
+    btn.onclick = async () => {
+      if (!confirm(`Move ${h.hostname} from ${h.tm_config_file} to ${h.config_file_resolved}? `
+        + "Traefik Manager is written immediately; middlewares added to the route by hand in "
+        + "Traefik Manager are not carried along.")) return;
+      btn.disabled = true;
+      setMsg("cf-move-msg", "Moving…");
+      try {
+        await apiFetch("POST", `/api/proxy-hosts/${PROXY_HOST_ID}/move-config-file`, undefined, { suppressToast: true });
+        setMsg("cf-move-msg", "Moved and verified.", "ok");
+        setTimeout(() => location.reload(), 700);
+      } catch (err) {
+        setMsg("cf-move-msg", err.message, "error");
+        btn.disabled = false;
+      }
+    };
+  }
+
   // --- enable / disable (edit mode) ---------------------------------------
   const toggleBtn = document.getElementById("toggle-enabled");
   if (toggleBtn) {
@@ -614,6 +735,7 @@
       .then((h) => {
         const tm = h.tm_state;
         const el = document.getElementById("state-tm");
+        showCurrentFile(h);
         if (h.router_provider !== "traefik" || h.sync_state === "local") return;
         const label = { in_sync: "in sync", pending_create: "pending", pending_update: "pending",
                         detached: "detached", external: "external" }[h.sync_state] || h.sync_state;

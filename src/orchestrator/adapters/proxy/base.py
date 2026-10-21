@@ -104,6 +104,38 @@ class EntryPointInfo:
     address: str = ""
 
 
+#: Human labels for the sources a certificate resolver can be seen in (the key
+#: is what :meth:`ProxyAdapter.list_cert_resolver_sources` tags a name with).
+CERT_RESOLVER_SOURCE_LABELS = {
+    "tm_settings": "Traefik Manager settings",
+    "static_config": "static config",
+    "runtime_router": "used by a router",
+    "default_setting": "TRAEFIK_DEFAULT_CERT_RESOLVER",
+}
+
+
+@dataclass(frozen=True)
+class ConfigFiles:
+    """The config files the proxy manager can write routes into (Traefik
+    Manager: its ``CONFIG_PATHS`` / ``CONFIG_DIR``), as bare file names.
+
+    ``can_create`` says whether a name that is not in ``files`` would be created
+    (Traefik Manager with ``CONFIG_DIR`` set creates ``<name>.yml`` there) or
+    silently replaced by its DEFAULT file (it has only a fixed ``CONFIG_PATHS``
+    list - then an unknown name must be refused, never posted). ``None`` =
+    could not tell. ``default`` is the file a save with no file name lands in.
+    """
+
+    files: tuple[str, ...] = ()
+    can_create: bool | None = None
+    default: str = ""
+
+    @property
+    def single(self) -> bool:
+        """Exactly one fixed file: there is no choice to make."""
+        return len(self.files) <= 1 and self.can_create is False
+
+
 @dataclass(frozen=True)
 class RouteOptions:
     """How a live route is built beyond hostname/upstream/entry points.
@@ -120,6 +152,11 @@ class RouteOptions:
       (e.g. ``kroon-en.nl`` + ``*.kroon-en.nl``) instead of one per host.
       Needs a cert resolver able to do it (DNS challenge for a wildcard).
     * ``http_redirect``: also answer plain HTTP and redirect it to HTTPS.
+    * ``config_file``: the proxy manager's config file this host's route should
+      live in (Traefik Manager: ``media.yml``). Blank = the configured template
+      (``TRAEFIK_MANAGER_CONFIG_FILE``). It decides where a NEW route is created;
+      an existing route stays where it is until it is explicitly moved. It is a
+      property of the record, not of the route's content.
     """
 
     pass_host_header: bool = True
@@ -127,6 +164,7 @@ class RouteOptions:
     tls_main: str = ""
     tls_sans: tuple[str, ...] = ()
     http_redirect: bool = False
+    config_file: str = ""
 
     @classmethod
     def from_dict(cls, data: dict[str, Any] | None) -> RouteOptions:
@@ -140,6 +178,7 @@ class RouteOptions:
             tls_main=str(data.get("tls_main") or "").strip(),
             tls_sans=tuple(s.strip() for s in sans if str(s).strip()),
             http_redirect=bool(data.get("http_redirect", False)),
+            config_file=str(data.get("config_file") or "").strip(),
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -149,7 +188,15 @@ class RouteOptions:
             "tls_main": self.tls_main,
             "tls_sans": list(self.tls_sans),
             "http_redirect": self.http_redirect,
+            "config_file": self.config_file,
         }
+
+    def content_dict(self) -> dict[str, Any]:
+        """:meth:`to_dict` without the fields that are not part of the route's
+        content (``config_file`` only says where it is created)."""
+        out = self.to_dict()
+        out.pop("config_file", None)
+        return out
 
 
 @dataclass(frozen=True)
@@ -304,11 +351,16 @@ class ProxyAdapter(ABC):
         entry_points: Sequence[str],
         cert_resolver: str = "",
         options: RouteOptions | None = None,
+        config_file: str = "",
     ) -> str:
         """Create a real route on this backend for ``hostname`` -> ``upstream``,
         bound to exactly ``entry_points`` (never empty - an implementation
         raises ``ValueError`` rather than let the backend pick a default
         that may not exist) with TLS from ``cert_resolver`` (empty = none).
+        ``config_file`` names the backend's config file to create it in (blank =
+        the backend's default); an implementation that cannot write to that file
+        raises ``ValueError`` naming the files it can, rather than put the route
+        somewhere else.
 
         Returns an opaque, backend-specific reference (a route id) the
         caller MUST persist (``ProxyHost.extra``) in order to target this
@@ -352,6 +404,31 @@ class ProxyAdapter(ABC):
         record can choose to treat "already gone on the backend" as
         success rather than blocking the local delete on it.
         """
+
+    async def move_route(
+        self,
+        route_ref: str,
+        *,
+        hostname: str,
+        upstream: str,
+        entry_points: Sequence[str],
+        cert_resolver: str = "",
+        options: RouteOptions | None = None,
+        config_file: str,
+    ) -> str:
+        """Re-save the route ``route_ref`` identifies into ``config_file`` (and
+        take it out of the file it was in), together with its companion
+        redirect route, then READ IT BACK. Returns the file it now lives in.
+        An explicit, opt-in action: raises on any failure, including a route
+        that is not where it was expected afterwards. Default: the backend has
+        no config files to move between."""
+        raise NotImplementedError(f"{type(self).__name__} cannot move a route between config files")
+
+    async def list_config_files(self) -> ConfigFiles | None:
+        """The config files routes can be written into, or ``None`` when this
+        backend has no such notion or cannot be read (callers then skip the
+        check and offer free text)."""
+        return None
 
     async def set_route_enabled(
         self,
@@ -434,10 +511,17 @@ class ProxyAdapter(ABC):
         such view or cannot be reached; callers then fall back to free text."""
         return None
 
+    async def list_cert_resolver_sources(self) -> dict[str, list[str]] | None:
+        """Certificate resolver names this backend knows about, each with the
+        sources that report it (stable order, de-duplicated), or ``None`` when
+        no source can be read (the caller then offers a free-text field)."""
+        return None
+
     async def list_cert_resolvers(self) -> list[str] | None:
         """Certificate resolver names this backend knows about, or ``None``
         when it cannot say (the caller then offers a free-text field)."""
-        return None
+        sources = await self.list_cert_resolver_sources()
+        return None if sources is None else list(sources)
 
     async def list_domains(self) -> list[str] | None:
         """Base domains the operator serves (Traefik Manager's configured
