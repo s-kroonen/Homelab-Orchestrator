@@ -453,7 +453,7 @@ def test_edit_page_has_the_enable_switch(service: Service, monkeypatch: pytest.M
     assert 'id="toggle-enabled"' in html and "Disable" in html
     client.post(f"/api/proxy-hosts/{pid}/enabled", json={"enabled": False})
     html = client.get(f"/proxy-hosts/{pid}/edit").text
-    assert "cannot be edited" in html and ">Enable</button>" in html
+    assert "parked" in html and ">Enable</button>" in html
 
 
 def test_link_buttons_keep_their_colour_when_visited() -> None:

@@ -292,6 +292,12 @@ def _serialize(
     sync: HostSync | None = None,
 ) -> dict[str, Any]:
     svc = services.get(ph.service_id)
+    traefik = _traefik_block(ph, live)
+    if traefik is not None and sync is not None and "disable" in sync.actions:
+        # Switched off here, but the push that parks the route has not run yet.
+        traefik["message"] = (
+            "Disabled here - Traefik Manager still serves the route until you push."
+        )
     return {
         # Where this host stands against Traefik Manager (registry/proxy_push.py):
         # in_sync / pending_create / pending_update / detached / external / local,
@@ -332,7 +338,7 @@ def _serialize(
         ),
         # Traefik's verdict on the router itself (state ok / error / not_loaded
         # / unverified, with Traefik's own error text when it is broken).
-        "traefik": _traefik_block(ph, live),
+        "traefik": traefik,
     }
 
 
@@ -407,7 +413,7 @@ def _audit_probe_sync_events(
 
 
 def _is_live_managed(body: ProxyHostIn) -> bool:
-    """A ``ProxyHost`` write-through to the real backend applies only when
+    """A ``ProxyHost`` is pushed to the real backend only when
     ALL hold: ``router_provider`` is ``traefik`` (the only backend with an
     adapter today), an ``upstream`` is actually given — a route cannot
     be created on Traefik Manager with no backend target — and the request is

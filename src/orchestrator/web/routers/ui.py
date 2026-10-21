@@ -340,8 +340,9 @@ async def new_proxy_host_page(
     """Dedicated add page (``docs/roadmap.md``'s "dedicated add/edit pages"
     small feature) — replaces the bottom-of-page form that used to live on
     ``/proxy-hosts`` and the inline one on a service's own page. Submits to
-    the existing ``POST /api/proxy-hosts``, now write-through for a
-    ``traefik`` host with an upstream (see ``web/routers/proxy_hosts.py``).
+    the existing ``POST /api/proxy-hosts`` (database only; a ``traefik`` host
+    with an upstream is pushed on Save to YAML / Push now - see
+    ``web/routers/proxy_hosts.py``).
     ``?service_id=`` pre-fills the service picker — used by the "Add proxy
     host" link on a service's own detail page.
     """

@@ -49,6 +49,13 @@ working (fail-open).
   disable, wake, back up, power off, start/stop them in one go, with a per-item
   result (also `orchestrator-cli bulk`); proxy hosts can be disabled without
   being deleted. See [docs/bulk_actions.md](docs/bulk_actions.md)
+* **Deferred push** — the database is the working copy; edits to proxy hosts
+  (add, edit, enable/disable, delete) never touch Traefik Manager. **Save to
+  YAML** writes `services.yaml` and then pushes every pending change, **Push
+  now** pushes without saving, and a per-host status (pending / detached /
+  external / in sync) shows what is not pushed or was changed behind your back
+  (`orchestrator-cli proxy status` / `proxy push`). Other outside services can
+  plug into the same engine. See [docs/proxy_hosts.md](docs/proxy_hosts.md#pushing-to-traefik-manager)
 * **Service IPs** — each service has an address: a manual `ip_address`, or one
   discovered from Proxmox (QEMU guest agent / LXC) and, by the NIC MACs, from
   an ARP table or DHCP leases. Proxy hosts can use it as their upstream ("Use
@@ -223,6 +230,8 @@ commands:
 orchestrator-cli service list           # what would be backed up, and what blocks it
 orchestrator-cli probe add <slug>       # guided probe builder
 orchestrator-cli proxy add <slug>       # record a Traefik / Pangolin route
+orchestrator-cli proxy status           # what is not pushed to Traefik Manager yet
+orchestrator-cli proxy push --yes       # push the live DB's proxy hosts now
 orchestrator-cli transport check        # is the host runner / ssh plumbing usable?
 ```
 

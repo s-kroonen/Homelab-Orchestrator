@@ -844,6 +844,8 @@ def _plan_text(action: str, ph: ProxyHost, hs: HostSync) -> str:
         return f"update the route ({'; '.join(hs.changes) or 'push the edited settings'})"
     if action == "enable":
         return "switch the route on"
+    if action == "fallback":
+        return "put the maintenance page fallback on the existing route"
     return "switch the route off"
 
 

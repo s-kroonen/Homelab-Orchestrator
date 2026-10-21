@@ -7,7 +7,7 @@
       {% if registry_dirty %}<span class="dirty-badge">unsaved changes vs {{ yaml_path }}</span>{% endif %}
     </h2>
     <div class="row">
-      <button id="save-btn">Save to YAML</button>
+      <button id="save-btn" title="Writes services.yaml, then pushes pending changes to Traefik Manager (and any other outside service)">Save to YAML</button>
       <button class="secondary" id="reset-btn">Reset to saved</button>
       <span class="msg" id="registry-msg"></span>
     </div>
@@ -131,6 +131,7 @@
 {% endblock %}
 {% block webauthn_script %}<script src="/static/webauthn.js"></script>{% endblock %}
 {% block scripts %}
+<script src="/static/push.js"></script>
 <script src="/static/bulk.js"></script>
 <script>
   function setMsg(id, text, kind) {
@@ -139,15 +140,9 @@
     el.className = "msg" + (kind ? " " + kind : "");
   }
 
-  document.getElementById("save-btn").addEventListener("click", async () => {
-    try {
-      await apiFetch("POST", "/api/registry/save");
-      setMsg("registry-msg", "Saved.", "ok");
-      setTimeout(() => location.reload(), 600);
-    } catch (err) {
-      setMsg("registry-msg", "Save failed: " + err.message, "error");
-    }
-  });
+  // Writes the YAML, then pushes pending changes to Traefik Manager; the
+  // outcome (toast + message) is reported by PushUI.
+  document.getElementById("save-btn").addEventListener("click", () => PushUI.save({ msgId: "registry-msg" }));
   document.getElementById("reset-btn").addEventListener("click", async () => {
     try {
       await apiFetch("POST", "/api/registry/reset");

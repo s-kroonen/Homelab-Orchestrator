@@ -164,6 +164,18 @@ def _save_recorder(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, str]]:
             return httpx.Response(200, json={"ok": True})
         if request.url.path == "/api/traefik/entrypoints":
             return httpx.Response(200, json=TRAEFIK_EPS)
+        if request.url.path == "/api/routes":
+            # Whatever was saved is listed (an edit looks the route up first).
+            apps = [
+                {
+                    "id": f["serviceName"],
+                    "name": f["serviceName"],
+                    "protocol": "http",
+                    "rule": f["httpRule"],
+                }
+                for f in saves
+            ]
+            return httpx.Response(200, json={"apps": apps, "middlewares": [], "services": {}})
         return httpx.Response(404, json={"ok": False})
 
     _patch(monkeypatch, handle)

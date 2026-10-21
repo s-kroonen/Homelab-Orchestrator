@@ -16,15 +16,18 @@
     </div>
     {% if not proxy_host.enabled %}
     <div class="notice" role="note">
-      This host is <strong>disabled</strong>: Traefik is not serving it, and it cannot be edited
-      until you enable it (an edit could bring the route back unasked).
+      This host is <strong>disabled</strong> here. Once pushed, Traefik Manager keeps its route
+      parked and Traefik does not serve it. You can still edit it: the push updates the parked
+      route and makes sure it stays off.
     </div>
     {% endif %}
     {% endif %}
     <p class="msg">
-      A <code>traefik</code> host is <strong>live-managed</strong> once an upstream is given —
-      saving this form creates/edits the real route on Traefik Manager, not just a local
-      record. Leave <strong>Upstream</strong> blank to keep it a local-only reference for now.
+      A <code>traefik</code> host is <strong>live-managed</strong> once an upstream is given.
+      Saving this form changes the <em>local</em> record only; the real route on Traefik Manager
+      is created/updated when you <strong>Save to YAML</strong> or click <strong>Push now</strong>
+      on the proxy hosts page. Leave <strong>Upstream</strong> blank to keep it a local-only
+      reference for now.
       <code>pangolin</code>/<code>npm</code>/<code>other</code> always stay local-only
       reference records — no adapter exists for those backends yet. See
       <code>docs/proxy_hosts.md</code>.
@@ -524,7 +527,7 @@
     }
     const btn = document.getElementById("submit-btn");
     btn.disabled = true;
-    setMsg("form-msg", "Saving and checking with Traefik…");
+    setMsg("form-msg", "Saving…");
     let result;
     try {
       // Not suppressed: apiFetch toasts the error AND we mark the field inline.
@@ -546,12 +549,13 @@
       return;
     }
     btn.disabled = false;
-    const warnings = (result && result.warnings) || [];
-    if (warnings.length) {
-      try {
-        sessionStorage.setItem("ph-flash", JSON.stringify({ text: warnings.join(" "), kind: "warn" }));
-      } catch (_e) { /* storage may be unavailable */ }
-    }
+    const live = result && result.sync_state && result.sync_state !== "local";
+    const text = live
+      ? "Saved here. Pushed to Traefik Manager on Save to YAML (or Push now)."
+      : "Saved.";
+    try {
+      sessionStorage.setItem("ph-flash", JSON.stringify({ text, kind: "ok" }));
+    } catch (_e) { /* storage may be unavailable */ }
     location.href = "/proxy-hosts";
   });
 
@@ -606,23 +610,30 @@
   if (toggleBtn) {
     const strip = document.getElementById("state-strip");
     const isEnabled = strip.dataset.enabled === "true";
-    if (!isEnabled) document.getElementById("submit-btn").disabled = true;
     apiFetch("GET", `/api/proxy-hosts/${PROXY_HOST_ID}`, undefined, { suppressToast: true })
       .then((h) => {
         const tm = h.tm_state;
         const el = document.getElementById("state-tm");
-        if (!tm || h.router_provider !== "traefik") return;
-        el.textContent = "Traefik Manager: " + (tm === "partial" ? "partly off" : tm);
-        if (tm !== (h.enabled ? "enabled" : "disabled")) el.className = "msg error";
+        if (h.router_provider !== "traefik" || h.sync_state === "local") return;
+        const label = { in_sync: "in sync", pending_create: "pending", pending_update: "pending",
+                        detached: "detached", external: "external" }[h.sync_state] || h.sync_state;
+        el.textContent = (tm ? "Traefik Manager: " + (tm === "partial" ? "partly off" : tm) + " · " : "")
+          + "push status: " + label
+          + (h.sync_changes && h.sync_changes.length ? " (" + h.sync_changes.join("; ") + ")" : "");
+        if (h.sync_state === "detached") el.className = "msg error";
       })
       .catch(() => {});
     toggleBtn.addEventListener("click", async () => {
       const turnOn = !isEnabled;
-      if (!turnOn && !confirm("Disable this host? Traefik stops serving it until you enable it again (the route is kept).")) return;
+      if (!turnOn && !confirm("Disable this host? This is saved here and pushed to Traefik Manager on Save to YAML (or Push now); until then Traefik keeps serving it. The route is kept, not deleted.")) return;
       toggleBtn.disabled = true;
       try {
         await apiFetch("POST", `/api/proxy-hosts/${PROXY_HOST_ID}/enabled`, { enabled: turnOn }, { suppressToast: true });
-        location.reload();
+        try {
+          sessionStorage.setItem("ph-flash", JSON.stringify({
+            text: "Saved here. Pushed to Traefik Manager on Save to YAML (or Push now).", kind: "ok" }));
+        } catch (_e) { /* storage may be unavailable */ }
+        location.href = "/proxy-hosts";
       } catch (err) {
         setMsg("state-msg", err.message, "error");
         toggleBtn.disabled = false;

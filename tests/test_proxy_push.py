@@ -883,3 +883,18 @@ def test_cli_proxy_push_exits_1_when_an_item_fails(
     result = CliRunner().invoke(cli, ["proxy", "push", "--yes"])
     assert result.exit_code == 1, result.output
     assert "gateway said no" in result.output and "1 failed" in result.output
+
+
+def test_every_save_button_surfaces_the_push_outcome(dry_client: TestClient) -> None:  # noqa: F811
+    page = dry_client.get("/proxy-hosts").text
+    assert 'id="push-banner"' in page and 'id="push-now-btn"' in page
+    assert 'id="push-results"' in page and "Save to YAML also pushes" in page
+    for path in ("/proxy-hosts", "/", "/backup-policies"):
+        html = dry_client.get(path).text
+        assert "/static/push.js" in html and 'title="Writes services.yaml, then pushes' in html
+    for path in ("/", "/backup-policies"):
+        assert "PushUI.save" in dry_client.get(path).text
+    js = dry_client.get("/static/push.js")
+    assert js.status_code == 200 and "push_results" in js.text
+    form = dry_client.get("/proxy-hosts/new").text
+    assert "Pushed to Traefik Manager on Save to YAML (or Push now)." in form
