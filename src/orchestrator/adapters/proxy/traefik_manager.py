@@ -298,6 +298,8 @@ class TraefikManagerProxyAdapter(ProxyAdapter):
     than a long-lived singleton, so a settings change takes effect
     immediately and no connection pool outlives a single call."""
 
+    HAS_REDIRECT_COMPANION = True
+
     def __init__(self, settings: Settings) -> None:
         self._settings = settings
 
@@ -1066,9 +1068,7 @@ class TraefikManagerProxyAdapter(ProxyAdapter):
         if with_redirect:
             rid = redirect_route_id(route_ref)
             siblings = [r for r in routes if rid in (r.route_id, r.name)]
-            beside = [
-                r for r in siblings if main is not None and r.config_file == main.config_file
-            ]
+            beside = [r for r in siblings if main is not None and r.config_file == main.config_file]
             companion = (beside or siblings or [None])[0]
             if companion is not None:
                 with contextlib.suppress(TraefikManagerNotFound):

@@ -784,6 +784,117 @@ def proxy_resync_maintenance() -> None:
     click.secho(f"\n{processed} linked proxy host(s) processed.", fg="green", bold=True)
 
 
+def _print_push_status(status: Any) -> None:
+    if not status.reachable:
+        click.secho(f"! {status.message or 'Traefik Manager could not be read.'}", fg="yellow")
+    for label, items, colour in (
+        ("pending", status.pending, "yellow"),
+        ("detached", status.detached, "magenta"),
+    ):
+        for item in items:
+            click.secho(f"{label:<9}{item['hostname']}  [{item['state']}]", fg=colour, bold=True)
+            for change in item["changes"]:
+                click.echo(f"         - {change}")
+    for item in status.pending_deletes:
+        click.secho(f"delete   {item['hostname']}  (route {item['route_ref']})", fg="red")
+    click.echo(
+        f"{status.in_sync} in sync, {len(status.pending)} pending, "
+        f"{len(status.detached)} detached, {len(status.pending_deletes)} to delete"
+    )
+
+
+@proxy.command("status")
+def proxy_status() -> None:
+    """Show what is not pushed to Traefik Manager yet (the live DB vs the gateway).
+
+    Edits only change the database; Traefik Manager is written by
+    `proxy push` or the dashboard's Save to YAML / Push now. Exits 1 when
+    anything is pending, detached or waiting to be deleted (or Traefik Manager
+    cannot be read), so a script can gate on it.
+    """
+    from orchestrator.registry.push import status_all
+
+    configure_logging()
+    build_engine()
+    settings = get_settings()
+
+    async def _go() -> Any:
+        adapters = build_adapters(settings)
+        await adapters.proxy.start()
+        try:
+            with Session(get_engine()) as session:
+                (status,) = await status_all(session, adapters, ["proxy"])
+                return status
+        finally:
+            await adapters.proxy.stop()
+
+    status = asyncio.run(_go())
+    _print_push_status(status)
+    if status.total or not status.reachable:
+        sys.exit(1)
+
+
+@proxy.command("push")
+@click.option("--yes", is_flag=True, help="Skip the confirmation.")
+@click.option("--hostname", "hostnames", multiple=True, help="Only these hostnames (repeatable).")
+def proxy_push(yes: bool, hostnames: tuple[str, ...]) -> None:
+    """Push the live DB's proxy hosts to Traefik Manager now.
+
+    Same engine as the dashboard's Save to YAML / Push now, run in-process: it
+    creates missing routes, applies edits, enables/disables, deletes routes of
+    deleted hosts, and re-applies anything changed behind our back ("detached").
+    One failing host does not stop the others; exits 1 if any item failed.
+    services.yaml is NOT written (Save to YAML does that).
+    """
+    from orchestrator.registry.push import apply_all, status_all
+
+    configure_logging()
+    build_engine()
+    settings = get_settings()
+    only = list(hostnames) or None
+
+    async def _go() -> list[Any]:
+        adapters = build_adapters(settings)
+        await adapters.proxy.start()
+        try:
+            with Session(get_engine()) as session:
+                if not yes:
+                    (status,) = await status_all(session, adapters, ["proxy"])
+                    _print_push_status(status)
+                    if not status.total:
+                        click.echo("Nothing to push.")
+                        return []
+                    if not click.confirm("Push these changes to Traefik Manager?"):
+                        raise click.Abort()
+                results = await apply_all(
+                    session, adapters, names=["proxy"], only=only, actor="cli"
+                )
+                session.commit()
+                return results
+        finally:
+            await adapters.proxy.stop()
+
+    if settings.dry_run:
+        click.secho(
+            "DRY_RUN is on - the dry-run proxy adapter is used; Traefik Manager is not contacted.",
+            fg="yellow",
+        )
+    results = asyncio.run(_go())
+    failed = 0
+    for r in results:
+        mark = click.style("ok  ", fg="green") if r.ok else click.style("FAIL", fg="red")
+        click.echo(f"{mark} {r.hostname:<32} {r.action:<8} {r.message}")
+        failed += 0 if r.ok else 1
+    if results:
+        click.secho(
+            f"\n{len(results) - failed} done, {failed} failed.",
+            fg="red" if failed else "green",
+            bold=True,
+        )
+    if failed:
+        sys.exit(1)
+
+
 # ---------------------------------------------------------------------------
 # service group
 # ---------------------------------------------------------------------------

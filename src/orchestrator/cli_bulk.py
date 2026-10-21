@@ -13,11 +13,11 @@ What each action touches follows the existing single-item commands exactly:
   --required``), one save for the whole batch.
 * ``bulk services wake`` runs the wake pipeline per service, one after
   another (like ``wake SLUG``). Honours ``DRY_RUN``.
-* ``bulk proxy-hosts enable|disable`` toggle the live route on Traefik
-  Manager first (the same function the web uses), then store the flag in the
-  database and, when the host is in ``services.yaml``, there too - so a later
-  YAML reload cannot quietly undo it. Honours ``DRY_RUN`` (dry-run proxy
-  adapter: nothing is sent to Traefik Manager). Audited with actor ``cli``.
+* ``bulk proxy-hosts enable|disable`` store the flag in the database (the
+  same function the web uses) and, when the host is in ``services.yaml``,
+  there too - so a later YAML reload cannot quietly undo it. Traefik Manager is
+  NOT contacted: the switch is pending until ``proxy push`` / Save to YAML.
+  Audited with actor ``cli``.
 """
 
 from __future__ import annotations
@@ -198,9 +198,9 @@ def bulk_proxy_hosts(
 ) -> None:
     """Enable or disable the selected proxy hosts.
 
-    A live-managed (traefik) host is toggled on Traefik Manager first; a
-    failure there leaves that host untouched and is reported. The flag is then
-    stored in the database and in services.yaml.
+    The flag is stored in the database and in services.yaml. Traefik Manager is
+    not contacted: run `orchestrator-cli proxy push` (or Save to YAML in the
+    dashboard) to apply it there.
     """
     from orchestrator.web.routers.proxy_hosts import set_proxy_host_enabled
 
@@ -229,12 +229,6 @@ def bulk_proxy_hosts(
         if dry_run:
             click.secho(f"Would {action}: {', '.join(wanted)}", fg="cyan")
             return
-        if settings.dry_run:
-            click.secho(
-                "DRY_RUN is on — Traefik Manager is not contacted; only the records change.",
-                fg="yellow",
-            )
-
         actor = SimpleNamespace(username="cli")
         results: list[tuple[str, bool, str]] = []
         done: list[ProxyHost] = []

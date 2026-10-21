@@ -54,6 +54,7 @@ from orchestrator.registry.loader import (
     save_registry_to_yaml,
 )
 from orchestrator.registry.probe_specs import PROBE_SPECS
+from orchestrator.registry.push import apply_all, get_pushers, status_all, summarize
 from orchestrator.web.auth import CurrentAdmin, require_admin
 from orchestrator.web.deps import AdaptersDep, SessionDep, SettingsDep
 
@@ -500,15 +501,83 @@ async def registry_status(session: SessionDep) -> dict[str, object]:
 
 
 @router.post("/registry/save")
-async def save_registry(session: SessionDep, settings: SettingsDep) -> dict[str, object]:
-    """Save button — write live DB registry back to YAML."""
+async def save_registry(
+    session: SessionDep,
+    settings: SettingsDep,
+    adapters: AdaptersDep,
+    admin: CurrentAdmin,
+) -> dict[str, object]:
+    """Save button - write the live DB registry back to YAML, THEN push the
+    pending changes to every outside service (Traefik Manager today).
+
+    The YAML is written and committed first and exactly as before; a push
+    that fails (or blows up) never undoes it and is reported in
+    ``push_results`` / ``push`` instead. Existing callers keep working: the
+    original keys are unchanged, the push keys are additive."""
     _ = get_settings()  # ensure singleton warmed
     try:
         sha = save_registry_to_yaml(session, settings.services_yaml_path, actor="dashboard")
         session.commit()
     except OSError as exc:
         raise HTTPException(status_code=500, detail=f"could not write YAML: {exc}") from exc
-    return {"status": "saved", "sha256": sha, "path": str(settings.services_yaml_path)}
+    results = await apply_all(session, adapters, actor=admin.username)
+    session.commit()
+    return {
+        "status": "saved",
+        "sha256": sha,
+        "path": str(settings.services_yaml_path),
+        "push_results": [r.as_dict() for r in results],
+        "push": summarize(results),
+    }
+
+
+class PushIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    #: Which outside services (default: all registered, today ``["proxy"]``).
+    targets: list[str] | None = None
+    #: Restrict to these hostnames.
+    hostnames: list[str] | None = None
+    #: Only report what would be done.
+    dry_run: bool = False
+
+
+@router.get("/push/status")
+async def push_status(session: SessionDep, adapters: AdaptersDep) -> dict[str, object]:
+    """What is not pushed yet, per outside service. Read-only."""
+    statuses = await status_all(session, adapters)
+    return {"targets": [st.as_dict() for st in statuses]}
+
+
+@router.post("/push")
+async def push_now(
+    body: PushIn, session: SessionDep, adapters: AdaptersDep, admin: CurrentAdmin
+) -> dict[str, object]:
+    """Push now: bring the outside services in line with the DB, without
+    touching services.yaml. Returns one item per thing done (or, with
+    ``dry_run``, per thing that would be done); a failing item never stops
+    the others."""
+    known = {p.name for p in get_pushers()}
+    unknown = sorted(set(body.targets or []) - known)
+    if unknown:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            f"unknown push target(s): {', '.join(unknown)} (known: {', '.join(sorted(known))})",
+        )
+    results = await apply_all(
+        session,
+        adapters,
+        names=body.targets,
+        only=body.hostnames,
+        dry_run=body.dry_run,
+        actor=admin.username,
+    )
+    session.commit()
+    return {
+        "dry_run": body.dry_run,
+        "results": [r.as_dict() for r in results],
+        "summary": summarize(results),
+    }
 
 
 @router.post("/registry/reset")

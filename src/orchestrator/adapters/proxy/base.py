@@ -209,6 +209,10 @@ class ProxyAdapter(ABC):
     # container — same convention as ``orchestrator.adapters.power.base.
     # PowerAdapter.IMPLEMENTED``.
     IMPLEMENTED: bool = True
+    #: True when ``RouteOptions.http_redirect`` is realised as a separate
+    #: companion route this backend lists (Traefik Manager: ``<name>-redirect``),
+    #: so its absence is a detectable difference.
+    HAS_REDIRECT_COMPANION: bool = False
 
     async def start(self) -> None:  # noqa: B027 - deliberate default no-op, see docstring
         """Open any persistent resource this backend needs. Idempotent.
