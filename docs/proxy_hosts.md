@@ -1119,6 +1119,26 @@ Every create/update/injection/removal is audit-logged
 `orchestrator.audit.log.record` mechanism as every other mutation in this
 file, target `traefik_manager:<name>`.
 
+### The rule is checked on the live route, and failures are shown
+
+The sync state does not just trust "the push ran". Traefik Manager lists each
+route's middlewares (`GET /api/routes`), and a host whose live, enabled, HTTPS
+route lacks `maintenance-<service>` is marked **desynced** with the change
+*"maintenance page rule missing on the live route"* - for routes this
+orchestrator created (`detached`), for adopted ones (`external`) and for
+hand-written routes serving a host. A plain-HTTP redirect router, a disabled
+route, a host that is disabled here, or a Traefik Manager that does not report
+middlewares never counts.
+
+**Push** attaches the rule by editing the route's raw YAML in Traefik Manager,
+then **reads the route back** and confirms the rule is really there. If Traefik
+Manager refuses (a 409 because a referenced definition is not in that file, a
+shared definition that would change, invalid YAML, ...) the push result for that
+host shows **Traefik Manager's own message**, the host stays desynced and the
+fingerprint is not recorded - nothing is swallowed into a log line any more. (The
+fail-open behaviour below still applies to the places that run this as a side
+effect, such as `orchestrator-cli proxy resync-maintenance`.)
+
 ### Fail-open, by design
 
 Unlike Resync (an explicit, admin-watched action that surfaces a real

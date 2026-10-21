@@ -138,6 +138,43 @@ def fallback_signature(ph: ProxyHost, service_slug: str | None) -> str:
     return "fb:" + hashlib.sha256(raw.encode()).hexdigest()[:16]
 
 
+FALLBACK_MISSING = "maintenance page rule missing on the live route"
+
+
+def _bare(name: str) -> str:
+    return name.split("@", 1)[0]
+
+
+def fallback_missing(
+    proxy: ProxyAdapter, routes: Sequence[RouteInfo], service_slug: str | None
+) -> bool:
+    """True when Traefik Manager LISTS the routes serving this host and at least
+    one that is switched on and answers HTTPS lacks the maintenance middleware.
+    Absence of information (the backend did not report middlewares, a redirect-only
+    route, a disabled one) never counts - the recorded fingerprint says the push
+    ran; this says whether the rule is actually THERE."""
+    from orchestrator.adapters.proxy.traefik_manager import is_plain_http_entrypoint
+
+    name = proxy.maintenance_middleware_name(service_slug) if service_slug else None
+    if not name:
+        return False
+    for route in routes:
+        if route.middlewares is None or not route.enabled or route.name.endswith("-redirect"):
+            continue
+        eps = route.entry_points
+        if eps and all(is_plain_http_entrypoint(e) for e in eps):
+            continue  # a plain-HTTP (redirect) router never needs the page
+        if name not in {_bare(m) for m in route.middlewares}:
+            return True
+    return False
+
+
+def _fallback_known(proxy: ProxyAdapter, routes: Sequence[RouteInfo]) -> bool:
+    """Does the backend report each route's middlewares? Then the live check
+    decides; otherwise the recorded fingerprint is all there is."""
+    return bool(routes) and all(r.middlewares is not None for r in routes)
+
+
 def _split_sig(sig: str) -> tuple[str, str]:
     content, _, flag = sig.partition(":")
     return content, flag
@@ -282,13 +319,16 @@ def evaluate(
             and ph.router_provider is RouterProvider.TRAEFIK
         ):
             serving = _routes_for_host(routes, ph.hostname)
-            if serving and ph.enabled and ph.pushed_sig != fb_sig:
-                return HostSync(
-                    LOCAL,
-                    ["maintenance page fallback not applied yet"],
-                    ["fallback"],
-                    host_routes=serving,
-                )
+            if serving and ph.enabled:
+                if fallback_missing(proxy, serving, service_slug_for_fb):
+                    return HostSync(LOCAL, [FALLBACK_MISSING], ["fallback"], host_routes=serving)
+                if ph.pushed_sig != fb_sig and not _fallback_known(proxy, serving):
+                    return HostSync(
+                        LOCAL,
+                        ["maintenance page fallback not applied yet"],
+                        ["fallback"],
+                        host_routes=serving,
+                    )
         return HostSync(LOCAL)
     ref = ref_of(ph)
     want = desired_signature(ph, service_slug)
@@ -326,9 +366,13 @@ def evaluate(
         change = _enabled_change(ph, tm)
         changes = [change] if change else []
         actions = (["enable"] if ph.enabled else ["disable"]) if change else []
-        if service_slug_for_fb and ph.enabled and ph.pushed_sig != fb_sig:
-            changes.append("maintenance page fallback not applied yet")
-            actions.append("fallback")
+        if service_slug_for_fb and ph.enabled:
+            if fallback_missing(proxy, host_routes, service_slug_for_fb):
+                changes.append(FALLBACK_MISSING)
+                actions.append("fallback")
+            elif ph.pushed_sig != fb_sig and not _fallback_known(proxy, host_routes):
+                changes.append("maintenance page fallback not applied yet")
+                actions.append("fallback")
         return HostSync(EXTERNAL, changes, actions, route=route, host_routes=host_routes, tm=tm)
 
     # --- ours, but not in Traefik Manager yet ---------------------------------
@@ -372,6 +416,8 @@ def evaluate(
 
     def actions_for(content: bool) -> list[str]:
         out: list[str] = []
+        if fb_missing:
+            out.append("fallback")
         if enabled_diff and ph.enabled:
             out.append("enable")
         if content:
@@ -381,6 +427,15 @@ def evaluate(
         return out
 
     live_diffs = diffs + ([enabled_diff] if enabled_diff else [])
+    fb_missing = (
+        ph.enabled
+        and bool(service_slug_for_fb)
+        and fallback_missing(
+            proxy, [route] + ([companion] if companion else []), service_slug_for_fb
+        )
+    )
+    if fb_missing:
+        live_diffs.append(FALLBACK_MISSING)
     if sig == want:
         if not live_diffs:
             return HostSync(IN_SYNC, route=route, companion=companion, tm=tm)
@@ -766,8 +821,14 @@ class ProxyPusher:
                         return
                 add(verb, True, f"{verb}d the existing Traefik Manager route (content left alone)")
                 done.append(verb)
-            if "fallback" in hs.actions and slug:
-                events = await proxy.ensure_maintenance_fallback(hostname=host, service_slug=slug)
+            if "fallback" in hs.actions and slug and proxy.maintenance_fallback_available():
+                try:
+                    events = await proxy.ensure_maintenance_fallback(
+                        hostname=host, service_slug=slug, raise_errors=True
+                    )
+                except Exception as exc:
+                    add("fallback", False, f"could not put the maintenance page rule on it: {exc}")
+                    return
                 audit_sync_events(session, actor, events)
                 ph.pushed_sig = fallback_signature(ph, slug)
                 session.add(ph)
@@ -885,9 +946,26 @@ class ProxyPusher:
             done.append("update")
 
         # Maintenance-page fallback (a route rewrite drops the middleware).
-        if slug and (created or updated or enabled_step) and ph.enabled:
-            events = await proxy.ensure_maintenance_fallback(hostname=host, service_slug=slug)
-            audit_sync_events(session, actor, events)
+        fallback_failed = False
+        if (
+            slug
+            and proxy.maintenance_fallback_available()
+            and (created or updated or enabled_step or "fallback" in hs.actions)
+            and ph.enabled
+        ):
+            try:
+                events = await proxy.ensure_maintenance_fallback(
+                    hostname=host, service_slug=slug, raise_errors=True
+                )
+            except Exception as exc:
+                # Never swallowed: the host stays desynced and the reason is shown.
+                fallback_failed = True
+                add("fallback", False, f"could not put the maintenance page rule on it: {exc}")
+            else:
+                audit_sync_events(session, actor, events)
+                if "fallback" in hs.actions:
+                    add("fallback", True, "maintenance page rule attached to the live route")
+                    done.append("fallback")
 
         if not ph.enabled:
             # Disable LAST, after anything above that needed the route live,
@@ -924,6 +1002,11 @@ class ProxyPusher:
             if verification.state != "ok":
                 out[-1].message += verification_note(verification)
 
+        if fallback_failed:
+            # The route itself is pushed, but the host is not "in sync": keep the
+            # old fingerprint so the next status still shows it as pending.
+            self._audit(session, actor, ph, done)
+            return
         ph.pushed_sig = want
         session.add(ph)
         self._audit(session, actor, ph, done)

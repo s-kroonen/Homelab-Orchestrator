@@ -56,6 +56,10 @@ class RouteInfo:
     #: Manager lists a disabled route in ``/api/routes`` with
     #: ``"enabled": false``; Traefik itself then has no runtime router for it).
     enabled: bool = True
+    #: Middleware names attached to the route as the backend reports them
+    #: (``None`` = the backend did not say, so nothing can be concluded from
+    #: their absence).
+    middlewares: tuple[str, ...] | None = None
     #: The backend's own handle for the route, as it must be sent back to
     #: toggle/delete/edit it. Traefik Manager with several config files
     #: (``MULTI_CONFIG``) gives every route ``id = "<configfile>::<name>"``
@@ -308,9 +312,15 @@ class ProxyAdapter(ABC):
         ``None`` result into its own error.
         """
 
+    def maintenance_middleware_name(self, service_slug: str) -> str | None:
+        """The name of the middleware that carries the maintenance-page fallback
+        for ``service_slug`` on a route, or ``None`` when this backend cannot say
+        (then the sync state never concludes the rule is missing)."""
+        return None
+
     @abstractmethod
     async def ensure_maintenance_fallback(
-        self, *, hostname: str, service_slug: str
+        self, *, hostname: str, service_slug: str, raise_errors: bool = False
     ) -> list[SyncEvent]:
         """Ensure a hit on ``hostname`` with a down backend falls back to
         this orchestrator's ``/maintenance/<service_slug>`` page. Idempotent

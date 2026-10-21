@@ -100,7 +100,7 @@ class DryRunProxyAdapter(ProxyAdapter):
         return target
 
     async def ensure_maintenance_fallback(
-        self, *, hostname: str, service_slug: str
+        self, *, hostname: str, service_slug: str, raise_errors: bool = False
     ) -> list[SyncEvent]:
         log.info(
             "proxy.dry_run.ensure_maintenance_fallback",
