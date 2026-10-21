@@ -24,7 +24,6 @@ from pathlib import Path
 
 from fastapi import FastAPI
 from starlette.middleware.sessions import SessionMiddleware
-from starlette.staticfiles import StaticFiles
 
 from orchestrator import __version__
 from orchestrator.adapters.factory import build_adapters
@@ -54,6 +53,7 @@ from orchestrator.web.routers import (
     ui,
     wake,
 )
+from orchestrator.web.static_files import RevalidatingStaticFiles
 
 
 def _maybe_run_migrations() -> None:
@@ -265,7 +265,9 @@ def create_app() -> FastAPI:
         https_only=False,
     )
     app.mount(
-        "/static", StaticFiles(directory=str(Path(__file__).parent / "static")), name="static"
+        "/static",
+        RevalidatingStaticFiles(directory=str(Path(__file__).parent / "static")),
+        name="static",
     )
     app.include_router(health.router)
     app.include_router(maintenance.router)
