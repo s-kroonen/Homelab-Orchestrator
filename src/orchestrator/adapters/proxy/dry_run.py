@@ -30,6 +30,9 @@ class DryRunProxyAdapter(ProxyAdapter):
         # Traefik would have them), plus every toggle in call order.
         self._disabled: dict[str, RouteInfo] = {}
         self.toggles: list[tuple[str, bool, bool]] = []
+        # Raw (ref -> (hostname, upstream, entry_points, cert_resolver)) so
+        # list_routes can describe a route whether it is on or parked.
+        self._specs: dict[str, tuple[str, str, tuple[str, ...], str]] = {}
 
     async def start(self) -> None:
         log.info("proxy.dry_run.start")
@@ -37,9 +40,30 @@ class DryRunProxyAdapter(ProxyAdapter):
     async def stop(self) -> None:
         log.info("proxy.dry_run.stop")
 
+    def route_ref_for(self, hostname: str) -> str:
+        return f"dry-run:{hostname}"
+
+    def owns_route_ref(self, route_ref: str) -> bool:
+        return route_ref.startswith("dry-run:")
+
     async def list_routes(self) -> list[RouteInfo] | None:
+        """The routes "written" during this process (on and parked), so the
+        push flow can be exercised end to end without a gateway."""
         log.info("proxy.dry_run.list_routes")
-        return []
+        out: list[RouteInfo] = []
+        for ref, (hostname, upstream, eps, resolver) in self._specs.items():
+            out.append(
+                RouteInfo(
+                    name=ref,
+                    route_id=ref,
+                    hostnames={hostname},
+                    upstream=upstream,
+                    entry_points=eps,
+                    cert_resolver=resolver or None,
+                    enabled=ref not in self._disabled,
+                )
+            )
+        return out
 
     async def ensure_maintenance_fallback(
         self, *, hostname: str, service_slug: str
@@ -90,7 +114,7 @@ class DryRunProxyAdapter(ProxyAdapter):
             cert_resolver=cert_resolver,
             options=(options or RouteOptions()).to_dict(),
         )
-        ref = f"dry-run:{hostname}"
+        ref = self.route_ref_for(hostname)
         self._remember(ref, hostname, upstream, entry_points, cert_resolver)
         return ref
 
@@ -123,7 +147,8 @@ class DryRunProxyAdapter(ProxyAdapter):
         entry_points: Sequence[str],
         cert_resolver: str,
     ) -> None:
-        self._routes[ref] = RouteInfo(
+        self._specs[ref] = (hostname, upstream, tuple(entry_points), cert_resolver)
+        info = RouteInfo(
             name=f"{ref}@file",
             hostnames={hostname},
             upstream=upstream,
@@ -131,6 +156,11 @@ class DryRunProxyAdapter(ProxyAdapter):
             status="enabled",
             cert_resolver=cert_resolver or None,
         )
+        # An edit of a parked route keeps it parked.
+        if ref in self._disabled:
+            self._disabled[ref] = info
+        else:
+            self._routes[ref] = info
 
     async def list_entrypoints(self) -> list[EntryPointInfo] | None:
         # A plausible Traefik: lets the form and validation be exercised
@@ -152,13 +182,21 @@ class DryRunProxyAdapter(ProxyAdapter):
     async def list_middlewares(self) -> list[str] | None:
         return ["redirect-to-https@file"]
 
-    async def delete_route(self, route_ref: str, *, with_redirect: bool = True) -> None:
+    async def delete_route(
+        self, route_ref: str, *, with_redirect: bool = True, hostname: str | None = None
+    ) -> None:
         log.info("proxy.dry_run.delete_route", route_ref=route_ref)
         self._routes.pop(route_ref, None)
         self._disabled.pop(route_ref, None)
+        self._specs.pop(route_ref, None)
 
     async def set_route_enabled(
-        self, route_ref: str, enabled: bool, *, with_redirect: bool = False
+        self,
+        route_ref: str,
+        enabled: bool,
+        *,
+        with_redirect: bool = False,
+        hostname: str | None = None,
     ) -> None:
         log.info(
             "proxy.dry_run.set_route_enabled",

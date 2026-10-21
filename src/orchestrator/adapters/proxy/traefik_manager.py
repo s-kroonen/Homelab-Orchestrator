@@ -65,7 +65,7 @@ import io
 import re
 from collections.abc import Sequence
 from typing import Any
-from urllib.parse import urlsplit
+from urllib.parse import quote, urlsplit
 
 import httpx
 from ruamel.yaml import YAML
@@ -78,6 +78,7 @@ from orchestrator.adapters.proxy.base import (
     RouteInfo,
     RouteOptions,
     SyncEvent,
+    find_route,
 )
 from orchestrator.config import Settings
 from orchestrator.logging_setup import get_logger
@@ -260,15 +261,23 @@ def _routes_to_route_info(apps: Any) -> list[RouteInfo]:
         if not hostnames:
             continue
         servers = app.get("servers")
+        target = app.get("target")
         upstream = (
             ",".join(s for s in servers if isinstance(s, str))
             if isinstance(servers, list) and servers
-            else (app.get("target") if isinstance(app.get("target"), str) else None)
+            # Traefik Manager writes the string "N/A" when it cannot resolve one.
+            else (target if isinstance(target, str) and target != "N/A" else None)
         )
         eps = app.get("entryPoints")
+        route_id = app.get("id")
+        config_file = app.get("configFile")
         infos.append(
             RouteInfo(
                 name=name,
+                # With several config files `id` is "<file>::<name>" and is the
+                # ONLY handle toggle/delete/edit understand; `name` is bare.
+                route_id=route_id if isinstance(route_id, str) and route_id else name,
+                config_file=config_file if isinstance(config_file, str) else "",
                 hostnames=hostnames,
                 upstream=upstream or None,
                 entry_points=(
@@ -451,15 +460,24 @@ class TraefikManagerProxyAdapter(ProxyAdapter):
         async with self._client() as client:
             await self._post_json(client, "/save", data=data, headers={"X-Requested-With": "fetch"})
 
-    async def _delete_route(self, route_id: str) -> None:
+    async def _delete_route(self, route_id: str, config_file: str = "") -> None:
         """``POST /delete/{route_id}`` — delete a route (router + its
         service, unless another router still references it). Form-
         urlencoded, per Traefik Manager's API docs. Raises
         :class:`TraefikManagerNotFound` (via ``_raise_for``) on a 404 —
-        "no config file and no disabled-route record holds that router"."""
+        "no config file and no disabled-route record holds that router".
+
+        Traefik Manager strips a ``<file>::`` prefix to the bare router name and
+        then searches EVERY config file for it unless the form names one
+        (``configFile``) - so with several files the route's own file is sent
+        along, or a same-named router in another file could be removed."""
+        data = {"configFile": config_file} if config_file else {}
         async with self._client() as client:
             await self._post_json(
-                client, f"/delete/{route_id}", data={}, headers={"X-Requested-With": "fetch"}
+                client,
+                f"/delete/{quote(route_id, safe=':')}",
+                data=data,
+                headers={"X-Requested-With": "fetch"},
             )
 
     async def _toggle_route(self, route_id: str, enable: bool) -> None:
@@ -468,13 +486,18 @@ class TraefikManagerProxyAdapter(ProxyAdapter):
         Disabling moves the router (and its service, unless another router
         shares it) out of the config file into Traefik Manager's own
         ``disabled_routes`` settings store; enabling writes them back. Traefik
-        stops/starts serving it on its next file-provider reload. Idempotent on
-        Traefik Manager's side (toggling an unknown or already-in-that-state
-        route is a silent no-op), so a retry is always safe. JSON body."""
+        stops/starts serving it on its next file-provider reload. JSON body.
+
+        TRAP: ``route_id`` must be the id ``GET /api/routes`` lists
+        (``<file>::<name>`` with several config files). Toggling an unknown id
+        - a bare name, say - is a silent no-op that still answers 200, and
+        enabling only finds a route whose id is the key of its disabled-routes
+        record. Callers resolve the id first and confirm the outcome after
+        (:meth:`_toggle_confirmed`)."""
         async with self._client() as client:
             await self._post_json(
                 client,
-                f"/api/routes/{route_id}/toggle",
+                f"/api/routes/{quote(route_id, safe=':')}/toggle",
                 json={"enable": bool(enable)},
                 headers={"X-Requested-With": "fetch"},
             )
@@ -836,10 +859,28 @@ class TraefikManagerProxyAdapter(ProxyAdapter):
             )
         return found
 
-    async def _save_redirect_route(self, route_ref: str, *, hostname: str, create: bool) -> None:
+    async def _read_routes(self) -> list[RouteInfo]:
+        """Every HTTP route Traefik Manager lists, with its real ``id``. Raises
+        (unlike :meth:`list_routes`) - a write that cannot see what it is
+        about to change must not guess."""
+        response = await self._get_routes()
+        apps = response.get("apps") if isinstance(response, dict) else None
+        return _routes_to_route_info(apps)
+
+    async def _save_redirect_route(
+        self,
+        route_ref: str,
+        *,
+        hostname: str,
+        existing: RouteInfo | None,
+        config_file: str = "",
+    ) -> None:
         """The companion router on the plain-HTTP entry point that redirects to
         HTTPS and shares the main route's service - the pair every hand-written
-        ``<name>-redirect`` / ``<name>`` setup has."""
+        ``<name>-redirect`` / ``<name>`` setup has. ``existing`` is the
+        companion Traefik Manager already lists (edit it by its real id and
+        file), or ``None`` to create it (next to the main route, in
+        ``config_file``)."""
         rid = redirect_route_id(route_ref)
         await self._save_route(
             service_name=rid,
@@ -849,8 +890,9 @@ class TraefikManagerProxyAdapter(ProxyAdapter):
             cert_resolver=CERT_RESOLVER_DISABLED,
             middlewares=self._settings.traefik_redirect_middleware.strip() or "redirect-to-https",
             service_ref=f"{route_ref}-service",
-            is_edit=not create,
-            original_id="" if create else rid,
+            is_edit=existing is not None,
+            original_id=existing.ref if existing is not None else "",
+            config_file=existing.config_file if existing is not None else config_file,
         )
 
     async def _sync_redirect_route(
@@ -860,19 +902,68 @@ class TraefikManagerProxyAdapter(ProxyAdapter):
         hostname: str,
         want: bool,
         previous: RouteOptions | None,
+        routes: Sequence[RouteInfo] | None = None,
+        main: RouteInfo | None = None,
     ) -> None:
+        if routes is None:
+            routes = await self._read_routes()
+        rid = redirect_route_id(route_ref)
+        # The companion normally lives next to the main route (same config file).
+        siblings = [r for r in routes if rid in (r.route_id, r.name)]
+        beside = [r for r in siblings if main is not None and r.config_file == main.config_file]
+        existing = (beside or siblings or [None])[0]
         if want:
             try:
-                await self._save_redirect_route(route_ref, hostname=hostname, create=False)
+                await self._save_redirect_route(
+                    route_ref,
+                    hostname=hostname,
+                    existing=existing,
+                    config_file=main.config_file if main is not None else "",
+                )
             except TraefikManagerNotFound:
-                await self._save_redirect_route(route_ref, hostname=hostname, create=True)
+                await self._save_redirect_route(
+                    route_ref,
+                    hostname=hostname,
+                    existing=None,
+                    config_file=main.config_file if main is not None else "",
+                )
             return
         # Only take a redirect router away when there may be one: the host
         # had it enabled before (or that is unknown) - never a blind delete on
         # every edit.
-        if previous is None or previous.http_redirect:
+        if (previous is None or previous.http_redirect) and existing is not None:
             with contextlib.suppress(TraefikManagerNotFound):
-                await self._delete_route(redirect_route_id(route_ref))
+                await self._delete_route(existing.ref, existing.config_file)
+
+    async def _toggle_confirmed(self, route: RouteInfo, enabled: bool) -> None:
+        """Toggle ``route`` by its real id, then READ IT BACK.
+
+        Traefik Manager answers 200 to a toggle it ignored (unknown id, a
+        disabled-routes record under another key, ...), so a success response
+        proves nothing. The route must be listed with ``enabled`` as asked, or
+        this raises."""
+        await self._toggle_route(route.ref, enabled)
+        after = find_route(await self._read_routes(), route.ref)
+        if after is None or after.enabled != enabled:
+            now = "missing" if after is None else ("enabled" if after.enabled else "disabled")
+            raise TraefikManagerUnavailable(
+                "Traefik Manager accepted the request but the route is still "
+                f"{now}: {route.ref}"
+                + (
+                    " (it is no longer listed)"
+                    if after is None
+                    else " (it did not change state - check the id and Traefik Manager's logs)"
+                )
+            )
+
+    def route_ref_for(self, hostname: str) -> str:
+        return route_name_for_hostname(hostname)
+
+    def owns_route_ref(self, route_ref: str) -> bool:
+        # Everything this adapter creates is prefixed (see
+        # route_name_for_hostname); anything else was adopted from a
+        # hand-written setup and is never overwritten or deleted.
+        return route_ref.startswith("orchestrator-")
 
     async def create_route(
         self,
@@ -904,7 +995,7 @@ class TraefikManagerProxyAdapter(ProxyAdapter):
         )
         if opts.http_redirect:
             try:
-                await self._save_redirect_route(name, hostname=hostname, create=True)
+                await self._save_redirect_route(name, hostname=hostname, existing=None)
             except Exception:
                 # Never leave a half-made pair behind: the caller treats this
                 # create as failed and keeps no record of it.
@@ -929,9 +1020,16 @@ class TraefikManagerProxyAdapter(ProxyAdapter):
         opts = options or RouteOptions()
         scheme, host, port = self._target_or_raise(upstream)
         eps, resolver = await self._route_fields(entry_points, cert_resolver)
+        # Edit the route by the id Traefik Manager lists and in the config file
+        # it lives in: with several files `/save` otherwise looks for it in the
+        # DEFAULT file, does not find it there and writes a second copy.
+        routes = await self._read_routes()
+        main = find_route(routes, route_ref, hostname)
+        if main is None:
+            raise ProxyRouteNotFound(f"{route_ref}: not found")
         try:
             await self._save_route(
-                service_name=route_ref,
+                service_name=main.name,
                 protocol="http",
                 target_ip=host,
                 target_port=port,
@@ -939,7 +1037,8 @@ class TraefikManagerProxyAdapter(ProxyAdapter):
                 entry_points=eps,
                 cert_resolver=resolver,
                 is_edit=True,
-                original_id=route_ref,
+                original_id=main.ref,
+                config_file=main.config_file,
                 scheme=scheme,
                 pass_host_header=opts.pass_host_header,
                 skip_verify=opts.skip_upstream_tls_verify,
@@ -949,43 +1048,89 @@ class TraefikManagerProxyAdapter(ProxyAdapter):
         except TraefikManagerNotFound as exc:
             raise ProxyRouteNotFound(str(exc)) from exc
         await self._sync_redirect_route(
-            route_ref, hostname=hostname, want=opts.http_redirect, previous=previous_options
+            route_ref,
+            hostname=hostname,
+            want=opts.http_redirect,
+            previous=previous_options,
+            routes=routes,
+            main=main,
         )
 
-    async def delete_route(self, route_ref: str, *, with_redirect: bool = True) -> None:
+    async def delete_route(
+        self, route_ref: str, *, with_redirect: bool = True, hostname: str | None = None
+    ) -> None:
+        routes = await self._read_routes()
+        main = find_route(routes, route_ref, hostname)
         # The companion redirect router first (it shares the main route's
         # service), then the route itself.
         if with_redirect:
-            with contextlib.suppress(TraefikManagerNotFound):
-                await self._delete_route(redirect_route_id(route_ref))
+            rid = redirect_route_id(route_ref)
+            siblings = [r for r in routes if rid in (r.route_id, r.name)]
+            beside = [
+                r for r in siblings if main is not None and r.config_file == main.config_file
+            ]
+            companion = (beside or siblings or [None])[0]
+            if companion is not None:
+                with contextlib.suppress(TraefikManagerNotFound):
+                    await self._delete_route(companion.ref, companion.config_file)
+        if main is None:
+            raise ProxyRouteNotFound(f"{route_ref}: not found")
         try:
-            await self._delete_route(route_ref)
+            await self._delete_route(main.ref, main.config_file)
         except TraefikManagerNotFound as exc:
             raise ProxyRouteNotFound(str(exc)) from exc
 
     async def set_route_enabled(
-        self, route_ref: str, enabled: bool, *, with_redirect: bool = False
+        self,
+        route_ref: str,
+        enabled: bool,
+        *,
+        with_redirect: bool = False,
+        hostname: str | None = None,
     ) -> None:
         """Toggle the route (and its ``-redirect`` companion) on Traefik
-        Manager. Ordered so a half-done toggle never leaves a plain-HTTP
-        redirect pointing at a route that is gone: disable takes the redirect
-        away first, enable brings the main route back first. If the second
-        call fails the first is undone (best effort) and the error raised."""
+        Manager. ``route_ref`` may be the bare name or the full id: it is
+        resolved against ``GET /api/routes`` first, because Traefik Manager
+        only acts on the id it lists (``<file>::<name>`` with several config
+        files) and answers 200 to anything else. Every toggle is read back.
+
+        Ordered so a half-done toggle never leaves a plain-HTTP redirect
+        pointing at a route that is gone: disable takes the redirect away
+        first, enable brings the main route back first. If the second call
+        fails the first is undone (best effort) and the error raised."""
+        routes = await self._read_routes()
+        main = find_route(routes, route_ref, hostname)
+        if main is None:
+            raise ProxyRouteNotFound(
+                f"Traefik Manager has no route {route_ref!r} to "
+                f"{'enable' if enabled else 'disable'}"
+            )
         if not with_redirect:
-            await self._toggle_route(route_ref, enabled)
+            await self._toggle_confirmed(main, enabled)
             return
-        pair = [redirect_route_id(route_ref), route_ref]
+        rid = redirect_route_id(route_ref)
+        siblings = [r for r in routes if rid in (r.route_id, r.name)]
+        beside = [r for r in siblings if r.config_file == main.config_file]
+        companion = (beside or siblings or [None])[0]
+        if companion is None:
+            # No companion router exists (never created, or removed by hand):
+            # nothing to take along.
+            await self._toggle_confirmed(main, enabled)
+            return
+        pair = [companion, main]
         if enabled:
             pair.reverse()
         first, second = pair
-        await self._toggle_route(first, enabled)
+        await self._toggle_confirmed(first, enabled)
         try:
-            await self._toggle_route(second, enabled)
+            await self._toggle_confirmed(second, enabled)
         except Exception:
             try:
-                await self._toggle_route(first, not enabled)
+                await self._toggle_confirmed(first, not enabled)
             except Exception as exc:  # pragma: no cover - best effort
-                log.warning("traefik_manager.toggle_rollback_failed", route=first, error=str(exc))
+                log.warning(
+                    "traefik_manager.toggle_rollback_failed", route=first.ref, error=str(exc)
+                )
             raise
 
     async def list_domains(self) -> list[str] | None:

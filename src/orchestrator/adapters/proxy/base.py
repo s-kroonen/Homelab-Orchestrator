@@ -56,6 +56,43 @@ class RouteInfo:
     #: Manager lists a disabled route in ``/api/routes`` with
     #: ``"enabled": false``; Traefik itself then has no runtime router for it).
     enabled: bool = True
+    #: The backend's own handle for the route, as it must be sent back to
+    #: toggle/delete/edit it. Traefik Manager with several config files
+    #: (``MULTI_CONFIG``) gives every route ``id = "<configfile>::<name>"``
+    #: while ``name`` stays the bare router name; with one file they are equal.
+    #: ``None`` when the backend does not distinguish (runtime routers).
+    route_id: str | None = None
+    #: The config file the route lives in (Traefik Manager's ``configFile``;
+    #: empty with a single config file). Needed to edit/delete precisely.
+    config_file: str = ""
+
+    @property
+    def ref(self) -> str:
+        """What to send the backend to address exactly this route."""
+        return self.route_id or self.name
+
+
+def find_route(
+    routes: Sequence[RouteInfo] | None, ref: str | None, hostname: str | None = None
+) -> RouteInfo | None:
+    """Resolve a stored or bare route reference to the route the backend lists.
+
+    ``ref`` may be the backend's full id (``file.yml::name``) or just the bare
+    name. An exact id match wins; several routes sharing a bare name (the same
+    router in two config files) are told apart by ``hostname`` - the one whose
+    rule matches it. ``None`` when nothing matches.
+    """
+    if not ref or not routes:
+        return None
+    cands = [r for r in routes if ref in (r.route_id, r.name)]
+    if not cands:
+        return None
+    pool = [r for r in cands if r.route_id == ref] or cands
+    if hostname and len(pool) > 1:
+        host = hostname.strip().lower()
+        by_host = [r for r in pool if host in {h.lower() for h in r.hostnames}]
+        pool = by_host or pool
+    return pool[0]
 
 
 @dataclass(frozen=True)
@@ -187,6 +224,19 @@ class ProxyAdapter(ABC):
     async def stop(self) -> None:  # noqa: B027 - deliberate default no-op, see start()
         """Close whatever :meth:`start` opened. Idempotent. Default no-op."""
 
+    def route_ref_for(self, hostname: str) -> str:
+        """The reference :meth:`create_route` will return for ``hostname``,
+        known BEFORE anything is written. The DB stamps it onto a new
+        live-managed host up front, so the saved YAML already carries it and a
+        later push does not dirty the registry. Default: the hostname."""
+        return hostname
+
+    def owns_route_ref(self, route_ref: str) -> bool:
+        """Does ``route_ref`` look like a route THIS orchestrator created (as
+        opposed to one adopted from the backend, which is never overwritten or
+        deleted)? Default: yes."""
+        return True
+
     @abstractmethod
     async def list_routes(self) -> list[RouteInfo] | None:
         """Every live route this backend currently knows about.
@@ -280,8 +330,11 @@ class ProxyAdapter(ABC):
         :meth:`delete_route`'s note on the same case)."""
 
     @abstractmethod
-    async def delete_route(self, route_ref: str, *, with_redirect: bool = True) -> None:
-        """Delete the route ``route_ref`` identifies.
+    async def delete_route(
+        self, route_ref: str, *, with_redirect: bool = True, hostname: str | None = None
+    ) -> None:
+        """Delete the route ``route_ref`` identifies (``hostname`` helps pick
+        the right one when a backend holds the same name twice).
 
         Raises on failure — EXCEPT raises :class:`ProxyRouteNotFound`
         specifically (not a generic failure) when the backend no longer has
@@ -291,14 +344,21 @@ class ProxyAdapter(ABC):
         """
 
     async def set_route_enabled(
-        self, route_ref: str, enabled: bool, *, with_redirect: bool = False
+        self,
+        route_ref: str,
+        enabled: bool,
+        *,
+        with_redirect: bool = False,
+        hostname: str | None = None,
     ) -> None:
         """Switch the route ``route_ref`` off (``enabled=False``) or back on,
         WITHOUT deleting it: the backend keeps everything needed to bring the
         exact same route back. ``with_redirect`` also toggles the companion
         plain-HTTP -> HTTPS router (``RouteOptions.http_redirect``).
 
-        An explicit admin action like the CRUD trio above: raises on failure.
+        An explicit admin action like the CRUD trio above: raises on failure -
+        and an implementation must read the state back rather than trust a
+        success response (a toggle the backend silently ignored is a failure).
         Default: the backend cannot do this, so it says so rather than
         pretending (the caller turns it into a visible error)."""
         raise NotImplementedError(
