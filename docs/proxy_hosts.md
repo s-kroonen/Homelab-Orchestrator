@@ -1149,6 +1149,28 @@ fingerprint is not recorded - nothing is swallowed into a log line any more. (Th
 fail-open behaviour below still applies to the places that run this as a side
 effect, such as `orchestrator-cli proxy resync-maintenance`.)
 
+### What wakes a down service: "call" or a Start button
+
+Per service (edit page, `service update --wake-trigger`, YAML `wake_trigger`, bulk
+"Set wake trigger"), once **Wake on hit** is on for the service and its node:
+
+* **call** (the default, and how it always behaved) — any request that reaches the
+  maintenance page starts the service. Nothing to press.
+* **button** — the page says the service is offline and shows a **Start** button;
+  a plain request starts nothing. Use it where scrapers, uptime monitors or apps
+  that poll the URL would otherwise keep waking the service. The traffic-driven
+  auto-wake skips these services too.
+
+How the button works through Traefik: Traefik answers a failed request with the
+maintenance page fetched on the visitor's behalf, so the page cannot receive a form
+POST. Instead it carries a signed token (HMAC of the slug and the hour, keyed with
+`SESSION_SECRET`, valid about two hours); pressing the button re-requests the same
+URL from the browser with that token in the `X-Orchestrator-Wake` header, which
+Traefik passes on to the page, and the page starts the wake. Clients that do not run
+the page's script never send it. This relies on Traefik forwarding the original
+request headers to the error page; if pressing Start only reloads the same page,
+that is not happening on your Traefik version.
+
 ### Fail-open, by design
 
 Unlike Resync (an explicit, admin-watched action that surfaces a real

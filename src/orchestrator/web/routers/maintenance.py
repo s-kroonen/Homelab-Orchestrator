@@ -27,7 +27,7 @@ from sqlmodel import Session, desc, select
 
 from orchestrator.adapters.errors import AdapterError
 from orchestrator.db.models import Node, PipelineRun, Service
-from orchestrator.domain.enums import PipelineKind, PipelineStatus
+from orchestrator.domain.enums import PipelineKind, PipelineStatus, WakeTrigger
 from orchestrator.logging_setup import get_logger
 from orchestrator.pipelines.wake import (
     WakeError,
@@ -36,6 +36,7 @@ from orchestrator.pipelines.wake import (
     wake_is_unsupported,
 )
 from orchestrator.web.deps import AdaptersDep, SessionDep, SettingsDep
+from orchestrator.web.wake_button import WAKE_HEADER, make_token, verify_token
 from orchestrator.web.wake_support import fire_background
 
 router = APIRouter(tags=["maintenance"])
@@ -161,6 +162,29 @@ async def maintenance_page(
                 steps=[],
                 refresh_seconds=None,
                 show_retry=False,
+            )
+    secret = settings.session_secret.get_secret_value()
+    if (
+        run is None
+        and service.wake_trigger is WakeTrigger.BUTTON
+        and not verify_token(secret, service_slug, request.headers.get(WAKE_HEADER))
+    ):
+        # Not pressed yet: join a wake already running, otherwise offer the
+        # button and start nothing - a plain request never wakes this service.
+        run = _active_wake_run(session, service)
+        if run is None:
+            return _render(
+                request,
+                service_name=service.name,
+                headline=f"{service.name} is offline",
+                reason=f"{service.name} is not running right now. Press the button to start it; "
+                f"this can take a minute or two.",
+                spinner_class="unsupported",
+                steps=[],
+                refresh_seconds=None,
+                show_retry=False,
+                wake_token=make_token(secret, service_slug),
+                wake_header=WAKE_HEADER,
             )
     try:
         if run is None:

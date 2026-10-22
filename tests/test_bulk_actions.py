@@ -466,3 +466,52 @@ def test_cli_bulk_proxy_hosts_disable(registry: Path) -> None:
     )
     assert result.exit_code == 0, result.output
     assert "enabled" not in _svc(registry, "media")["proxy_hosts"][0]  # default, omitted
+
+
+def test_bulk_services_wake_on_hit_and_trigger(client: TestClient) -> None:
+    _seed_services("media", "photos")
+    r = client.post(
+        "/api/bulk/services", json={"action": "wake_on_hit_off", "slugs": ["media", "photos"]}
+    )
+    assert r.status_code == 200 and r.json()["ok_count"] == 2
+    assert _service("media").wake_on_hit_enabled is False
+    client.post("/api/bulk/services", json={"action": "wake_on_hit_on", "slugs": ["media"]})
+    assert _service("media").wake_on_hit_enabled is True
+
+    r = client.post(
+        "/api/bulk/services",
+        json={
+            "action": "update",
+            "slugs": ["media", "photos"],
+            "params": {"wake_trigger": "button"},
+        },
+    )
+    assert r.json()["ok_count"] == 2
+    assert _service("media").wake_trigger.value == "button"
+    assert client.get("/api/registry/services/media").json()["wake_trigger"] == "button"
+
+    bad = client.post(
+        "/api/bulk/services",
+        json={"action": "update", "slugs": ["media"], "params": {"wake_trigger": "shout"}},
+    )
+    assert bad.json()["failed_count"] == 1
+    assert _service("media").wake_trigger.value == "button"
+
+
+def test_cli_bulk_services_wake_trigger_and_wake_on_hit(registry: Path) -> None:
+    result = CliRunner().invoke(cli, ["bulk", "services", "wake-trigger-button", "--group", "home"])
+    assert result.exit_code == 0, result.output
+    assert _svc(registry, "media")["wake_trigger"] == "button"
+    assert "wake_trigger" not in _svc(registry, "dns")
+    result = CliRunner().invoke(cli, ["bulk", "services", "wake-on-hit-off", "--all"])
+    assert result.exit_code == 0, result.output
+    assert _svc(registry, "dns")["wake_on_hit_enabled"] is False
+
+
+def test_cli_service_update_sets_wake_trigger(registry: Path) -> None:
+    result = CliRunner().invoke(
+        cli, ["service", "update", "media", "--wake-trigger", "button", "--no-wake-on-hit"]
+    )
+    assert result.exit_code == 0, result.output
+    svc = _svc(registry, "media")
+    assert svc["wake_trigger"] == "button" and svc["wake_on_hit_enabled"] is False

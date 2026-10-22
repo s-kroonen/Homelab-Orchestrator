@@ -173,6 +173,7 @@ def _spec_from_db(session: Session) -> RegistryFile:
                 backup_excluded=svc.backup_excluded,
                 backup_excluded_reason=svc.backup_excluded_reason,
                 wake_on_hit_enabled=svc.wake_on_hit_enabled,
+                wake_trigger=svc.wake_trigger,
                 depends_on=list(svc.depends_on or []),
                 backup_requires=list(svc.backup_requires or []),
                 backup_policy=policy_name,
@@ -468,6 +469,7 @@ def reconcile_yaml_into_db(session: Session, path: Path) -> RegistryFile:
         svc.backup_excluded = spec.backup_excluded
         svc.backup_excluded_reason = spec.backup_excluded_reason
         svc.wake_on_hit_enabled = spec.wake_on_hit_enabled
+        svc.wake_trigger = spec.wake_trigger
         svc.depends_on = list(spec.depends_on)
         svc.backup_requires = clean_slug_list(spec.backup_requires)
         svc.ip_address = spec.ip_address
