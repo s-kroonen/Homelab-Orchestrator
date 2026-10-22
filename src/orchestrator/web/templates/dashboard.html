@@ -16,7 +16,7 @@
       <summary><span class="group-name">{{ grp.name }}</span> <span class="msg">({{ grp.services|length }})</span>{% if grp.name != "Ungrouped" %} <a class="msg" href="/activity?group={{ grp.name }}">history</a>{% endif %}</summary>
       <table class="services-table">
         <thead>
-          <tr><th class="bulk-col"></th><th>Service</th><th class="hide-phone">Node</th><th>Health</th><th>Last backup</th></tr>
+          <tr><th class="bulk-col"></th><th>Service</th><th class="hide-phone">Node</th><th>Guest</th><th>Health</th><th>Enabled</th><th>Wake on hit</th><th>Last backup</th></tr>
         </thead>
         <tbody>
           {% for svc in grp.services %}
@@ -25,6 +25,7 @@
             <td><a href="/services/{{ svc.slug }}">{{ svc.name }}</a> <code class="hide-phone">{{ svc.slug }}</code>{% if svc.ip %}
               <span class="svc-ip" title="IP ({{ svc.ip_source }})">{{ svc.ip }}</span>{% endif %}</td>
             <td class="hide-phone">{{ svc.node }}</td>
+            <td>{% if svc.guest.css %}<span class="badge {{ svc.guest.css }}" title="{{ svc.guest.title }}">{{ svc.guest.label }}</span>{% else %}<span class="msg" title="{{ svc.guest.title }}">{{ svc.guest.label }}</span>{% endif %}</td>
             <td>
               {% if not svc.enabled %}{% set badge %}<span class="badge disabled">disabled</span>{% endset %}
               {% elif svc.verdict == "healthy" %}{% set badge %}<span class="badge healthy">healthy</span>{% endset %}
@@ -43,6 +44,8 @@
               {% else %}{{ badge }}{% endif %}
               <a class="msg hide-phone" href="/activity?service={{ svc.slug }}">history</a>
             </td>
+            <td>{% if svc.enabled %}yes{% else %}<span class="msg">no</span>{% endif %}</td>
+            <td title="{{ svc.wake_on_hit_why }}">{% if svc.wake_on_hit %}yes{% if svc.wake_trigger == "button" %} <span class="msg">(button)</span>{% endif %}{% else %}<span class="msg">no</span>{% endif %}</td>
             <td>
               {% if svc.last_backup_at %}
                 {{ svc.last_backup_at }}{% if svc.last_backup_verified %} ✓{% endif %}
