@@ -1,0 +1,72 @@
+{% extends "base.html" %}
+{% block title %}homelab-orchestrator — restore{% endblock %}
+{% block content %}
+  <section>
+    <h2>Restore proposal</h2>
+    <div class="banner warn" id="warn" hidden></div>
+    <dl class="kv" id="kv"><div><dt>Loading…</dt><dd></dd></div></dl>
+    <div class="row" id="actions" hidden>
+      <button class="danger" id="approve-btn">Approve and restore</button>
+      <button class="secondary" id="deny-btn">Deny</button>
+    </div>
+    <p class="msg" id="msg"></p>
+    <ol class="steps" id="steps"></ol>
+  </section>
+{% endblock %}
+{% block extra_head %}
+<style>
+  dl.kv { display: grid; grid-template-columns: max-content 1fr; gap: 0.25rem 1.25rem; font-size: 0.9rem; }
+  dl.kv > div { display: contents; } dl.kv dt { color: #9aa4b2; } dl.kv dd { margin: 0; overflow-wrap: anywhere; }
+  .banner.warn { background: #3b2e14; border: 1px solid #e5a63e; padding: 0.6rem 0.8rem; border-radius: 0.4rem; margin-bottom: 0.9rem; font-size: 0.85rem; }
+</style>
+{% endblock %}
+{% block scripts %}
+<script>
+  const TOKEN = {{ token|tojson }};
+  const $ = (id) => document.getElementById(id);
+  function setMsg(text, kind) { const el = $("msg"); el.textContent = text; el.className = "msg" + (kind ? " " + kind : ""); }
+  let timer = null;
+  async function load() {
+    let a;
+    try { a = await apiFetch("GET", "/api/approvals/" + TOKEN, undefined, { suppressToast: true }); }
+    catch (err) { setMsg(err.message, "error"); return; }
+    const p = a.payload;
+    const rows = [
+      ["Service", `${p.name} (${p.service})`],
+      ["Guest", `${p.guest_kind} ${p.vmid} on ${p.node}`],
+      ["Restore from", `${p.snapshot} (taken ${new Date(p.snapshot_at).toLocaleString()}, verified)`],
+      ["Why", p.reason],
+      ["Proposed by", `${a.requested_by} at ${new Date(a.requested_at).toLocaleString()}`],
+      ["Status", a.status + (a.approved_by ? " by " + a.approved_by : "")],
+      ["Valid until", new Date(a.expires_at).toLocaleString()],
+    ];
+    $("kv").replaceChildren(...rows.map(([k, v]) => {
+      const d = document.createElement("div");
+      const dt = document.createElement("dt"); dt.textContent = k;
+      const dd = document.createElement("dd"); dd.textContent = v;
+      d.append(dt, dd); return d;
+    }));
+    $("warn").hidden = !a.open;
+    $("warn").textContent = `Approving stops guest ${p.vmid}, REPLACES it with the copy from ${new Date(p.snapshot_at).toLocaleString()} (everything newer is lost), starts it again and waits for ${p.service} to be healthy.`;
+    $("actions").hidden = !a.open;
+    const steps = (a.run && a.run.steps) || [];
+    $("steps").replaceChildren(...steps.map((s) => { const li = document.createElement("li"); li.className = s.status; li.textContent = `${s.name} - ${s.status}` + (s.detail && s.detail.error ? ": " + s.detail.error : ""); return li; }));
+    if (a.run) {
+      const done = a.run.status === "succeeded" || a.run.status === "failed";
+      setMsg(a.run.status === "running" ? "Restoring…" : a.run.status === "succeeded" ? "Restored - the service is healthy." : (a.run.error || "Failed."), a.run.status === "failed" ? "error" : a.run.status === "succeeded" ? "ok" : "");
+      if (!done && !timer) timer = setInterval(load, 4000);
+      if (done && timer) { clearInterval(timer); timer = null; }
+    }
+  }
+  $("approve-btn").addEventListener("click", async () => {
+    if (!confirm("Really restore? This replaces the guest with the older copy.")) return;
+    try { await apiFetch("POST", "/api/approvals/" + TOKEN + "/approve", undefined, { suppressToast: true }); load(); }
+    catch (err) { setMsg(err.message, "error"); }
+  });
+  $("deny-btn").addEventListener("click", async () => {
+    try { await apiFetch("POST", "/api/approvals/" + TOKEN + "/deny", undefined, { suppressToast: true }); load(); }
+    catch (err) { setMsg(err.message, "error"); }
+  });
+  load();
+</script>
+{% endblock %}

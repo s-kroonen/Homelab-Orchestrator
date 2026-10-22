@@ -109,6 +109,18 @@ class DryRunProxmoxAdapter(ProxmoxAdapter):
             log_line=f"[dry_run] would vzdump vmid={vmid} to {storage} mode={mode}",
         )
 
+    async def restore_guest(
+        self, *, node: str, vmid: int, kind: GuestKind, archive: str
+    ) -> TaskHandle:
+        return self._record_task(
+            "proxmox.dry_run.restore_guest",
+            node,
+            vmid=vmid,
+            kind=kind.value,
+            archive=archive,
+            log_line=f"[dry_run] would restore {archive} over {kind.value} {vmid}",
+        )
+
     async def task_status(self, node: str, upid: str) -> TaskStatus:
         return self._tasks.get(
             upid,

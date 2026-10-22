@@ -27,7 +27,7 @@ a proxy host with no service would silently never reach the saved YAML.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import AsyncIterator, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
@@ -51,7 +51,9 @@ from orchestrator.db.models import ProxyHost, Service
 from orchestrator.domain.enums import RouterProvider
 from orchestrator.logging_setup import get_logger
 from orchestrator.registry.config_files import normalize_config_file, unknown_file_problem
+from orchestrator.registry.host_cascade import host_served
 from orchestrator.registry.proxy_push import (
+    SERVED_OVERLAY,
     TRAEFIK_MANAGER_ROUTE_REF_KEY,
     HostSync,
     add_pending_delete,
@@ -59,6 +61,7 @@ from orchestrator.registry.proxy_push import (
     conflict_message,
     desired_signature,
     evaluate,
+    host_enabled,
     is_live_managed,
     move_to_configured_file,
     pending_deletes,
@@ -166,8 +169,22 @@ async def _router_details_or_503(settings: Any, adapters: AdapterBundle) -> list
     return routers
 
 
+async def _service_tree_overlay(session: SessionDep) -> AsyncIterator[None]:
+    """For the whole request, judge hosts against the service tree: a host whose
+    service (or an ancestor) is disabled is not served, whatever its own switch says."""
+    from orchestrator.registry.host_cascade import tree_map
+
+    SERVED_OVERLAY.set(tree_map(session))
+    try:
+        yield
+    finally:
+        SERVED_OVERLAY.set(None)
+
+
 router = APIRouter(
-    prefix="/api/proxy-hosts", tags=["proxy-hosts"], dependencies=[Depends(require_admin)]
+    prefix="/api/proxy-hosts",
+    tags=["proxy-hosts"],
+    dependencies=[Depends(require_admin), Depends(_service_tree_overlay)],
 )
 
 
@@ -256,7 +273,7 @@ def _traefik_block(
     status and error text (what Traefik Manager shows)."""
     if ph.router_provider is not RouterProvider.TRAEFIK:
         return None
-    if not ph.enabled:
+    if not host_enabled(ph):
         # Switched off on purpose: Traefik is EXPECTED not to serve it, so its
         # absence from the runtime routers is not an error or "not loaded".
         return {
@@ -333,9 +350,12 @@ def _serialize(
         # orchestrator.registry.traefik_status. "unknown" means Traefik polling
         # is not configured or the poll failed, NOT that the route is missing.
         "live_status": (
-            DISABLED if not ph.enabled else drift_status(ph.hostname, live_hostnames).value
+            DISABLED if not host_enabled(ph) else drift_status(ph.hostname, live_hostnames).value
         ),
         "enabled": ph.enabled,
+        # Switched on AND its service (and every ancestor) is enabled; False with
+        # enabled=True means "parked by its service", not by this host's own switch.
+        "served": host_enabled(ph),
         # What Traefik Manager says about the same host (it is the source of
         # truth for routes): enabled / disabled / partial / None (unreadable or
         # no such route). A difference from `enabled` is shown as a mismatch.
@@ -468,7 +488,7 @@ def _sync_probe_of(session: Session, settings: Any, ph: ProxyHost) -> list[Probe
         settings,
         hostname=ph.hostname,
         service_id=ph.service_id,
-        enabled=ph.enabled,
+        enabled=host_served(session, ph),
     )
 
 
@@ -779,7 +799,11 @@ async def create_proxy_host(
         },
     )
     probe_events = sync_traefik_probe(
-        session, settings, hostname=ph.hostname, service_id=ph.service_id, enabled=ph.enabled
+        session,
+        settings,
+        hostname=ph.hostname,
+        service_id=ph.service_id,
+        enabled=host_served(session, ph),
     )
     _audit_probe_sync_events(session, admin, probe_events)
     session.commit()
@@ -1001,7 +1025,7 @@ async def update_proxy_host(
         service_id=ph.service_id,
         old_hostname=before["hostname"],
         old_service_id=before["service_id"],
-        enabled=ph.enabled,
+        enabled=host_served(session, ph),
     )
     _audit_probe_sync_events(session, admin, probe_events)
     session.commit()
@@ -1125,7 +1149,11 @@ async def set_proxy_host_enabled(
     # push): a disabled host is not served, so its probe must not fail the
     # service. ``required`` / timeout are kept for the way back.
     probe_events = sync_traefik_probe(
-        session, settings, hostname=ph.hostname, service_id=ph.service_id, enabled=enabled
+        session,
+        settings,
+        hostname=ph.hostname,
+        service_id=ph.service_id,
+        enabled=host_served(session, ph),
     )
     _audit_probe_sync_events(session, admin, probe_events)
     session.commit()

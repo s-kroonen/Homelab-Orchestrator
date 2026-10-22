@@ -104,6 +104,39 @@
     </div>
   </section>
 
+  <section id="actions">
+    <h2>Actions</h2>
+    <table class="kv-table"><tbody>
+      <tr>
+        <th>This service</th>
+        <td id="ctl-service-text" class="muted">Loading…</td>
+        <td id="ctl-service-btns"></td>
+      </tr>
+      <tr>
+        <th>Its guest</th>
+        <td id="ctl-guest-text" class="muted">Loading…</td>
+        <td id="ctl-guest-btns"></td>
+      </tr>
+    </tbody></table>
+    <p class="msg" id="ctl-msg" aria-live="polite"></p>
+  </section>
+
+  <section id="subservices">
+    <h2>Sub-services</h2>
+    <div class="table-scroll">
+    <table>
+      <thead><tr><th>Sub-service</th><th>Health</th><th>Enabled</th><th>Backup waits</th></tr></thead>
+      <tbody id="sub-body"><tr><td colspan="4" class="muted">None.</td></tr></tbody>
+    </table>
+    </div>
+    <div class="row">
+      <input id="sub-slug" placeholder="slug (e.g. nginx)" size="14">
+      <input id="sub-name" placeholder="name" size="16">
+      <button class="secondary" id="sub-add-btn" type="button">Add sub-service</button>
+      <span class="msg" id="sub-msg"></span>
+    </div>
+  </section>
+
   <section>
     <h2>Service</h2>
     <div class="grid">
@@ -116,6 +149,17 @@
       <datalist id="f-group-options">
         {% for g in existing_groups %}<option value="{{ g }}">{% endfor %}
       </datalist>
+      <label for="f-parent">Part of</label>
+      <select id="f-parent">
+        <option value="">(nothing - a top-level service)</option>
+        {% for s in parent_choices %}<option value="{{ s }}">{{ s }}</option>{% endfor %}
+      </select>
+      <span class="hint">Make this a sub-service of another (a container on Portainer, an add-on on Home Assistant). It then lives on that service's node and guest, has no guest or backup policy of its own, and its proxy hosts go dark with it when either is disabled.</span>
+      <label for="f-backup-gate" data-sub-only>Backup waits for it</label>
+      <select id="f-backup-gate" data-sub-only>
+        <option value="ignore">No - never checked before a backup</option>
+        <option value="required">Yes - must be healthy first (started if stopped)</option>
+      </select>
       <label for="f-enabled">Enabled</label>
       <span><input id="f-enabled" type="checkbox"></span>
       <label for="f-wake-on-hit">Wake on hit</label>
@@ -127,18 +171,18 @@
         <option value="button">Visitor presses a Start button</option>
       </select>
       <span class="hint">What a visit to this service while it is down does, when Wake on hit is on. <strong>Any request</strong>: the maintenance page starts it straight away. <strong>Start button</strong>: the page shows a Start button and nothing starts until someone presses it, so scrapers, monitors and apps polling the URL cannot wake it by accident (the traffic-driven auto-wake skips these services).</span>
-      <label for="f-node">Node</label>
-      <select id="f-node">
+      <label for="f-node" data-root-only>Node</label>
+      <select id="f-node" data-root-only>
         {% for n in nodes %}<option value="{{ n.id }}">{{ n.name }}</option>{% endfor %}
       </select>
-      <label for="f-guest-kind">Guest kind</label>
-      <select id="f-guest-kind">
+      <label for="f-guest-kind" data-root-only>Guest kind</label>
+      <select id="f-guest-kind" data-root-only>
         {% for k in guest_kinds %}<option value="{{ k }}">{{ k }}</option>{% endfor %}
       </select>
-      <label for="f-guest-id">Guest id</label>
-      <input id="f-guest-id" type="number" style="width: 8rem">
-      <label for="f-policy">Backup policy</label>
-      <select id="f-policy">
+      <label for="f-guest-id" data-root-only>Guest id</label>
+      <input id="f-guest-id" type="number" style="width: 8rem" data-root-only>
+      <label for="f-policy" data-root-only>Backup policy</label>
+      <select id="f-policy" data-root-only>
         <option value="">(none)</option>
         {% for p in policies %}<option value="{{ p.id }}">{{ p.name }}</option>{% endfor %}
       </select>
@@ -154,6 +198,17 @@
         {% else %}<span class="muted">No other services.</span>{% endfor %}
       </div>
       <span class="hint">Must be HEALTHY before this service is judged; a down dependency makes it UNKNOWN, never FAILED.</span>
+      <label for="f-controller">Controller (JSON)</label>
+      <textarea id="f-controller" rows="3" spellcheck="false" placeholder='{"type": "portainer", "endpoint": 2, "container": "nginx"}'></textarea>
+      <span class="hint">How to start / stop / restart THIS service on its own (not the whole guest). Empty = only its guest can be acted on.</span>
+      <label for="f-recovery">Recovery (JSON)</label>
+      <textarea id="f-recovery" rows="3" spellcheck="false" placeholder='{"enabled": true, "steps": ["restart"], "max_attempts": 3}'></textarea>
+      <span class="hint">Limited automatic recovery when this service FAILS. Empty = off. Steps, tried in order: <code>restart</code> (its controller), <code>restart_parent</code>, <code>restart_guest</code> (the whole guest - opt in), <code>propose_restore</code> (asks you to approve). Other keys: <code>max_attempts</code>, <code>window_s</code> (3600), <code>settle_s</code> (120). See docs/recovery.md.</span>
+      <span></span>
+      <div id="recovery-state-row" hidden>
+        <span class="msg" id="recovery-state-text"></span>
+        <button class="secondary small" id="recovery-reset-btn" type="button">Reset recovery</button>
+      </div>
     </div>
     <div class="row">
       <button id="svc-save-btn" title="Save and stay on this page">Save</button>
@@ -357,6 +412,7 @@
 
     <div class="row">
       <button class="secondary" id="run-backup-btn" title="Wakes what the backup plan lists first, then backs up">Run backup now</button>
+      <button class="danger" id="propose-restore-btn" title="Creates a proposal to restore the latest verified backup over the guest. Nothing happens until you approve it on the next page.">Propose a restore…</button>
       <span class="msg" id="backup-trigger-msg"></span>
     </div>
     <p class="msg muted" id="run-backup-hint"></p>
@@ -537,7 +593,113 @@
       cb.checked = s.depends_on.includes(cb.value);
     }
     $("f-ip").value = s.ip_address || "";
+    $("f-parent").value = s.parent || "";
+    $("f-backup-gate").value = s.backup_gate || "ignore";
+    $("f-controller").value = Object.keys(s.controller || {}).length ? JSON.stringify(s.controller, null, 2) : "";
+    $("f-recovery").value = Object.keys(s.recovery || {}).length ? JSON.stringify(s.recovery, null, 2) : "";
+    syncTreeFields();
+    renderSubs(s);
+    renderRecoveryState(s.recovery_state);
   }
+  loadControllers();
+
+  function renderRecoveryState(r) {
+    $("recovery-state-row").hidden = !r;
+    if (!r) return;
+    $("recovery-state-text").textContent = r.exhausted
+      ? `Recovery gave up after ${r.attempts} attempt(s) (last: ${r.last_action} - ${r.last_result}).`
+      : r.attempts ? `Recovery attempt ${r.attempts} done (${r.last_action} - ${r.last_result}).` : `Failing on ${r.failing_scans} scan(s)...`;
+  }
+  $("recovery-reset-btn").addEventListener("click", async () => {
+    try {
+      await apiFetch("POST", "/api/services/" + SERVICE.slug + "/recovery/reset", undefined, { suppressToast: true });
+      SERVICE.recovery_state = null; renderRecoveryState(null);
+    } catch (err) { setMsg("svc-msg", err.message, "error"); }
+  });
+
+  // --- actions: start / stop / restart this service or its guest -----------
+  async function loadControllers() {
+    let c;
+    try { c = await apiFetch("GET", svcPath.replace("/api/registry/services/", "/api/services/") + "/controller?live=true", undefined, { suppressToast: true }); }
+    catch (err) { $("ctl-service-text").textContent = err.message; $("ctl-guest-text").textContent = ""; return; }
+    for (const target of ["service", "guest"]) {
+      const info = c[target];
+      const text = $("ctl-" + target + "-text"), btns = $("ctl-" + target + "-btns");
+      btns.replaceChildren();
+      if (!info.available) {
+        text.textContent = info.error || (target === "service" ? "Nothing can act on this on its own - give it a controller below (or act on its guest)." : "No Proxmox guest.");
+        continue;
+      }
+      const st = info.status;
+      text.textContent = info.describe + (st ? " - " + st.state + (st.detail ? " (" + st.detail + ")" : "") : "");
+      for (const action of ["start", "stop", "restart"]) {
+        const b = document.createElement("button");
+        b.className = (action === "start" ? "secondary" : "danger") + " small";
+        b.textContent = action[0].toUpperCase() + action.slice(1);
+        b.addEventListener("click", async () => {
+          if (action !== "start" && !confirm(`${b.textContent} ${info.describe}?` + (target === "guest" && SERVICE.parent ? " This is the root's whole guest - everything on it goes with it." : ""))) return;
+          setMsg("ctl-msg", `${b.textContent}…`, "");
+          try {
+            const r = await apiFetch("POST", svcPath.replace("/api/registry/services/", "/api/services/") + "/actions/" + action, { target }, { suppressToast: true });
+            setMsg("ctl-msg", r.message, "ok");
+            setTimeout(loadControllers, 1500);
+          } catch (err) { setMsg("ctl-msg", err.message, "error"); }
+        });
+        btns.append(b, " ");
+      }
+    }
+  }
+
+  // A sub-service takes node, guest and backup policy from its root.
+  function syncTreeFields() {
+    const sub = $("f-parent").value !== "";
+    for (const el of document.querySelectorAll("[data-root-only]")) el.hidden = sub;
+    for (const el of document.querySelectorAll("[data-sub-only]")) el.hidden = !sub;
+  }
+  $("f-parent").addEventListener("change", () => { syncTreeFields(); svcFormDirty = true; });
+
+  function renderSubs(s) {
+    const body = $("sub-body");
+    body.replaceChildren();
+    if (!(s.children || []).length) {
+      body.innerHTML = '<tr><td colspan="4" class="muted">None.</td></tr>';
+      return;
+    }
+    for (const c of s.children) {
+      const tr = document.createElement("tr");
+      const name = document.createElement("td");
+      const a = document.createElement("a");
+      a.href = "/services/" + encodeURIComponent(c.slug);
+      a.textContent = c.name;
+      name.append(a, " ");
+      const code = document.createElement("code");
+      code.textContent = c.slug;
+      name.append(code);
+      const health = document.createElement("td");
+      const badge = document.createElement("span");
+      badge.className = "badge " + (c.enabled ? (c.verdict === "healthy" ? "healthy" : c.verdict === "failed" ? "failed" : c.verdict === "down" ? "down" : "unknown") : "disabled");
+      badge.textContent = c.enabled ? c.verdict : "disabled";
+      health.append(badge);
+      const en = document.createElement("td"); en.textContent = c.enabled ? "yes" : "no";
+      const bg = document.createElement("td"); bg.textContent = c.backup_gate === "required" ? "yes" : "no";
+      tr.append(name, health, en, bg);
+      body.append(tr);
+    }
+  }
+
+  $("sub-add-btn").addEventListener("click", async () => {
+    try {
+      await apiFetch("POST", "/api/registry/services", {
+        slug: $("sub-slug").value.trim(), name: $("sub-name").value.trim() || $("sub-slug").value.trim(),
+        parent: SERVICE.slug,
+      }, { suppressToast: true });
+      const fresh = await apiFetch("GET", svcPath, undefined, { suppressToast: true });
+      Object.assign(SERVICE, fresh);
+      renderSubs(SERVICE);
+      $("sub-slug").value = ""; $("sub-name").value = "";
+      setMsg("sub-msg", "Added. Open it to give it probes, a controller and proxy hosts.", "ok");
+    } catch (err) { setMsg("sub-msg", err.message, "error"); }
+  });
 
   // --- address (effective IP, discovery, manual IP, one-click ping) -------
   for (const ev of ["input", "change"]) {
@@ -665,6 +827,16 @@
   $("svc-save-btn").addEventListener("click", async () => {
     const guestId = $("f-guest-id").value.trim();
     const policy = $("f-policy").value;
+    let controller, recovery;
+    try {
+      controller = $("f-controller").value.trim() ? JSON.parse($("f-controller").value) : {};
+      recovery = $("f-recovery").value.trim() ? JSON.parse($("f-recovery").value) : {};
+    } catch (err) {
+      applyNext = false;
+      setMsg("svc-msg", "Controller / recovery is not valid JSON: " + err.message, "error");
+      return;
+    }
+    const parent = $("f-parent").value;
     const body = {
       name: $("f-name").value.trim(),
       description: $("f-description").value,
@@ -680,7 +852,15 @@
       backup_excluded_reason: $("f-backup-reason").value.trim(),
       depends_on: [...$("f-depends").querySelectorAll("input:checked")].map((cb) => cb.value),
       ip_address: $("f-ip").value.trim(),
+      controller,
+      recovery,
+      backup_gate: $("f-backup-gate").value,
     };
+    if (parent !== (SERVICE.parent || "")) body.parent = parent;
+    if (parent) {
+      // Inherited from the root: not ours to send.
+      for (const k of ["node_id", "guest_kind", "guest_id", "backup_policy_id"]) delete body[k];
+    }
     try {
       const updated = await apiFetch("PUT", svcPath, body, { suppressToast: true });
       Object.assign(SERVICE, updated);
@@ -1230,7 +1410,7 @@
   function renderPlan(plan) {
     const list = $("plan-list");
     list.innerHTML = "";
-    if (!plan.steps.length) {
+    if (!plan.steps.length && !(plan.required_subs || []).length) {
       list.innerHTML = '<li class="muted">Nothing is woken before this backup (the policy has wake-before-backup off and there are no prerequisites).</li>';
     }
     for (const step of plan.steps) {
@@ -1257,6 +1437,18 @@
         b.textContent = step.blocker;
         li.appendChild(b);
       }
+      list.appendChild(li);
+    }
+    for (const sub of plan.required_subs || []) {
+      const li = document.createElement("li");
+      const slug = document.createElement("code");
+      slug.textContent = sub.slug;
+      const why = document.createElement("span");
+      why.className = "why";
+      why.textContent = sub.can_start
+        ? "required sub-service - started through its " + sub.controller + " controller if stopped, then must be healthy"
+        : "required sub-service - must already be healthy (no controller to start it)";
+      li.append(slug, why);
       list.appendChild(li);
     }
     const warn = $("plan-blockers");
@@ -1295,6 +1487,14 @@
       cb.checked = (s.backup_requires || []).includes(cb.value);
     }
   }
+
+  $("propose-restore-btn").addEventListener("click", async () => {
+    if (!confirm("Propose restoring the latest verified backup over this service's guest? You will be asked to approve it on the next page; nothing is restored before that.")) return;
+    try {
+      const r = await apiFetch("POST", "/api/services/" + SERVICE.root + "/restore-proposal", undefined, { suppressToast: true });
+      location.href = "/approvals/" + r.token;
+    } catch (err) { setMsg("backup-trigger-msg", err.message, "error"); }
+  });
 
   $("req-save-btn").addEventListener("click", async () => {
     const backup_requires = [...$("f-backup-requires").querySelectorAll("input:checked")].map((cb) => cb.value);

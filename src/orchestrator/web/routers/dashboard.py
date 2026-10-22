@@ -37,10 +37,12 @@ from orchestrator.db.models import (
     PipelineRun,
     Probe,
     ProxyHost,
+    RecoveryState,
     Service,
     ServiceState,
 )
 from orchestrator.domain.enums import (
+    BackupGate,
     GuestKind,
     PipelineKind,
     PipelineStatus,
@@ -62,6 +64,7 @@ from orchestrator.registry.loader import (
 from orchestrator.registry.probe_specs import PROBE_SPECS
 from orchestrator.registry.proxy_push import move_to_configured_file
 from orchestrator.registry.push import PushResult, apply_all, get_pushers, status_all, summarize
+from orchestrator.registry.tree import MAX_DEPTH, TreeIndex, would_cycle
 from orchestrator.web.auth import CurrentAdmin, require_admin
 from orchestrator.web.deps import AdaptersDep, SessionDep, SettingsDep
 from orchestrator.web.proxy_catalog import get_catalog
@@ -113,7 +116,13 @@ class ServiceCreate(_Body):
     name: str
     description: str = ""
     group: str = ""
-    node_id: int
+    #: Required for a root; a sub-service (``parent`` set) takes its root's.
+    node_id: int | None = None
+    #: Slug of the parent: this is then a sub-service (container, add-on).
+    parent: str | None = None
+    controller: dict[str, Any] = Field(default_factory=dict)
+    recovery: dict[str, Any] = Field(default_factory=dict)
+    backup_gate: str = BackupGate.IGNORE.value
     guest_kind: str = GuestKind.NONE.value
     guest_id: int | None = None
     enabled: bool = True
@@ -142,6 +151,12 @@ class ServiceUpdate(_Body):
     wake_on_hit_enabled: bool | None = None
     #: "call" or "button" - see Service.wake_trigger.
     wake_trigger: str | None = None
+    #: Slug of the parent ("" / null = make it a root). See Service.parent_id.
+    parent: str | None = None
+    controller: dict[str, Any] | None = None
+    recovery: dict[str, Any] | None = None
+    #: "ignore" or "required" - see Service.backup_gate.
+    backup_gate: str | None = None
     depends_on: list[str] | None = None
     backup_requires: list[str] | None = None
     #: The manual IP ("" clears it). Discovered addresses are never set here.
@@ -269,7 +284,44 @@ def _proxy_host_dict(ph: ProxyHost) -> dict[str, Any]:
     }
 
 
+def _recovery_state(session: Session, svc: Service) -> dict[str, Any] | None:
+    row = session.get(RecoveryState, svc.id) if svc.id is not None else None
+    if row is None or not (row.attempts or row.failing_scans):
+        return None
+    return {
+        "attempts": row.attempts,
+        "failing_scans": row.failing_scans,
+        "exhausted": row.exhausted,
+        "last_action": row.last_action,
+        "last_result": row.last_result,
+        "last_attempt_at": row.last_attempt_at.isoformat() if row.last_attempt_at else None,
+    }
+
+
+def _tree_info(session: Session, svc: Service) -> dict[str, Any]:
+    index = TreeIndex.build(session)
+    parent = index.parent(svc)
+    states = {s.service_id: s.last_verdict.value for s in session.exec(select(ServiceState)).all()}
+    return {
+        "parent": parent.slug if parent else None,
+        "root": index.root(svc).slug,
+        "depth": index.depth(svc),
+        "served": index.is_served(svc),
+        "children": [
+            {
+                "slug": c.slug,
+                "name": c.name,
+                "enabled": c.enabled,
+                "verdict": states.get(c.id, "unknown"),
+                "backup_gate": c.backup_gate.value,
+            }
+            for c in index.kids(svc)
+        ],
+    }
+
+
 def service_detail(session: Session, svc: Service) -> dict[str, Any]:
+    tree_info = _tree_info(session, svc)
     node = session.get(Node, svc.node_id) if svc.node_id is not None else None
     policy = (
         session.get(BackupPolicy, svc.backup_policy_id)
@@ -289,6 +341,15 @@ def service_detail(session: Session, svc: Service) -> dict[str, Any]:
         "backup_excluded_reason": svc.backup_excluded_reason,
         "wake_on_hit_enabled": svc.wake_on_hit_enabled,
         "wake_trigger": svc.wake_trigger.value,
+        "parent": tree_info["parent"],
+        "root": tree_info["root"],
+        "depth": tree_info["depth"],
+        "children": tree_info["children"],
+        "served": tree_info["served"],
+        "controller": dict(svc.controller or {}),
+        "recovery": dict(svc.recovery or {}),
+        "backup_gate": svc.backup_gate.value,
+        "recovery_state": _recovery_state(session, svc),
         "backup_policy_id": svc.backup_policy_id,
         "backup_policy": policy.name if policy else None,
         "depends_on": list(svc.depends_on or []),
@@ -361,6 +422,61 @@ def _parse_probe_kind(raw: str) -> ProbeKind:
     except ValueError:
         choices = ", ".join(k.value for k in ProbeKind)
         raise _bad_request(f"unknown probe kind {raw!r} (expected one of: {choices})") from None
+
+
+def _check_json_object(raw: Any, field: str) -> dict[str, Any]:
+    if raw is None:
+        return {}
+    if not isinstance(raw, dict):
+        raise _bad_request(f"{field} must be an object")
+    return dict(raw)
+
+
+def _check_recovery(raw: Any) -> dict[str, Any]:
+    from orchestrator.recovery.policy import normalize_policy
+
+    try:
+        return normalize_policy(_check_json_object(raw, "recovery"))
+    except ValueError as exc:
+        raise _bad_request(str(exc)) from None
+
+
+def _check_controller(raw: Any) -> dict[str, Any]:
+    from orchestrator.controllers import validate_controller
+
+    try:
+        return validate_controller(_check_json_object(raw, "controller"))
+    except ValueError as exc:
+        raise _bad_request(str(exc)) from None
+
+
+def _parse_backup_gate(raw: str | None) -> BackupGate:
+    try:
+        return BackupGate(str(raw or "ignore").strip().lower())
+    except ValueError:
+        raise _bad_request("backup_gate must be 'ignore' or 'required'") from None
+
+
+def _resolve_parent(
+    session: Session, index: TreeIndex, parent_slug: str | None, *, child: Service | None
+) -> Service | None:
+    """The parent row for ``parent_slug`` ("" / None = no parent), validated."""
+    slug = (parent_slug or "").strip()
+    if not slug:
+        return None
+    parent = index.by_slug.get(slug)
+    if parent is None:
+        raise _bad_request(f"parent {slug!r} does not exist")
+    if child is not None and would_cycle(index, child, parent):
+        raise _bad_request(f"{slug!r} is {child.slug!r} or below it - that would be a loop")
+    depth = index.depth(parent) + 1
+    if child is not None:
+        depth += max(
+            (index.depth(d) - index.depth(child) for d in index.descendants(child)), default=0
+        )
+    if depth > MAX_DEPTH:
+        raise _bad_request(f"services nest at most {MAX_DEPTH} levels deep")
+    return parent
 
 
 def _check_node_exists(session: Session, node_id: int | None) -> None:
@@ -678,14 +794,18 @@ async def list_services(session: SessionDep) -> list[dict[str, object]]:
     services = session.exec(select(Service).order_by(Service.slug)).all()
     nodes = {n.id: n.name for n in session.exec(select(Node)).all()}
     states = {st.service_id: st for st in session.exec(select(ServiceState)).all()}
+    index = TreeIndex(list(services))
     out: list[dict[str, object]] = []
     for s in services:
         ip, source = effective_ip(s, states.get(s.id))
+        parent = index.parent(s)
         out.append(
             {
                 "slug": s.slug,
                 "name": s.name,
                 "enabled": s.enabled,
+                "parent": parent.slug if parent else None,
+                "depth": index.depth(s),
                 "group": s.group,
                 "node": nodes.get(s.node_id),
                 "guest_kind": s.guest_kind.value,
@@ -748,7 +868,19 @@ async def create_service(
         raise _conflict(f"service {slug!r} already exists")
     name = _require_text(body.name, "name")
     guest_kind = _parse_guest_kind(body.guest_kind)
-    _check_node_exists(session, body.node_id)
+    index = TreeIndex.build(session)
+    parent = _resolve_parent(session, index, body.parent, child=None)
+    node_id = body.node_id
+    if parent is not None:
+        # A sub-service lives where its root lives and has no guest of its own.
+        if guest_kind is not GuestKind.NONE or body.guest_id is not None:
+            raise _bad_request(
+                "a sub-service uses its root's guest - leave guest_kind/guest_id out"
+            )
+        if body.backup_policy_id is not None:
+            raise _bad_request("backups are per guest - set the backup policy on the root service")
+        node_id = index.root(parent).node_id
+    _check_node_exists(session, node_id)
     _check_policy_exists(session, body.backup_policy_id)
     _check_backup_exclusion(body.backup_excluded, body.backup_excluded_reason)
     depends_on = _check_depends_on(session, slug, body.depends_on)
@@ -765,7 +897,11 @@ async def create_service(
         name=name,
         description=body.description,
         group=body.group,
-        node_id=body.node_id,
+        node_id=node_id,
+        parent_id=parent.id if parent is not None else None,
+        controller=_check_controller(body.controller),
+        recovery=_check_recovery(body.recovery),
+        backup_gate=_parse_backup_gate(body.backup_gate),
         guest_kind=guest_kind,
         guest_id=body.guest_id,
         enabled=body.enabled,
@@ -821,6 +957,30 @@ def apply_service_update(
             raise _bad_request(f"{flag} must be true or false")
     if "guest_kind" in changes:
         changes["guest_kind"] = _parse_guest_kind(changes["guest_kind"] or "")
+    if "controller" in changes:
+        changes["controller"] = _check_controller(changes["controller"])
+    if "recovery" in changes:
+        changes["recovery"] = _check_recovery(changes["recovery"])
+    if "backup_gate" in changes:
+        changes["backup_gate"] = _parse_backup_gate(changes["backup_gate"])
+    index = TreeIndex.build(session)
+    new_parent = index.parent(svc)
+    if "parent" in changes:
+        new_parent = _resolve_parent(session, index, changes.pop("parent"), child=svc)
+        changes["parent_id"] = new_parent.id if new_parent is not None else None
+    if new_parent is not None:
+        # Sub-service: guest, node and backup policy come from the root.
+        for field in ("guest_kind", "guest_id", "node_id", "backup_policy_id"):
+            if field in changes and changes[field] not in (None, GuestKind.NONE.value, "none"):
+                raise _bad_request(
+                    f"{field} is set on the root service ({index.root(new_parent).slug}); "
+                    "a sub-service inherits it"
+                )
+            changes.pop(field, None)
+        changes["guest_kind"] = GuestKind.NONE
+        changes["guest_id"] = None
+        changes["backup_policy_id"] = None
+        changes["node_id"] = index.root(new_parent).node_id
     if "wake_trigger" in changes:
         try:
             changes["wake_trigger"] = WakeTrigger(str(changes["wake_trigger"] or "").strip())
@@ -860,6 +1020,20 @@ def apply_service_update(
         setattr(svc, key, value)
     svc.updated_at = _utcnow()
     session.add(svc)
+    session.flush()
+    # Everything under this service lives where its root lives; a switched-off
+    # service (or one moved under another parent) changes which hosts are served.
+    tree = TreeIndex.build(session)
+    for child in tree.descendants(svc):
+        root_node = tree.root(child).node_id
+        if child.node_id != root_node:
+            child.node_id = root_node
+            session.add(child)
+    if {"enabled", "parent_id"} & set(changes):
+        from orchestrator.config import get_settings
+        from orchestrator.registry.host_cascade import resync_subtree_probes
+
+        resync_subtree_probes(session, get_settings(), svc)
     audit.record(
         session,
         actor=actor,
@@ -882,13 +1056,27 @@ def apply_service_update(
 
 
 @router.delete("/registry/services/{slug}")
-async def delete_service(slug: str, session: SessionDep, admin: CurrentAdmin) -> dict[str, Any]:
+async def delete_service(
+    slug: str, session: SessionDep, admin: CurrentAdmin, cascade: bool = False
+) -> dict[str, Any]:
     """Remove a service. Its probes and runtime state go with it (FK CASCADE);
     backup records and pipeline runs survive with ``service_id`` nulled
-    (SET NULL) — the same history-preserving policy as removing it from YAML."""
+    (SET NULL) — the same history-preserving policy as removing it from YAML.
+    A service with sub-services is removed together with them, but only with
+    ``?cascade=true``."""
     svc = _get_service(session, slug)
+    tree = TreeIndex.build(session)
+    below = tree.descendants(svc)
+    if below and not cascade:
+        raise _conflict(
+            f"{slug!r} has sub-services ({', '.join(c.slug for c in below)}) - "
+            "delete them too with ?cascade=true, or move them first"
+        )
+    doomed = {slug, *(c.slug for c in below)}
     dependents = sorted(
-        s.slug for s in session.exec(select(Service)).all() if slug in (s.depends_on or [])
+        s.slug
+        for s in session.exec(select(Service)).all()
+        if s.slug not in doomed and doomed & set(s.depends_on or [])
     )
     if dependents:
         raise _conflict(
@@ -896,11 +1084,15 @@ async def delete_service(slug: str, session: SessionDep, admin: CurrentAdmin) ->
             "remove it from their depends_on first"
         )
     required_by = sorted(
-        {s.slug for s in session.exec(select(Service)).all() if slug in (s.backup_requires or [])}
+        {
+            s.slug
+            for s in session.exec(select(Service)).all()
+            if s.slug not in doomed and doomed & set(s.backup_requires or [])
+        }
         | {
             f"policy {p.name}"
             for p in session.exec(select(BackupPolicy)).all()
-            if slug in (p.requires or [])
+            if doomed & set(p.requires or [])
         }
     )
     if required_by:
@@ -909,13 +1101,21 @@ async def delete_service(slug: str, session: SessionDep, admin: CurrentAdmin) ->
             "remove it from their backup requirements first"
         )
     probe_names = [p.name for p in _service_probes(session, svc)]
+    for child in reversed(below):  # deepest first, so no row ever loses its parent under us
+        probe_names += [p.name for p in _service_probes(session, child)]
+        session.delete(child)
+        session.flush()
     session.delete(svc)
     audit.record(
         session,
         actor=admin.username,
         action="service.deleted",
         target=f"service:{slug}",
-        details={"name": svc.name, "probes_removed": probe_names},
+        details={
+            "name": svc.name,
+            "probes_removed": probe_names,
+            "sub_services_removed": [c.slug for c in below],
+        },
     )
     session.commit()
     return {"status": "deleted", "slug": slug, "probes_removed": len(probe_names)}

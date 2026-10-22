@@ -42,9 +42,12 @@ every update. Moving it is a separate, explicit, opt-in action
 
 from __future__ import annotations
 
+import functools
 import hashlib
 import json
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from typing import Any
 from urllib.parse import urlsplit
@@ -99,6 +102,43 @@ LOCAL = "local"
 # ---------------------------------------------------------------------------
 
 
+#: ``{proxy_host.id: served}`` while a push evaluation runs - see served_overlay.
+SERVED_OVERLAY: ContextVar[dict[int, bool] | None] = ContextVar("proxy_host_served", default=None)
+
+
+def host_enabled(ph: ProxyHost) -> bool:
+    """Should this host be served right now? Its own switch AND its service
+    tree (a disabled service or ancestor parks its hosts without rewriting
+    their own flag). Outside :func:`served_overlay` this is just ``ph.enabled``."""
+    overlay = SERVED_OVERLAY.get()
+    if overlay is not None and ph.id is not None and ph.id in overlay:
+        return ph.enabled and overlay[ph.id]
+    return ph.enabled
+
+
+@contextmanager
+def served_overlay(session: Session) -> Iterator[None]:
+    """Evaluate hosts against the service tree for the duration of the block."""
+    from orchestrator.registry.host_cascade import tree_map
+
+    token = SERVED_OVERLAY.set(tree_map(session))
+    try:
+        yield
+    finally:
+        SERVED_OVERLAY.reset(token)
+
+
+def _overlayed(fn: Any) -> Any:
+    """Run an async Pusher method with the service tree applied to every host."""
+
+    @functools.wraps(fn)
+    async def wrapper(self: Any, session: Session, *args: Any, **kwargs: Any) -> Any:
+        with served_overlay(session):
+            return await fn(self, session, *args, **kwargs)
+
+    return wrapper
+
+
 def is_live_managed(ph: ProxyHost) -> bool:
     return ph.router_provider is RouterProvider.TRAEFIK and bool((ph.upstream or "").strip())
 
@@ -127,7 +167,7 @@ def content_signature(ph: ProxyHost, service_slug: str | None = None) -> str:
 def desired_signature(ph: ProxyHost, service_slug: str | None = None) -> str:
     """``<content hash>:<1|0>`` - the content hash plus the enabled flag, kept
     visible so "only the switch changed" needs no content update."""
-    return f"{content_signature(ph, service_slug)}:{'1' if ph.enabled else '0'}"
+    return f"{content_signature(ph, service_slug)}:{'1' if host_enabled(ph) else '0'}"
 
 
 def fallback_signature(ph: ProxyHost, service_slug: str | None) -> str:
@@ -295,7 +335,7 @@ def _tm_state(routes: Sequence[RouteInfo]) -> str | None:
 
 
 def _enabled_change(ph: ProxyHost, tm: str | None) -> str | None:
-    want = "enabled" if ph.enabled else "disabled"
+    want = "enabled" if host_enabled(ph) else "disabled"
     if tm is None or tm == want:
         return None
     phrase = "partly disabled" if tm == "partial" else tm
@@ -321,7 +361,7 @@ def evaluate(
             and ph.router_provider is RouterProvider.TRAEFIK
         ):
             serving = _routes_for_host(routes, ph.hostname)
-            if serving and ph.enabled:
+            if serving and host_enabled(ph):
                 if fallback_missing(proxy, serving, service_slug_for_fb):
                     return HostSync(LOCAL, [FALLBACK_MISSING], ["fallback"], host_routes=serving)
                 if ph.pushed_sig != fb_sig and not _fallback_known(proxy, serving):
@@ -338,7 +378,7 @@ def evaluate(
     sig = ph.pushed_sig or ""
     opts = RouteOptions.from_dict(ph.route_options)
     owned = bool(ref) and proxy.owns_route_ref(ref or "")
-    disable_too = [] if ph.enabled else ["disable"]
+    disable_too = [] if host_enabled(ph) else ["disable"]
 
     if routes is None:
         if ref and not owned:
@@ -367,8 +407,8 @@ def evaluate(
         tm = _tm_state(host_routes)
         change = _enabled_change(ph, tm)
         changes = [change] if change else []
-        actions = (["enable"] if ph.enabled else ["disable"]) if change else []
-        if service_slug_for_fb and ph.enabled:
+        actions = (["enable"] if host_enabled(ph) else ["disable"]) if change else []
+        if service_slug_for_fb and host_enabled(ph):
             if fallback_missing(proxy, host_routes, service_slug_for_fb):
                 changes.append(FALLBACK_MISSING)
                 actions.append("fallback")
@@ -420,17 +460,17 @@ def evaluate(
         out: list[str] = []
         if fb_missing:
             out.append("fallback")
-        if enabled_diff and ph.enabled:
+        if enabled_diff and host_enabled(ph):
             out.append("enable")
         if content:
             out.append("update")
-        if enabled_diff and not ph.enabled:
+        if enabled_diff and not host_enabled(ph):
             out.append("disable")
         return out
 
     live_diffs = diffs + ([enabled_diff] if enabled_diff else [])
     fb_missing = (
-        ph.enabled
+        host_enabled(ph)
         and bool(service_slug_for_fb)
         and fallback_missing(
             proxy, [route] + ([companion] if companion else []), service_slug_for_fb
@@ -495,7 +535,7 @@ async def move_to_configured_file(
             "this route was adopted from a hand-written one - it is never moved automatically; "
             "move it in Traefik Manager"
         )
-    if not ph.enabled:
+    if not host_enabled(ph):
         return fail("the host is disabled - enable and push it first (a parked route has no file)")
     known = await adapters.proxy.list_config_files()
     target, problem = resolve_file_for(settings, ph, slug, known)
@@ -678,6 +718,7 @@ def _select(hosts: Sequence[ProxyHost], only: Sequence[str] | None) -> list[Prox
 class ProxyPusher:
     name = TARGET
 
+    @_overlayed
     async def status(self, session: Session, adapters: AdapterBundle) -> PushStatus:
         hosts = session.exec(select(ProxyHost).order_by(ProxyHost.hostname)).all()
         services = services_by_id(session)
@@ -699,6 +740,7 @@ class ProxyPusher:
         status.pending_deletes = pending_deletes(session)
         return status
 
+    @_overlayed
     async def apply(
         self,
         session: Session,
@@ -812,11 +854,11 @@ class ProxyPusher:
             slug = slug_of(ph, services)
             done: list[str] = []
             if hs.state == EXTERNAL and ("enable" in hs.actions or "disable" in hs.actions):
-                verb = "enable" if ph.enabled else "disable"
+                verb = "enable" if host_enabled(ph) else "disable"
                 for route in hs.host_routes or ([hs.route] if hs.route else []):
                     try:
                         await proxy.set_route_enabled(
-                            route.ref, ph.enabled, with_redirect=False, hostname=host
+                            route.ref, host_enabled(ph), with_redirect=False, hostname=host
                         )
                     except Exception as exc:
                         add(verb, False, f"could not {verb} {route.name}: {exc}")
@@ -910,7 +952,7 @@ class ProxyPusher:
             add("create", True, f"created route {ref}{where}" + verification_note(verification))
             done.append("create")
 
-        if ph.enabled and not created and hs.tm != "enabled" and "enable" in hs.actions:
+        if host_enabled(ph) and not created and hs.tm != "enabled" and "enable" in hs.actions:
             try:
                 await proxy.set_route_enabled(
                     ref, True, with_redirect=opts.http_redirect, hostname=host
@@ -953,7 +995,7 @@ class ProxyPusher:
             slug
             and proxy.maintenance_fallback_available()
             and (created or updated or enabled_step or "fallback" in hs.actions)
-            and ph.enabled
+            and host_enabled(ph)
         ):
             try:
                 events = await proxy.ensure_maintenance_fallback(
@@ -969,7 +1011,7 @@ class ProxyPusher:
                     add("fallback", True, "maintenance page rule attached to the live route")
                     done.append("fallback")
 
-        if not ph.enabled:
+        if not host_enabled(ph):
             # Disable LAST, after anything above that needed the route live,
             # and only if something is still on (read back, not assumed).
             fresh = await proxy.list_routes()
@@ -992,7 +1034,7 @@ class ProxyPusher:
                 add("disable", True, "route disabled (parked on Traefik Manager)")
                 done.append("disable")
 
-        if ph.enabled and (updated or enabled_step):
+        if host_enabled(ph) and (updated or enabled_step):
             verification = await verify_route(
                 proxy, route_ref=ref, hostname=host, expect_entry_points=eps
             )

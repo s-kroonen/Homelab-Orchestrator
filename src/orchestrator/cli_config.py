@@ -1107,6 +1107,17 @@ def service_list(path_override: str | None) -> None:
     default=None,
     help="call: any request wakes it; button: the maintenance page shows a Start button.",
 )
+@click.option(
+    "--parent",
+    default=None,
+    help="Make this a sub-service of PARENT (a container, an add-on). Pass '' to make it a root.",
+)
+@click.option(
+    "--backup-gate",
+    type=click.Choice(["ignore", "required"]),
+    default=None,
+    help="Sub-services: does the root's backup wait for this one?",
+)
 @click.option("--reason", default=None, help="Why it is excluded.")
 @click.option("--policy", "backup_policy", default=None, help="Backup policy name.")
 @click.option(
@@ -1150,6 +1161,8 @@ def service_update(
     backup_excluded: bool | None,
     wake_on_hit_enabled: bool | None,
     wake_trigger: str | None,
+    parent: str | None,
+    backup_gate: str | None,
     reason: str | None,
     backup_policy: str | None,
     depends_on: str | None,
@@ -1179,6 +1192,26 @@ def service_update(
         fields["wake_on_hit_enabled"] = wake_on_hit_enabled
     if wake_trigger is not None:
         fields["wake_trigger"] = wake_trigger
+    if parent is not None:
+        if parent and parent == slug:
+            raise click.BadParameter("a service cannot be its own parent", param_hint="--parent")
+        if parent:
+            editor.require_service(parent)
+            # A sub-service lives where its root lives and has no guest of its own.
+            for key in ("guest_kind", "guest_id", "backup_policy"):
+                fields[key] = "none" if key == "guest_kind" else None
+        else:
+            # Detaching: it becomes a root, which needs a node - the one it lived on.
+            current = editor.get_service(slug) or {}
+            walker, hops = current, 0
+            while walker.get("parent") and hops < 8:
+                walker = editor.get_service(str(walker["parent"])) or {}
+                hops += 1
+            if not current.get("node") and walker.get("node"):
+                fields["node"] = walker["node"]
+        fields["parent"] = parent or None
+    if backup_gate is not None:
+        fields["backup_gate"] = backup_gate
     if reason is not None:
         fields["backup_excluded_reason"] = reason
     if backup_policy is not None:

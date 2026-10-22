@@ -14,7 +14,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from orchestrator.domain.enums import BackupMode, GuestKind, ProbeKind, WakeTrigger
+from orchestrator.domain.enums import BackupGate, BackupMode, GuestKind, ProbeKind, WakeTrigger
 
 
 def _collapse_slugs(value: list[str]) -> list[str]:
@@ -143,7 +143,12 @@ class ServiceSpec(BaseModel):
     description: str = ""
     #: Purely organisational — see Service.group. "" means ungrouped.
     group: str = ""
-    node: str  # -> NodeSpec.name
+    #: -> NodeSpec.name. Required for a root; a sub-service (``parent`` set) takes
+    #: its root's node and may leave this out.
+    node: str = ""
+    #: Slug of the parent service: this is then a sub-service (a container, an
+    #: add-on) with no guest of its own. See Service.parent_id.
+    parent: str | None = None
     guest_kind: GuestKind = GuestKind.NONE
     guest_id: int | None = None
     enabled: bool = True
@@ -163,6 +168,12 @@ class ServiceSpec(BaseModel):
     #: policy's `requires`). Not the same as depends_on — see docs/backup_wake.md.
     backup_requires: list[str] = Field(default_factory=list)
     backup_policy: str | None = None  # -> BackupPolicySpec.name
+    #: How to act on this service itself (start/stop/restart). See Service.controller.
+    controller: dict[str, Any] = Field(default_factory=dict)
+    #: Limited automatic recovery; {} = off. See Service.recovery.
+    recovery: dict[str, Any] = Field(default_factory=dict)
+    #: Sub-services only: does the root's backup wait for it? See Service.backup_gate.
+    backup_gate: BackupGate = BackupGate.IGNORE
     #: The operator's manual address. See Service.ip_address — discovered
     #: addresses are runtime state and never appear in this file.
     ip_address: str = ""

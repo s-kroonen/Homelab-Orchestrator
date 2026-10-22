@@ -54,6 +54,13 @@ class WakeTrigger(StrEnum):
     BUTTON = "button"  # the visitor has to press Start on the page
 
 
+class BackupGate(StrEnum):
+    """What a sub-service means for its root's backup (see Service.backup_gate)."""
+
+    IGNORE = "ignore"  # not checked; a container stopped on purpose never blocks a backup
+    REQUIRED = "required"  # must be healthy before the dump; its controller starts it if stopped
+
+
 class ProbeKind(StrEnum):
     """Built-in probe kinds. Add new kinds by registering an implementation in
     ``orchestrator.health.probes`` and extending this enum."""

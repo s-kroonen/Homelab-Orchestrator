@@ -58,6 +58,7 @@ from __future__ import annotations
 import asyncio
 import traceback
 from datetime import UTC, datetime, timedelta
+from typing import Any
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from sqlmodel import Session, select
@@ -69,6 +70,10 @@ from orchestrator.db.session import session_scope
 from orchestrator.domain.schemas import ServiceVerdict
 from orchestrator.health.engine import HealthEngine
 from orchestrator.logging_setup import get_logger
+from orchestrator.notify.engine import NotificationEngine
+from orchestrator.notify.monitor import collect
+from orchestrator.recovery.engine import RecoveryEngine
+from orchestrator.registry.tree import TreeIndex
 
 log = get_logger(__name__)
 
@@ -85,8 +90,27 @@ class HealthScanner:
     dependency cache per cycle, store one HealthScanSample per slug touched,
     prune old samples."""
 
-    def __init__(self, *, settings: Settings, adapters: AdapterBundle | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        settings: Settings,
+        adapters: AdapterBundle | None = None,
+        notifications: NotificationEngine | None = None,
+    ) -> None:
         self._settings = settings
+        # State changes found by a cycle are announced by the notification engine.
+        notifier = getattr(adapters, "notifier", None)
+        self._notifications = notifications or (
+            NotificationEngine(notifier, settings) if notifier is not None else None
+        )
+        # Limited automatic recovery of services that opted in (docs/recovery.md).
+        self._recovery = (
+            RecoveryEngine(
+                settings=settings, proxmox=adapters.proxmox, notifications=self._notifications
+            )
+            if adapters is not None
+            else None
+        )
         # The Proxmox adapter feeds the guest gate (node online? guest
         # running?). The app always passes the bundle; a bare
         # HealthScanner(settings=) scans without the guest gate.
@@ -148,7 +172,10 @@ class HealthScanner:
                 stmt = select(Service).order_by(Service.slug)
                 stmt = stmt.where(Service.enabled == True)  # noqa: E712
                 services = session.exec(stmt).all()
+                tree = TreeIndex.build(session)
                 for svc in services:
+                    if not tree.is_served(svc):
+                        continue  # a disabled ancestor parks its whole subtree
                     if svc.slug in cache:
                         # Already scanned THIS cycle as someone else's
                         # dependency (``_check_dependencies`` populates the
@@ -177,6 +204,7 @@ class HealthScanner:
                         )
 
                 inserted = self._store_samples(session, cache)
+                await self._announce(session, cache, guest_cache, tree)
                 # Pruning is independent of whether this cycle's scans
                 # succeeded — a probe hiccup must not also stop old samples
                 # from eventually being cleaned up. session_scope commits on
@@ -189,6 +217,27 @@ class HealthScanner:
 
         log.info("health_scanner.polled", services=len(cache), inserted=inserted)
         return inserted
+
+    async def _announce(
+        self,
+        session: Session,
+        cache: dict[str, ServiceVerdict],
+        guest_cache: Any,
+        tree: TreeIndex,
+    ) -> None:
+        """Hand this cycle's results to the notification engine. Never raises."""
+        if self._notifications is None:
+            return
+        try:
+            cluster = None
+            if guest_cache is not None:
+                cluster, _ = await guest_cache.cluster()
+            await self._notifications.observe(session, collect(session, cache, cluster, tree))
+            self._notifications.prune(session)
+            if self._recovery is not None:
+                await self._recovery.run_cycle(session, cache, tree)
+        except Exception as exc:  # pragma: no cover - defensive
+            log.error("health_scanner.notify_failed", error=str(exc), error_type=type(exc).__name__)
 
     def _store_samples(self, session: Session, cache: dict[str, ServiceVerdict]) -> int:
         """Write one HealthScanSample per slug in ``cache`` this cycle.

@@ -82,12 +82,12 @@ def test_0017_wake_trigger_rows_are_readable_through_the_orm() -> None:
         )
     command.upgrade(cfg, "0017_service_wake_trigger")
     with Session(engine) as s:
-        assert s.exec(select(Service)).one().wake_trigger is WakeTrigger.CALL
+        assert s.exec(select(Service.wake_trigger)).one() is WakeTrigger.CALL
 
     # A database that ran the first draft of 0017 (lower-case values).
     with engine.begin() as conn:
         conn.execute(sa.text("UPDATE service SET wake_trigger = 'call'"))
     command.upgrade(cfg, "head")
     with Session(engine) as s:
-        assert s.exec(select(Service)).one().wake_trigger is WakeTrigger.CALL
+        assert s.exec(select(Service.wake_trigger)).one() is WakeTrigger.CALL
     engine.dispose()

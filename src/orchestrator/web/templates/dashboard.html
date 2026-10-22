@@ -23,7 +23,8 @@
           {% for svc in grp.services %}
           <tr>
             <td class="bulk-col"><input type="checkbox" class="bulk-cb" data-bulk-id="{{ svc.slug }}" data-bulk-label="{{ svc.name }}"></td>
-            <td><a href="/services/{{ svc.slug }}">{{ svc.name }}</a> <code class="hide-phone">{{ svc.slug }}</code>{% if svc.ip %}
+            <td{% if svc.depth > 1 %} class="sub-row" style="padding-left: {{ 0.5 + 1.25 * (svc.depth - 1) }}rem"{% endif %}>{% if svc.depth > 1 %}<span class="msg" title="part of {{ svc.parent }}">↳</span> {% endif %}<a href="/services/{{ svc.slug }}">{{ svc.name }}</a> <code class="hide-phone">{{ svc.slug }}</code>{% if svc.children %}
+              <span class="badge {{ {'failed': 'failed', 'down': 'down', 'healthy': 'healthy'}.get(svc.children.worst, 'unknown' if svc.children.worst != 'disabled' else 'disabled') }}" title="{% for k, n in svc.children.counts.items() %}{{ n }} {{ k }}{% if not loop.last %}, {% endif %}{% endfor %}">{{ svc.children.total }} sub</span>{% endif %}{% if svc.ip %}
               <span class="svc-ip" title="IP ({{ svc.ip_source }})">{{ svc.ip }}</span>{% endif %}</td>
             <td class="hide-phone">{{ svc.node }}</td>
             <td>{% if svc.guest.css %}<span class="badge {{ svc.guest.css }}" title="{{ svc.guest.title }}">{{ svc.guest.label }}</span>{% else %}<span class="msg" title="{{ svc.guest.title }}">{{ svc.guest.label }}</span>{% endif %}</td>
@@ -495,6 +496,11 @@
       { label: "Probes optional", action: "probes_optional", run: servicesApi },
       { label: "Discover IP", action: "discover_ip", run: servicesApi },
       { label: "Resync guests", action: "resync", run: servicesApi },
+      { label: "Start (itself)", action: "ctl_start", run: servicesApi },
+      { label: "Stop (itself)", action: "ctl_stop", run: servicesApi, cls: "danger", confirm: (ids) =>
+          `Stop ${ids.length} service(s) with their own controller (a root service with none stops its whole guest)?` },
+      { label: "Restart (itself)", action: "ctl_restart", run: servicesApi, cls: "danger", confirm: (ids) =>
+          `Restart ${ids.length} service(s) with their own controller (a root service with none restarts its whole guest)?` },
       { label: "Wake on hit on", action: "wake_on_hit_on", run: servicesApi },
       { label: "Wake on hit off", action: "wake_on_hit_off", run: servicesApi },
       { label: "Set wake trigger", action: "update", run: servicesApi,

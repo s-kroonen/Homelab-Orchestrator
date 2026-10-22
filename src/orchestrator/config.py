@@ -373,6 +373,38 @@ class Settings(BaseSettings):
     mail_from: str = ""
     ntfy_url: str = ""
     ntfy_token: SecretStr = SecretStr("")
+    #: Where e-mail alerts go (comma-separated). Needs MAIL_SMTP_HOST and MAIL_FROM.
+    mail_to: str = ""
+    mail_smtp_starttls: bool = True
+    #: Any HTTP endpoint that takes a JSON POST (Home Assistant, Slack bridge, ...).
+    notify_webhook_url: str = ""
+    notify_webhook_token: SecretStr = SecretStr("")
+    # ---- Automatic recovery (docs/recovery.md) -------------------------------
+    #: Global kill switch; each service also opts in with its own `recovery:` block.
+    recovery_enabled: bool = True
+    #: A service must be FAILED on this many consecutive scans before a recovery attempt.
+    recovery_confirm_scans: int = 2
+    #: How long a restore approval link stays valid.
+    approval_ttl_hours: int = 24
+    #: How admins reach this dashboard from their phone/browser, for the links in alerts
+    #: (falls back to ORCHESTRATOR_PUBLIC_URL, which is the gateway-side address).
+    external_url: str = ""
+    # ---- Controllers: acting on one service itself (docs/controllers.md) ------
+    portainer_url: str = ""
+    portainer_api_key: SecretStr = SecretStr("")
+    portainer_verify_tls: bool = True
+    haos_url: str = ""
+    haos_token: SecretStr = SecretStr("")
+    haos_verify_tls: bool = True
+    controller_timeout_s: int = 20
+    # ---- Notification engine (docs/notifications.md) -----------------------
+    notifications_enabled: bool = True
+    #: A state change must be seen on this many consecutive scans before it is announced.
+    notify_confirm_scans: int = 2
+    #: This many state changes inside the window = "flapping": one alert, then quiet.
+    notify_flap_threshold: int = 4
+    notify_flap_window_s: int = 1800
+    notify_retention_days: int = 30
 
     # ---- Derived helpers --------------------------------------------------
     @field_validator("state_dir", "services_yaml_path", "setup_project_dir", mode="before")

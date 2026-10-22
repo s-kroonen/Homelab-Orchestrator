@@ -19,6 +19,8 @@ and the dump never run, exactly like a gate refusal.
 
 from __future__ import annotations
 
+import asyncio
+import time
 from datetime import UTC, datetime
 
 from sqlmodel import Session, select
@@ -32,6 +34,7 @@ from orchestrator.config import Settings
 from orchestrator.db.models import BackupPolicy, BackupRecord, Node, PipelineRun, Service
 from orchestrator.domain.enums import (
     AuditResult,
+    BackupGate,
     BackupMode,
     GuestKind,
     HealthState,
@@ -40,6 +43,7 @@ from orchestrator.domain.enums import (
 )
 from orchestrator.health.engine import HealthEngine
 from orchestrator.logging_setup import get_logger, new_correlation_id
+from orchestrator.notify.hooks import announce
 from orchestrator.pipelines.backup_wake import BackupWaker, WakeContext
 from orchestrator.pipelines.steps import BackupError, StepRecorder
 from orchestrator.pipelines.wake import WakePipeline
@@ -48,6 +52,7 @@ from orchestrator.registry.backup_plan import (
     resolve_backup_plan,
     resolve_policy_prerequisites,
 )
+from orchestrator.registry.tree import TreeIndex, effective_guest
 
 __all__ = ["BackupError", "BackupPipeline", "StepRecorder", "WakeContext"]
 
@@ -151,8 +156,10 @@ class BackupPipeline:
                 correlation_id=correlation_id,
                 run_id=run.id,
             )
+            await self._start_required_subs(session, steps, service, start=wake)
             await self._preflight(steps)
             await self._run_gate(session, steps, service, gate=gate)
+            await self._run_sub_gate(session, steps, service, gate=gate)
             snapshot = await self._dump_and_locate(steps, service, node, policy)
             record = self._record_backup(session, steps, service, policy, run, snapshot)
 
@@ -200,6 +207,17 @@ class BackupPipeline:
                 },
             )
             session.commit()
+            await announce(
+                session,
+                level="service",
+                key=slug,
+                name=service.name,
+                event="backup_failed",
+                severity="warn" if indeterminate else "error",
+                title=f"Backup of {service.name} {'could not run' if indeterminate else 'FAILED'}",
+                body=str(exc)[:1500],
+                scope={"slug": slug, "group": service.group},
+            )
             raise
         finally:
             # Whatever happened — including an exception this method does not
@@ -428,6 +446,105 @@ class BackupPipeline:
             f"evidence of corruption, only that the check could not run."
         )
 
+    # -- sub-services ----------------------------------------------------------
+
+    @staticmethod
+    def _required_subs(session: Session, service: Service) -> list[Service]:
+        """Sub-services whose root's backup waits for them (backup_gate: required),
+        enabled all the way up."""
+        tree = TreeIndex.build(session)
+        return [
+            d
+            for d in tree.descendants(service)
+            if d.backup_gate is BackupGate.REQUIRED and tree.is_served(d)
+        ]
+
+    async def _start_required_subs(
+        self, session: Session, steps: StepRecorder, service: Service, *, start: bool
+    ) -> None:
+        """Bring up the required sub-services that have a controller and are not
+        running (the guest is up by now), then give them time to turn HEALTHY."""
+        subs = self._required_subs(session, service)
+        if not subs:
+            return
+        from orchestrator.controllers import ControllerError, build_controller
+
+        deadline = time.monotonic() + self._settings.wake_timeout_s
+        for sub in subs:
+            started = datetime.now(UTC)
+            if not start:
+                steps.record(
+                    f"sub_start:{sub.slug}", "skipped", detail={"reason": "wake=False override"}
+                )
+                continue
+            if not sub.controller:
+                steps.record(
+                    f"sub_start:{sub.slug}",
+                    "skipped",
+                    detail={"reason": "no controller to start it"},
+                )
+                continue
+            try:
+                ctl = build_controller(self._settings, self._proxmox, session, sub)
+                assert ctl is not None
+                if not (await ctl.status()).running:
+                    message = await ctl.start()
+                    steps.record(
+                        f"sub_start:{sub.slug}",
+                        "ok",
+                        started_at=started,
+                        detail={"controller": ctl.describe(), "message": message},
+                    )
+                else:
+                    steps.record(
+                        f"sub_start:{sub.slug}",
+                        "already_running",
+                        detail={"controller": ctl.describe()},
+                    )
+            except (ControllerError, ValueError, AssertionError) as exc:
+                raise BackupError(
+                    f"required sub-service {sub.slug!r} could not be started through its "
+                    f"controller: {exc}"
+                ) from exc
+            # Wait for it to be judged HEALTHY (a container needs a moment).
+            while True:
+                verdict = await self._health.scan(session, sub)
+                if verdict.state is HealthState.HEALTHY or time.monotonic() >= deadline:
+                    break
+                await asyncio.sleep(self._settings.wake_poll_interval_s)
+
+    async def _run_sub_gate(
+        self, session: Session, steps: StepRecorder, service: Service, *, gate: bool
+    ) -> None:
+        """The root's backup also waits for its required sub-services: each must be
+        HEALTHY. One that is not refuses the whole backup, like the root's own gate."""
+        if not gate:
+            return
+        for sub in self._required_subs(session, service):
+            started = datetime.now(UTC)
+            verdict = await self._health.scan(session, sub)
+            detail = {"verdict": verdict.state.value, "reason": verdict.reason}
+            if verdict.state is HealthState.HEALTHY:
+                steps.record(f"sub_gate:{sub.slug}", "ok", started_at=started, detail=detail)
+                continue
+            steps.record(
+                f"sub_gate:{sub.slug}",
+                "failed" if verdict.state is HealthState.FAILED else "indeterminate",
+                started_at=started,
+                detail=detail,
+            )
+            how = {
+                HealthState.FAILED: "is FAILED",
+                HealthState.DOWN: "is not running",
+                HealthState.UNKNOWN: "could not be verified (UNKNOWN)",
+            }.get(verdict.state, verdict.state.value)
+            raise BackupError(
+                f"integrity gate refused {service.slug!r}: its required sub-service "
+                f"{sub.slug!r} {how} - {verdict.reason}. No backup was taken and the last "
+                f"known-good backup is untouched. (Set {sub.slug!r} to backup_gate: ignore "
+                f"if a backup should not wait for it.)"
+            )
+
     async def _dump_and_locate(
         self,
         steps: StepRecorder,
@@ -569,6 +686,13 @@ class BackupPipeline:
             raise BackupError(f"no service registered with slug {slug!r}")
         if not service.enabled:
             raise BackupError(f"service {slug!r} is disabled in the registry")
+        if service.parent_id is not None:
+            root = effective_guest(session, service).root_slug
+            raise BackupError(
+                f"{slug!r} is a sub-service: backups are per guest, so back up its "
+                f"root service {root!r} (mark this one backup_gate: required to make "
+                f"that backup wait for it)"
+            )
         if service.backup_excluded:
             # Deliberately unconditional — no force flag, no CLI override. The
             # motivating case (a VM hosting the pool PBS lives on) is never

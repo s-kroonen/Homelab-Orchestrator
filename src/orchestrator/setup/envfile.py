@@ -96,7 +96,11 @@ ENV_SECTIONS: tuple[EnvSection, ...] = (
                 "(blank falls back to dry_run with a loud warning); see "
                 "docs/proxy_hosts.md.",
             ),
-            EnvKey("NOTIFIER_ADAPTER", "null — the only notifier until phase 9"),
+            EnvKey(
+                "NOTIFIER_ADAPTER",
+                "null (log only) | auto (every channel configured below) | ntfy | email | webhook.\n"
+                "DRY_RUN=true keeps it silent whatever this says. See docs/notifications.md.",
+            ),
             EnvKey(
                 "SCHEDULER_ENABLED",
                 "Run backup policies on their schedule_cron. false = manual backups only.",
@@ -179,6 +183,30 @@ ENV_SECTIONS: tuple[EnvSection, ...] = (
                 "ORCHESTRATOR_GIT_SHA",
                 "Baked into the image by the build; leave blank.",
             ),
+        ),
+    ),
+    EnvSection(
+        "controllers",
+        "Controllers (act on one service, not its whole guest)",
+        (
+            EnvKey(
+                "PORTAINER_URL",
+                "e.g. http://10.0.0.5:9000. For services with `controller: {type: portainer ...}`.",
+            ),
+            EnvKey(
+                "PORTAINER_API_KEY",
+                "A Portainer access token (My account > Access tokens).",
+                secret=True,
+            ),
+            EnvKey("PORTAINER_VERIFY_TLS"),
+            EnvKey("HAOS_URL", "e.g. http://10.0.0.6:8123. For `controller: {type: haos ...}`."),
+            EnvKey(
+                "HAOS_TOKEN",
+                "A long-lived access token of an ADMIN Home Assistant user.",
+                secret=True,
+            ),
+            EnvKey("HAOS_VERIFY_TLS"),
+            EnvKey("CONTROLLER_TIMEOUT_S"),
         ),
     ),
     EnvSection(
@@ -519,7 +547,7 @@ ENV_SECTIONS: tuple[EnvSection, ...] = (
     ),
     EnvSection(
         "notifier",
-        "Notifier (phase 9)",
+        "Notifications",
         (
             EnvKey("MAIL_SMTP_HOST", "mailcow SMTP — used only while mailcow itself is healthy."),
             EnvKey("MAIL_SMTP_PORT"),
@@ -528,6 +556,28 @@ ENV_SECTIONS: tuple[EnvSection, ...] = (
             EnvKey("MAIL_FROM"),
             EnvKey("NTFY_URL", "Offsite ntfy for instant fallback alerts."),
             EnvKey("NTFY_TOKEN", secret=True),
+            EnvKey("MAIL_TO", "Where e-mail alerts go (comma-separated). Needs MAIL_SMTP_HOST."),
+            EnvKey("MAIL_SMTP_STARTTLS"),
+            EnvKey("NOTIFY_WEBHOOK_URL", "Any endpoint that takes a JSON POST."),
+            EnvKey("NOTIFY_WEBHOOK_TOKEN", secret=True),
+            EnvKey(
+                "NOTIFICATIONS_ENABLED", "false = no alerts and no feed (state is not tracked)."
+            ),
+            EnvKey(
+                "NOTIFY_CONFIRM_SCANS",
+                "A change must be seen on this many consecutive scans before it is announced.",
+            ),
+            EnvKey("NOTIFY_FLAP_THRESHOLD", "This many changes inside the window = 'flapping'."),
+            EnvKey("NOTIFY_FLAP_WINDOW_S"),
+            EnvKey("NOTIFY_RETENTION_DAYS", "How long the feed on /notifications is kept."),
+            EnvKey(
+                "EXTERNAL_URL",
+                "How you reach this dashboard (https://orchestrator.example.com), used for\n"
+                "the links in alerts. Falls back to ORCHESTRATOR_PUBLIC_URL.",
+            ),
+            EnvKey("RECOVERY_ENABLED", "Global switch for automatic recovery (docs/recovery.md)."),
+            EnvKey("RECOVERY_CONFIRM_SCANS", "FAILED scans in a row before a recovery attempt."),
+            EnvKey("APPROVAL_TTL_HOURS", "How long a restore approval link stays valid."),
         ),
     ),
 )
