@@ -151,6 +151,37 @@ ENV_SECTIONS: tuple[EnvSection, ...] = (
         ),
     ),
     EnvSection(
+        "self",
+        "The orchestrator itself (backups, updates)",
+        (
+            EnvKey(
+                "SELF_BACKUP_ENABLED",
+                "Scheduled backups of the database + services.yaml into STATE_DIR/backups.\n"
+                "Manual, pre-update, pre-migration and pre-restore backups always happen.\n"
+                "See docs/system.md.",
+            ),
+            EnvKey("SELF_BACKUP_INTERVAL_HOURS"),
+            EnvKey("SELF_BACKUP_KEEP", "Scheduled backups kept; older ones are pruned."),
+            EnvKey(
+                "SELF_UPDATE_TRANSPORT",
+                "Where the update command runs, as a probe-style transport block in JSON,\n"
+                'e.g. {"type": "host_agent", "host": "docker-host"}. Blank = show manual steps.',
+            ),
+            EnvKey(
+                "SELF_UPDATE_COMMAND",
+                "Run on the Docker host by the dashboard's Update button. Make it detach,\n"
+                "because it replaces this container. docs/system.md has the full example.",
+            ),
+            EnvKey("SELF_UPDATE_TIMEOUT_S"),
+            EnvKey("UPDATE_REPO", 'GitHub repo that "is there a newer build?" looks at.'),
+            EnvKey("UPDATE_BRANCH", "Blank = follow the tag of ORCHESTRATOR_IMAGE (dev or main)."),
+            EnvKey(
+                "ORCHESTRATOR_GIT_SHA",
+                "Baked into the image by the build; leave blank.",
+            ),
+        ),
+    ),
+    EnvSection(
         "health",
         "Health scanning (periodic)",
         (

@@ -40,6 +40,7 @@ from orchestrator.cli_config import probe, proxy
 from orchestrator.cli_config import service as service_group
 from orchestrator.cli_ip import ip_group
 from orchestrator.cli_setup import config_group, init, scaffold
+from orchestrator.cli_system import system as system_group
 from orchestrator.config import get_settings
 from orchestrator.db.models import Admin, Node, Service, WebAuthnCredential
 from orchestrator.db.models import Probe as ProbeRow
@@ -178,6 +179,7 @@ def check() -> None:
                 # tell us plainly. Ask it rather than making the operator guess.
                 await _diagnose_pbs_permissions(adapters, settings)
 
+            failures += await _check_nodes(adapters)
             failures += await _check_power(adapters)
         finally:
             await adapters.stop_all()
@@ -187,6 +189,30 @@ def check() -> None:
     if failures:
         raise SystemExit(1)
     click.secho("\nAll checks passed.", fg="green", bold=True)
+
+
+async def _check_nodes(adapters: Any) -> int:
+    """Each node with an address, asked through its own Proxmox API."""
+    from orchestrator.web.routers.infra import node_checks
+
+    with Session(get_engine()) as session:
+        rows = await node_checks(session, adapters)
+        nodes = session.exec(select(Node)).all()
+    for node in nodes:
+        if not node.address.strip():
+            click.secho(
+                f"  --    node {node.name}: no address set "
+                "(dashboard: Fill addresses from Proxmox, or set `address:` in services.yaml)",
+                fg="yellow",
+            )
+    failures = 0
+    for row in rows:
+        if row.get("ok"):
+            click.secho(f"  OK    {row['target']}: {row['result']['detail']}", fg="green")
+        else:
+            click.secho(f"  FAIL  {row['target']}: {row.get('error')}", fg="red")
+            failures += 1
+    return failures
 
 
 async def _check_power(adapters: Any) -> int:
@@ -220,6 +246,44 @@ async def _check_power(adapters: Any) -> int:
             click.secho(f"  FAIL  {label}: {why}", fg="red")
             failures += 1
     return failures
+
+
+@cli.command()
+@click.option("--node", default=None, help="Only the services on this node.")
+@click.option("--slug", default=None, help="Only this service.")
+def resync(node: str | None, slug: str | None) -> None:
+    """Re-read guests from Proxmox now and re-check the services (whole, per node or one)."""
+    _bootstrap()
+    settings = get_settings()
+    adapters = build_adapters(settings)
+
+    async def _go() -> dict[str, Any]:
+        from orchestrator.web.routers.infra import do_resync
+
+        await adapters.start_all()
+        try:
+            with Session(get_engine()) as session:
+                return await do_resync(session, adapters, settings, "cli", node=node, slug=slug)
+        finally:
+            await adapters.stop_all()
+
+    try:
+        out = _run(_go())
+    except Exception as exc:
+        detail = getattr(exc, "detail", None) or str(exc)
+        raise click.ClickException(str(detail)) from exc
+    for r in out["results"]:
+        if not r["ok"]:
+            click.secho(f"  FAIL  {r['slug']}: {r['message']}", fg="red")
+            continue
+        note = "  (guest NOT FOUND in Proxmox)" if r["missing"] else ""
+        click.echo(f"  {r['slug']:<24} guest {r['guest'] or 'n/a':<10} {r['verdict']}{note}")
+    click.echo(f"\nRe-read {out['scanned']} service(s).")
+    if out["unregistered_guests"]:
+        names = ", ".join(
+            f"{g['name'] or g['vmid']}@{g['node']}" for g in out["unregistered_guests"]
+        )
+        click.secho(f"Not registered as a service: {names}", fg="yellow")
 
 
 def _token_owner(token_id: str) -> str:
@@ -859,6 +923,7 @@ cli.add_command(policy_group, name="policy")
 cli.add_command(transport)
 cli.add_command(ip_group, name="ip")
 cli.add_command(bulk)
+cli.add_command(system_group, name="system")
 cli.add_command(admin_group, name="admin")
 
 

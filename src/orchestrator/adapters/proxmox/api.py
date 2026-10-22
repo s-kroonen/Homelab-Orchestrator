@@ -13,6 +13,7 @@ from orchestrator.adapters.proxmox.base import (
     ClusterStatus,
     Guest,
     GuestNetwork,
+    NodeHealth,
     ProxmoxAdapter,
     TaskHandle,
     TaskStatus,
@@ -43,6 +44,16 @@ _TYPE_TO_KIND: dict[str, GuestKind] = {
 }
 
 
+def _split_address(address: str, default_port: int) -> tuple[str, int]:
+    """``host`` / ``host:port`` -> (host, port); a bare IPv6 literal keeps its colons."""
+    value = address.strip()
+    if value.count(":") == 1:
+        host, _, port = value.partition(":")
+        if port.isdigit():
+            return host, int(port)
+    return value, default_port
+
+
 class LiveProxmoxAdapter(ProxmoxAdapter):
     def __init__(self, settings: Settings) -> None:
         self._settings = settings
@@ -69,6 +80,49 @@ class LiveProxmoxAdapter(ProxmoxAdapter):
             release=str(data.get("release", "")),
             raw=data,
         )
+
+    async def node_health(self, node: str, address: str) -> NodeHealth:
+        host, port = _split_address(address, self._settings.proxmox_port)
+        s = self._settings
+        client = ProxmoxFamilyClient(
+            flavor="pve",
+            host=host,
+            port=port,
+            token_id=s.proxmox_token_id,
+            token_secret=s.proxmox_token_secret.get_secret_value(),
+            verify_tls=s.proxmox_verify_tls,
+            connect_timeout=4.0,
+            read_timeout=6.0,
+        )
+        started = time.monotonic()
+        try:
+            data = await client.request("GET", "/version") or {}
+            latency = round((time.monotonic() - started) * 1000, 1)
+            version = str(data.get("version", ""))
+            uptime = cpu = mem_used = mem_total = None
+            try:
+                # Needs Sys.Audit; a token without it still proves the node is up.
+                status = await client.request("GET", f"/nodes/{node}/status") or {}
+                uptime = int(status["uptime"]) if "uptime" in status else None
+                cpu = float(status["cpu"]) if "cpu" in status else None
+                mem = status.get("memory") or {}
+                mem_used = int(mem["used"]) if "used" in mem else None
+                mem_total = int(mem["total"]) if "total" in mem else None
+            except (AdapterError, KeyError, TypeError, ValueError):
+                pass
+            return NodeHealth(
+                reachable=True,
+                latency_ms=latency,
+                version=version,
+                uptime_s=uptime,
+                cpu=cpu,
+                memory_used=mem_used,
+                memory_total=mem_total,
+            )
+        except AdapterError as exc:
+            return NodeHealth(reachable=False, error=str(exc))
+        finally:
+            await client.stop()
 
     async def list_guests(self, node: str | None = None) -> list[Guest]:
         rows = await self._client.request("GET", "/cluster/resources", params={"type": "vm"})

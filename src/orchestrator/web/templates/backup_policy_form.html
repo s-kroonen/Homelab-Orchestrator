@@ -83,8 +83,9 @@
         </div>
       </fieldset>
       <div class="row">
-        <button type="submit" id="submit-btn">{{ "Save changes" if mode == "edit" else "Create policy" }}</button>
-        <a class="btn secondary" href="/backup-policies">Cancel</a>
+        <button type="submit" id="submit-btn" title="Save and stay on this page">{{ "Save" if mode == "edit" else "Create policy" }}</button>
+        <button type="submit" id="apply-btn" class="secondary" title="Save and go back to the previous page">Apply</button>
+        <a class="btn secondary" id="cancel-link" href="/backup-policies">Cancel</a>
         <span class="msg" id="form-msg"></span>
       </div>
     </form>
@@ -134,6 +135,7 @@
 
   document.getElementById("policy-form").addEventListener("submit", async (ev) => {
     ev.preventDefault();
+    const apply = ev.submitter && ev.submitter.id === "apply-btn";
     const body = readForm();
     try {
       if (MODE === "edit") {
@@ -146,8 +148,11 @@
       setMsg("form-msg", err.message, "error");
       return;
     }
-    location.href = "/backup-policies";
+    if (apply) PrevPage.go("/backup-policies");
+    else if (MODE === "edit") setMsg("form-msg", "Saved.", "ok");
+    else location.href = PrevPage.carry("/backup-policies/" + encodeURIComponent(body.name) + "/edit");
   });
+  document.getElementById("cancel-link").href = PrevPage.url("/backup-policies");
 
   // Warn early about a required service whose node can never be woken (no power
   // target, not always on): the backup would fail at the wake step.

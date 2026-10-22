@@ -98,6 +98,8 @@ mechanics behind the dashboard,
 probing services the orchestrator cannot reach directly,
 [docs/host_runner.md](docs/host_runner.md) for running credentialed checks
 off-container,
+[docs/system.md](docs/system.md) for backups, restore, schema upgrades,
+updating and restarting the orchestrator from the dashboard,
 [docs/service_ips.md](docs/service_ips.md) for how service IPs are found
 (guest agent, LXC, ARP, DHCP) and the ping probe, and
 [docs/proxmox_connectivity.md](docs/proxmox_connectivity.md) for the single

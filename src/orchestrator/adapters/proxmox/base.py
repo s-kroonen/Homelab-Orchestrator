@@ -70,6 +70,21 @@ class ClusterStatus:
 
 
 @dataclass(frozen=True)
+class NodeHealth:
+    """One node's own Proxmox API, asked directly."""
+
+    reachable: bool
+    #: Round-trip of the first authenticated call, in milliseconds.
+    latency_ms: float | None = None
+    version: str = ""
+    uptime_s: int | None = None
+    cpu: float | None = None  # 0..1
+    memory_used: int | None = None
+    memory_total: int | None = None
+    error: str | None = None
+
+
+@dataclass(frozen=True)
 class BackupStorage:
     """A PVE storage entry of type ``pbs`` — the name ``vzdump storage=`` takes."""
 
@@ -108,6 +123,12 @@ class ProxmoxAdapter(ABC):
     @abstractmethod
     async def version(self) -> VersionInfo:
         """Cheap authenticated call — used as the connectivity check."""
+
+    async def node_health(self, node: str, address: str) -> NodeHealth:
+        """Ask ``node``'s own Proxmox API at ``address`` (``host`` or
+        ``host:port``) whether it is up. Never raises: an unreachable node is a
+        result, not an error. Adapters without a transport keep this default."""
+        return NodeHealth(reachable=False, error="this adapter cannot health-check nodes")
 
     @abstractmethod
     async def list_guests(self, node: str | None = None) -> list[Guest]: ...

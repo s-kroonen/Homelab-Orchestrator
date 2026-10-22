@@ -166,8 +166,9 @@
         <div class="field-error" id="form-error" role="alert"></div>
       </div>
       <div class="row full">
-        <button type="submit" id="submit-btn">{{ "Save changes" if mode == "edit" else "Add" }}</button>
-        <a class="btn secondary" href="/proxy-hosts">Cancel</a>
+        <button type="submit" id="submit-btn" title="Save and stay on this page">{{ "Save" if mode == "edit" else "Add" }}</button>
+        <button type="submit" id="apply-btn" class="secondary" title="Save and go back to the previous page">Apply</button>
+        <a class="btn secondary" id="cancel-link" href="/proxy-hosts">Cancel</a>
         <span class="msg" id="form-msg"></span>
       </div>
     </form>
@@ -607,8 +608,11 @@
       payload.cert_resolver = currentResolver();
       payload.route_options = currentRouteOptions();
     }
+    const apply = ev.submitter && ev.submitter.id === "apply-btn";
     const btn = document.getElementById("submit-btn");
+    const applyBtn = document.getElementById("apply-btn");
     btn.disabled = true;
+    applyBtn.disabled = true;
     setMsg("form-msg", "Saving…");
     let result;
     try {
@@ -620,6 +624,7 @@
       }
     } catch (err) {
       btn.disabled = false;
+      applyBtn.disabled = false;
       setMsg("form-msg", "");
       const fields = err.fieldErrors || {};
       const keys = Object.keys(fields);
@@ -631,15 +636,24 @@
       return;
     }
     btn.disabled = false;
+    applyBtn.disabled = false;
     const live = result && result.sync_state && result.sync_state !== "local";
     const text = live
       ? "Saved here. Pushed to Traefik Manager on Save to YAML (or Push now)."
       : "Saved.";
-    try {
-      sessionStorage.setItem("ph-flash", JSON.stringify({ text, kind: "ok" }));
-    } catch (_e) { /* storage may be unavailable */ }
-    location.href = "/proxy-hosts";
+    if (apply) {
+      try {
+        sessionStorage.setItem("ph-flash", JSON.stringify({ text, kind: "ok" }));
+      } catch (_e) { /* storage may be unavailable */ }
+      PrevPage.go("/proxy-hosts");
+    } else if (MODE === "edit") {
+      setMsg("form-msg", text, "ok");
+    } else {
+      // Created: carry on editing it, with the way back kept.
+      location.href = PrevPage.carry(`/proxy-hosts/${result.id}/edit`);
+    }
   });
+  document.getElementById("cancel-link").href = PrevPage.url("/proxy-hosts");
 
   // --- "Use service IP" -----------------------------------------------------
   // The linked service's effective IP (manual, else discovered — see

@@ -35,6 +35,8 @@ class NodeSpec(BaseModel):
     always_on: bool = False
     power_mgr_target: str = ""
     notes: str = ""
+    #: See Node.address - where the node's own Proxmox API answers.
+    address: str = ""
     #: See Node.wake_on_hit_enabled — a safety rail for the TrafficCollector
     #: "wake on hit" path, not a general wake toggle.
     wake_on_hit_enabled: bool = True

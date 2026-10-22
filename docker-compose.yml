@@ -17,6 +17,9 @@ services:
     restart: unless-stopped
     env_file:
       - .env
+    environment:
+      # Lets the System page say which image tag it follows (for "is there a newer build?").
+      ORCHESTRATOR_IMAGE: ${ORCHESTRATOR_IMAGE:-ghcr.io/s-kroonen/homelab-orchestrator:main}
     ports:
       # Loopback by default (safest for a fresh clone). To expose this on the
       # LAN — e.g. a Traefik instance on a DIFFERENT host that needs to reach

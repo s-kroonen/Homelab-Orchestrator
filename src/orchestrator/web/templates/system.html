@@ -1,0 +1,244 @@
+{% extends "base.html" %}
+{% block title %}homelab-orchestrator — system{% endblock %}
+{% block content %}
+  <section>
+    <h2>This orchestrator</h2>
+    <div class="banner warn" id="migrate-banner" hidden>
+      <strong>The database needs upgrading.</strong>
+      <span id="migrate-text"></span>
+      <button id="migrate-btn">Back up and upgrade</button>
+    </div>
+    <div class="banner warn" id="restore-banner" hidden>
+      <strong>A restore is staged.</strong>
+      <span id="restore-text"></span>
+      <button class="danger" id="restore-apply-btn">Restart and restore</button>
+      <button class="secondary" id="restore-cancel-btn">Cancel</button>
+    </div>
+    <dl class="kv" id="info-kv"><div><dt>Loading…</dt><dd></dd></div></dl>
+    <p class="msg" id="info-msg"></p>
+  </section>
+
+  <section>
+    <h2>Update</h2>
+    <p class="msg" id="update-text">Not checked yet.</p>
+    <div class="row">
+      <button class="secondary" id="update-check-btn">Check for a newer build</button>
+      <button id="update-btn" hidden>Back up and update</button>
+      <a class="msg" id="update-link" href="#" target="_blank" rel="noopener" hidden>what changed</a>
+    </div>
+    <pre class="manual" id="update-manual" hidden></pre>
+    <p class="msg" id="update-msg"></p>
+  </section>
+
+  <section>
+    <h2>Backups</h2>
+    <p class="msg">
+      The database and <code>services.yaml</code>, as one file. A backup is taken automatically before
+      a schema upgrade, before an update and before a restore, and on a schedule. The
+      <code>.env</code> file is not included: it lives on the host and holds secrets.
+    </p>
+    <div class="row">
+      <input id="backup-note" placeholder="note (optional)" size="28">
+      <button id="backup-btn">Back up now</button>
+      <span class="msg" id="backup-msg"></span>
+    </div>
+    <div class="table-scroll">
+    <table>
+      <thead><tr><th>Created</th><th>Why</th><th>Size</th><th>Version</th><th>Note</th><th></th></tr></thead>
+      <tbody id="backups-body"><tr><td colspan="6">Loading…</td></tr></tbody>
+    </table>
+    </div>
+  </section>
+
+  <section>
+    <h2>Maintenance</h2>
+    <div class="row">
+      <button class="secondary" id="restart-btn" title="Stops the process; Docker's restart policy starts it again">Restart the orchestrator</button>
+      <a class="btn secondary" href="/infra">Connectivity checks</a>
+      <span class="msg" id="restart-msg"></span>
+    </div>
+  </section>
+{% endblock %}
+{% block extra_head %}
+<style>
+  dl.kv { display: grid; grid-template-columns: max-content 1fr; gap: 0.25rem 1.25rem; font-size: 0.85rem; margin: 0 0 1rem; }
+  dl.kv > div { display: contents; }
+  dl.kv dt { color: #9aa4b2; }
+  dl.kv dd { margin: 0; overflow-wrap: anywhere; }
+  .banner { padding: 0.6rem 0.8rem; border-radius: 0.4rem; margin-bottom: 0.9rem; font-size: 0.85rem; display: flex; gap: 0.75rem; align-items: center; flex-wrap: wrap; }
+  .banner.warn { background: #3b2e14; border: 1px solid #e5a63e; }
+  pre.manual { background: #11151d; padding: 0.6rem 0.8rem; border-radius: 0.4rem; font-size: 0.8rem; overflow-x: auto; }
+</style>
+{% endblock %}
+{% block scripts %}
+<script>
+  const $ = (id) => document.getElementById(id);
+  function setMsg(id, text, kind) { const el = $(id); el.textContent = text; el.className = "msg" + (kind ? " " + kind : ""); }
+  function bytes(n) {
+    if (n == null) return "—";
+    const u = ["B", "KB", "MB", "GB"]; let i = 0;
+    while (n >= 1024 && i < u.length - 1) { n /= 1024; i++; }
+    return (i ? n.toFixed(1) : n) + " " + u[i];
+  }
+  function duration(s) {
+    const d = Math.floor(s / 86400), h = Math.floor(s % 86400 / 3600), m = Math.floor(s % 3600 / 60);
+    return (d ? d + "d " : "") + (h || d ? h + "h " : "") + m + "m";
+  }
+  function when(iso) { const d = new Date(iso); return isNaN(d) ? iso : d.toLocaleString(); }
+
+  // After a restart/update: wait for the service to stop answering, then answer again.
+  async function waitForRestart(msgId) {
+    setMsg(msgId, "Restarting… this page reloads when it is back.", "");
+    let sawDown = false;
+    const started = Date.now();
+    while (Date.now() - started < 240000) {
+      await new Promise((r) => setTimeout(r, 2000));
+      try {
+        const r = await fetch("/healthz", { cache: "no-store" });
+        if (r.ok && (sawDown || Date.now() - started > 15000)) { location.reload(); return; }
+      } catch (_e) { sawDown = true; }
+    }
+    setMsg(msgId, "It has not come back after 4 minutes - check the container on the host.", "error");
+  }
+
+  async function loadInfo() {
+    let i;
+    try { i = await apiFetch("GET", "/api/system/info", undefined, { suppressToast: true }); }
+    catch (err) { setMsg("info-msg", err.message, "error"); return; }
+    const rows = [
+      ["Version", i.version + (i.git_sha ? " (" + i.git_sha.slice(0, 7) + ")" : "")],
+      ["Image", i.image ? i.image : "not reported (set ORCHESTRATOR_IMAGE in .env)"],
+      ["Uptime", duration(i.uptime_s)],
+      ["Mode", i.dry_run ? "DRY RUN (nothing is changed on real systems)" : "live"],
+      ["Database", i.database + " (" + bytes(i.database_bytes) + ")"],
+      ["Schema", (i.schema.current || "none") + (i.schema.pending ? "  ->  needs " + i.schema.head : "  (up to date)")],
+      ["Registry", i.registry + (i.registry_exists ? "" : "  (missing)")],
+      ["Self-backups", i.self_backup.enabled ? "every " + i.self_backup.interval_hours + "h, keep " + i.self_backup.keep : "off"],
+      ["Runtime", "Python " + i.python + ", " + i.platform],
+    ];
+    $("info-kv").replaceChildren(...rows.map(([k, v]) => {
+      const d = document.createElement("div");
+      const dt = document.createElement("dt"); dt.textContent = k;
+      const dd = document.createElement("dd"); dd.textContent = v;
+      d.append(dt, dd); return d;
+    }));
+    $("migrate-banner").hidden = !i.schema.pending;
+    $("migrate-text").textContent = i.schema.pending
+      ? `It is on ${i.schema.current || "no revision"}; this version needs ${i.schema.head}. ` +
+        (i.run_migrations_on_start ? "It upgrades by itself at the next start." : "RUN_MIGRATIONS_ON_START is off, so do it here.")
+      : "";
+    const p = i.pending_restore;
+    $("restore-banner").hidden = !p;
+    if (p) $("restore-text").textContent = `Restoring ${p.backup} replaces the database` + (p.has_registry ? " and services.yaml" : "") + " when the orchestrator restarts. What is there now is backed up first.";
+  }
+
+  async function loadBackups() {
+    const body = $("backups-body");
+    let list;
+    try { list = await apiFetch("GET", "/api/system/backups", undefined, { suppressToast: true }); }
+    catch (err) { body.innerHTML = ""; const tr = document.createElement("tr"); const td = document.createElement("td"); td.colSpan = 6; td.textContent = err.message; tr.append(td); body.append(tr); return; }
+    body.innerHTML = "";
+    if (!list.length) { body.innerHTML = '<tr><td colspan="6">No backups yet.</td></tr>'; return; }
+    for (const b of list) {
+      const tr = document.createElement("tr");
+      for (const text of [when(b.created_at), b.reason || "—", bytes(b.size_bytes), (b.version || "—") + (b.git_sha ? " " + b.git_sha.slice(0, 7) : ""), b.note || ""]) {
+        const td = document.createElement("td"); td.textContent = text; tr.append(td);
+      }
+      const act = document.createElement("td");
+      const dl = document.createElement("a");
+      dl.className = "btn secondary small"; dl.textContent = "Download";
+      dl.href = "/api/system/backups/" + encodeURIComponent(b.name) + "/download";
+      const restore = document.createElement("button");
+      restore.className = "secondary small"; restore.textContent = "Restore";
+      restore.addEventListener("click", async () => {
+        if (!confirm(`Restore ${b.name}?\n\nIt replaces the database${b.has_registry ? " and services.yaml" : ""} the next time the orchestrator restarts. Anything newer than this backup is lost (a backup of the current state is taken first).`)) return;
+        try {
+          await apiFetch("POST", "/api/system/backups/" + encodeURIComponent(b.name) + "/restore", undefined, { suppressToast: true });
+          setMsg("backup-msg", "Restore staged. Use Restart and restore at the top.", "ok");
+          loadInfo();
+        } catch (err) { setMsg("backup-msg", err.message, "error"); }
+      });
+      const del = document.createElement("button");
+      del.className = "danger small"; del.textContent = "Delete";
+      del.addEventListener("click", async () => {
+        if (!confirm(`Delete ${b.name}?`)) return;
+        try { await apiFetch("DELETE", "/api/system/backups/" + encodeURIComponent(b.name), undefined, { suppressToast: true }); loadBackups(); }
+        catch (err) { setMsg("backup-msg", err.message, "error"); }
+      });
+      act.append(dl, " ", restore, " ", del);
+      tr.append(act);
+      body.append(tr);
+    }
+  }
+
+  $("backup-btn").addEventListener("click", async () => {
+    setMsg("backup-msg", "Backing up…", "");
+    try {
+      const b = await apiFetch("POST", "/api/system/backups", { note: $("backup-note").value }, { suppressToast: true });
+      $("backup-note").value = "";
+      setMsg("backup-msg", `Saved ${b.name} (${bytes(b.size_bytes)}).`, "ok");
+      loadBackups();
+    } catch (err) { setMsg("backup-msg", err.message, "error"); }
+  });
+
+  $("migrate-btn").addEventListener("click", async () => {
+    try {
+      const r = await apiFetch("POST", "/api/system/migrate", undefined, { suppressToast: true });
+      setMsg("info-msg", r.message + (r.backup ? " Backup: " + r.backup : ""), "ok");
+      loadInfo(); loadBackups();
+    } catch (err) { setMsg("info-msg", err.message, "error"); }
+  });
+
+  async function restart(msgId) {
+    try { await apiFetch("POST", "/api/system/restart", undefined, { suppressToast: true }); }
+    catch (err) { setMsg(msgId, err.message, "error"); return; }
+    waitForRestart(msgId);
+  }
+  $("restart-btn").addEventListener("click", () => {
+    if (confirm("Restart the orchestrator now? Pages and wakes in flight are interrupted for a few seconds.")) restart("restart-msg");
+  });
+  $("restore-apply-btn").addEventListener("click", () => {
+    if (confirm("Restart now and apply the staged restore?")) restart("info-msg");
+  });
+  $("restore-cancel-btn").addEventListener("click", async () => {
+    try { await apiFetch("DELETE", "/api/system/restore", undefined, { suppressToast: true }); loadInfo(); }
+    catch (err) { setMsg("info-msg", err.message, "error"); }
+  });
+
+  let updateInfo = null;
+  async function checkUpdate(refresh) {
+    setMsg("update-msg", "", "");
+    $("update-text").textContent = "Asking GitHub…";
+    try { updateInfo = await apiFetch("GET", "/api/system/update" + (refresh ? "?refresh=true" : ""), undefined, { suppressToast: true }); }
+    catch (err) { $("update-text").textContent = err.message; return; }
+    $("update-text").textContent = updateInfo.message;
+    $("update-link").hidden = !updateInfo.url;
+    if (updateInfo.url) $("update-link").href = updateInfo.url;
+    $("update-btn").hidden = !updateInfo.configured;
+    $("update-btn").className = updateInfo.available ? "" : "secondary";
+    $("update-btn").textContent = updateInfo.available ? "Back up and update" : "Back up and update anyway";
+    const manual = $("update-manual");
+    manual.hidden = updateInfo.configured;
+    manual.textContent = updateInfo.configured ? "" :
+      "Updating from this page is not set up (see docs/system.md). On the Docker host:\n\n  " + updateInfo.manual_steps.join("\n  ");
+  }
+  $("update-check-btn").addEventListener("click", () => checkUpdate(true));
+  $("update-btn").addEventListener("click", async () => {
+    if (!confirm("Take a backup, then update and restart the orchestrator?")) return;
+    setMsg("update-msg", "Backing up and starting the update…", "");
+    let r;
+    try { r = await apiFetch("POST", "/api/system/update", undefined, { suppressToast: true }); }
+    catch (err) {
+      // The container may be replaced mid-request: that is the update working.
+      waitForRestart("update-msg"); return;
+    }
+    if (!r.ran || !r.ok) {
+      setMsg("update-msg", r.message + (r.output ? " " + r.output : ""), "error");
+      return;
+    }
+    waitForRestart("update-msg");
+  });
+
+  loadInfo(); loadBackups(); checkUpdate(false);
+</script>
+{% endblock %}

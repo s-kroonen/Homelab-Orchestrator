@@ -12,6 +12,7 @@ from orchestrator.adapters.proxmox.base import (
     ClusterStatus,
     Guest,
     GuestNetwork,
+    NodeHealth,
     ProxmoxAdapter,
     TaskHandle,
     TaskStatus,
@@ -55,6 +56,9 @@ class DryRunProxmoxAdapter(ProxmoxAdapter):
 
     async def version(self) -> VersionInfo:
         return VersionInfo(version="dry-run", release="dry-run", raw={"dry_run": True})
+
+    async def node_health(self, node: str, address: str) -> NodeHealth:
+        return NodeHealth(reachable=True, latency_ms=1.0, version="dry-run", uptime_s=3600)
 
     async def list_guests(self, node: str | None = None) -> list[Guest]:
         log.info("proxmox.dry_run.list_guests", node=node)

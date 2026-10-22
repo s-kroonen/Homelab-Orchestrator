@@ -153,6 +153,7 @@ class NodeCreate(_Body):
     always_on: bool = False
     power_mgr_target: str = ""
     notes: str = ""
+    address: str = ""
     wake_on_hit_enabled: bool = True
 
 
@@ -161,6 +162,7 @@ class NodeUpdate(_Body):
     always_on: bool | None = None
     power_mgr_target: str | None = None
     notes: str | None = None
+    address: str | None = None
     wake_on_hit_enabled: bool | None = None
 
 
@@ -192,6 +194,19 @@ class ProbeUpdate(_Body):
 # ---------------------------------------------------------------------------
 
 
+def _check_node_address(raw: str) -> str:
+    """``host`` or ``host:port`` of a node's Proxmox API (no scheme or path)."""
+    value = (raw or "").strip()
+    if not value:
+        return ""
+    if "://" in value or "/" in value or " " in value:
+        raise _bad_request("address is a host or host:port, without http:// or a path")
+    _, _, port = value.rpartition(":") if value.count(":") == 1 else (value, "", "")
+    if port and not (port.isdigit() and 0 < int(port) < 65536):
+        raise _bad_request(f"address port {port!r} is not a valid port")
+    return value
+
+
 def _node_dict(node: Node) -> dict[str, Any]:
     return {
         "id": node.id,
@@ -199,6 +214,7 @@ def _node_dict(node: Node) -> dict[str, Any]:
         "always_on": node.always_on,
         "power_mgr_target": node.power_mgr_target,
         "notes": node.notes,
+        "address": node.address,
         "wake_on_hit_enabled": node.wake_on_hit_enabled,
     }
 
@@ -929,6 +945,7 @@ async def create_node(body: NodeCreate, session: SessionDep, admin: CurrentAdmin
         always_on=body.always_on,
         power_mgr_target=body.power_mgr_target,
         notes=body.notes,
+        address=_check_node_address(body.address),
         wake_on_hit_enabled=body.wake_on_hit_enabled,
     )
     session.add(node)
@@ -967,9 +984,11 @@ def apply_node_update(session: Session, actor: str, name: str, body: NodeUpdate)
     for flag in ("always_on", "wake_on_hit_enabled"):
         if flag in changes and changes[flag] is None:
             raise _bad_request(f"{flag} must be true or false")
-    for text_field in ("power_mgr_target", "notes"):
+    for text_field in ("power_mgr_target", "notes", "address"):
         if text_field in changes and changes[text_field] is None:
             changes[text_field] = ""
+    if "address" in changes:
+        changes["address"] = _check_node_address(changes["address"])
 
     for key, value in changes.items():
         setattr(node, key, value)

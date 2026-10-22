@@ -54,4 +54,9 @@ EXPOSE 8080
 HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
     CMD curl -fsS http://127.0.0.1:8080/healthz || exit 1
 
+# Which commit this image was built from (the System page compares it with the
+# newest one on GitHub). Passed by the publish workflow; "" for a local build.
+ARG GIT_SHA=""
+ENV ORCHESTRATOR_GIT_SHA=${GIT_SHA}
+
 ENTRYPOINT ["orchestrator"]

@@ -88,6 +88,27 @@ class Settings(BaseSettings):
 
     run_migrations_on_start: bool = True
 
+    # ---- The orchestrator managing itself (docs/system.md) ----------------
+    # Scheduled backups of the database + services.yaml into state_dir/backups.
+    self_backup_enabled: bool = True
+    self_backup_interval_hours: int = 24
+    self_backup_keep: int = 14
+    # Update from the dashboard: a command run on the Docker HOST through a
+    # transport (normally the host runner), e.g.
+    #   SELF_UPDATE_TRANSPORT={"type": "host_agent", "host": "docker-host"}
+    #   SELF_UPDATE_COMMAND=sh -c '(sleep 3; cd /opt/orchestrator && docker compose pull orchestrator && docker compose up -d orchestrator) >/tmp/orchestrator-update.log 2>&1 &'
+    # Blank = the page shows the commands to run by hand instead.
+    self_update_transport: str = ""
+    self_update_command: str = ""
+    self_update_timeout_s: int = 120
+    # Which GitHub repo / branch "is there a newer build?" looks at. The branch
+    # defaults to the tag of ORCHESTRATOR_IMAGE (dev or main).
+    update_repo: str = "s-kroonen/homelab-orchestrator"
+    update_branch: str = ""
+    # Baked in by the image build (Dockerfile ARG GIT_SHA) and passed by compose.
+    orchestrator_git_sha: str = ""
+    orchestrator_image: str = ""
+
     # ---- Service registry -------------------------------------------------
     services_yaml_path: Path = Path("./config/services.yaml")
 
