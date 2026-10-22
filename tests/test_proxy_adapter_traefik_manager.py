@@ -30,6 +30,7 @@ import pytest
 from orchestrator.adapters.proxy.base import ProxyRouteNotFound, RouteInfo
 from orchestrator.adapters.proxy.traefik_manager import (
     SHARED_BACKEND_SERVICE_NAME,
+    SHARED_BACKEND_SERVICE_REF,
     TraefikManagerProxyAdapter,
     TraefikManagerUnavailable,
     maintenance_middleware_name,
@@ -201,7 +202,7 @@ def _router_calls(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
                         }
                     ],
                     "middlewares": [],
-                    "services": {"http": [SHARED_BACKEND_SERVICE_NAME], "tcp": [], "udp": []},
+                    "services": {"http": [SHARED_BACKEND_SERVICE_REF], "tcp": [], "udp": []},
                 },
             )
         if path == "/api/routes/media-router/raw":
@@ -333,7 +334,7 @@ async def test_remove_maintenance_fallback_removes_injection_leaves_middleware_d
                         }
                     ],
                     "middlewares": [{"name": mw_name}],
-                    "services": {"http": [SHARED_BACKEND_SERVICE_NAME], "tcp": [], "udp": []},
+                    "services": {"http": [SHARED_BACKEND_SERVICE_REF], "tcp": [], "udp": []},
                 },
             )
         if path == "/api/routes/media-router/raw" and request.method == "GET":
@@ -426,7 +427,7 @@ async def test_shared_backend_service_is_not_recreated_when_already_present(
                 json={
                     "apps": [],
                     "middlewares": [],
-                    "services": {"http": [SHARED_BACKEND_SERVICE_NAME], "tcp": [], "udp": []},
+                    "services": {"http": [SHARED_BACKEND_SERVICE_REF], "tcp": [], "udp": []},
                 },
             )
         if path == "/save":

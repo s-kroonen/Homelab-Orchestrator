@@ -216,3 +216,64 @@ async def test_ensure_fallback_raises_only_when_asked(monkeypatch: pytest.Monkey
         await adapter.ensure_maintenance_fallback(
             hostname="a.example.com", service_slug="s", raise_errors=True
         )
+
+
+def _routes_response(service: str, known: list[str]) -> dict[str, Any]:
+    mw = TraefikManagerProxyAdapter(_settings()).maintenance_middleware_name(SLUG)
+    return {
+        "services": {"http": known},
+        "middlewares": [
+            {
+                "name": mw,
+                "type": "http",
+                "yaml": f"errors:\n  status:\n    - 500-599\n  service: {service}\n  query: /maintenance/{SLUG}\n",
+            },
+            {"name": "cloud-hsts", "type": "http", "yaml": "headers:\n  stsSeconds: 31536000\n"},
+        ],
+    }
+
+
+def test_middleware_pointing_at_a_missing_service_is_dangling() -> None:
+    from orchestrator.adapters.proxy.traefik_manager import (
+        SHARED_BACKEND_SERVICE_NAME,
+        SHARED_BACKEND_SERVICE_REF,
+        _dangling_middlewares,
+    )
+
+    mw = TraefikManagerProxyAdapter(_settings()).maintenance_middleware_name(SLUG)
+    # The bug: the middleware named the router, Traefik Manager's service has -service.
+    bad = _routes_response(SHARED_BACKEND_SERVICE_NAME, [SHARED_BACKEND_SERVICE_REF])
+    assert _dangling_middlewares(bad) == {mw}
+    good = _routes_response(SHARED_BACKEND_SERVICE_REF, [SHARED_BACKEND_SERVICE_REF])
+    assert _dangling_middlewares(good) == set()
+    # Provider-qualified references and an unreported service list prove nothing.
+    assert _dangling_middlewares(_routes_response("x@file", [])) == set()
+    assert _dangling_middlewares({"middlewares": bad["middlewares"]}) == set()
+
+
+def test_attached_but_dangling_rule_counts_as_missing() -> None:
+    mw = TraefikManagerProxyAdapter(_settings()).maintenance_middleware_name(SLUG)
+    (route,) = _routes_to_route_info(
+        [
+            {
+                "id": "cloud.yml::cloud",
+                "name": "cloud",
+                "protocol": "http",
+                "rule": "Host(`cloud.example.com`)",
+                "servers": ["http://10.0.0.11:80"],
+                "entryPoints": ["websecure"],
+                "enabled": True,
+                "middlewares": [mw],
+            }
+        ],
+        {mw},
+    )
+    assert fallback_missing(_adapter(), [route], SLUG) is True
+
+
+def test_the_middleware_points_at_the_service_traefik_manager_creates() -> None:
+    from orchestrator.adapters.proxy.traefik_manager import SHARED_BACKEND_SERVICE_REF
+
+    body = TraefikManagerProxyAdapter._middleware_yaml(SHARED_BACKEND_SERVICE_REF, SLUG)
+    assert f"service: {SHARED_BACKEND_SERVICE_REF}" in body
+    assert SHARED_BACKEND_SERVICE_REF.endswith("-service")

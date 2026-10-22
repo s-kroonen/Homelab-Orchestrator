@@ -1001,6 +1001,16 @@ as every other optional integration in this app.
    router+service PAIR, with no supported way to write a bare service with
    no router.
 
+   **Naming trap**: Traefik Manager names the router after what you send as
+   `serviceName` but names the *service* `<serviceName>-service`. The
+   `errors` middleware must therefore say
+   `service: orchestrator-maintenance-backend-service`. A reference to a name
+   that does not exist makes Traefik drop the routers in that config file —
+   every host in it answers 404. The sync state now checks this too: a
+   `maintenance-*` middleware whose `errors.service` is not a listed service
+   shows the host as desynced ("missing or broken"), and a Save to YAML /
+   Push now rewrites the middleware with the right reference.
+
    **The "service with no router" resolution**: create a minimal,
    deliberately-never-matched router alongside the service, whose
    `httpRule` targets a hostname under the reserved `.invalid` TLD
@@ -1124,7 +1134,7 @@ file, target `traefik_manager:<name>`.
 The sync state does not just trust "the push ran". Traefik Manager lists each
 route's middlewares (`GET /api/routes`), and a host whose live, enabled, HTTPS
 route lacks `maintenance-<service>` is marked **desynced** with the change
-*"maintenance page rule missing on the live route"* - for routes this
+*"maintenance page rule missing or broken on the live route"* - for routes this
 orchestrator created (`detached`), for adopted ones (`external`) and for
 hand-written routes serving a host. A plain-HTTP redirect router, a disabled
 route, a host that is disabled here, or a Traefik Manager that does not report
