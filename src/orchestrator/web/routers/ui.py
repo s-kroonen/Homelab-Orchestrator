@@ -165,6 +165,21 @@ def guest_gate_view(state: ServiceState | None) -> dict[str, Any] | None:
     }
 
 
+def _guest_cell(svc: Service, state: ServiceState | None) -> dict[str, str]:
+    """What the services table shows for the Proxmox guest: its power state as
+    of the last health scan (``css`` is a badge class)."""
+    if svc.guest_kind is GuestKind.NONE:
+        return {"label": "—", "css": "", "title": "no Proxmox guest"}
+    gate = guest_gate_view(state)
+    if gate is None:
+        return {"label": "unknown", "css": "unknown", "title": "not scanned yet"}
+    if gate["node_state"] == "offline":
+        return {"label": "node off", "css": "down", "title": gate["message"]}
+    status = gate["guest_state"]
+    css = {"running": "healthy", "stopped": "disabled"}.get(status, "unknown")
+    return {"label": status, "css": css, "title": f"{gate['guest']} - {gate['message']}"}
+
+
 @router.get("/", response_model=None)
 async def dashboard_page(
     request: Request, session: SessionDep, settings: SettingsDep
@@ -173,7 +188,8 @@ async def dashboard_page(
     if admin is None:
         return RedirectResponse("/login?next=/", status_code=303)
 
-    nodes = {n.id: n.name for n in session.exec(select(Node)).all()}
+    node_rows = {n.id: n for n in session.exec(select(Node)).all()}
+    nodes = {nid: n.name for nid, n in node_rows.items()}
     states = {s.service_id: s for s in session.exec(select(ServiceState)).all()}
     services = session.exec(select(Service).order_by(Service.slug)).all()
 
@@ -184,6 +200,8 @@ async def dashboard_page(
         if state is not None and state.last_backup_id is not None:
             last_backup = session.get(BackupRecord, state.last_backup_id)
         ip, ip_source = effective_ip(svc, state)
+        node = node_rows.get(svc.node_id)
+        node_wakes = node.wake_on_hit_enabled if node is not None else False
         rows.append(
             {
                 "slug": svc.slug,
@@ -193,6 +211,19 @@ async def dashboard_page(
                 "enabled": svc.enabled,
                 "group": svc.group,
                 "node": nodes.get(svc.node_id, "?"),
+                "guest": _guest_cell(svc, state),
+                # On only when the service AND its node allow it (see Node.wake_on_hit_enabled).
+                "wake_on_hit": svc.wake_on_hit_enabled and node_wakes,
+                "wake_on_hit_why": (
+                    ""
+                    if svc.wake_on_hit_enabled and node_wakes
+                    else (
+                        "off for this service"
+                        if not svc.wake_on_hit_enabled
+                        else f"off for its node {nodes.get(svc.node_id, '?')}"
+                    )
+                ),
+                "wake_trigger": svc.wake_trigger.value,
                 "verdict": state.last_verdict.value if state else "unknown",
                 "verdict_reason": (state.notes or "") if state else "",
                 "down_label": _down_label(state),
