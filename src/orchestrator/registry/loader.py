@@ -215,6 +215,7 @@ def _spec_from_db(session: Session) -> RegistryFile:
                 always_on=n.always_on,
                 power_mgr_target=n.power_mgr_target,
                 notes=n.notes,
+                address=n.address,
                 wake_on_hit_enabled=n.wake_on_hit_enabled,
             )
             for n in nodes
@@ -402,6 +403,7 @@ def reconcile_yaml_into_db(session: Session, path: Path) -> RegistryFile:
         node.always_on = spec.always_on
         node.power_mgr_target = spec.power_mgr_target
         node.notes = spec.notes
+        node.address = spec.address
         node.wake_on_hit_enabled = spec.wake_on_hit_enabled
         node.updated_at = datetime.now(UTC)
 

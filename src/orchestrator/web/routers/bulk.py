@@ -55,11 +55,12 @@ SERVICE_ACTIONS = (
     "discover_ip",
     "wake_on_hit_on",
     "wake_on_hit_off",
+    "resync",
 )
 #: Fields the "update" action may set on many services at once.
 SERVICE_UPDATE_FIELDS = ("group", "backup_policy_id", "wake_trigger")
 PROXY_HOST_ACTIONS = ("enable", "disable", "delete", "wake_on_hit_on", "wake_on_hit_off")
-NODE_ACTIONS = ("wake", "power_off", "wake_on_hit_on", "wake_on_hit_off")
+NODE_ACTIONS = ("wake", "power_off", "wake_on_hit_on", "wake_on_hit_off", "resync")
 
 
 class BulkIn(BaseModel):
@@ -205,6 +206,18 @@ async def bulk_services(
                 session, admin.username, slug, ServiceUpdate(enabled=body.action == "enable")
             )
             return f"{body.action}d"
+        if body.action == "resync":
+            from orchestrator.web.routers.infra import do_resync
+
+            out = await do_resync(session, adapters, settings, admin.username, slug=slug)
+            r = out["results"][0] if out["results"] else None
+            if r is None:
+                return "skipped (disabled)"
+            if not r["ok"]:
+                raise RuntimeError(r["message"])
+            return f"guest {r['guest'] or 'n/a'}, verdict {r['verdict']}" + (
+                " - guest NOT FOUND in Proxmox" if r["missing"] else ""
+            )
         if body.action in ("wake_on_hit_on", "wake_on_hit_off"):
             on = body.action == "wake_on_hit_on"
             apply_service_update(
@@ -293,8 +306,9 @@ async def bulk_nodes(
     session: SessionDep,
     admin: CurrentAdmin,
     adapters: AdaptersDep,
+    settings: SettingsDep,
 ) -> dict[str, Any]:
-    """Nodes by name: ``wake`` / ``power_off`` (``params: {"force": bool}``,
+    """Nodes by name: ``resync`` (re-read its guests from Proxmox) / ``wake`` / ``power_off`` (``params: {"force": bool}``,
     same meaning as the single-node button) / ``wake_on_hit_on`` /
     ``wake_on_hit_off``."""
     from orchestrator.web.routers.dashboard import NodeUpdate, apply_node_update
@@ -305,6 +319,12 @@ async def bulk_nodes(
 
     async def one(item: str | int) -> str:
         name = str(item)
+        if body.action == "resync":
+            from orchestrator.web.routers.infra import do_resync
+
+            out = await do_resync(session, adapters, settings, admin.username, node=name)
+            gone = f", {len(out['missing'])} guest(s) NOT FOUND" if out["missing"] else ""
+            return f"{out['scanned']} service(s) re-read{gone}"
         if body.action in ("wake", "power_off"):
             await apply_node_power(
                 session, adapters, admin.username, name, body.action, force=force

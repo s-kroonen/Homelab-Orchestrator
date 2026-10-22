@@ -59,6 +59,11 @@ class Node(SQLModel, table=True):
     always_on: bool = Field(default=False)
     power_mgr_target: str = ""
     notes: str = ""
+    # Where THIS node's own Proxmox API answers ("10.0.0.5" or "10.0.0.5:8006").
+    # Used to health-check the node directly. Blank = not known yet: fill it from
+    # the cluster listing ("Fill from Proxmox"), or by hand. The node the setup
+    # talks to (PROXMOX_HOST) is filled from the setup.
+    address: str = ""
 
     # Top-level safety rail for the unattended, request-triggered wakes: the
     # TrafficCollector-driven "wake on hit" path (see ProxyHost.wake_on_hit)

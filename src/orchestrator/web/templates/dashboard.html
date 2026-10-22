@@ -9,6 +9,7 @@
     <div class="row">
       <button id="save-btn" title="Writes services.yaml, then pushes pending changes to Traefik Manager (and any other outside service)">Save to YAML</button>
       <button class="secondary" id="reset-btn">Reset to saved</button>
+      <button class="secondary" id="refresh-btn" title="Re-read every guest from Proxmox, re-run the health checks, then reload this page">Refresh</button>
       <span class="msg" id="registry-msg"></span>
     </div>
     {% for grp in service_groups %}
@@ -87,17 +88,22 @@
     <h2>Nodes</h2>
     <table id="nodes-table">
       <thead>
-        <tr><th>Name</th><th>State</th><th>Always on</th><th>Power target</th><th>Notes</th><th>Wake on hit</th><th>Services</th><th></th></tr>
+        <tr><th>Name</th><th>State</th><th>Address</th><th>Always on</th><th>Power target</th><th>Notes</th><th>Wake on hit</th><th>Services</th><th></th></tr>
       </thead>
-      <tbody id="nodes-body"><tr><td colspan="8">Loading…</td></tr></tbody>
+      <tbody id="nodes-body"><tr><td colspan="9">Loading…</td></tr></tbody>
     </table>
     <div class="row">
       <input id="new-node-name" placeholder="name (e.g. pve1)" size="12">
       <label class="inline"><input id="new-node-always-on" type="checkbox"> always on</label>
+      <input id="new-node-address" placeholder="address (host[:port])" size="16">
       <input id="new-node-target" placeholder="power target" size="14">
       <input id="new-node-notes" placeholder="notes" size="16">
       <label class="inline"><input id="new-node-wake-on-hit" type="checkbox" checked> wake on hit</label>
       <button id="new-node-btn">Add node</button>
+    </div>
+    <div class="row">
+      <button class="secondary" id="fill-addresses-btn" title="Fill blank addresses: the setup's node from PROXMOX_HOST, the others from the cluster listing">Fill addresses from Proxmox</button>
+      <button class="secondary" id="check-nodes-btn">Check all nodes</button>
     </div>
     <p class="msg" id="nodes-msg"></p>
   </section>
@@ -240,6 +246,17 @@
   // Live power state (GET /api/infra/nodes/status), filled in after the table
   // renders so a slow power manager never delays the page.
   const nodeStates = {};
+  function healthText(s) {
+    const h = s.health || {};
+    if (!h.checked) return "Own Proxmox API: no address set";
+    if (!h.reachable) return "Own Proxmox API (" + (s.address || "?") + "): not answering - " + (h.error || "no answer");
+    const bits = [h.latency_ms + " ms"];
+    if (h.version) bits.push("Proxmox " + h.version);
+    if (h.uptime_s != null) bits.push("up " + Math.floor(h.uptime_s / 3600) + "h");
+    if (h.cpu != null) bits.push("cpu " + Math.round(h.cpu * 100) + "%");
+    if (h.memory_total) bits.push("mem " + Math.round(100 * h.memory_used / h.memory_total) + "%");
+    return "Own Proxmox API (" + s.address + "): " + bits.join(", ");
+  }
   function stateBadge(s) {
     const span = document.createElement("span");
     if (!s) { span.className = "badge unknown"; span.textContent = "…"; return span; }
@@ -249,6 +266,7 @@
     const bits = [];
     bits.push("Proxmox: " + (s.proxmox_online === true ? "online" : s.proxmox_online === false ? "offline" : "unknown"));
     bits.push("Power manager: " + (s.power || "—") + (s.power_detail ? " (" + s.power_detail + ")" : ""));
+    bits.push(healthText(s));
     span.title = bits.join("\n");
     return span;
   }
@@ -303,7 +321,7 @@
       stateCell.dataset.node = node.name;
       stateCell.appendChild(stateBadge(nodeStates[node.name]));
       tr.append(
-        cell(node.name), stateCell, cell(node.always_on ? "yes" : "no"), cell(node.power_mgr_target || "—"),
+        cell(node.name), stateCell, cell(node.address || "—"), cell(node.always_on ? "yes" : "no"), cell(node.power_mgr_target || "—"),
         cell(node.notes || "—"), cell(node.wake_on_hit_enabled ? "yes" : "no"),
         cell(String(node.service_count)),
       );
@@ -346,6 +364,8 @@
 
       actions.append(
         button("Edit", "secondary small", () => tr.replaceWith(renderNodeRow(node, true))), " ",
+        button("Check", "secondary small", () => checkNode(node.name)), " ",
+        button("Resync guests", "secondary small", () => resync({ node: node.name }, "nodes-msg")), " ",
         button("Wake", "secondary small", () => doPower("wake")), " ",
         button("Power off", "danger small", () => doPower("power_off")), " ",
         button("Restart", "danger small", () => doPower("restart")), " ",
@@ -365,13 +385,14 @@
     const alwaysOn = document.createElement("input");
     alwaysOn.type = "checkbox";
     alwaysOn.checked = node.always_on;
+    const address = textInput(node.address, 14);
     const target = textInput(node.power_mgr_target, 12);
     const notes = textInput(node.notes, 14);
     const wakeOnHit = document.createElement("input");
     wakeOnHit.type = "checkbox";
     wakeOnHit.checked = node.wake_on_hit_enabled;
     tr.append(
-      cell(name), cell(stateBadge(nodeStates[node.name])), cell(alwaysOn), cell(target), cell(notes), cell(wakeOnHit),
+      cell(name), cell(stateBadge(nodeStates[node.name])), cell(address), cell(alwaysOn), cell(target), cell(notes), cell(wakeOnHit),
       cell(String(node.service_count)),
     );
     actions.append(
@@ -380,6 +401,7 @@
           await apiFetch("PUT", path, {
             name: name.value.trim(), always_on: alwaysOn.checked,
             power_mgr_target: target.value.trim(), notes: notes.value,
+            address: address.value.trim(),
             wake_on_hit_enabled: wakeOnHit.checked,
           }, { suppressToast: true });
           location.reload();
@@ -396,13 +418,64 @@
     const body = document.getElementById("nodes-body");
     body.innerHTML = "";
     if (!nodes.length) {
-      body.innerHTML = '<tr><td colspan="8">No nodes yet.</td></tr>';
+      body.innerHTML = '<tr><td colspan="9">No nodes yet.</td></tr>';
       return;
     }
     for (const n of nodes) body.appendChild(renderNodeRow(n, false));
     nodeBulk.decorate();
     loadNodeStates();
   }
+
+  // Health-check one node through its own Proxmox API and say what came back.
+  async function checkNode(name) {
+    setMsg("nodes-msg", `Checking ${name}...`, "");
+    try {
+      const r = await apiFetch("POST", `/api/infra/nodes/${encodeURIComponent(name)}/check`, undefined, { suppressToast: true });
+      nodeStates[name] = Object.assign(nodeStates[name] || { name }, { address: r.address, health: r });
+      setMsg("nodes-msg", `${name}: ` + healthText(nodeStates[name]), r.reachable ? "ok" : "error");
+      for (const td of document.querySelectorAll("td.node-state")) td.replaceChildren(stateBadge(nodeStates[td.dataset.node]));
+    } catch (err) { setMsg("nodes-msg", `${name}: ${err.message}`, "error"); }
+  }
+
+  // Re-read guests from Proxmox ({} = all, {node} or {slug}) and report.
+  async function resync(scope, msgId) {
+    setMsg(msgId, "Re-reading guests from Proxmox...", "");
+    try {
+      const r = await apiFetch("POST", "/api/infra/resync", scope, { suppressToast: true });
+      const gone = r.missing.length ? ` NOT FOUND in Proxmox: ${r.missing.join(", ")}.` : "";
+      const extra = r.unregistered_guests.length ? ` ${r.unregistered_guests.length} Proxmox guest(s) are not registered as a service.` : "";
+      setMsg(msgId, `Re-read ${r.scanned} service(s).${gone}${extra}`, r.missing.length ? "error" : "ok");
+      return r;
+    } catch (err) {
+      setMsg(msgId, "Resync failed: " + err.message, "error");
+      return null;
+    }
+  }
+
+  document.getElementById("refresh-btn").addEventListener("click", async () => {
+    const r = await resync({}, "registry-msg");
+    if (r) setTimeout(() => location.reload(), 1200);
+  });
+  document.getElementById("check-nodes-btn").addEventListener("click", async () => {
+    setMsg("nodes-msg", "Checking every node...", "");
+    await loadNodeStates();
+    const bad = Object.values(nodeStates).filter((n) => n.health && n.health.checked && !n.health.reachable);
+    const unset = Object.values(nodeStates).filter((n) => !(n.health && n.health.checked));
+    setMsg("nodes-msg",
+      bad.length ? `Not answering: ${bad.map((n) => n.name).join(", ")}.`
+        : unset.length ? `Answering where an address is set; no address for: ${unset.map((n) => n.name).join(", ")}.`
+        : "All nodes answer.",
+      bad.length ? "error" : "ok");
+  });
+  document.getElementById("fill-addresses-btn").addEventListener("click", async () => {
+    try {
+      const r = await apiFetch("POST", "/api/infra/nodes/fill-addresses", undefined, { suppressToast: true });
+      const names = Object.entries(r.filled).map(([n, a]) => `${n}=${a}`);
+      setMsg("nodes-msg", (names.length ? "Filled " + names.join(", ") + ". " : "Nothing to fill. ") +
+        (r.skipped.length ? "Not in the Proxmox cluster listing: " + r.skipped.join(", ") + " (set by hand)." : ""), "ok");
+      loadNodes();
+    } catch (err) { setMsg("nodes-msg", err.message, "error"); }
+  });
 
   // --- bulk actions (static/bulk.js) ----------------------------------------
   const servicesApi = Bulk.viaApi("/api/bulk/services");
@@ -421,6 +494,7 @@
       { label: "Probes required", action: "probes_required", run: servicesApi },
       { label: "Probes optional", action: "probes_optional", run: servicesApi },
       { label: "Discover IP", action: "discover_ip", run: servicesApi },
+      { label: "Resync guests", action: "resync", run: servicesApi },
       { label: "Wake on hit on", action: "wake_on_hit_on", run: servicesApi },
       { label: "Wake on hit off", action: "wake_on_hit_off", run: servicesApi },
       { label: "Set wake trigger", action: "update", run: servicesApi,
@@ -454,6 +528,7 @@
         confirm: (ids, p) => `Power off ${ids.length} node(s)?` + (p.force
           ? " force=true SKIPS a graceful shutdown — this cuts power immediately, with no chance for a clean shutdown and possible data loss."
           : " force=false asks for a graceful shutdown first.") },
+      { label: "Resync guests", action: "resync", run: nodesApi },
       { label: "Wake on hit on", action: "wake_on_hit_on", run: nodesApi },
       { label: "Wake on hit off", action: "wake_on_hit_off", run: nodesApi },
     ],
@@ -465,6 +540,7 @@
       await apiFetch("POST", "/api/registry/nodes", {
         name: document.getElementById("new-node-name").value.trim(),
         always_on: document.getElementById("new-node-always-on").checked,
+        address: document.getElementById("new-node-address").value.trim(),
         power_mgr_target: document.getElementById("new-node-target").value.trim(),
         notes: document.getElementById("new-node-notes").value,
         wake_on_hit_enabled: document.getElementById("new-node-wake-on-hit").checked,
