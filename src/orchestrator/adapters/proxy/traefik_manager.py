@@ -217,12 +217,17 @@ def _router_error_text(raw: Any) -> str | None:
     return text or None
 
 
-def _split_host_port(url: str) -> tuple[str, str]:
+def _split_host_port(url: str, *, allow_bare: bool = False) -> tuple[str, str]:
     """Split a ``scheme://host:port`` URL into ``(host, port)`` — shared by
     the maintenance-fallback backend target and the general route CRUD
     below. Returns ``("", "")`` for an unparseable/hostless URL; callers
-    decide whether that's acceptable."""
-    parsed = urlsplit(url)
+    decide whether that's acceptable.
+
+    ``allow_bare`` also accepts a scheme-less ``host:port`` / ``10.0.0.5:8000``
+    (urlsplit would read the host as a scheme and report no hostname); upstream
+    URLs stay strict so a typo like ``not-a-url`` is still rejected."""
+    text = url.strip()
+    parsed = urlsplit(f"//{text}" if allow_bare and "://" not in text else text)
     host = parsed.hostname or ""
     if not host:
         return "", ""
@@ -591,7 +596,7 @@ class TraefikManagerProxyAdapter(ProxyAdapter):
     def _public_target(self) -> tuple[str, str]:
         """Split ``ORCHESTRATOR_PUBLIC_URL`` into ``(host, port)`` for
         ``/save``'s ``targetIp``/``targetPort`` fields."""
-        return _split_host_port(self._settings.orchestrator_public_url)
+        return _split_host_port(self._settings.orchestrator_public_url, allow_bare=True)
 
     @staticmethod
     def _middleware_yaml(service_name: str, slug: str) -> str:
@@ -642,6 +647,13 @@ class TraefikManagerProxyAdapter(ProxyAdapter):
             )
 
         host, port = self._public_target()
+        if not host:
+            raise TraefikManagerUnavailable(
+                "ORCHESTRATOR_PUBLIC_URL "
+                f"({self._settings.orchestrator_public_url!r}) has no host in it - "
+                "set it to this orchestrator's address as the gateway reaches it, "
+                "e.g. http://10.0.0.5:8000"
+            )
         await self._save_route(
             service_name=SHARED_BACKEND_SERVICE_NAME,
             protocol="http",

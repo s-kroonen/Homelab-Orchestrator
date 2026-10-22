@@ -31,6 +31,7 @@ from orchestrator.adapters.proxy.base import ProxyRouteNotFound, RouteInfo
 from orchestrator.adapters.proxy.traefik_manager import (
     SHARED_BACKEND_SERVICE_NAME,
     TraefikManagerProxyAdapter,
+    TraefikManagerUnavailable,
     maintenance_middleware_name,
     route_name_for_hostname,
 )
@@ -782,3 +783,44 @@ async def test_delete_route_raises_proxy_route_not_found_when_it_is_gone(
 
     with pytest.raises(ProxyRouteNotFound):
         await adapter.delete_route("gone-ref")
+
+
+@pytest.mark.parametrize(
+    ("url", "expected"),
+    [
+        ("http://10.0.0.5:8000", ("10.0.0.5", "8000")),
+        ("https://orch.example.com", ("orch.example.com", "443")),
+        ("10.0.0.5:8000", ("10.0.0.5", "8000")),
+        ("orchestrator.lan:8000", ("orchestrator.lan", "8000")),
+        ("orchestrator.lan", ("orchestrator.lan", "80")),
+        ("", ("", "")),
+    ],
+)
+def test_split_host_port_accepts_scheme_less_urls(url: str, expected: tuple[str, str]) -> None:
+    from orchestrator.adapters.proxy.traefik_manager import _split_host_port
+
+    assert _split_host_port(url, allow_bare=True) == expected
+
+
+async def test_shared_backend_without_a_host_is_reported_not_posted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    posted: list[str] = []
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        if request.method == "POST":
+            posted.append(request.url.path)
+            return httpx.Response(200, json={"ok": True})
+        if request.url.path == "/api/routes":
+            return httpx.Response(200, json={"apps": [], "services": {"http": []}})
+        if request.url.path == "/api/traefik/entrypoints":
+            return httpx.Response(200, json=[{"name": "websecure"}])
+        return httpx.Response(200, json={})
+
+    _patch_transport(monkeypatch, handle)
+    adapter = TraefikManagerProxyAdapter(_settings(orchestrator_public_url="http://:8000"))
+    with pytest.raises(TraefikManagerUnavailable, match="ORCHESTRATOR_PUBLIC_URL"):
+        await adapter.ensure_maintenance_fallback(
+            hostname="media.example.com", service_slug="media", raise_errors=True
+        )
+    assert posted == []
