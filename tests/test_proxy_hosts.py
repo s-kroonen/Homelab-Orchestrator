@@ -1062,7 +1062,7 @@ def test_create_proxy_host_injects_maintenance_middleware_and_audits_it(
     )
 
     from orchestrator.adapters.proxy.traefik_manager import (
-        SHARED_BACKEND_SERVICE_NAME,
+        SHARED_BACKEND_SERVICE_REF,
         maintenance_middleware_name,
     )
 
@@ -1091,7 +1091,7 @@ def test_create_proxy_host_injects_maintenance_middleware_and_audits_it(
                         }
                     ],
                     "middlewares": [],
-                    "services": {"http": [SHARED_BACKEND_SERVICE_NAME], "tcp": [], "udp": []},
+                    "services": {"http": [SHARED_BACKEND_SERVICE_REF], "tcp": [], "udp": []},
                 },
             )
         if path == "/api/routes/r1/raw" and request.method == "GET":

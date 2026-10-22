@@ -60,6 +60,9 @@ class RouteInfo:
     #: (``None`` = the backend did not say, so nothing can be concluded from
     #: their absence).
     middlewares: tuple[str, ...] | None = None
+    #: Names among ``middlewares`` whose definition points at a service that
+    #: does not exist (Traefik then drops every router using them).
+    dangling_middlewares: tuple[str, ...] = ()
     #: The backend's own handle for the route, as it must be sent back to
     #: toggle/delete/edit it. Traefik Manager with several config files
     #: (``MULTI_CONFIG``) gives every route ``id = "<configfile>::<name>"``

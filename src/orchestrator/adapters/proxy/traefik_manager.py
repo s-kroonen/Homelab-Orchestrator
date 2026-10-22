@@ -127,6 +127,11 @@ class TraefikManagerNotFound(TraefikManagerError):
 #: ever requested for the ``.invalid`` name. See docs/proxy_hosts.md.
 SHARED_BACKEND_SERVICE_NAME = "orchestrator-maintenance-backend"
 _DUMMY_ROUTER_HOSTNAME = "orchestrator-maintenance-backend.invalid"
+#: Traefik Manager's ``/save`` names the router after ``serviceName`` but the
+#: SERVICE ``<serviceName>-service``. The ``errors`` middleware must point at
+#: the service, and a reference to a name that does not exist makes Traefik
+#: drop the whole file's routes.
+SHARED_BACKEND_SERVICE_REF = f"{SHARED_BACKEND_SERVICE_NAME}-service"
 
 #: Traefik's own convention for "treat a fully unreachable backend as this
 #: middleware's trigger": a dead backend surfaces to the ``errors``
@@ -278,7 +283,36 @@ def redirect_route_id(route_ref: str) -> str:
     return f"{route_ref}-redirect"
 
 
-def _routes_to_route_info(apps: Any) -> list[RouteInfo]:
+def _dangling_middlewares(response: Any) -> set[str]:
+    """Names of ``errors`` middlewares whose ``service`` is not a service Traefik
+    Manager lists (``/api/routes`` -> ``services.http``, plus ``@provider``
+    references, which cannot be checked here and are left alone)."""
+    if not isinstance(response, dict):
+        return set()
+    services = response.get("services")
+    known = services.get("http") if isinstance(services, dict) else None
+    mws = response.get("middlewares")
+    if not isinstance(known, list) or not isinstance(mws, list):
+        return set()
+    found: set[str] = set()
+    for mw in mws:
+        if not isinstance(mw, dict) or mw.get("type", "http") != "http":
+            continue
+        name, text = mw.get("name"), mw.get("yaml")
+        if not isinstance(name, str) or not isinstance(text, str):
+            continue
+        try:
+            body = _yaml.load(text)
+        except Exception:  # unreadable YAML is not ours to judge
+            continue
+        errors = body.get("errors") if hasattr(body, "get") else None
+        target = errors.get("service") if hasattr(errors, "get") else None
+        if isinstance(target, str) and "@" not in target and target not in known:
+            found.add(name)
+    return found
+
+
+def _routes_to_route_info(apps: Any, dangling: set[str] | None = None) -> list[RouteInfo]:
     """Convert Traefik Manager's ``GET /api/routes`` ``apps`` list into
     :class:`RouteInfo`. HTTP routes only — ``protocol`` other than
     ``"http"`` (tcp, udp) is skipped, since drift detection is HTTP-only.
@@ -327,6 +361,11 @@ def _routes_to_route_info(apps: Any) -> list[RouteInfo]:
                 enabled=app.get("enabled", True) is not False,
                 middlewares=(
                     tuple(m for m in mws if isinstance(m, str)) if isinstance(mws, list) else None
+                ),
+                dangling_middlewares=(
+                    tuple(m for m in mws if isinstance(m, str) and m in (dangling or ()))
+                    if isinstance(mws, list)
+                    else ()
                 ),
             )
         )
@@ -589,7 +628,7 @@ class TraefikManagerProxyAdapter(ProxyAdapter):
             log.warning("traefik_manager.poll_failed", error=str(exc))
             return None
         apps = response.get("apps") if isinstance(response, dict) else None
-        return _routes_to_route_info(apps)
+        return _routes_to_route_info(apps, _dangling_middlewares(response))
 
     # -- ProxyAdapter: maintenance-fallback write path ----------------------
 
@@ -632,7 +671,7 @@ class TraefikManagerProxyAdapter(ProxyAdapter):
         routes = await self._get_routes()
         services = routes.get("services") if isinstance(routes, dict) else None
         http_services = services.get("http") if isinstance(services, dict) else None
-        if isinstance(http_services, list) and SHARED_BACKEND_SERVICE_NAME in http_services:
+        if isinstance(http_services, list) and SHARED_BACKEND_SERVICE_REF in http_services:
             return None
 
         entry_point = await self._pick_internal_entrypoint()
@@ -684,12 +723,12 @@ class TraefikManagerProxyAdapter(ProxyAdapter):
                 (m for m in middlewares if isinstance(m, dict) and m.get("name") == name), None
             )
 
-        content = self._middleware_yaml(SHARED_BACKEND_SERVICE_NAME, slug)
+        content = self._middleware_yaml(SHARED_BACKEND_SERVICE_REF, slug)
         await self._save_middleware(name, content, protocol="http", is_edit=existing is not None)
         return SyncEvent(
             "middleware.updated" if existing is not None else "middleware.created",
             name,
-            {"query": f"/maintenance/{slug}", "service": SHARED_BACKEND_SERVICE_NAME},
+            {"query": f"/maintenance/{slug}", "service": SHARED_BACKEND_SERVICE_REF},
         )
 
     @staticmethod

@@ -138,7 +138,7 @@ def fallback_signature(ph: ProxyHost, service_slug: str | None) -> str:
     return "fb:" + hashlib.sha256(raw.encode()).hexdigest()[:16]
 
 
-FALLBACK_MISSING = "maintenance page rule missing on the live route"
+FALLBACK_MISSING = "maintenance page rule missing or broken on the live route"
 
 
 def _bare(name: str) -> str:
@@ -166,6 +166,8 @@ def fallback_missing(
             continue  # a plain-HTTP (redirect) router never needs the page
         if name not in {_bare(m) for m in route.middlewares}:
             return True
+        if name in {_bare(m) for m in route.dangling_middlewares}:
+            return True  # attached, but pointing at a service that does not exist
     return False
 
 
