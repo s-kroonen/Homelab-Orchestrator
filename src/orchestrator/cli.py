@@ -41,7 +41,7 @@ from orchestrator.cli_config import service as service_group
 from orchestrator.cli_ip import ip_group
 from orchestrator.cli_setup import config_group, init, scaffold
 from orchestrator.config import get_settings
-from orchestrator.db.models import Admin, Service, WebAuthnCredential
+from orchestrator.db.models import Admin, Node, Service, WebAuthnCredential
 from orchestrator.db.models import Probe as ProbeRow
 from orchestrator.db.session import build_engine, get_engine
 from orchestrator.health.engine import HealthEngine
@@ -127,7 +127,7 @@ def admin_reset(yes: bool) -> None:
 
 @cli.command()
 def check() -> None:
-    """Check connectivity to Proxmox and PBS."""
+    """Check connectivity to Proxmox, PBS and the power manager (MQTT)."""
     _bootstrap()
     settings = get_settings()
     adapters = build_adapters(settings)
@@ -177,6 +177,8 @@ def check() -> None:
                 # A datastore failure is usually an ACL problem, and PBS will
                 # tell us plainly. Ask it rather than making the operator guess.
                 await _diagnose_pbs_permissions(adapters, settings)
+
+            failures += await _check_power(adapters)
         finally:
             await adapters.stop_all()
         return failures
@@ -185,6 +187,39 @@ def check() -> None:
     if failures:
         raise SystemExit(1)
     click.secho("\nAll checks passed.", fg="green", bold=True)
+
+
+async def _check_power(adapters: Any) -> int:
+    """The power manager (MQTT broker) and every node's power target. Returns
+    the number of failed lines."""
+    with Session(get_engine()) as session:
+        nodes = session.exec(select(Node).order_by(Node.name)).all()
+    targets = sorted({n.power_mgr_target.strip() for n in nodes if n.power_mgr_target.strip()})
+    try:
+        result = await adapters.power.check(targets)
+    except AdapterError as exc:
+        click.secho(f"  FAIL  power manager: {exc}", fg="red")
+        return 1
+    if not result.connected:
+        click.secho(f"  FAIL  power manager: {result.detail}", fg="red")
+        return 1
+    click.secho(f"  OK    power manager: {result.detail}", fg="green")
+    failures = 0
+    by_node = {n.power_mgr_target.strip(): n.name for n in nodes}
+    for t in result.targets:
+        label = f"power target {t.target!r} (node {by_node.get(t.target, '?')})"
+        if t.online:
+            state = t.state.value if t.state else "unknown"
+            click.secho(f"  OK    {label}: online, power state {state}", fg="green")
+        else:
+            why = (
+                "reports offline in the power manager"
+                if t.online is False
+                else (t.detail or "never reported by the power manager")
+            )
+            click.secho(f"  FAIL  {label}: {why}", fg="red")
+            failures += 1
+    return failures
 
 
 def _token_owner(token_id: str) -> str:

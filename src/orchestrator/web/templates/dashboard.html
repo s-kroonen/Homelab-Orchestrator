@@ -264,6 +264,29 @@
     }
   }
 
+  // Fire-and-forget commands (MQTT) say nothing about the outcome, so after one
+  // is accepted, re-read the node's state a few times and report what happened.
+  const WANTED_AFTER = { wake: ["on"], power_off: ["off"], restart: ["on"] };
+  async function watchNodeAfter(name, action) {
+    const wanted = WANTED_AFTER[action] || [];
+    for (let i = 0; i < 10; i++) {
+      await new Promise((r) => setTimeout(r, 3000));
+      await loadNodeStates();
+      const s = nodeStates[name];
+      if (s && wanted.includes(s.state)) {
+        setMsg("nodes-msg", `${name} is ${s.state} (${action} worked).`, "ok");
+        return;
+      }
+    }
+    const s = nodeStates[name];
+    setMsg(
+      "nodes-msg",
+      `${action} was sent to ${name}, but it still reads ${s ? s.state : "unknown"} after 30s` +
+        (s && s.power_detail ? ` (${s.power_detail})` : "") + ". It may still be booting.",
+      "error",
+    );
+  }
+
   function renderNodeRow(node, editing) {
     const tr = document.createElement("tr");
     tr.dataset.bulkId = node.name;
@@ -310,9 +333,11 @@
             { action, force: forceCb.checked },
             { suppressToast: true },
           );
-          setMsg("nodes-msg", `${action} sent to ${node.name}.`, "ok");
+          setMsg("nodes-msg", `${action} sent to ${node.name} - waiting for the power manager to report...`, "ok");
+          watchNodeAfter(node.name, action);
         } catch (err) {
-          setMsg("nodes-msg", err.message, "error");
+          // Shown in place and kept (not a toast): the reason the command did not go out.
+          setMsg("nodes-msg", `${action} on ${node.name} FAILED: ${err.message}`, "error");
         }
       }
 

@@ -23,11 +23,11 @@ from pathlib import Path
 from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
-from sqlmodel import select
+from sqlmodel import Session, desc, select
 
 from orchestrator.adapters.errors import AdapterError
-from orchestrator.db.models import Node, Service
-from orchestrator.domain.enums import PipelineStatus
+from orchestrator.db.models import Node, PipelineRun, Service
+from orchestrator.domain.enums import PipelineKind, PipelineStatus
 from orchestrator.logging_setup import get_logger
 from orchestrator.pipelines.wake import (
     WakeError,
@@ -56,6 +56,32 @@ def _render(request: Request, **context: object) -> HTMLResponse:
     except Exception:
         log.exception("maintenance.render_failed")
         return HTMLResponse(_FALLBACK_HTML)
+
+
+def wake_disabled_reason(service: Service, node: Node | None) -> str | None:
+    """Why a visitor's request must NOT start this service (``None`` = it may).
+    The maintenance page is the unattended, visitor-triggered wake, so it obeys
+    the same per-service and per-node "wake on hit" switches as the traffic
+    collector; the manual button, the CLI and ``POST /wake`` do not."""
+    if not service.wake_on_hit_enabled:
+        return f"Automatic start is turned off for {service.name}."
+    if node is not None and not node.wake_on_hit_enabled:
+        return f"Automatic start is turned off for {node.name}, the host that runs {service.name}."
+    return None
+
+
+def _active_wake_run(session: Session, service: Service) -> PipelineRun | None:
+    """A wake already in flight (started by an operator, say). Joining it is
+    always fine; only STARTING one is gated."""
+    run = session.exec(
+        select(PipelineRun)
+        .where(PipelineRun.service_id == service.id, PipelineRun.kind == PipelineKind.WAKE)
+        .order_by(desc(PipelineRun.started_at))
+        .limit(1)
+    ).one_or_none()
+    if run is not None and run.status in (PipelineStatus.QUEUED, PipelineStatus.RUNNING):
+        return run
+    return None
 
 
 @router.get("/maintenance/{service_slug}")
@@ -120,10 +146,29 @@ async def maintenance_page(
         )
 
     pipeline = WakePipeline(power=adapters.power, proxmox=adapters.proxmox, settings=settings)
+    run: PipelineRun | None = None
+    disabled = wake_disabled_reason(service, node)
+    if disabled is not None:
+        run = _active_wake_run(session, service)
+        if run is None:
+            return _render(
+                request,
+                service_name=service.name,
+                headline=f"{service.name} is not available",
+                reason=f"{disabled} It will not be started by visiting this page. "
+                f"Contact an administrator.",
+                spinner_class="unsupported",
+                steps=[],
+                refresh_seconds=None,
+                show_retry=False,
+            )
     try:
-        run, started_new = pipeline.get_or_start(session, service_slug, actor="maintenance-page")
-        if started_new:
-            fire_background(pipeline, run, service_slug, actor="maintenance-page")
+        if run is None:
+            run, started_new = pipeline.get_or_start(
+                session, service_slug, actor="maintenance-page"
+            )
+            if started_new:
+                fire_background(pipeline, run, service_slug, actor="maintenance-page")
     except WakeUnsupportedError as exc:
         # Defense in depth: the early check above should always catch this
         # first, but node state could theoretically change between that

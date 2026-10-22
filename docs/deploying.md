@@ -49,6 +49,18 @@ docker compose logs -f
 docker compose exec orchestrator orchestrator-cli check
 ```
 
+`orchestrator-cli check` (and the dashboard's Connectivity page) also covers the
+power manager: whether the MQTT broker (`MQTT_HOST`/`MQTT_PORT`) can be reached —
+with the broker's own reason when it cannot, such as a refused port or a name that
+does not resolve — and whether each node's `power_mgr_target` is reported online.
+A manual wake that fails says the same thing, and after one is accepted the
+dashboard re-reads the node's state for 30 seconds and reports whether it came on.
+
+The maintenance page only starts a service when both the service's and its node's
+"wake on hit" switch are on; otherwise it shows a plain "not available" page and
+starts nothing (a wake already running is still shown). The manual wake button, the
+CLI and `POST /wake/{slug}` ignore those switches.
+
 The wizard asks for the image tag and writes it into `.env`, so later pulls fetch
 the tag you chose. It also flags the two mistakes that are easy to miss: a
 `PROXMOX_HOST` on a node that powers off, and a PBS token whose ACL exists on

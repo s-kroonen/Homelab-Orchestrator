@@ -59,12 +59,12 @@ class Node(SQLModel, table=True):
     power_mgr_target: str = ""
     notes: str = ""
 
-    # Top-level safety rail for the TrafficCollector-driven "wake on hit"
-    # path (see ProxyHost.wake_on_hit) — NOT a blanket wake permission. The
-    # manual dashboard button, the CLI wake command and POST /wake/{slug}
-    # (including Traefik's errors middleware calling it, once that is
-    # wired up) are unaffected by this flag and stay unconditional; this
-    # only gates the automatic poll-triggered trigger. Defaults True: it is
+    # Top-level safety rail for the unattended, request-triggered wakes: the
+    # TrafficCollector-driven "wake on hit" path (see ProxyHost.wake_on_hit)
+    # AND the maintenance page Traefik's errors middleware serves, which
+    # shows "not available" instead of starting anything while this is off.
+    # NOT a blanket wake permission: the manual dashboard button, the CLI wake
+    # command and POST /wake/{slug} are unaffected and stay unconditional. Defaults True: it is
     # a rail on top of the per-proxy-host opt-in (which itself defaults
     # False), not an independent opt-in, so leaving it at its default must
     # not silently disable a wake-on-hit an operator deliberately turned on

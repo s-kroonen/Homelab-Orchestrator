@@ -19,7 +19,8 @@ than inventing a protocol the device does not have.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from collections.abc import Sequence
+from dataclasses import dataclass, field
 
 from orchestrator.domain.enums import PowerState
 
@@ -31,6 +32,29 @@ class NodeReport:
     node_name: str
     state: PowerState
     detail: str | None = None
+
+
+@dataclass(frozen=True)
+class PowerTargetCheck:
+    """What the power manager says about one ``power_mgr_target``."""
+
+    target: str
+    #: True / False when the manager reported the target online / offline;
+    #: ``None`` when it never said anything about it.
+    online: bool | None
+    state: PowerState | None = None
+    detail: str | None = None
+
+
+@dataclass(frozen=True)
+class PowerCheck:
+    """A connectivity verdict for the power manager itself plus its targets."""
+
+    connected: bool
+    #: Where it talks to ("mqtt.lan:1883"); empty for adapters with no transport.
+    endpoint: str = ""
+    detail: str = ""
+    targets: tuple[PowerTargetCheck, ...] = field(default_factory=tuple)
 
 
 class PowerAdapter(ABC):
@@ -100,3 +124,9 @@ class PowerAdapter(ABC):
     @abstractmethod
     async def get_status(self, node_name: str) -> NodeReport:
         """Query the last-known power state for one node."""
+
+    async def check(self, targets: Sequence[str] = ()) -> PowerCheck:
+        """Is the power manager reachable, and what does it say about
+        ``targets``? For the connectivity page and ``orchestrator-cli check``.
+        Adapters without a transport keep this default."""
+        return PowerCheck(connected=True, detail="no connection to check")
