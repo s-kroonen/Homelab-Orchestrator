@@ -44,6 +44,7 @@ from orchestrator.domain.enums import (
 )
 from orchestrator.health.engine import HealthEngine
 from orchestrator.logging_setup import get_logger, new_correlation_id
+from orchestrator.notify.hooks import announce
 from orchestrator.pipelines.steps import Recorder, StepRecorder
 from orchestrator.registry.tree import effective_guest, is_served
 
@@ -367,6 +368,17 @@ class WakePipeline:
                 details={"run_id": run.id, "error": str(exc), "indeterminate": indeterminate},
             )
             session.commit()
+            await announce(
+                session,
+                level="service",
+                key=slug,
+                name=service.name,
+                event="wake_failed",
+                severity="warn",
+                title=f"Waking {service.name} failed",
+                body=str(exc)[:1500],
+                scope={"slug": slug, "group": service.group},
+            )
             raise
         finally:
             if hold_handle is not None:

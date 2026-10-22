@@ -96,7 +96,11 @@ ENV_SECTIONS: tuple[EnvSection, ...] = (
                 "(blank falls back to dry_run with a loud warning); see "
                 "docs/proxy_hosts.md.",
             ),
-            EnvKey("NOTIFIER_ADAPTER", "null — the only notifier until phase 9"),
+            EnvKey(
+                "NOTIFIER_ADAPTER",
+                "null (log only) | auto (every channel configured below) | ntfy | email | webhook.\n"
+                "DRY_RUN=true keeps it silent whatever this says. See docs/notifications.md.",
+            ),
             EnvKey(
                 "SCHEDULER_ENABLED",
                 "Run backup policies on their schedule_cron. false = manual backups only.",
@@ -519,7 +523,7 @@ ENV_SECTIONS: tuple[EnvSection, ...] = (
     ),
     EnvSection(
         "notifier",
-        "Notifier (phase 9)",
+        "Notifications",
         (
             EnvKey("MAIL_SMTP_HOST", "mailcow SMTP — used only while mailcow itself is healthy."),
             EnvKey("MAIL_SMTP_PORT"),
@@ -528,6 +532,20 @@ ENV_SECTIONS: tuple[EnvSection, ...] = (
             EnvKey("MAIL_FROM"),
             EnvKey("NTFY_URL", "Offsite ntfy for instant fallback alerts."),
             EnvKey("NTFY_TOKEN", secret=True),
+            EnvKey("MAIL_TO", "Where e-mail alerts go (comma-separated). Needs MAIL_SMTP_HOST."),
+            EnvKey("MAIL_SMTP_STARTTLS"),
+            EnvKey("NOTIFY_WEBHOOK_URL", "Any endpoint that takes a JSON POST."),
+            EnvKey("NOTIFY_WEBHOOK_TOKEN", secret=True),
+            EnvKey(
+                "NOTIFICATIONS_ENABLED", "false = no alerts and no feed (state is not tracked)."
+            ),
+            EnvKey(
+                "NOTIFY_CONFIRM_SCANS",
+                "A change must be seen on this many consecutive scans before it is announced.",
+            ),
+            EnvKey("NOTIFY_FLAP_THRESHOLD", "This many changes inside the window = 'flapping'."),
+            EnvKey("NOTIFY_FLAP_WINDOW_S"),
+            EnvKey("NOTIFY_RETENTION_DAYS", "How long the feed on /notifications is kept."),
         ),
     ),
 )

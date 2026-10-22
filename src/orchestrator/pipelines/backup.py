@@ -40,6 +40,7 @@ from orchestrator.domain.enums import (
 )
 from orchestrator.health.engine import HealthEngine
 from orchestrator.logging_setup import get_logger, new_correlation_id
+from orchestrator.notify.hooks import announce
 from orchestrator.pipelines.backup_wake import BackupWaker, WakeContext
 from orchestrator.pipelines.steps import BackupError, StepRecorder
 from orchestrator.pipelines.wake import WakePipeline
@@ -201,6 +202,17 @@ class BackupPipeline:
                 },
             )
             session.commit()
+            await announce(
+                session,
+                level="service",
+                key=slug,
+                name=service.name,
+                event="backup_failed",
+                severity="warn" if indeterminate else "error",
+                title=f"Backup of {service.name} {'could not run' if indeterminate else 'FAILED'}",
+                body=str(exc)[:1500],
+                scope={"slug": slug, "group": service.group},
+            )
             raise
         finally:
             # Whatever happened — including an exception this method does not

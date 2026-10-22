@@ -30,6 +30,8 @@ from orchestrator.adapters.factory import build_adapters
 from orchestrator.config import get_settings
 from orchestrator.db.session import build_engine, session_scope
 from orchestrator.logging_setup import configure_logging, get_logger
+from orchestrator.notify import hooks as notify_hooks
+from orchestrator.notify.engine import NotificationEngine
 from orchestrator.registry.loader import RegistryPathError, reconcile_yaml_into_db
 from orchestrator.scheduler import BackupScheduler
 from orchestrator.scheduler.access_log_collector import AccessLogCollector
@@ -48,6 +50,7 @@ from orchestrator.web.routers import (
     health,
     infra,
     maintenance,
+    notifications,
     proxy_hosts,
     setup,
     system,
@@ -160,6 +163,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         raise
 
     app.state.adapters = adapters
+    # One engine for the scanner, the recovery loop and the API, so they share
+    # the same delivery and the same feed.
+    notify_engine = NotificationEngine(adapters.notifier, settings)
+    app.state.notifications = notify_engine
+    notify_hooks.install(notify_engine)
 
     # A scheduler that fails to start is logged, not fatal: the maintenance
     # responder and manual backups must stay up, and the dashboard shows the
@@ -205,7 +213,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # one an intentional no-op too.
     health_scanner: HealthScanner | None = None
     try:
-        health_scanner = HealthScanner(settings=settings, adapters=adapters)
+        health_scanner = HealthScanner(
+            settings=settings, adapters=adapters, notifications=notify_engine
+        )
         health_scanner.start()
     except Exception as exc:
         log.error(
@@ -274,6 +284,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         yield
     finally:
         log.info("orchestrator.stop")
+        notify_hooks.install(None)
         if self_backup is not None:
             await self_backup.shutdown()
         if ip_discovery is not None:
@@ -325,6 +336,7 @@ def create_app() -> FastAPI:
     app.include_router(proxy_hosts.catalog_router)
     app.include_router(bulk.router)
     app.include_router(system.router)
+    app.include_router(notifications.router)
     app.include_router(activity.router)
     app.include_router(geo_traffic.router)
     app.include_router(traffic.router)

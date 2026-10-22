@@ -373,6 +373,20 @@ class Settings(BaseSettings):
     mail_from: str = ""
     ntfy_url: str = ""
     ntfy_token: SecretStr = SecretStr("")
+    #: Where e-mail alerts go (comma-separated). Needs MAIL_SMTP_HOST and MAIL_FROM.
+    mail_to: str = ""
+    mail_smtp_starttls: bool = True
+    #: Any HTTP endpoint that takes a JSON POST (Home Assistant, Slack bridge, ...).
+    notify_webhook_url: str = ""
+    notify_webhook_token: SecretStr = SecretStr("")
+    # ---- Notification engine (docs/notifications.md) -----------------------
+    notifications_enabled: bool = True
+    #: A state change must be seen on this many consecutive scans before it is announced.
+    notify_confirm_scans: int = 2
+    #: This many state changes inside the window = "flapping": one alert, then quiet.
+    notify_flap_threshold: int = 4
+    notify_flap_window_s: int = 1800
+    notify_retention_days: int = 30
 
     # ---- Derived helpers --------------------------------------------------
     @field_validator("state_dir", "services_yaml_path", "setup_project_dir", mode="before")

@@ -1,0 +1,202 @@
+{% extends "base.html" %}
+{% block title %}homelab-orchestrator — notifications{% endblock %}
+{% block content %}
+  <section>
+    <h2>Channels</h2>
+    <p class="msg" id="channels-text">Loading…</p>
+    <div class="row">
+      <button class="secondary" id="test-btn">Send a test notification</button>
+      <span class="msg" id="test-msg"></span>
+    </div>
+  </section>
+
+  <section>
+    <h2>Rules</h2>
+    <p class="msg">
+      Who hears about what. With <strong>no rules</strong>, failed / down / recovered (and
+      flapping and exhausted recoveries) go to every channel. Add rules to narrow it down or
+      to route by level, service, group or node. An empty list in a rule means "any".
+    </p>
+    <div class="table-scroll">
+    <table>
+      <thead><tr><th>Name</th><th>Levels</th><th>Scope</th><th>Events</th><th>From</th><th>Channels</th><th>On</th><th></th></tr></thead>
+      <tbody id="rules-body"><tr><td colspan="8">Loading…</td></tr></tbody>
+    </table>
+    </div>
+    <details class="rule-form" id="rule-form">
+      <summary id="rule-form-title">Add a rule</summary>
+      <div class="grid">
+        <label for="r-name">Name</label>
+        <input id="r-name" placeholder="e.g. Critical stuff to my phone">
+        <label>Levels</label>
+        <div class="checks" id="r-levels">
+          {% for l in levels %}<label class="inline"><input type="checkbox" value="{{ l }}"> {{ l }}</label>{% endfor %}
+        </div>
+        <label>Events</label>
+        <div class="checks" id="r-events">
+          {% for e in events if e != "test" %}<label class="inline"><input type="checkbox" value="{{ e }}"> {{ e }}</label>{% endfor %}
+        </div>
+        <label for="r-min">At least</label>
+        <select id="r-min">{% for s in severities %}<option value="{{ s }}">{{ s }}</option>{% endfor %}</select>
+        <label for="r-slugs">Only these services</label>
+        <input id="r-slugs" placeholder="slugs, comma separated (blank = any)">
+        <label for="r-groups">Only these groups</label>
+        <input id="r-groups" placeholder="groups, comma separated">
+        <label for="r-nodes">Only these nodes</label>
+        <input id="r-nodes" placeholder="node names, comma separated">
+        <label>Send to</label>
+        <div class="checks" id="r-channels">
+          {% for c in channel_names %}<label class="inline"><input type="checkbox" value="{{ c }}"> {{ c }}</label>{% endfor %}
+          <span class="muted">(none ticked = every channel)</span>
+        </div>
+        <label for="r-enabled">Enabled</label>
+        <span><input id="r-enabled" type="checkbox" checked></span>
+      </div>
+      <div class="row">
+        <button id="r-save">Save rule</button>
+        <button class="secondary" id="r-cancel" type="button">Cancel</button>
+        <span class="msg" id="r-msg"></span>
+      </div>
+    </details>
+  </section>
+
+  <section>
+    <h2>Feed</h2>
+    <div class="row">
+      <select id="f-level"><option value="">all levels</option>{% for l in levels %}<option value="{{ l }}">{{ l }}</option>{% endfor %}</select>
+      <input id="f-target" placeholder="target (slug / node)" size="18">
+      <label class="inline"><input type="checkbox" id="f-suppressed" checked> show folded / unsent</label>
+      <button class="secondary" id="f-refresh">Refresh</button>
+    </div>
+    <div class="table-scroll">
+    <table>
+      <thead><tr><th>When</th><th>Level</th><th>Target</th><th>Event</th><th>What</th><th>Sent</th></tr></thead>
+      <tbody id="feed-body"><tr><td colspan="6">Loading…</td></tr></tbody>
+    </table>
+    </div>
+  </section>
+{% endblock %}
+{% block extra_head %}
+<style>
+  .checks { display: flex; flex-wrap: wrap; gap: 0.3rem 1rem; }
+  details.rule-form { margin-top: 0.75rem; }
+  details.rule-form summary { cursor: pointer; color: #5b8def; }
+  tr.suppressed td { color: #7b8494; }
+  .sent-ok { color: #3ecf6d; } .sent-bad { color: #e5534b; }
+</style>
+{% endblock %}
+{% block scripts %}
+<script>
+  const $ = (id) => document.getElementById(id);
+  function setMsg(id, text, kind) { const el = $(id); el.textContent = text; el.className = "msg" + (kind ? " " + kind : ""); }
+  const csv = (s) => s.split(",").map((x) => x.trim()).filter(Boolean);
+  const ticked = (id) => [...$(id).querySelectorAll("input:checked")].map((c) => c.value);
+  function tick(id, values) { for (const c of $(id).querySelectorAll("input")) c.checked = values.includes(c.value); }
+  function when(iso) { const d = new Date(iso); return isNaN(d) ? iso : d.toLocaleString(); }
+  function td(text, cls) { const e = document.createElement("td"); e.textContent = text; if (cls) e.className = cls; return e; }
+
+  async function loadChannels() {
+    try {
+      const c = await apiFetch("GET", "/api/notifications/channels", undefined, { suppressToast: true });
+      $("channels-text").textContent = c.channels.length
+        ? "Active: " + c.channels.join(", ") + "."
+        : c.hint;
+    } catch (err) { $("channels-text").textContent = err.message; }
+  }
+  $("test-btn").addEventListener("click", async () => {
+    setMsg("test-msg", "Sending…", "");
+    try {
+      const r = await apiFetch("POST", "/api/notifications/test", {}, { suppressToast: true });
+      const parts = Object.entries(r.delivered).map(([k, v]) => k + ": " + v);
+      setMsg("test-msg", parts.length ? parts.join(" | ") : (r.suppressed_reason || "nothing was sent"), parts.some((p) => !p.endsWith(": ok")) || !parts.length ? "error" : "ok");
+      loadFeed();
+    } catch (err) { setMsg("test-msg", err.message, "error"); }
+  });
+
+  let editing = null;
+  function resetForm() {
+    editing = null;
+    $("r-name").value = ""; $("r-slugs").value = ""; $("r-groups").value = ""; $("r-nodes").value = "";
+    tick("r-levels", []); tick("r-events", []); tick("r-channels", []);
+    $("r-min").value = "info"; $("r-enabled").checked = true;
+    $("rule-form-title").textContent = "Add a rule"; setMsg("r-msg", "", "");
+  }
+  $("r-cancel").addEventListener("click", () => { resetForm(); $("rule-form").open = false; });
+  $("r-save").addEventListener("click", async () => {
+    const body = {
+      name: $("r-name").value, enabled: $("r-enabled").checked,
+      levels: ticked("r-levels"), events: ticked("r-events"), min_severity: $("r-min").value,
+      scope: { slugs: csv($("r-slugs").value), groups: csv($("r-groups").value), nodes: csv($("r-nodes").value) },
+      channels: ticked("r-channels"),
+    };
+    try {
+      if (editing) await apiFetch("PUT", "/api/notifications/rules/" + editing, body, { suppressToast: true });
+      else await apiFetch("POST", "/api/notifications/rules", body, { suppressToast: true });
+      resetForm(); $("rule-form").open = false; loadRules();
+    } catch (err) { setMsg("r-msg", err.message, "error"); }
+  });
+
+  async function loadRules() {
+    const body = $("rules-body");
+    let rules;
+    try { rules = await apiFetch("GET", "/api/notifications/rules", undefined, { suppressToast: true }); }
+    catch (err) { body.innerHTML = ""; const tr = document.createElement("tr"); const c = td(err.message); c.colSpan = 8; tr.append(c); body.append(tr); return; }
+    body.innerHTML = "";
+    if (!rules.length) { body.innerHTML = '<tr><td colspan="8" class="muted">No rules - the defaults apply.</td></tr>'; return; }
+    for (const r of rules) {
+      const tr = document.createElement("tr");
+      const scope = Object.entries(r.scope).map(([k, v]) => k + ": " + v.join(", ")).join("; ");
+      tr.append(td(r.name), td(r.levels.join(", ") || "any"), td(scope || "any"), td(r.events.join(", ") || "any"),
+        td(r.min_severity), td(r.channels.join(", ") || "all"), td(r.enabled ? "yes" : "no"));
+      const act = document.createElement("td");
+      const edit = document.createElement("button"); edit.className = "secondary small"; edit.textContent = "Edit";
+      edit.addEventListener("click", () => {
+        editing = r.id; $("r-name").value = r.name; tick("r-levels", r.levels); tick("r-events", r.events);
+        $("r-min").value = r.min_severity; $("r-slugs").value = (r.scope.slugs || []).join(", ");
+        $("r-groups").value = (r.scope.groups || []).join(", "); $("r-nodes").value = (r.scope.nodes || []).join(", ");
+        tick("r-channels", r.channels); $("r-enabled").checked = r.enabled;
+        $("rule-form-title").textContent = "Edit rule"; $("rule-form").open = true;
+        $("rule-form").scrollIntoView({ behavior: "smooth" });
+      });
+      const del = document.createElement("button"); del.className = "danger small"; del.textContent = "Delete";
+      del.addEventListener("click", async () => {
+        if (!confirm("Delete rule " + r.name + "?")) return;
+        try { await apiFetch("DELETE", "/api/notifications/rules/" + r.id, undefined, { suppressToast: true }); loadRules(); }
+        catch (err) { setMsg("r-msg", err.message, "error"); }
+      });
+      act.append(edit, " ", del); tr.append(act); body.append(tr);
+    }
+  }
+
+  async function loadFeed() {
+    const q = new URLSearchParams({ limit: "150" });
+    if ($("f-level").value) q.set("level", $("f-level").value);
+    if ($("f-target").value.trim()) q.set("target", $("f-target").value.trim());
+    if (!$("f-suppressed").checked) q.set("suppressed", "false");
+    const body = $("feed-body");
+    let rows;
+    try { rows = await apiFetch("GET", "/api/notifications/events?" + q, undefined, { suppressToast: true }); }
+    catch (err) { body.innerHTML = ""; const tr = document.createElement("tr"); const c = td(err.message); c.colSpan = 6; tr.append(c); body.append(tr); return; }
+    body.innerHTML = "";
+    if (!rows.length) { body.innerHTML = '<tr><td colspan="6" class="muted">Nothing yet.</td></tr>'; return; }
+    for (const e of rows) {
+      const tr = document.createElement("tr");
+      if (e.suppressed) tr.className = "suppressed";
+      const sent = document.createElement("td");
+      const parts = Object.entries(e.delivered || {});
+      if (e.suppressed) sent.textContent = e.suppressed_reason;
+      else if (!parts.length) sent.textContent = "-";
+      else for (const [k, v] of parts) { const s = document.createElement("span"); s.className = v === "ok" ? "sent-ok" : "sent-bad"; s.textContent = k + (v === "ok" ? " ✓ " : " ✗ "); s.title = v; sent.append(s); }
+      const what = td(e.title); what.title = e.body;
+      tr.append(td(when(e.at)), td(e.level), td(e.target), td(e.event + (e.severity ? " (" + e.severity + ")" : "")), what, sent);
+      body.append(tr);
+    }
+  }
+  for (const id of ["f-level", "f-suppressed"]) $(id).addEventListener("change", loadFeed);
+  $("f-refresh").addEventListener("click", loadFeed);
+  $("f-target").addEventListener("keydown", (ev) => { if (ev.key === "Enter") loadFeed(); });
+
+  loadChannels(); loadRules(); loadFeed();
+  setInterval(loadFeed, 30000);
+</script>
+{% endblock %}

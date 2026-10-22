@@ -188,7 +188,7 @@ async def test_publish_failure_raises_adapter_unreachable(
 
 
 async def test_get_status_reflects_state_topic(
-    wired: tuple[MqttPowerAdapter, FakeMqttClient]
+    wired: tuple[MqttPowerAdapter, FakeMqttClient],
 ) -> None:
     adapter, fake = wired
     await _observe(adapter, fake, "hp-ilo2", "state", "on")

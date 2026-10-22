@@ -19,7 +19,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import Column, ForeignKey, UniqueConstraint
+from sqlalchemy import Column, ForeignKey, String, UniqueConstraint
 from sqlalchemy.types import JSON
 from sqlmodel import Field, SQLModel
 
@@ -633,6 +633,76 @@ class StateSnapshotMarker(SQLModel, table=True):
     path: str
     size_bytes: int | None = None
     created_at: datetime = Field(default_factory=_utcnow, index=True)
+
+
+class NotificationRule(SQLModel, table=True):
+    """Who hears about what. An empty list means "any" for that dimension.
+
+    With NO rules at all the engine falls back to "failed / down / recovered at
+    every level, on every channel", so notifications work as soon as a channel is
+    configured. Plain strings, not Enums, on purpose (the stored value is exactly
+    what the UI sends)."""
+
+    __tablename__ = "notification_rule"
+
+    id: int | None = Field(default=None, primary_key=True)
+    name: str = Field(index=True, unique=True)
+    enabled: bool = Field(default=True)
+    #: Subset of node | guest | service | sub.
+    levels: list[str] = Field(default_factory=list, sa_column=Column(JSON))
+    #: {"slugs": [...], "groups": [...], "nodes": [...]} - any match counts.
+    scope: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))
+    #: failed | down | recovered | flapping | recovery_attempt | recovery_exhausted | ...
+    events: list[str] = Field(default_factory=list, sa_column=Column(JSON))
+    #: info | warn | error | critical - the least severe event this rule wants.
+    min_severity: str = "info"
+    #: Channel names (ntfy, email, webhook); empty = every configured channel.
+    channels: list[str] = Field(default_factory=list, sa_column=Column(JSON))
+    created_at: datetime = Field(default_factory=_utcnow)
+    updated_at: datetime = Field(default_factory=_utcnow)
+
+
+class NotificationEvent(SQLModel, table=True):
+    """Every event the engine decided on, sent or not - the feed on /notifications."""
+
+    __tablename__ = "notification_event"
+
+    id: int | None = Field(default=None, primary_key=True)
+    at: datetime = Field(default_factory=_utcnow, index=True)
+    level: str = Field(index=True)  # node | guest | service | sub
+    target: str = Field(index=True)  # slug, node name, or "node/vmid" for a guest
+    name: str = ""
+    event: str = Field(index=True)
+    severity: str = "info"
+    title: str = ""
+    body: str = ""
+    #: The incident this is folded into ("node:pve1"), if any.
+    cause: str = ""
+    suppressed: bool = False
+    suppressed_reason: str = ""
+    rule_ids: list[int] = Field(default_factory=list, sa_column=Column(JSON))
+    #: {channel: "ok" | "error: ..."}
+    delivered: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))
+
+
+class TargetState(SQLModel, table=True):
+    """What the notification engine last concluded about one target, with the
+    debounce and flap bookkeeping. Runtime only; never in services.yaml."""
+
+    __tablename__ = "target_state"
+
+    level: str = Field(sa_column=Column(String, primary_key=True))
+    key: str = Field(sa_column=Column(String, primary_key=True))
+    state: str = "unknown"  # healthy | failed | down | unknown
+    #: The bad state we actually TOLD someone about ("" = nothing outstanding), so a
+    #: recovery is announced only for something that was announced.
+    announced: str = ""
+    since: datetime = Field(default_factory=_utcnow)
+    pending_state: str = ""
+    pending_count: int = 0
+    transitions: list[str] = Field(default_factory=list, sa_column=Column(JSON))
+    muted_until: datetime | None = None
+    updated_at: datetime = Field(default_factory=_utcnow)
 
 
 class Setting(SQLModel, table=True):
