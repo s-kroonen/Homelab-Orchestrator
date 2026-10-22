@@ -35,6 +35,7 @@ from orchestrator.pipelines.wake import (
     WakeUnsupportedError,
     wake_is_unsupported,
 )
+from orchestrator.registry.tree import is_served
 from orchestrator.web.deps import AdaptersDep, SessionDep, SettingsDep
 from orchestrator.web.wake_button import WAKE_HEADER, make_token, verify_token
 from orchestrator.web.wake_support import fire_background
@@ -109,7 +110,7 @@ async def maintenance_page(
             show_retry=False,
         )
 
-    if not service.enabled:
+    if not is_served(session, service):
         return _render(
             request,
             service_name=service.name,

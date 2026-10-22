@@ -23,6 +23,7 @@ from orchestrator.adapters.errors import AdapterError, AdapterUnreachable
 from orchestrator.audit import log as audit
 from orchestrator.db.models import Node, Service, ServiceState
 from orchestrator.domain.enums import GuestKind, PowerState
+from orchestrator.registry.tree import TreeIndex
 from orchestrator.web.auth import CurrentAdmin, require_admin
 from orchestrator.web.deps import AdaptersDep, SessionDep, SettingsDep
 
@@ -572,7 +573,8 @@ async def do_resync(
     services = list(session.exec(stmt).all())
     if slug and not services:
         raise HTTPException(status.HTTP_404_NOT_FOUND, f"no service {slug!r}")
-    services = [s for s in services if s.enabled]
+    tree = TreeIndex.build(session)
+    services = [s for s in services if tree.is_served(s)]
 
     engine = HealthEngine(settings=settings, proxmox=adapters.proxmox)
     guest_cache = engine.new_guest_cache()

@@ -62,6 +62,7 @@ from orchestrator.health.transports.base import (
 from orchestrator.health.transports.dry_run import DryRunTransport
 from orchestrator.health.transports.local import LocalTransport
 from orchestrator.logging_setup import get_logger
+from orchestrator.registry.tree import effective_guest
 
 log = get_logger(__name__)
 
@@ -276,15 +277,17 @@ class HealthEngine:
     ) -> GuestCheck | None:
         """Run the guest gate, or return None when it does not apply (no
         Proxmox source given, or the service has no guest)."""
-        if guest_cache is None or not has_guest(service.guest_kind, service.guest_id):
+        # A sub-service has no guest of its own: it is judged against its root's.
+        eg = effective_guest(session, service)
+        if guest_cache is None or not has_guest(eg.kind, eg.guest_id):
             return None
-        assert service.guest_id is not None
-        node = session.get(Node, service.node_id) if service.node_id is not None else None
+        assert eg.guest_id is not None
+        node = session.get(Node, eg.node_id) if eg.node_id is not None else None
         return await check_guest(
             guest_cache,
             node_name=node.name if node else None,
-            guest_kind=service.guest_kind,
-            guest_id=service.guest_id,
+            guest_kind=eg.kind,
+            guest_id=eg.guest_id,
         )
 
     @staticmethod

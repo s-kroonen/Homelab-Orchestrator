@@ -48,6 +48,7 @@ from orchestrator.registry.backup_plan import (
     resolve_backup_plan,
     resolve_policy_prerequisites,
 )
+from orchestrator.registry.tree import effective_guest
 
 __all__ = ["BackupError", "BackupPipeline", "StepRecorder", "WakeContext"]
 
@@ -569,6 +570,13 @@ class BackupPipeline:
             raise BackupError(f"no service registered with slug {slug!r}")
         if not service.enabled:
             raise BackupError(f"service {slug!r} is disabled in the registry")
+        if service.parent_id is not None:
+            root = effective_guest(session, service).root_slug
+            raise BackupError(
+                f"{slug!r} is a sub-service: backups are per guest, so back up its "
+                f"root service {root!r} (mark this one backup_gate: required to make "
+                f"that backup wait for it)"
+            )
         if service.backup_excluded:
             # Deliberately unconditional — no force flag, no CLI override. The
             # motivating case (a VM hosting the pool PBS lives on) is never

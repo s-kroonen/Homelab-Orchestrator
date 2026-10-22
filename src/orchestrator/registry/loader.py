@@ -38,7 +38,7 @@ from orchestrator.db.models import (
     Service,
     Setting,
 )
-from orchestrator.domain.enums import RouterProvider
+from orchestrator.domain.enums import GuestKind, RouterProvider
 from orchestrator.logging_setup import get_logger
 from orchestrator.registry.backup_plan import clean_slug_list, requires_problems
 from orchestrator.registry.proxy_validation import validate_cert_resolver, validate_entry_points
@@ -51,6 +51,7 @@ from orchestrator.registry.schema import (
     ServiceSpec,
 )
 from orchestrator.registry.traefik_probes import probe_name_for_hostname
+from orchestrator.registry.tree import MAX_DEPTH
 
 log = get_logger(__name__)
 
@@ -114,6 +115,17 @@ def write_yaml_file(path: Path, registry: RegistryFile) -> str:
     # paths are stringified — ruamel's default representer only handles primitives.
     body = registry.model_dump(mode="json", exclude_defaults=False)
     for svc in body.get("services", []):
+        # Tree/automation keys appear only when they say something.
+        for key, default in (
+            ("parent", None),
+            ("controller", {}),
+            ("recovery", {}),
+            ("backup_gate", "ignore"),
+        ):
+            if svc.get(key, default) == default:
+                svc.pop(key, None)
+        if svc.get("parent") is not None and not svc.get("node"):
+            svc.pop("node", None)
         for probe in svc.get("probes", []):
             # ``enabled: true`` is the default - only a switched-off probe says so.
             if probe.get("enabled", True):
@@ -143,6 +155,7 @@ def _spec_from_db(session: Session) -> RegistryFile:
 
     node_by_id = {n.id: n for n in nodes}
     policy_by_id = {p.id: p for p in policies}
+    svc_by_id = {s.id: s for s in services}
 
     services_out: list[ServiceSpec] = []
     for svc in services:
@@ -154,6 +167,7 @@ def _spec_from_db(session: Session) -> RegistryFile:
         ).all()
 
         node_name = node_by_id[svc.node_id].name if svc.node_id in node_by_id else ""
+        parent_slug = svc_by_id[svc.parent_id].slug if svc.parent_id in svc_by_id else None
         policy_name = (
             policy_by_id[svc.backup_policy_id].name
             if svc.backup_policy_id in policy_by_id
@@ -166,7 +180,8 @@ def _spec_from_db(session: Session) -> RegistryFile:
                 name=svc.name,
                 description=svc.description,
                 group=svc.group,
-                node=node_name,
+                node=node_name if parent_slug is None else "",
+                parent=parent_slug,
                 guest_kind=svc.guest_kind,
                 guest_id=svc.guest_id,
                 enabled=svc.enabled,
@@ -177,6 +192,9 @@ def _spec_from_db(session: Session) -> RegistryFile:
                 depends_on=list(svc.depends_on or []),
                 backup_requires=list(svc.backup_requires or []),
                 backup_policy=policy_name,
+                controller=dict(svc.controller or {}),
+                recovery=dict(svc.recovery or {}),
+                backup_gate=svc.backup_gate,
                 ip_address=svc.ip_address or "",
                 probes=[
                     ProbeSpec(
@@ -298,6 +316,23 @@ def _find_dependency_cycle(graph: dict[str, list[str]]) -> list[str] | None:
     return None
 
 
+def _parent_problems(parents: dict[str, str | None]) -> list[str]:
+    """Cycles and over-deep nesting in the ``parent`` links."""
+    problems: list[str] = []
+    for start in sorted(parents):
+        seen = [start]
+        cur = parents.get(start)
+        while cur is not None and cur in parents:
+            if cur in seen:
+                return [*problems, "parent links form a cycle: " + " -> ".join([*seen, cur])]
+            seen.append(cur)
+            if len(seen) > MAX_DEPTH:
+                problems.append(f"service {start!r} is nested deeper than {MAX_DEPTH} levels")
+                break
+            cur = parents.get(cur)
+    return problems
+
+
 def validate_references(parsed: RegistryFile) -> None:
     """Check every cross-reference inside the file resolves within the file."""
     node_names = {n.name for n in parsed.nodes}
@@ -315,7 +350,24 @@ def validate_references(parsed: RegistryFile) -> None:
                     f"service {svc.slug!r} depends_on {dep!r}, which this file does "
                     f"not define. Services defined here: {known}"
                 )
-        if svc.node not in node_names:
+        if svc.parent is not None:
+            if svc.parent == svc.slug:
+                problems.append(f"service {svc.slug!r} is its own parent")
+            elif svc.parent not in slugs:
+                problems.append(
+                    f"service {svc.slug!r} has parent {svc.parent!r}, which this file does not define"
+                )
+            if svc.guest_kind is not GuestKind.NONE or svc.guest_id is not None:
+                problems.append(
+                    f"sub-service {svc.slug!r} has its own guest; a sub-service uses "
+                    f"its root's guest - remove guest_kind/guest_id"
+                )
+            if svc.backup_policy:
+                problems.append(
+                    f"sub-service {svc.slug!r} has a backup_policy; backups are per "
+                    f"guest - set it on its root service"
+                )
+        elif svc.node not in node_names:
             known = ", ".join(sorted(node_names)) or "(none defined)"
             problems.append(
                 f"service {svc.slug!r} references node {svc.node!r}, which this "
@@ -340,6 +392,8 @@ def validate_references(parsed: RegistryFile) -> None:
             msg = validate_cert_resolver(ph.cert_resolver, None)
             if msg:
                 problems.append(f"service {svc.slug!r} proxy host {ph.hostname!r}: {msg}")
+
+    problems += _parent_problems({s.slug: s.parent for s in parsed.services})
 
     cycle = _find_dependency_cycle({s.slug: list(s.depends_on) for s in parsed.services})
     if cycle:
@@ -448,10 +502,21 @@ def reconcile_yaml_into_db(session: Session, path: Path) -> RegistryFile:
     if stale_deletes is not None:
         session.delete(stale_deletes)
 
+    spec_by_slug = {s.slug: s for s in parsed.services}
+
+    def root_spec(spec: ServiceSpec) -> ServiceSpec:
+        cur, hops = spec, 0
+        while cur.parent is not None and cur.parent in spec_by_slug and hops < MAX_DEPTH:
+            cur = spec_by_slug[cur.parent]
+            hops += 1
+        return cur
+
     for spec in parsed.services:
-        node = nodes_by_name.get(spec.node)
+        # A sub-service lives where its root lives and has no guest of its own.
+        root = root_spec(spec)
+        node = nodes_by_name.get(root.node)
         if node is None:
-            raise ValueError(f"service {spec.slug!r} references unknown node {spec.node!r}")
+            raise ValueError(f"service {spec.slug!r} references unknown node {root.node!r}")
         policy = policies_by_name.get(spec.backup_policy) if spec.backup_policy else None
         if spec.backup_policy and policy is None:
             raise ValueError(
@@ -467,6 +532,9 @@ def reconcile_yaml_into_db(session: Session, path: Path) -> RegistryFile:
         svc.group = spec.group
         svc.guest_kind = spec.guest_kind
         svc.guest_id = spec.guest_id
+        svc.controller = dict(spec.controller)
+        svc.recovery = dict(spec.recovery)
+        svc.backup_gate = spec.backup_gate
         svc.enabled = spec.enabled
         svc.backup_excluded = spec.backup_excluded
         svc.backup_excluded_reason = spec.backup_excluded_reason
@@ -521,6 +589,17 @@ def reconcile_yaml_into_db(session: Session, path: Path) -> RegistryFile:
                     pushed_sig=pushed_sigs.get(phspec.hostname, ""),
                 )
             )
+
+    # Parent links, now that every service row exists (and has an id).
+    rows_by_slug = {s.slug: s for s in session.exec(select(Service)).all()}
+    for spec in parsed.services:
+        rows_by_slug[spec.slug].parent_id = (
+            rows_by_slug[spec.parent].id if spec.parent is not None else None
+        )
+    for slug, svc in existing_services.items():
+        if slug not in yaml_service_slugs:
+            svc.parent_id = None  # so removing a parent cannot cascade under the ORM
+    session.flush()
 
     for slug, svc in existing_services.items():
         if slug not in yaml_service_slugs:

@@ -69,6 +69,7 @@ from orchestrator.db.session import session_scope
 from orchestrator.domain.schemas import ServiceVerdict
 from orchestrator.health.engine import HealthEngine
 from orchestrator.logging_setup import get_logger
+from orchestrator.registry.tree import TreeIndex
 
 log = get_logger(__name__)
 
@@ -148,7 +149,10 @@ class HealthScanner:
                 stmt = select(Service).order_by(Service.slug)
                 stmt = stmt.where(Service.enabled == True)  # noqa: E712
                 services = session.exec(stmt).all()
+                tree = TreeIndex.build(session)
                 for svc in services:
+                    if not tree.is_served(svc):
+                        continue  # a disabled ancestor parks its whole subtree
                     if svc.slug in cache:
                         # Already scanned THIS cycle as someone else's
                         # dependency (``_check_dependencies`` populates the

@@ -45,6 +45,7 @@ from orchestrator.domain.enums import (
 from orchestrator.health.engine import HealthEngine
 from orchestrator.logging_setup import get_logger, new_correlation_id
 from orchestrator.pipelines.steps import Recorder, StepRecorder
+from orchestrator.registry.tree import effective_guest, is_served
 
 log = get_logger(__name__)
 
@@ -301,12 +302,13 @@ class WakePipeline:
             cluster = await self._proxmox.cluster_status()
             if not self._node_online(cluster, node.name):
                 return False
-            if service.guest_kind is GuestKind.NONE or service.guest_id is None:
+            eg = effective_guest(session, service)
+            if eg.kind is GuestKind.NONE or eg.guest_id is None:
                 return True
             guests = await self._proxmox.list_guests(node.name)
         except AdapterError:
             return False
-        guest = next((g for g in guests if g.vmid == service.guest_id), None)
+        guest = next((g for g in guests if g.vmid == eg.guest_id), None)
         return bool(guest and guest.status == "running")
 
     # -- the pipeline body ------------------------------------------------------
@@ -331,7 +333,7 @@ class WakePipeline:
             hold_handle = await self.assert_hold(session, steps, node, reason=f"wake:{slug}")
             await self._ensure_node_powered(steps, node)
             await self._wait_node_online(session, steps, node, deadline)
-            await self._ensure_guest_running(steps, service, node)
+            await self._ensure_guest_running(session, steps, service, node)
             await self._wait_healthy(session, steps, service, deadline)
 
             self._finish(session, run, PipelineStatus.SUCCEEDED)
@@ -480,20 +482,22 @@ class WakePipeline:
             await asyncio.sleep(self._settings.wake_poll_interval_s)
 
     async def _ensure_guest_running(
-        self, steps: StepRecorder, service: Service, node: Node
+        self, session: Session, steps: StepRecorder, service: Service, node: Node
     ) -> None:
-        if service.guest_kind is GuestKind.NONE or service.guest_id is None:
+        # A sub-service wakes its root's guest.
+        eg = effective_guest(session, service)
+        if eg.kind is GuestKind.NONE or eg.guest_id is None:
             steps.record("guest_start", "skipped", detail={"reason": "service has no guest"})
             return
 
         guests = await self._proxmox.list_guests(node.name)
-        guest = next((g for g in guests if g.vmid == service.guest_id), None)
+        guest = next((g for g in guests if g.vmid == eg.guest_id), None)
         if guest is not None and guest.status == "running":
-            steps.record("guest_start", "already_running", detail={"vmid": service.guest_id})
+            steps.record("guest_start", "already_running", detail={"vmid": eg.guest_id})
             return
 
         started = datetime.now(UTC)
-        handle = await self._proxmox.start_guest(node.name, service.guest_id, service.guest_kind)
+        handle = await self._proxmox.start_guest(node.name, eg.guest_id, eg.kind)
         status = await self._proxmox.wait_for_task(
             node.name, handle.upid, timeout_s=self._settings.wake_guest_start_timeout_s
         )
@@ -553,8 +557,8 @@ class WakePipeline:
         service = session.exec(select(Service).where(Service.slug == slug)).one_or_none()
         if service is None:
             raise WakeError(f"no service registered with slug {slug!r}")
-        if not service.enabled:
-            raise WakeError(f"service {slug!r} is disabled in the registry")
+        if not is_served(session, service):
+            raise WakeError(f"service {slug!r} (or a service above it) is disabled in the registry")
 
         node = session.get(Node, service.node_id) if service.node_id else None
         if node is None:

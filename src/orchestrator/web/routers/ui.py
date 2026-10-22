@@ -37,6 +37,7 @@ from orchestrator.pipelines.wake import wake_is_unsupported
 from orchestrator.registry.backup_plan import BLOCKER_NO_POWER_TARGET
 from orchestrator.registry.loader import compute_registry_diff
 from orchestrator.registry.probe_specs import PROBE_SPECS
+from orchestrator.registry.tree import TreeIndex
 from orchestrator.web.auth import get_current_admin
 from orchestrator.web.deps import SessionDep, SettingsDep
 from orchestrator.web.routers.activity import build_feed
@@ -165,6 +166,47 @@ def guest_gate_view(state: ServiceState | None) -> dict[str, Any] | None:
     }
 
 
+def _guest_cell_for(
+    svc: Service,
+    state: ServiceState | None,
+    tree: TreeIndex,
+    states: dict[int, ServiceState],
+    cache: dict[str, dict[str, str]],
+) -> dict[str, str]:
+    """The guest cell; a sub-service shows its root's guest, noted as inherited."""
+    root = tree.root(svc)
+    if root is svc:
+        cell = _guest_cell(svc, state)
+        cache[svc.slug] = cell
+        return cell
+    base = cache.get(root.slug) or _guest_cell(
+        root, states.get(root.id) if root.id is not None else None
+    )
+    return {**base, "title": f"{root.slug}'s guest - {base['title']}"}
+
+
+def _children_summary(
+    tree: TreeIndex, svc: Service, states: dict[int, ServiceState]
+) -> dict[str, Any] | None:
+    """How the sub-services below this one are doing, for the parent's row."""
+    kids = tree.descendants(svc)
+    if not kids:
+        return None
+    counts: dict[str, int] = {}
+    for k in kids:
+        if not k.enabled:
+            key = "disabled"
+        else:
+            st = states.get(k.id) if k.id is not None else None
+            key = st.last_verdict.value if st else "unknown"
+        counts[key] = counts.get(key, 0) + 1
+    worst = next(
+        (k for k in ("failed", "down", "unknown", "healthy", "disabled") if counts.get(k)),
+        "unknown",
+    )
+    return {"total": len(kids), "counts": counts, "worst": worst}
+
+
 def _guest_cell(svc: Service, state: ServiceState | None) -> dict[str, str]:
     """What the services table shows for the Proxmox guest: its power state as
     of the last health scan (``css`` is a badge class)."""
@@ -192,6 +234,10 @@ async def dashboard_page(
     nodes = {nid: n.name for nid, n in node_rows.items()}
     states = {s.service_id: s for s in session.exec(select(ServiceState)).all()}
     services = session.exec(select(Service).order_by(Service.slug)).all()
+    tree = TreeIndex(list(services))
+    # Parents before their children, so a group lists them as a tree.
+    services = [s for s, _ in tree.walk()]
+    guest_cells: dict[str, dict[str, str]] = {}
 
     rows: list[dict[str, Any]] = []
     for svc in services:
@@ -211,7 +257,11 @@ async def dashboard_page(
                 "enabled": svc.enabled,
                 "group": svc.group,
                 "node": nodes.get(svc.node_id, "?"),
-                "guest": _guest_cell(svc, state),
+                "guest": _guest_cell_for(svc, state, tree, states, guest_cells),
+                "parent": tree.parent(svc).slug if tree.parent(svc) else None,
+                "depth": tree.depth(svc),
+                "children": _children_summary(tree, svc, states),
+                "served": tree.is_served(svc),
                 # On only when the service AND its node allow it (see Node.wake_on_hit_enabled).
                 "wake_on_hit": svc.wake_on_hit_enabled and node_wakes,
                 "wake_on_hit_why": (
@@ -280,6 +330,9 @@ async def service_detail_page(
         s for s in session.exec(select(Service.slug).order_by(Service.slug)).all() if s != slug
     ]
     existing_groups = sorted({g for g in session.exec(select(Service.group)).all() if g})
+    tree = TreeIndex.build(session)
+    below = {d.slug for d in tree.descendants(svc)}
+    parent_choices = [s for s in other_slugs if s not in below]
     probe_kinds = [
         {"kind": k.value, "summary": spec.summary, "default_timeout_s": spec.default_timeout_s}
         for k, spec in PROBE_SPECS.items()
@@ -314,6 +367,7 @@ async def service_detail_page(
             "nodes": [{"id": n.id, "name": n.name} for n in nodes],
             "policies": [{"id": p.id, "name": p.name} for p in policies],
             "other_slugs": other_slugs,
+            "parent_choices": parent_choices,
             "requirable": _requirable_services(session, exclude=slug),
             "existing_groups": existing_groups,
             "guest_kinds": [k.value for k in GuestKind],

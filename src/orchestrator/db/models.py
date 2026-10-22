@@ -27,6 +27,7 @@ from orchestrator.domain.enums import (
     ApprovalKind,
     ApprovalStatus,
     AuditResult,
+    BackupGate,
     BackupMode,
     GuestKind,
     HealthState,
@@ -181,6 +182,26 @@ class Service(SQLModel, table=True):
         default=None,
         sa_column=Column(ForeignKey("backup_policy.id", ondelete="SET NULL")),
     )
+
+    # The service tree (docs/plan_service_tree.md). A sub-service is a Service
+    # with a parent: a container on Portainer, an add-on on Home Assistant. It
+    # has no guest of its own - it inherits the ROOT's guest and node (node_id is
+    # kept equal to the root's) - and has its own probes, proxy hosts, controller,
+    # recovery policy and backup setting. Deleting a parent deletes its children.
+    parent_id: int | None = Field(
+        default=None,
+        sa_column=Column(ForeignKey("service.id", ondelete="CASCADE"), nullable=True),
+    )
+    # How to act on THIS service itself (start/stop/restart/status), e.g.
+    # {"type": "portainer", "endpoint": 2, "container": "nginx"}. {} = nothing but
+    # the root's guest (Proxmox) can act on it. See orchestrator.controllers.
+    controller: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))
+    # Limited automatic recovery. {} = off. See orchestrator.recovery.
+    recovery: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))
+    # For a sub-service: does its root's backup wait for it? IGNORE (default) or
+    # REQUIRED (healthy before the dump; started first if stopped).
+    backup_gate: BackupGate = Field(default=BackupGate.IGNORE)
+
     created_at: datetime = Field(default_factory=_utcnow)
     updated_at: datetime = Field(default_factory=_utcnow)
 
