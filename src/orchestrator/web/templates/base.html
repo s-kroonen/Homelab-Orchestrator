@@ -42,6 +42,10 @@
         {{ navlink("/backup-policies", "Backup policies") }}
       </div>
       <div class="nav-group">
+        <div class="nav-heading">Orchestrator</div>
+        {{ navlink("/system", "System and backups", exact=True) }}
+      </div>
+      <div class="nav-group">
         <div class="nav-heading">Monitoring</div>
         {{ navlink("/activity", "Activity") }}
         {{ navlink("/infra", "Connectivity", exact=True) }}

@@ -40,6 +40,7 @@ from orchestrator.cli_config import probe, proxy
 from orchestrator.cli_config import service as service_group
 from orchestrator.cli_ip import ip_group
 from orchestrator.cli_setup import config_group, init, scaffold
+from orchestrator.cli_system import system as system_group
 from orchestrator.config import get_settings
 from orchestrator.db.models import Admin, Node, Service, WebAuthnCredential
 from orchestrator.db.models import Probe as ProbeRow
@@ -922,6 +923,7 @@ cli.add_command(policy_group, name="policy")
 cli.add_command(transport)
 cli.add_command(ip_group, name="ip")
 cli.add_command(bulk)
+cli.add_command(system_group, name="system")
 cli.add_command(admin_group, name="admin")
 
 

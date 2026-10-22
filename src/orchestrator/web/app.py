@@ -35,6 +35,7 @@ from orchestrator.scheduler import BackupScheduler
 from orchestrator.scheduler.access_log_collector import AccessLogCollector
 from orchestrator.scheduler.health_scanner import HealthScanner
 from orchestrator.scheduler.ip_discovery import IpDiscoveryScheduler
+from orchestrator.scheduler.self_backup import SelfBackupScheduler
 from orchestrator.scheduler.traffic_collector import TrafficCollector
 from orchestrator.web.routers import (
     activity,
@@ -49,6 +50,7 @@ from orchestrator.web.routers import (
     maintenance,
     proxy_hosts,
     setup,
+    system,
     traffic,
     ui,
     wake,
@@ -65,6 +67,19 @@ def _maybe_run_migrations() -> None:
 
     from alembic import command
     from alembic.config import Config
+
+    from orchestrator.system.backups import BackupError, create_backup
+    from orchestrator.system.info import schema_status
+
+    # A database that is about to change shape gets a copy first. Fail-open: a
+    # backup that cannot be taken is logged, the migration still runs.
+    try:
+        status = schema_status(settings)
+        if status["current"] is not None and status["pending"]:
+            info = create_backup(settings, reason="pre-migration")
+            get_logger(__name__).info("migrations.backup", name=info.name, to=status["head"])
+    except (BackupError, OSError) as exc:
+        get_logger(__name__).warning("migrations.backup_skipped", error=str(exc))
 
     cfg = Config("alembic.ini")
     cfg.set_main_option("sqlalchemy.url", settings.database_url)
@@ -83,6 +98,17 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         env=settings.orchestrator_env,
         dry_run=settings.dry_run,
     )
+
+    # A restore staged from the dashboard is applied here, before the database
+    # is opened, never under a running app.
+    try:
+        from orchestrator.system.backups import apply_pending_restore
+
+        restored = apply_pending_restore(settings)
+        if restored:
+            log.warning("system.restored", backup=restored)
+    except Exception as exc:
+        log.error("system.restore.failed", error=str(exc))
 
     build_engine(settings)
     try:
@@ -229,10 +255,27 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         ip_discovery = None
     app.state.ip_discovery = ip_discovery
 
+    # Backups of our own database + registry. Resilience rule as above.
+    self_backup: SelfBackupScheduler | None = None
+    try:
+        self_backup = SelfBackupScheduler(settings=settings)
+        self_backup.start()
+    except Exception as exc:
+        log.error(
+            "self_backup.start.failed",
+            error=str(exc),
+            error_type=type(exc).__name__,
+            impact="No scheduled self-backups; manual ones on /system still work.",
+        )
+        self_backup = None
+    app.state.self_backup = self_backup
+
     try:
         yield
     finally:
         log.info("orchestrator.stop")
+        if self_backup is not None:
+            await self_backup.shutdown()
         if ip_discovery is not None:
             await ip_discovery.shutdown()
         if access_log_collector is not None:
@@ -281,6 +324,7 @@ def create_app() -> FastAPI:
     app.include_router(proxy_hosts.router)
     app.include_router(proxy_hosts.catalog_router)
     app.include_router(bulk.router)
+    app.include_router(system.router)
     app.include_router(activity.router)
     app.include_router(geo_traffic.router)
     app.include_router(traffic.router)
