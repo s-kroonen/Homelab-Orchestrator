@@ -143,6 +143,35 @@
     return resp.json();
   }
 
+  // The page the operator came from, so "Apply" (save, then go back) knows where
+  // back is. Remembered per page for the tab, so a reload after "Save" keeps it.
+  // `?next=` wins (a redirect after creating something carries it along); only
+  // same-origin relative paths are ever used.
+  const PrevPage = (function () {
+    function safe(path) {
+      return typeof path === "string" && path.startsWith("/") && !path.startsWith("//") ? path : null;
+    }
+    const key = "orch:prev:" + location.pathname;
+    let prev = safe(new URLSearchParams(location.search).get("next"));
+    try {
+      if (!prev && document.referrer) {
+        const r = new URL(document.referrer);
+        if (r.origin === location.origin && r.pathname !== location.pathname) {
+          prev = safe(r.pathname + r.search + r.hash);
+        }
+      }
+      if (prev) sessionStorage.setItem(key, prev);
+      else prev = safe(sessionStorage.getItem(key));
+    } catch (_e) { /* storage may be unavailable */ }
+    return {
+      url(fallback) { return prev || fallback || "/"; },
+      go(fallback) { location.href = prev || fallback || "/"; },
+      // For redirects that must keep the way back: "/x/edit" -> "/x/edit?next=..."
+      carry(url) { return prev ? url + (url.includes("?") ? "&" : "?") + "next=" + encodeURIComponent(prev) : url; },
+    };
+  })();
+
+  window.PrevPage = PrevPage;
   window.toast = toast;
   window.apiFetch = apiFetch;
 })();

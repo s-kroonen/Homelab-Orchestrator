@@ -156,7 +156,8 @@
       <span class="hint">Must be HEALTHY before this service is judged; a down dependency makes it UNKNOWN, never FAILED.</span>
     </div>
     <div class="row">
-      <button id="svc-save-btn">Save service</button>
+      <button id="svc-save-btn" title="Save and stay on this page">Save</button>
+      <button class="secondary" id="svc-apply-btn" title="Save and go back to the previous page">Apply</button>
       <button class="danger" id="svc-delete-btn">Delete service</button>
       <span class="msg" id="svc-msg"></span>
     </div>
@@ -280,7 +281,8 @@
       </div>
 
       <div class="row">
-        <button id="probe-save-btn">Save probe</button>
+        <button id="probe-save-btn" title="Save and stay on this page">Save probe</button>
+        <button class="secondary" id="probe-apply-btn" title="Save and go back to the previous page">Apply</button>
         <button class="secondary" id="probe-cancel-btn">Cancel</button>
         <span class="msg" id="probe-editor-msg"></span>
       </div>
@@ -347,7 +349,8 @@
         {% else %}<span class="muted">No other services.</span>{% endfor %}
       </div>
       <div class="row">
-        <button class="secondary" id="req-save-btn">Save requirements</button>
+        <button class="secondary" id="req-save-btn" title="Save and stay on this page">Save requirements</button>
+        <button class="secondary" id="req-apply-btn" title="Save and go back to the previous page">Apply</button>
         <span class="msg" id="req-msg"></span>
       </div>
     </div>
@@ -645,6 +648,20 @@
     }
   });
 
+  // "Apply" = the same save, then back to the page the operator came from.
+  // It is just the matching Save button with this flag set; every save
+  // handler calls finishSave() on success and clears the flag on failure.
+  let applyNext = false;
+  function finishSave() {
+    if (applyNext) {
+      applyNext = false;
+      PrevPage.go("/");
+    }
+  }
+  for (const [apply, save] of [["svc-apply-btn", "svc-save-btn"], ["probe-apply-btn", "probe-save-btn"], ["req-apply-btn", "req-save-btn"]]) {
+    $(apply).addEventListener("click", () => { applyNext = true; $(save).click(); });
+  }
+
   $("svc-save-btn").addEventListener("click", async () => {
     const guestId = $("f-guest-id").value.trim();
     const policy = $("f-policy").value;
@@ -671,7 +688,9 @@
       renderAddress();
       svcFormDirty = false;
       setMsg("svc-msg", "Saved to the live registry. Remember to Save to YAML.", "ok");
+      finishSave();
     } catch (err) {
+      applyNext = false;
       setMsg("svc-msg", err.message, "error");
     }
   });
@@ -1011,7 +1030,9 @@
       editing = null;
       await reloadProbes();
       setMsg("probes-msg", "Probe saved. Remember to Save to YAML.", "ok");
+      finishSave();
     } catch (err) {
+      applyNext = false;
       setMsg("probe-editor-msg", err.message, "error");
     }
   });
@@ -1284,7 +1305,9 @@
       reqFormDirty = false;
       setMsg("req-msg", "Saved to the live registry. Remember to Save to YAML.", "ok");
       await loadPlan();
+      finishSave();
     } catch (err) {
+      applyNext = false;
       setMsg("req-msg", err.message, "error");
     }
   });
