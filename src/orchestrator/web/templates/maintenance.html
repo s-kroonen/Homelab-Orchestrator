@@ -22,7 +22,9 @@
   h1 { font-size: 1.25rem; margin: 0 0 0.5rem; }
   p.reason { color: #9aa4b2; font-size: 0.9rem; line-height: 1.4; margin: 0 0 1.5rem; }
   ol.steps { text-align: left; margin: 0 0 1.5rem; }
-  a.retry {
+  button.retry { border: 0; cursor: pointer; font: inherit; font-weight: 600; }
+  button.retry:disabled { opacity: 0.6; cursor: default; }
+  a.retry, button.retry {
     display: inline-block; margin-top: 0.5rem; padding: 0.5rem 1.25rem;
     background: #5b8def; color: #0b0e14; border-radius: 0.4rem; text-decoration: none; font-weight: 600;
   }
@@ -40,5 +42,25 @@
     </ol>
     {% endif %}
     {% if show_retry %}<a class="retry" href="{{ retry_url }}">Try again</a>{% endif %}
+    {% if wake_token %}
+    <button type="button" class="retry" id="wake-btn" data-token="{{ wake_token }}"
+            data-header="{{ wake_header }}">Start {{ service_name }}</button>
+    <script>
+      (function () {
+        var btn = document.getElementById("wake-btn");
+        btn.addEventListener("click", function () {
+          btn.disabled = true;
+          btn.textContent = "Starting…";
+          // The same URL again, with the token: Traefik passes the header on to
+          // this page, which then starts the service. A plain request never does.
+          var headers = {};
+          headers[btn.dataset.header] = btn.dataset.token;
+          fetch(window.location.href, { headers: headers, cache: "no-store" })
+            .catch(function () {})
+            .then(function () { window.location.reload(); });
+        });
+      })();
+    </script>
+    {% endif %}
   </div>
 {% endblock %}

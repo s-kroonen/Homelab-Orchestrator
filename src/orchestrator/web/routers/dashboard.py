@@ -40,7 +40,13 @@ from orchestrator.db.models import (
     Service,
     ServiceState,
 )
-from orchestrator.domain.enums import GuestKind, PipelineKind, PipelineStatus, ProbeKind
+from orchestrator.domain.enums import (
+    GuestKind,
+    PipelineKind,
+    PipelineStatus,
+    ProbeKind,
+    WakeTrigger,
+)
 from orchestrator.domain.schemas import HttpProbeConfig, PingProbeConfig, TcpProbeConfig
 from orchestrator.health.engine import HealthEngine
 from orchestrator.ipdiscovery.discovery import IpDiscoverer, effective_ip, ip_view
@@ -134,6 +140,8 @@ class ServiceUpdate(_Body):
     backup_excluded_reason: str | None = None
     backup_policy_id: int | None = None
     wake_on_hit_enabled: bool | None = None
+    #: "call" or "button" - see Service.wake_trigger.
+    wake_trigger: str | None = None
     depends_on: list[str] | None = None
     backup_requires: list[str] | None = None
     #: The manual IP ("" clears it). Discovered addresses are never set here.
@@ -264,6 +272,7 @@ def service_detail(session: Session, svc: Service) -> dict[str, Any]:
         "backup_excluded": svc.backup_excluded,
         "backup_excluded_reason": svc.backup_excluded_reason,
         "wake_on_hit_enabled": svc.wake_on_hit_enabled,
+        "wake_trigger": svc.wake_trigger.value,
         "backup_policy_id": svc.backup_policy_id,
         "backup_policy": policy.name if policy else None,
         "depends_on": list(svc.depends_on or []),
@@ -796,6 +805,11 @@ def apply_service_update(
             raise _bad_request(f"{flag} must be true or false")
     if "guest_kind" in changes:
         changes["guest_kind"] = _parse_guest_kind(changes["guest_kind"] or "")
+    if "wake_trigger" in changes:
+        try:
+            changes["wake_trigger"] = WakeTrigger(str(changes["wake_trigger"] or "").strip())
+        except ValueError:
+            raise _bad_request("wake_trigger must be 'call' or 'button'") from None
     if "ip_address" in changes:
         changes["ip_address"] = _check_ip_address(changes["ip_address"])
     if "node_id" in changes:

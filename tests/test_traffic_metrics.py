@@ -523,3 +523,32 @@ def test_router_metric_sample_is_a_plain_dataclass() -> None:
         router="r@docker", requests_total=1, duration_sum_s=0.1, duration_count=1, by_code={}
     )
     assert sample.router == "r@docker"
+
+
+def test_wake_on_hit_never_fires_for_a_start_button_service(
+    client: TestClient, service: Service, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Traffic alone must not wake a service whose wake_trigger is "button"."""
+    from orchestrator.domain.enums import WakeTrigger
+
+    with Session(get_engine()) as s:
+        svc = s.exec(select(Service).where(Service.id == service.id)).one()
+        svc.wake_trigger = WakeTrigger.BUTTON
+        s.add(svc)
+        s.add(ServiceState(service_id=svc.id, last_verdict=HealthState.FAILED))
+        s.commit()
+        ph = _make_proxy_host(s, svc, "a.example.com")
+        ph.wake_on_hit = True
+        s.add(ph)
+        s.commit()
+
+    collector = _collector(monkeypatch)
+    counter = [100]
+    _patch_traefik_transport(monkeypatch, _dynamic_responder("a.example.com", counter))
+
+    import asyncio
+
+    asyncio.run(collector.poll_once())
+    counter[0] = 150
+    asyncio.run(collector.poll_once())
+    assert _wake_runs() == []

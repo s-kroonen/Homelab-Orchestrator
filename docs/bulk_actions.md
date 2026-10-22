@@ -37,7 +37,7 @@ POST /api/bulk/nodes        {"names": [...], "action": ..., "params": {"force": 
 
 `ids`, `slugs` and `names` are interchangeable. Actions: services `enable`,
 `disable`, `wake`, `backup` (synchronous, like `POST /api/backup/{slug}`),
-`probes_required`, `probes_optional`, `update` with `params` `group` and/or
+`probes_required`, `probes_optional`, `wake_on_hit_on`, `wake_on_hit_off`, `update` with `params` `group`, `wake_trigger` (`call` / `button`) and/or
 `backup_policy_id`, `discover_ip` (IP discovery now — a stopped guest or one
 without a Proxmox guest is reported, not failed; see docs/service_ips.md); proxy hosts `enable`, `disable`, `delete`, `wake_on_hit_on`,
 `wake_on_hit_off`; nodes `wake`, `power_off`, `wake_on_hit_on`, `wake_on_hit_off`.

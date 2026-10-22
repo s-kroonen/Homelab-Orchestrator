@@ -14,7 +14,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from orchestrator.domain.enums import BackupMode, GuestKind, ProbeKind
+from orchestrator.domain.enums import BackupMode, GuestKind, ProbeKind, WakeTrigger
 
 
 def _collapse_slugs(value: list[str]) -> list[str]:
@@ -151,6 +151,9 @@ class ServiceSpec(BaseModel):
     #: See Service.wake_on_hit_enabled — a safety rail for the
     #: TrafficCollector "wake on hit" path, not a general wake toggle.
     wake_on_hit_enabled: bool = True
+    #: See Service.wake_trigger - "call" (any request wakes it) or "button"
+    #: (the maintenance page shows a Start button).
+    wake_trigger: WakeTrigger = WakeTrigger.CALL
     #: Slugs that must be HEALTHY before this service can be judged. See
     #: Service.depends_on — the gateway case.
     depends_on: list[str] = Field(default_factory=list)

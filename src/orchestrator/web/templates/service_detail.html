@@ -121,6 +121,12 @@
       <label for="f-wake-on-hit">Wake on hit</label>
       <span><input id="f-wake-on-hit" type="checkbox"></span>
       <span class="hint">Safety rail for the unattended wakes: the traffic-driven auto-wake (see docs/traffic_metrics.md) and the maintenance page, which shows "not available" instead of starting this service while it is off. The host (node) has the same switch. Does not affect the manual wake button, the CLI or the wake API.</span>
+      <label for="f-wake-trigger">Wake trigger</label>
+      <select id="f-wake-trigger">
+        <option value="call">Any request starts it (no button)</option>
+        <option value="button">Visitor presses a Start button</option>
+      </select>
+      <span class="hint">What a visit to this service while it is down does, when Wake on hit is on. <strong>Any request</strong>: the maintenance page starts it straight away. <strong>Start button</strong>: the page shows a Start button and nothing starts until someone presses it, so scrapers, monitors and apps polling the URL cannot wake it by accident (the traffic-driven auto-wake skips these services).</span>
       <label for="f-node">Node</label>
       <select id="f-node">
         {% for n in nodes %}<option value="{{ n.id }}">{{ n.name }}</option>{% endfor %}
@@ -517,6 +523,7 @@
     $("f-group").value = s.group || "";
     $("f-enabled").checked = s.enabled;
     $("f-wake-on-hit").checked = s.wake_on_hit_enabled;
+    $("f-wake-trigger").value = s.wake_trigger || "call";
     $("f-node").value = s.node_id ?? "";
     $("f-guest-kind").value = s.guest_kind;
     $("f-guest-id").value = s.guest_id ?? "";
@@ -647,6 +654,7 @@
       group: $("f-group").value.trim(),
       enabled: $("f-enabled").checked,
       wake_on_hit_enabled: $("f-wake-on-hit").checked,
+      wake_trigger: $("f-wake-trigger").value,
       node_id: Number($("f-node").value),
       guest_kind: $("f-guest-kind").value,
       guest_id: guestId === "" ? null : Number(guestId),

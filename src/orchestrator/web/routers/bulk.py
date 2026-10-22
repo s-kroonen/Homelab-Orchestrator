@@ -53,9 +53,11 @@ SERVICE_ACTIONS = (
     "probes_optional",
     "update",
     "discover_ip",
+    "wake_on_hit_on",
+    "wake_on_hit_off",
 )
 #: Fields the "update" action may set on many services at once.
-SERVICE_UPDATE_FIELDS = ("group", "backup_policy_id")
+SERVICE_UPDATE_FIELDS = ("group", "backup_policy_id", "wake_trigger")
 PROXY_HOST_ACTIONS = ("enable", "disable", "delete", "wake_on_hit_on", "wake_on_hit_off")
 NODE_ACTIONS = ("wake", "power_off", "wake_on_hit_on", "wake_on_hit_off")
 
@@ -166,8 +168,10 @@ async def bulk_services(
     """Services by slug: ``enable`` / ``disable`` / ``wake`` (fires the wake
     pipeline, returns once it is recorded) / ``backup`` (runs the backup now,
     one after another - this request returns when the last has finished) /
-    ``probes_required`` / ``probes_optional`` / ``update`` with
-    ``params: {"group": "...", "backup_policy_id": 3 | null}`` /
+    ``probes_required`` / ``probes_optional`` / ``wake_on_hit_on`` /
+    ``wake_on_hit_off`` / ``update`` with
+    ``params: {"group": "...", "backup_policy_id": 3 | null,
+    "wake_trigger": "call" | "button"}`` /
     ``discover_ip`` (IP discovery now; a stopped guest is reported, not failed)."""
     from orchestrator.web.routers.backup import run_backup
     from orchestrator.web.routers.dashboard import (
@@ -201,6 +205,12 @@ async def bulk_services(
                 session, admin.username, slug, ServiceUpdate(enabled=body.action == "enable")
             )
             return f"{body.action}d"
+        if body.action in ("wake_on_hit_on", "wake_on_hit_off"):
+            on = body.action == "wake_on_hit_on"
+            apply_service_update(
+                session, admin.username, slug, ServiceUpdate(wake_on_hit_enabled=on)
+            )
+            return f"wake on hit {'on' if on else 'off'}"
         if body.action == "update":
             assert update is not None
             apply_service_update(session, admin.username, slug, update)

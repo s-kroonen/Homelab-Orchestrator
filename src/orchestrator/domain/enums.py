@@ -46,6 +46,14 @@ class GuestKind(StrEnum):
     NONE = "none"  # e.g. a bare-metal-ish workload, or purely observational
 
 
+class WakeTrigger(StrEnum):
+    """What a visit to a down service's maintenance page does (see
+    ``Service.wake_trigger``)."""
+
+    CALL = "call"  # any request starts it - no button
+    BUTTON = "button"  # the visitor has to press Start on the page
+
+
 class ProbeKind(StrEnum):
     """Built-in probe kinds. Add new kinds by registering an implementation in
     ``orchestrator.health.probes`` and extending this enum."""

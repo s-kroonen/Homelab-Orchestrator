@@ -189,3 +189,69 @@ def test_a_wake_already_in_flight_is_still_shown_when_disabled(app_with_registry
         r = client.get("/maintenance/example-media")
     assert "Waking" in r.text
     assert "is not available" not in r.text
+
+
+# --- wake trigger: call vs. Start button -------------------------------------
+
+
+def _trigger(trigger: str) -> None:
+    from orchestrator.domain.enums import WakeTrigger
+
+    with Session(get_engine()) as session:
+        svc = session.exec(select(Service).where(Service.slug == "example-media")).one()
+        svc.wake_trigger = WakeTrigger(trigger)
+        session.add(svc)
+        session.commit()
+
+
+def _runs() -> list[PipelineRun]:
+    with Session(get_engine()) as session:
+        return list(session.exec(select(PipelineRun)).all())
+
+
+def test_button_service_shows_the_button_and_starts_nothing_on_a_plain_hit(
+    app_with_registry: Any,
+) -> None:
+    with TestClient(app_with_registry) as client:
+        _trigger("button")
+        r1 = client.get("/maintenance/example-media")
+        r2 = client.get("/maintenance/example-media", headers={"X-Orchestrator-Wake": "guess"})
+    assert 'id="wake-btn"' in r1.text and "Start " in r1.text
+    assert 'id="wake-btn"' in r2.text
+    assert _runs() == []
+
+
+def test_pressing_the_button_starts_the_wake(app_with_registry: Any) -> None:
+    import re
+
+    with TestClient(app_with_registry) as client:
+        _trigger("button")
+        token = re.search(
+            r'data-token="([0-9a-f]+)"', client.get("/maintenance/example-media").text
+        )
+        assert token
+        r = client.get("/maintenance/example-media", headers={"X-Orchestrator-Wake": token[1]})
+        assert "Waking" in r.text or "Ready" in r.text
+        assert len(_runs()) == 1
+        # The reload that follows (no header) joins the run instead of offering the button.
+        again = client.get("/maintenance/example-media")
+    assert 'id="wake-btn"' not in again.text or "Ready" in again.text
+
+
+def test_call_service_has_no_button_and_wakes_on_any_request(app_with_registry: Any) -> None:
+    with TestClient(app_with_registry) as client:
+        r = client.get("/maintenance/example-media")
+    assert 'id="wake-btn"' not in r.text
+    assert len(_runs()) == 1
+
+
+def test_a_token_for_one_service_does_not_work_for_another() -> None:
+    from orchestrator.web.wake_button import make_token, verify_token
+
+    t = make_token("secret", "media", now=10_000)
+    assert verify_token("secret", "media", t, now=10_000)
+    assert verify_token("secret", "media", t, now=10_000 + 3600)  # previous hour still ok
+    assert not verify_token("secret", "media", t, now=10_000 + 3 * 3600)  # expired
+    assert not verify_token("secret", "photos", t, now=10_000)
+    assert not verify_token("other", "media", t, now=10_000)
+    assert not verify_token("secret", "media", None)

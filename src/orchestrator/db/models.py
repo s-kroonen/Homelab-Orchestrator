@@ -35,6 +35,7 @@ from orchestrator.domain.enums import (
     PowerState,
     ProbeKind,
     RouterProvider,
+    WakeTrigger,
 )
 
 
@@ -131,6 +132,13 @@ class Service(SQLModel, table=True):
     # specifically exempted (even though its proxy host opts in) flips this
     # one off.
     wake_on_hit_enabled: bool = Field(default=True)
+
+    # HOW a request wakes this service when wake_on_hit_enabled is on. CALL: the
+    # maintenance page (and the traffic collector) start it on any request.
+    # BUTTON: the page shows a Start button and only a press starts it, so a
+    # scraper, a monitor or an app polling the URL never wakes it by accident;
+    # the traffic collector leaves BUTTON services alone for the same reason.
+    wake_trigger: WakeTrigger = Field(default=WakeTrigger.CALL)
 
     # Free-form organisational tag — purely cosmetic. "" means ungrouped, not a
     # distinct "Ungrouped" group. Lets the dashboard collapse the service table

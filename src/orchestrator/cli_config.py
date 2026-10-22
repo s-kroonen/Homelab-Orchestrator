@@ -1095,6 +1095,18 @@ def service_list(path_override: str | None) -> None:
     default=None,
     help="Hard 'never back this up' — for a VM hosting PBS's own storage.",
 )
+@click.option(
+    "--wake-on-hit/--no-wake-on-hit",
+    "wake_on_hit_enabled",
+    default=None,
+    help="Let a visit to the down service wake it (maintenance page / traffic).",
+)
+@click.option(
+    "--wake-trigger",
+    type=click.Choice(["call", "button"]),
+    default=None,
+    help="call: any request wakes it; button: the maintenance page shows a Start button.",
+)
 @click.option("--reason", default=None, help="Why it is excluded.")
 @click.option("--policy", "backup_policy", default=None, help="Backup policy name.")
 @click.option(
@@ -1136,6 +1148,8 @@ def service_update(
     slug: str,
     enabled: bool | None,
     backup_excluded: bool | None,
+    wake_on_hit_enabled: bool | None,
+    wake_trigger: str | None,
     reason: str | None,
     backup_policy: str | None,
     depends_on: str | None,
@@ -1161,6 +1175,10 @@ def service_update(
                 default="hosts storage the PBS datastore lives on",
                 type=str,
             )
+    if wake_on_hit_enabled is not None:
+        fields["wake_on_hit_enabled"] = wake_on_hit_enabled
+    if wake_trigger is not None:
+        fields["wake_trigger"] = wake_trigger
     if reason is not None:
         fields["backup_excluded_reason"] = reason
     if backup_policy is not None:

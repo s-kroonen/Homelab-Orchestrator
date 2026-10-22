@@ -31,7 +31,8 @@ linked service looks down, and if so fires the same :class:`WakePipeline`
 itself — see :meth:`TrafficCollector._check_wake_on_hit` and
 ``docs/traffic_metrics.md`` for the full three-way gate
 (``ProxyHost.wake_on_hit`` AND ``Service.wake_on_hit_enabled`` AND
-``Node.wake_on_hit_enabled``). This is knowingly slower than a real
+``Node.wake_on_hit_enabled``), and only for services whose ``wake_trigger`` is
+``call`` (a Start-button service is never woken by traffic). This is knowingly slower than a real
 Traefik-side trigger — up to one poll interval of latency — which is an
 accepted trade-off until write access to Traefik's config exists; injecting
 a wake trigger directly into Traefik is future work, out of scope here.
@@ -53,7 +54,7 @@ from orchestrator.adapters.factory import AdapterBundle
 from orchestrator.config import Settings
 from orchestrator.db.models import Node, ProxyHost, Service, ServiceState, TrafficSample
 from orchestrator.db.session import session_scope
-from orchestrator.domain.enums import HealthState
+from orchestrator.domain.enums import HealthState, WakeTrigger
 from orchestrator.logging_setup import get_logger
 from orchestrator.pipelines.wake import WakeError, WakePipeline
 from orchestrator.registry.traefik_status import fetch_router_details, fetch_router_metrics
@@ -254,6 +255,8 @@ class TrafficCollector:
         service = session.get(Service, proxy_host.service_id)
         if service is None or service.id is None or not service.wake_on_hit_enabled:
             return
+        if service.wake_trigger is not WakeTrigger.CALL:
+            return  # a Start-button service is never woken by traffic alone
 
         if service.node_id is None:
             return

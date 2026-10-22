@@ -8,7 +8,8 @@ reported on its own line as ``ok`` or ``FAILED: <why>``, and the command exits
 
 What each action touches follows the existing single-item commands exactly:
 
-* ``bulk services enable|disable|probes-required|probes-optional`` edit
+* ``bulk services enable|disable|probes-required|probes-optional|
+  wake-on-hit-on|wake-on-hit-off|wake-trigger-call|wake-trigger-button`` edit
   ``services.yaml`` (like ``service update --enabled`` / ``probe add
   --required``), one save for the whole batch.
 * ``bulk services wake`` runs the wake pipeline per service, one after
@@ -38,7 +39,17 @@ from orchestrator.db.models import ProxyHost, Service
 from orchestrator.db.session import build_engine, get_engine
 from orchestrator.logging_setup import configure_logging
 
-SERVICE_ACTIONS = ("enable", "disable", "wake", "probes-required", "probes-optional")
+SERVICE_ACTIONS = (
+    "enable",
+    "disable",
+    "wake",
+    "probes-required",
+    "probes-optional",
+    "wake-on-hit-on",
+    "wake-on-hit-off",
+    "wake-trigger-call",
+    "wake-trigger-button",
+)
 PROXY_ACTIONS = ("enable", "disable")
 
 
@@ -87,7 +98,8 @@ def bulk_services(
 ) -> None:
     """Run ACTION on the selected services.
 
-    enable/disable/probes-required/probes-optional edit services.yaml;
+    enable/disable/probes-required/probes-optional/wake-on-hit-*/wake-trigger-*
+    edit services.yaml;
     wake runs the wake pipeline for each, one at a time.
     """
     editor = open_editor(path_override)
@@ -121,6 +133,16 @@ def bulk_services(
         if action in ("enable", "disable"):
             editor.upsert_service(slug, {"enabled": action == "enable"})
             results.append((slug, True, f"{action}d"))
+            continue
+        if action in ("wake-on-hit-on", "wake-on-hit-off"):
+            on = action == "wake-on-hit-on"
+            editor.upsert_service(slug, {"wake_on_hit_enabled": on})
+            results.append((slug, True, f"wake on hit {'on' if on else 'off'}"))
+            continue
+        if action.startswith("wake-trigger-"):
+            trigger = action.removeprefix("wake-trigger-")
+            editor.upsert_service(slug, {"wake_trigger": trigger})
+            results.append((slug, True, f"wake trigger: {trigger}"))
             continue
         required = action == "probes-required"
         probes = svc.get("probes") or []
