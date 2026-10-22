@@ -120,7 +120,7 @@
       <span><input id="f-enabled" type="checkbox"></span>
       <label for="f-wake-on-hit">Wake on hit</label>
       <span><input id="f-wake-on-hit" type="checkbox"></span>
-      <span class="hint">Safety rail for the TrafficCollector-driven auto-wake (see docs/traffic_metrics.md). Does not affect the manual wake button, the CLI or the wake API.</span>
+      <span class="hint">Safety rail for the unattended wakes: the traffic-driven auto-wake (see docs/traffic_metrics.md) and the maintenance page, which shows "not available" instead of starting this service while it is off. The host (node) has the same switch. Does not affect the manual wake button, the CLI or the wake API.</span>
       <label for="f-node">Node</label>
       <select id="f-node">
         {% for n in nodes %}<option value="{{ n.id }}">{{ n.name }}</option>{% endfor %}

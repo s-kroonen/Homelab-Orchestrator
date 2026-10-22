@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import uuid
+from collections.abc import Sequence
 
-from orchestrator.adapters.power.base import NodeReport, PowerAdapter
+from orchestrator.adapters.power.base import NodeReport, PowerAdapter, PowerCheck, PowerTargetCheck
 from orchestrator.domain.enums import PowerState
 from orchestrator.logging_setup import get_logger
 
@@ -53,3 +54,15 @@ class DryRunPowerAdapter(PowerAdapter):
     async def get_status(self, node_name: str) -> NodeReport:
         state = self._simulated_state.get(node_name, PowerState.UNKNOWN)
         return NodeReport(node_name=node_name, state=state, detail="dry_run")
+
+    async def check(self, targets: Sequence[str] = ()) -> PowerCheck:
+        return PowerCheck(
+            connected=True,
+            detail="dry run - power actions are only logged",
+            targets=tuple(
+                PowerTargetCheck(
+                    target=t, online=True, state=self._simulated_state.get(t), detail="dry_run"
+                )
+                for t in targets
+            ),
+        )

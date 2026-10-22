@@ -39,12 +39,18 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import uuid
+from collections.abc import Sequence
 from typing import Any
 
 import aiomqtt
 
 from orchestrator.adapters.errors import AdapterUnreachable
-from orchestrator.adapters.power.base import NodeReport, PowerAdapter
+from orchestrator.adapters.power.base import (
+    NodeReport,
+    PowerAdapter,
+    PowerCheck,
+    PowerTargetCheck,
+)
 from orchestrator.config import Settings
 from orchestrator.domain.enums import PowerState
 from orchestrator.logging_setup import get_logger
@@ -71,6 +77,8 @@ class MqttPowerAdapter(PowerAdapter):
         self._listener_task: asyncio.Task[None] | None = None
         self._connected = asyncio.Event()
         self._stopping = False
+        #: Why the last connection attempt failed; cleared once connected.
+        self._last_error: str | None = None
 
         # Populated by retained messages as they arrive. Keyed by power_mgr_target.
         self._power_state: dict[str, PowerState] = {}
@@ -119,14 +127,18 @@ class MqttPowerAdapter(PowerAdapter):
                     await client.subscribe(f"{self._prefix}/+/state", qos=1)
                     await client.subscribe(f"{self._prefix}/+/availability", qos=1)
                     self._connected.set()
+                    self._last_error = None
                     backoff = 1.0
                     async for message in client.messages:
                         self._handle_message(message)
-            except aiomqtt.MqttError as exc:
+            except (aiomqtt.MqttError, OSError) as exc:
+                # OSError too: a name that does not resolve or a refused port
+                # must keep retrying (and be reported), not kill the listener.
                 self._connected.clear()
                 self._client = None
                 if self._stopping:
                     return
+                self._last_error = str(exc) or type(exc).__name__
                 log.warning("power.mqtt.disconnected", error=str(exc), retry_in_s=backoff)
                 await asyncio.sleep(backoff)
                 backoff = min(backoff * 2, 30.0)
@@ -176,6 +188,43 @@ class MqttPowerAdapter(PowerAdapter):
     def _event_for(self, target: str) -> asyncio.Event:
         return self._seen.setdefault(target, asyncio.Event())
 
+    @property
+    def endpoint(self) -> str:
+        return f"{self._settings.mqtt_host}:{self._settings.mqtt_port}"
+
+    def _why_not_connected(self) -> str:
+        reason = self._last_error or "no connection attempt has finished yet"
+        return f"cannot reach the broker at {self.endpoint} ({reason})"
+
+    # -- connectivity -----------------------------------------------------------
+
+    async def check(self, targets: Sequence[str] = ()) -> PowerCheck:
+        with contextlib.suppress(TimeoutError):
+            await asyncio.wait_for(self._connected.wait(), timeout=_READY_TIMEOUT_S)
+        if not self._connected.is_set():
+            return PowerCheck(
+                connected=False, endpoint=self.endpoint, detail=self._why_not_connected()
+            )
+        reports = [await self._target_check(t) for t in targets]
+        return PowerCheck(
+            connected=True,
+            endpoint=self.endpoint,
+            detail=f"connected to the broker at {self.endpoint}",
+            targets=tuple(reports),
+        )
+
+    async def _target_check(self, target: str) -> PowerTargetCheck:
+        report = await self.get_status(target)
+        online = self._available.get(target)
+        if online is None and report.state is PowerState.UNKNOWN:
+            return PowerTargetCheck(target=target, online=None, detail=report.detail)
+        return PowerTargetCheck(
+            target=target,
+            online=online,
+            state=report.state if report.state is not PowerState.UNKNOWN else None,
+            detail=report.detail,
+        )
+
     # -- commands ---------------------------------------------------------------
 
     async def wake(self, node_name: str, *, reason: str) -> None:
@@ -196,7 +245,7 @@ class MqttPowerAdapter(PowerAdapter):
         if client is None:
             raise AdapterUnreachable(
                 f"power manager MQTT connection is not up (target={node_name!r}, "
-                f"action={action!r})"
+                f"action={action!r}): {self._why_not_connected()}"
             )
 
         if self._available.get(node_name) is False:

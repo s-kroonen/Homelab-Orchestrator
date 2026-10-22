@@ -48,8 +48,80 @@ async def _probe(label: str, coro: Any) -> dict[str, Any]:
     return {"target": label, "reachable": True, "ok": True, "result": result}
 
 
+async def power_checks(session: Session, adapters: Any) -> list[dict[str, Any]]:
+    """The power manager's own connectivity check plus one row per node's
+    ``power_mgr_target``, in the shape :func:`_probe` produces."""
+    nodes = session.exec(select(Node).order_by(Node.name)).all()
+    targets = sorted({n.power_mgr_target.strip() for n in nodes if n.power_mgr_target.strip()})
+    try:
+        result = await asyncio.wait_for(adapters.power.check(targets), _POWER_CHECK_TIMEOUT_S)
+    except TimeoutError:
+        return [
+            {
+                "target": "power_manager",
+                "reachable": False,
+                "error": "the power manager did not answer",
+                "kind": "unreachable",
+            }
+        ]
+    except AdapterError as exc:
+        return [
+            {
+                "target": "power_manager",
+                "reachable": False,
+                "error": str(exc),
+                "kind": "unreachable",
+            }
+        ]
+
+    if not result.connected:
+        return [
+            {
+                "target": "power_manager",
+                "reachable": False,
+                "error": result.detail,
+                "kind": "unreachable",
+            }
+        ]
+    rows: list[dict[str, Any]] = [
+        {
+            "target": "power_manager",
+            "reachable": True,
+            "ok": True,
+            "result": {"detail": result.detail, "endpoint": result.endpoint},
+        }
+    ]
+    by_node = {n.power_mgr_target.strip(): n.name for n in nodes}
+    for t in result.targets:
+        label = f"power:{t.target} ({by_node.get(t.target, '?')})"
+        if t.online:
+            state = t.state.value if t.state else "unknown"
+            rows.append(
+                {
+                    "target": label,
+                    "reachable": True,
+                    "ok": True,
+                    "result": {"detail": f"online, power state {state}"},
+                }
+            )
+        else:
+            why = (
+                "reports offline in the power manager"
+                if t.online is False
+                else (t.detail or "the power manager never reported this target")
+            )
+            rows.append({"target": label, "reachable": False, "error": why, "kind": "unreachable"})
+    return rows
+
+
+#: Bounds the whole power check (the MQTT adapter waits on its own too).
+_POWER_CHECK_TIMEOUT_S = 15.0
+
+
 @router.get("/status")
-async def infra_status(adapters: AdaptersDep, settings: SettingsDep) -> dict[str, Any]:
+async def infra_status(
+    adapters: AdaptersDep, settings: SettingsDep, session: SessionDep
+) -> dict[str, Any]:
     """One call that answers 'can I reach everything?' — what you run first."""
     pve = await _probe("proxmox", adapters.proxmox.version())
     if pve.get("ok"):
@@ -74,7 +146,7 @@ async def infra_status(adapters: AdaptersDep, settings: SettingsDep) -> dict[str
         "dry_run": settings.dry_run,
         "pve_backup_storage": settings.pve_backup_storage,
         "pbs_datastore": settings.pbs_datastore,
-        "checks": [pve, pbs, datastore],
+        "checks": [pve, pbs, datastore, *await power_checks(session, adapters)],
     }
 
 
