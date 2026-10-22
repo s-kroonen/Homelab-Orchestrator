@@ -147,3 +147,22 @@ async def run_action(
         session, adapters, settings, admin.username, slug, action, target=body.target
     )
     return {"slug": slug, "action": action, "target": body.target, "message": message}
+
+
+@router.post("/{slug}/recovery/reset")
+async def reset_recovery(slug: str, session: SessionDep, admin: CurrentAdmin) -> dict[str, Any]:
+    """Forget the attempts so far (e.g. after fixing the cause by hand): the next
+    FAILED scans start a fresh ladder."""
+    from orchestrator.db.models import RecoveryState
+
+    svc = _service(session, slug)
+    row = session.get(RecoveryState, svc.id)
+    if row is not None:
+        row.attempts, row.failing_scans, row.exhausted = 0, 0, False
+        row.window_started_at = None
+        session.add(row)
+    audit.record(
+        session, actor=admin.username, action="recovery.reset", target=f"service:{slug}", details={}
+    )
+    session.commit()
+    return {"slug": slug, "reset": row is not None}

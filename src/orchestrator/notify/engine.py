@@ -44,6 +44,8 @@ EVENTS = (
     "recovery_succeeded",
     "recovery_exhausted",
     "restore_proposed",
+    "restore_succeeded",
+    "restore_failed",
     "backup_failed",
     "wake_failed",
     "test",
@@ -61,6 +63,8 @@ DEFAULT_EVENTS = (
     "recovery_succeeded",
     "recovery_exhausted",
     "restore_proposed",
+    "restore_succeeded",
+    "restore_failed",
 )
 
 

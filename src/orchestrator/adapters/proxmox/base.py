@@ -6,6 +6,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Any
 
+from orchestrator.adapters.errors import AdapterError
 from orchestrator.domain.enums import GuestKind
 
 
@@ -169,6 +170,14 @@ class ProxmoxAdapter(ABC):
         Note ``storage`` is the **PVE storage ID** that points at PBS, which is
         not necessarily the same string as the PBS datastore name.
         """
+
+    async def restore_guest(
+        self, *, node: str, vmid: int, kind: GuestKind, archive: str
+    ) -> TaskHandle:
+        """Restore ``archive`` (a PVE volume id like ``pbs:backup/vm/101/2026-...``)
+        OVER the existing guest ``vmid`` (``force``). Destructive: callers stop the
+        guest first and gate this behind an explicit approval."""
+        raise AdapterError("this adapter cannot restore guests")
 
     @abstractmethod
     async def task_status(self, node: str, upid: str) -> TaskStatus: ...

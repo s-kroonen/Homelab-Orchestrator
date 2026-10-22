@@ -203,7 +203,12 @@
       <span class="hint">How to start / stop / restart THIS service on its own (not the whole guest). Empty = only its guest can be acted on.</span>
       <label for="f-recovery">Recovery (JSON)</label>
       <textarea id="f-recovery" rows="3" spellcheck="false" placeholder='{"enabled": true, "steps": ["restart"], "max_attempts": 3}'></textarea>
-      <span class="hint">Limited automatic recovery when this service FAILS. Empty = off.</span>
+      <span class="hint">Limited automatic recovery when this service FAILS. Empty = off. Steps, tried in order: <code>restart</code> (its controller), <code>restart_parent</code>, <code>restart_guest</code> (the whole guest - opt in), <code>propose_restore</code> (asks you to approve). Other keys: <code>max_attempts</code>, <code>window_s</code> (3600), <code>settle_s</code> (120). See docs/recovery.md.</span>
+      <span></span>
+      <div id="recovery-state-row" hidden>
+        <span class="msg" id="recovery-state-text"></span>
+        <button class="secondary small" id="recovery-reset-btn" type="button">Reset recovery</button>
+      </div>
     </div>
     <div class="row">
       <button id="svc-save-btn" title="Save and stay on this page">Save</button>
@@ -407,6 +412,7 @@
 
     <div class="row">
       <button class="secondary" id="run-backup-btn" title="Wakes what the backup plan lists first, then backs up">Run backup now</button>
+      <button class="danger" id="propose-restore-btn" title="Creates a proposal to restore the latest verified backup over the guest. Nothing happens until you approve it on the next page.">Propose a restore…</button>
       <span class="msg" id="backup-trigger-msg"></span>
     </div>
     <p class="msg muted" id="run-backup-hint"></p>
@@ -593,8 +599,23 @@
     $("f-recovery").value = Object.keys(s.recovery || {}).length ? JSON.stringify(s.recovery, null, 2) : "";
     syncTreeFields();
     renderSubs(s);
+    renderRecoveryState(s.recovery_state);
   }
   loadControllers();
+
+  function renderRecoveryState(r) {
+    $("recovery-state-row").hidden = !r;
+    if (!r) return;
+    $("recovery-state-text").textContent = r.exhausted
+      ? `Recovery gave up after ${r.attempts} attempt(s) (last: ${r.last_action} - ${r.last_result}).`
+      : r.attempts ? `Recovery attempt ${r.attempts} done (${r.last_action} - ${r.last_result}).` : `Failing on ${r.failing_scans} scan(s)...`;
+  }
+  $("recovery-reset-btn").addEventListener("click", async () => {
+    try {
+      await apiFetch("POST", "/api/services/" + SERVICE.slug + "/recovery/reset", undefined, { suppressToast: true });
+      SERVICE.recovery_state = null; renderRecoveryState(null);
+    } catch (err) { setMsg("svc-msg", err.message, "error"); }
+  });
 
   // --- actions: start / stop / restart this service or its guest -----------
   async function loadControllers() {
@@ -1454,6 +1475,14 @@
       cb.checked = (s.backup_requires || []).includes(cb.value);
     }
   }
+
+  $("propose-restore-btn").addEventListener("click", async () => {
+    if (!confirm("Propose restoring the latest verified backup over this service's guest? You will be asked to approve it on the next page; nothing is restored before that.")) return;
+    try {
+      const r = await apiFetch("POST", "/api/services/" + SERVICE.root + "/restore-proposal", undefined, { suppressToast: true });
+      location.href = "/approvals/" + r.token;
+    } catch (err) { setMsg("backup-trigger-msg", err.message, "error"); }
+  });
 
   $("req-save-btn").addEventListener("click", async () => {
     const backup_requires = [...$("f-backup-requires").querySelectorAll("input:checked")].map((cb) => cb.value);

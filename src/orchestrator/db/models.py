@@ -705,6 +705,29 @@ class TargetState(SQLModel, table=True):
     updated_at: datetime = Field(default_factory=_utcnow)
 
 
+class RecoveryState(SQLModel, table=True):
+    """Where a service's automatic recovery stands. Runtime only."""
+
+    __tablename__ = "recovery_state"
+
+    service_id: int = Field(
+        sa_column=Column(
+            ForeignKey("service.id", ondelete="CASCADE"), primary_key=True, nullable=False
+        ),
+    )
+    #: Consecutive scans that found it FAILED (an attempt needs a few, not a blip).
+    failing_scans: int = 0
+    window_started_at: datetime | None = None
+    attempts: int = 0
+    last_attempt_at: datetime | None = None
+    last_action: str = ""
+    last_result: str = ""
+    #: The ladder ran out inside this window; nothing more happens until it is healthy
+    #: or the window passes.
+    exhausted: bool = False
+    updated_at: datetime = Field(default_factory=_utcnow)
+
+
 class Setting(SQLModel, table=True):
     """Tiny key/value store for singleton metadata (last-loaded YAML hash, etc.).
 

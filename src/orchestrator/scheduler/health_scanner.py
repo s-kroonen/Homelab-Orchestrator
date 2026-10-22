@@ -72,6 +72,7 @@ from orchestrator.health.engine import HealthEngine
 from orchestrator.logging_setup import get_logger
 from orchestrator.notify.engine import NotificationEngine
 from orchestrator.notify.monitor import collect
+from orchestrator.recovery.engine import RecoveryEngine
 from orchestrator.registry.tree import TreeIndex
 
 log = get_logger(__name__)
@@ -100,6 +101,14 @@ class HealthScanner:
         # State changes found by a cycle are announced by the notification engine.
         self._notifications = notifications or (
             NotificationEngine(adapters.notifier, settings) if adapters is not None else None
+        )
+        # Limited automatic recovery of services that opted in (docs/recovery.md).
+        self._recovery = (
+            RecoveryEngine(
+                settings=settings, proxmox=adapters.proxmox, notifications=self._notifications
+            )
+            if adapters is not None
+            else None
         )
         # The Proxmox adapter feeds the guest gate (node online? guest
         # running?). The app always passes the bundle; a bare
@@ -224,6 +233,8 @@ class HealthScanner:
                 cluster, _ = await guest_cache.cluster()
             await self._notifications.observe(session, collect(session, cache, cluster, tree))
             self._notifications.prune(session)
+            if self._recovery is not None:
+                await self._recovery.run_cycle(session, cache, tree)
         except Exception as exc:  # pragma: no cover - defensive
             log.error("health_scanner.notify_failed", error=str(exc), error_type=type(exc).__name__)
 

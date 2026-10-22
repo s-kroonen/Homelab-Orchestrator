@@ -42,6 +42,7 @@ from orchestrator.scheduler.traffic_collector import TrafficCollector
 from orchestrator.web.routers import (
     actions,
     activity,
+    approvals,
     auth,
     backup,
     backup_policies,
@@ -337,6 +338,7 @@ def create_app() -> FastAPI:
     app.include_router(proxy_hosts.catalog_router)
     app.include_router(bulk.router)
     app.include_router(actions.router)
+    app.include_router(approvals.router)
     app.include_router(system.router)
     app.include_router(notifications.router)
     app.include_router(activity.router)

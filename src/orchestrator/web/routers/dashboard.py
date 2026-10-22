@@ -37,6 +37,7 @@ from orchestrator.db.models import (
     PipelineRun,
     Probe,
     ProxyHost,
+    RecoveryState,
     Service,
     ServiceState,
 )
@@ -283,6 +284,20 @@ def _proxy_host_dict(ph: ProxyHost) -> dict[str, Any]:
     }
 
 
+def _recovery_state(session: Session, svc: Service) -> dict[str, Any] | None:
+    row = session.get(RecoveryState, svc.id) if svc.id is not None else None
+    if row is None or not (row.attempts or row.failing_scans):
+        return None
+    return {
+        "attempts": row.attempts,
+        "failing_scans": row.failing_scans,
+        "exhausted": row.exhausted,
+        "last_action": row.last_action,
+        "last_result": row.last_result,
+        "last_attempt_at": row.last_attempt_at.isoformat() if row.last_attempt_at else None,
+    }
+
+
 def _tree_info(session: Session, svc: Service) -> dict[str, Any]:
     index = TreeIndex.build(session)
     parent = index.parent(svc)
@@ -334,6 +349,7 @@ def service_detail(session: Session, svc: Service) -> dict[str, Any]:
         "controller": dict(svc.controller or {}),
         "recovery": dict(svc.recovery or {}),
         "backup_gate": svc.backup_gate.value,
+        "recovery_state": _recovery_state(session, svc),
         "backup_policy_id": svc.backup_policy_id,
         "backup_policy": policy.name if policy else None,
         "depends_on": list(svc.depends_on or []),
@@ -414,6 +430,15 @@ def _check_json_object(raw: Any, field: str) -> dict[str, Any]:
     if not isinstance(raw, dict):
         raise _bad_request(f"{field} must be an object")
     return dict(raw)
+
+
+def _check_recovery(raw: Any) -> dict[str, Any]:
+    from orchestrator.recovery.policy import normalize_policy
+
+    try:
+        return normalize_policy(_check_json_object(raw, "recovery"))
+    except ValueError as exc:
+        raise _bad_request(str(exc)) from None
 
 
 def _check_controller(raw: Any) -> dict[str, Any]:
@@ -875,7 +900,7 @@ async def create_service(
         node_id=node_id,
         parent_id=parent.id if parent is not None else None,
         controller=_check_controller(body.controller),
-        recovery=_check_json_object(body.recovery, "recovery"),
+        recovery=_check_recovery(body.recovery),
         backup_gate=_parse_backup_gate(body.backup_gate),
         guest_kind=guest_kind,
         guest_id=body.guest_id,
@@ -935,7 +960,7 @@ def apply_service_update(
     if "controller" in changes:
         changes["controller"] = _check_controller(changes["controller"])
     if "recovery" in changes:
-        changes["recovery"] = _check_json_object(changes["recovery"], "recovery")
+        changes["recovery"] = _check_recovery(changes["recovery"])
     if "backup_gate" in changes:
         changes["backup_gate"] = _parse_backup_gate(changes["backup_gate"])
     index = TreeIndex.build(session)

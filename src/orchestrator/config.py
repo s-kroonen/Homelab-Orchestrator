@@ -379,6 +379,16 @@ class Settings(BaseSettings):
     #: Any HTTP endpoint that takes a JSON POST (Home Assistant, Slack bridge, ...).
     notify_webhook_url: str = ""
     notify_webhook_token: SecretStr = SecretStr("")
+    # ---- Automatic recovery (docs/recovery.md) -------------------------------
+    #: Global kill switch; each service also opts in with its own `recovery:` block.
+    recovery_enabled: bool = True
+    #: A service must be FAILED on this many consecutive scans before a recovery attempt.
+    recovery_confirm_scans: int = 2
+    #: How long a restore approval link stays valid.
+    approval_ttl_hours: int = 24
+    #: How admins reach this dashboard from their phone/browser, for the links in alerts
+    #: (falls back to ORCHESTRATOR_PUBLIC_URL, which is the gateway-side address).
+    external_url: str = ""
     # ---- Controllers: acting on one service itself (docs/controllers.md) ------
     portainer_url: str = ""
     portainer_api_key: SecretStr = SecretStr("")

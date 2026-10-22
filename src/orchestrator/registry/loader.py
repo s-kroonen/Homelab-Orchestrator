@@ -357,6 +357,13 @@ def validate_references(parsed: RegistryFile) -> None:
                 validate_controller(svc.controller)
             except ValueError as exc:
                 problems.append(f"service {svc.slug!r} controller: {exc}")
+        if svc.recovery:
+            from orchestrator.recovery.policy import normalize_policy
+
+            try:
+                normalize_policy(svc.recovery)
+            except ValueError as exc:
+                problems.append(f"service {svc.slug!r} recovery: {exc}")
         if svc.parent is not None:
             if svc.parent == svc.slug:
                 problems.append(f"service {svc.slug!r} is its own parent")

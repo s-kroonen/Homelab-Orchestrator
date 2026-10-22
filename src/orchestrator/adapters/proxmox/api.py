@@ -284,6 +284,36 @@ class LiveProxmoxAdapter(ProxmoxAdapter):
         )
         return TaskHandle(node=node, upid=str(upid))
 
+    async def restore_guest(
+        self, *, node: str, vmid: int, kind: GuestKind, archive: str
+    ) -> TaskHandle:
+        s = self._settings
+        if not s.proxmox_restore_token_id.strip():
+            raise AdapterAuthError(
+                "restoring needs the restore token: set PROXMOX_RESTORE_TOKEN_ID and "
+                "PROXMOX_RESTORE_TOKEN_SECRET (docs/api_tokens.md)"
+            )
+        client = ProxmoxFamilyClient(
+            flavor="pve",
+            host=s.proxmox_host,
+            port=s.proxmox_port,
+            token_id=s.proxmox_restore_token_id,
+            token_secret=s.proxmox_restore_token_secret.get_secret_value(),
+            verify_tls=s.proxmox_verify_tls,
+        )
+        endpoint = self._endpoint_for(kind)
+        data: dict[str, Any] = {"vmid": vmid, "force": 1}
+        if kind is GuestKind.VM:
+            data["archive"] = archive
+        else:
+            data.update({"ostemplate": archive, "restore": 1})
+        try:
+            upid = await client.request("POST", f"/nodes/{node}/{endpoint}", data=data)
+        finally:
+            await client.stop()
+        log.warning("proxmox.restore.started", node=node, vmid=vmid, archive=archive, upid=upid)
+        return TaskHandle(node=node, upid=str(upid))
+
     async def task_status(self, node: str, upid: str) -> TaskStatus:
         status = await self._client.request("GET", f"/nodes/{node}/tasks/{upid}/status")
         status = status or {}

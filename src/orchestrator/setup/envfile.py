@@ -570,6 +570,14 @@ ENV_SECTIONS: tuple[EnvSection, ...] = (
             EnvKey("NOTIFY_FLAP_THRESHOLD", "This many changes inside the window = 'flapping'."),
             EnvKey("NOTIFY_FLAP_WINDOW_S"),
             EnvKey("NOTIFY_RETENTION_DAYS", "How long the feed on /notifications is kept."),
+            EnvKey(
+                "EXTERNAL_URL",
+                "How you reach this dashboard (https://orchestrator.example.com), used for\n"
+                "the links in alerts. Falls back to ORCHESTRATOR_PUBLIC_URL.",
+            ),
+            EnvKey("RECOVERY_ENABLED", "Global switch for automatic recovery (docs/recovery.md)."),
+            EnvKey("RECOVERY_CONFIRM_SCANS", "FAILED scans in a row before a recovery attempt."),
+            EnvKey("APPROVAL_TTL_HOURS", "How long a restore approval link stays valid."),
         ),
     ),
 )
