@@ -60,6 +60,9 @@ from orchestrator.web.routers import (
     ui,
     wake,
 )
+from orchestrator.web.routers import (
+    map as map_page,
+)
 from orchestrator.web.static_files import RevalidatingStaticFiles
 
 
@@ -341,6 +344,7 @@ def create_app() -> FastAPI:
     app.include_router(approvals.router)
     app.include_router(system.router)
     app.include_router(notifications.router)
+    app.include_router(map_page.router)
     app.include_router(activity.router)
     app.include_router(geo_traffic.router)
     app.include_router(traffic.router)

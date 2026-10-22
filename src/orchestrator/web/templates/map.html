@@ -1,0 +1,105 @@
+{% extends "base.html" %}
+{% block title %}homelab-orchestrator — map{% endblock %}
+{% block content %}
+  <section>
+    <h2>Map</h2>
+    <p class="msg">
+      What runs on which box, where traffic comes in, and where the backups go.
+      Hover a card to follow its lines; click it for details and actions.
+    </p>
+    <div class="map-bar">
+      <div class="seg" id="view-seg">
+        <button type="button" data-view="boxes" class="on">Boxes</button>
+        <button type="button" data-view="tree">Tree</button>
+      </div>
+      <input id="m-search" type="search" placeholder="search service / host / ip" size="24">
+      <label class="inline"><input type="checkbox" id="m-problems"> only problems</label>
+      <span class="edge-toggles" id="edge-toggles">
+        <label class="inline"><input type="checkbox" data-edge="proxy" checked> <i class="sw proxy"></i>traffic</label>
+        <label class="inline"><input type="checkbox" data-edge="depends" checked> <i class="sw depends"></i>depends on</label>
+        <label class="inline"><input type="checkbox" data-edge="backup" checked> <i class="sw backup"></i>backups</label>
+        <label class="inline"><input type="checkbox" data-edge="waits" checked> <i class="sw waits"></i>backup waits</label>
+        <label class="inline"><input type="checkbox" data-edge="requires" checked> <i class="sw requires"></i>needs awake</label>
+      </span>
+      <button class="secondary" id="m-refresh" type="button">Refresh</button>
+      <span class="msg" id="m-msg"></span>
+    </div>
+  </section>
+
+  <div id="map-root" class="map-root"></div>
+
+  <aside id="drawer" class="drawer" hidden>
+    <button type="button" class="drawer-close" id="drawer-close" aria-label="Close">×</button>
+    <div id="drawer-body"></div>
+  </aside>
+{% endblock %}
+{% block extra_head %}
+<style>
+  body.has-sidebar .wrap { max-width: none; }
+  .map-bar { display: flex; flex-wrap: wrap; gap: 0.6rem 1rem; align-items: center; }
+  .seg { display: inline-flex; border: 1px solid #2a3040; border-radius: 0.4rem; overflow: hidden; }
+  .seg button { background: #151a24; color: #9aa4b2; border: 0; padding: 0.35rem 0.8rem; cursor: pointer; }
+  .seg button.on { background: #1f2a44; color: #e6e9ef; }
+  .edge-toggles { display: inline-flex; flex-wrap: wrap; gap: 0.2rem 0.9rem; }
+  .sw { display: inline-block; width: 1.1rem; height: 0; border-top: 2px solid; vertical-align: middle; margin-right: 0.25rem; }
+  .sw.proxy { border-color: #5b8def; } .sw.depends { border-color: #9aa4b2; border-top-style: dashed; }
+  .sw.backup { border-color: #3ecf6d; } .sw.waits { border-color: #e5a63e; border-top-style: dotted; }
+  .sw.requires { border-color: #b48cf2; border-top-style: dashed; }
+
+  .map-root { position: relative; }
+  .cols { display: grid; grid-template-columns: minmax(12rem, 16rem) 1fr minmax(11rem, 14rem); gap: 5rem; align-items: start; position: relative; z-index: 1; }
+  @media (max-width: 900px) { .cols { grid-template-columns: 1fr; gap: 1.5rem; } svg.edges { display: none; } }
+  .col-h { font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.06em; color: #7b8494; margin: 0 0 0.5rem; }
+  svg.edges { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; z-index: 2; overflow: visible; }
+  svg.edges path { fill: none; stroke-width: 1.6; opacity: 0.55; transition: opacity 0.15s; }
+  svg.edges path.proxy { stroke: #5b8def; }
+  svg.edges path.depends { stroke: #9aa4b2; stroke-dasharray: 6 4; }
+  svg.edges path.backup { stroke: #3ecf6d; }
+  svg.edges path.waits { stroke: #e5a63e; stroke-dasharray: 2 4; stroke-width: 2.2; }
+  svg.edges path.requires { stroke: #b48cf2; stroke-dasharray: 6 4; }
+  svg.edges path.off, svg.edges path.stale { opacity: 0.25; stroke-dasharray: 3 5; }
+  svg.edges path.hl { opacity: 1; stroke-width: 2.6; }
+  svg.edges.focus path:not(.hl) { opacity: 0.08; }
+
+  .box { background: #10141c; border: 1px solid #232938; border-radius: 0.6rem; padding: 0.7rem; margin-bottom: 1rem; }
+  .box.node-off { border-color: #5a2a2a; }
+  .box > .box-h { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; margin-bottom: 0.6rem; }
+  .box-h .t { font-weight: 600; }
+  .box-h .s { color: #7b8494; font-size: 0.8rem; }
+  .guest { background: #0d1118; border: 1px dashed #2b3347; border-radius: 0.5rem; padding: 0.55rem; margin-bottom: 0.6rem; }
+  .guest > .box-h { margin-bottom: 0.4rem; }
+
+  .card { background: #151a24; border: 1px solid #262d3d; border-left: 4px solid #3a4256; border-radius: 0.4rem; padding: 0.4rem 0.55rem; margin: 0.35rem 0; cursor: pointer; }
+  .card:hover { border-color: #5b8def; }
+  .card.healthy { border-left-color: #3ecf6d; } .card.failed { border-left-color: #e5534b; }
+  .card.down { border-left-color: #5ba8e5; } .card.disabled, .card.parked { border-left-color: #4a505e; opacity: 0.7; }
+  .card.unknown { border-left-color: #6b7280; }
+  .card.dim { opacity: 0.25; } .card.sel { outline: 2px solid #5b8def; }
+  .card .row1 { display: flex; align-items: center; gap: 0.45rem; flex-wrap: wrap; }
+  .card .nm { font-weight: 600; } .card .meta { color: #7b8494; font-size: 0.78rem; }
+  .card .kids { margin: 0.35rem 0 0 0.9rem; padding-left: 0.5rem; border-left: 1px solid #2b3347; }
+  .chip { font-size: 0.7rem; padding: 0 0.4rem; border-radius: 0.8rem; background: #1b2232; color: #9aa4b2; white-space: nowrap; }
+  .host { background: #151a24; border: 1px solid #262d3d; border-radius: 0.4rem; padding: 0.3rem 0.5rem; margin: 0.3rem 0; font-size: 0.85rem; word-break: break-all; }
+  .host.off { opacity: 0.5; text-decoration: line-through; }
+  .host.dim { opacity: 0.2; }
+  .pbs { text-align: left; }
+
+  .tree ul { list-style: none; margin: 0.2rem 0 0.2rem 1.1rem; padding-left: 0.8rem; border-left: 1px solid #2b3347; }
+  .tree > ul { margin-left: 0; border-left: 0; padding-left: 0; }
+  .tree li { margin: 0.25rem 0; }
+  .tree .lvl { color: #7b8494; font-size: 0.72rem; text-transform: uppercase; margin-right: 0.35rem; }
+  .tree a.pick { cursor: pointer; color: #e6e9ef; }
+  .tree a.pick:hover { color: #5b8def; }
+
+  .drawer { position: fixed; top: 0; right: 0; bottom: 0; width: min(26rem, 100vw); background: #10141c; border-left: 1px solid #232938; padding: 1.2rem; overflow-y: auto; z-index: 30; box-shadow: -8px 0 24px #0008; }
+  .drawer[hidden] { display: none; }
+  .drawer-close { position: absolute; top: 0.4rem; right: 0.6rem; background: none; border: 0; color: #9aa4b2; font-size: 1.5rem; cursor: pointer; }
+  .drawer h3 { margin: 0 0 0.3rem; }
+  .drawer dl { display: grid; grid-template-columns: 8rem 1fr; gap: 0.3rem 0.6rem; margin: 0.8rem 0; font-size: 0.88rem; }
+  .drawer dt { color: #7b8494; } .drawer dd { margin: 0; word-break: break-word; }
+  .drawer .acts { display: flex; gap: 0.5rem; flex-wrap: wrap; margin: 0.8rem 0; }
+</style>
+{% endblock %}
+{% block scripts %}
+<script src="/static/map.js"></script>
+{% endblock %}

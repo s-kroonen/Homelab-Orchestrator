@@ -99,8 +99,9 @@ class HealthScanner:
     ) -> None:
         self._settings = settings
         # State changes found by a cycle are announced by the notification engine.
+        notifier = getattr(adapters, "notifier", None)
         self._notifications = notifications or (
-            NotificationEngine(adapters.notifier, settings) if adapters is not None else None
+            NotificationEngine(notifier, settings) if notifier is not None else None
         )
         # Limited automatic recovery of services that opted in (docs/recovery.md).
         self._recovery = (
