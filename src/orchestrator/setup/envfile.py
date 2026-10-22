@@ -186,6 +186,30 @@ ENV_SECTIONS: tuple[EnvSection, ...] = (
         ),
     ),
     EnvSection(
+        "controllers",
+        "Controllers (act on one service, not its whole guest)",
+        (
+            EnvKey(
+                "PORTAINER_URL",
+                "e.g. http://10.0.0.5:9000. For services with `controller: {type: portainer ...}`.",
+            ),
+            EnvKey(
+                "PORTAINER_API_KEY",
+                "A Portainer access token (My account > Access tokens).",
+                secret=True,
+            ),
+            EnvKey("PORTAINER_VERIFY_TLS"),
+            EnvKey("HAOS_URL", "e.g. http://10.0.0.6:8123. For `controller: {type: haos ...}`."),
+            EnvKey(
+                "HAOS_TOKEN",
+                "A long-lived access token of an ADMIN Home Assistant user.",
+                secret=True,
+            ),
+            EnvKey("HAOS_VERIFY_TLS"),
+            EnvKey("CONTROLLER_TIMEOUT_S"),
+        ),
+    ),
+    EnvSection(
         "health",
         "Health scanning (periodic)",
         (

@@ -496,6 +496,11 @@
       { label: "Probes optional", action: "probes_optional", run: servicesApi },
       { label: "Discover IP", action: "discover_ip", run: servicesApi },
       { label: "Resync guests", action: "resync", run: servicesApi },
+      { label: "Start (itself)", action: "ctl_start", run: servicesApi },
+      { label: "Stop (itself)", action: "ctl_stop", run: servicesApi, cls: "danger", confirm: (ids) =>
+          `Stop ${ids.length} service(s) with their own controller (a root service with none stops its whole guest)?` },
+      { label: "Restart (itself)", action: "ctl_restart", run: servicesApi, cls: "danger", confirm: (ids) =>
+          `Restart ${ids.length} service(s) with their own controller (a root service with none restarts its whole guest)?` },
       { label: "Wake on hit on", action: "wake_on_hit_on", run: servicesApi },
       { label: "Wake on hit off", action: "wake_on_hit_off", run: servicesApi },
       { label: "Set wake trigger", action: "update", run: servicesApi,

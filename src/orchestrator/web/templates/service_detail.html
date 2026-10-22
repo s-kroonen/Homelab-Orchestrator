@@ -104,6 +104,23 @@
     </div>
   </section>
 
+  <section id="actions">
+    <h2>Actions</h2>
+    <table class="kv-table"><tbody>
+      <tr>
+        <th>This service</th>
+        <td id="ctl-service-text" class="muted">Loading…</td>
+        <td id="ctl-service-btns"></td>
+      </tr>
+      <tr>
+        <th>Its guest</th>
+        <td id="ctl-guest-text" class="muted">Loading…</td>
+        <td id="ctl-guest-btns"></td>
+      </tr>
+    </tbody></table>
+    <p class="msg" id="ctl-msg" aria-live="polite"></p>
+  </section>
+
   <section id="subservices">
     <h2>Sub-services</h2>
     <div class="table-scroll">
@@ -576,6 +593,40 @@
     $("f-recovery").value = Object.keys(s.recovery || {}).length ? JSON.stringify(s.recovery, null, 2) : "";
     syncTreeFields();
     renderSubs(s);
+  }
+  loadControllers();
+
+  // --- actions: start / stop / restart this service or its guest -----------
+  async function loadControllers() {
+    let c;
+    try { c = await apiFetch("GET", svcPath.replace("/api/registry/services/", "/api/services/") + "/controller?live=true", undefined, { suppressToast: true }); }
+    catch (err) { $("ctl-service-text").textContent = err.message; $("ctl-guest-text").textContent = ""; return; }
+    for (const target of ["service", "guest"]) {
+      const info = c[target];
+      const text = $("ctl-" + target + "-text"), btns = $("ctl-" + target + "-btns");
+      btns.replaceChildren();
+      if (!info.available) {
+        text.textContent = info.error || (target === "service" ? "Nothing can act on this on its own - give it a controller below (or act on its guest)." : "No Proxmox guest.");
+        continue;
+      }
+      const st = info.status;
+      text.textContent = info.describe + (st ? " - " + st.state + (st.detail ? " (" + st.detail + ")" : "") : "");
+      for (const action of ["start", "stop", "restart"]) {
+        const b = document.createElement("button");
+        b.className = (action === "start" ? "secondary" : "danger") + " small";
+        b.textContent = action[0].toUpperCase() + action.slice(1);
+        b.addEventListener("click", async () => {
+          if (action !== "start" && !confirm(`${b.textContent} ${info.describe}?` + (target === "guest" && SERVICE.parent ? " This is the root's whole guest - everything on it goes with it." : ""))) return;
+          setMsg("ctl-msg", `${b.textContent}…`, "");
+          try {
+            const r = await apiFetch("POST", svcPath.replace("/api/registry/services/", "/api/services/") + "/actions/" + action, { target }, { suppressToast: true });
+            setMsg("ctl-msg", r.message, "ok");
+            setTimeout(loadControllers, 1500);
+          } catch (err) { setMsg("ctl-msg", err.message, "error"); }
+        });
+        btns.append(b, " ");
+      }
+    }
   }
 
   // A sub-service takes node, guest and backup policy from its root.

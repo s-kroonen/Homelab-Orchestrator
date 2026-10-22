@@ -56,6 +56,9 @@ SERVICE_ACTIONS = (
     "wake_on_hit_on",
     "wake_on_hit_off",
     "resync",
+    "ctl_start",
+    "ctl_stop",
+    "ctl_restart",
 )
 #: Fields the "update" action may set on many services at once.
 SERVICE_UPDATE_FIELDS = ("group", "backup_policy_id", "wake_trigger")
@@ -206,6 +209,18 @@ async def bulk_services(
                 session, admin.username, slug, ServiceUpdate(enabled=body.action == "enable")
             )
             return f"{body.action}d"
+        if body.action.startswith("ctl_"):
+            from orchestrator.web.routers.actions import do_service_action
+
+            return await do_service_action(
+                session,
+                adapters,
+                settings,
+                admin.username,
+                slug,
+                body.action.removeprefix("ctl_"),
+                target=str(body.params.get("target", "service")),
+            )
         if body.action == "resync":
             from orchestrator.web.routers.infra import do_resync
 

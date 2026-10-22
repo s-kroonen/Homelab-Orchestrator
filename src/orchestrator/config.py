@@ -379,6 +379,14 @@ class Settings(BaseSettings):
     #: Any HTTP endpoint that takes a JSON POST (Home Assistant, Slack bridge, ...).
     notify_webhook_url: str = ""
     notify_webhook_token: SecretStr = SecretStr("")
+    # ---- Controllers: acting on one service itself (docs/controllers.md) ------
+    portainer_url: str = ""
+    portainer_api_key: SecretStr = SecretStr("")
+    portainer_verify_tls: bool = True
+    haos_url: str = ""
+    haos_token: SecretStr = SecretStr("")
+    haos_verify_tls: bool = True
+    controller_timeout_s: int = 20
     # ---- Notification engine (docs/notifications.md) -----------------------
     notifications_enabled: bool = True
     #: A state change must be seen on this many consecutive scans before it is announced.

@@ -335,6 +335,7 @@ class WakePipeline:
             await self._ensure_node_powered(steps, node)
             await self._wait_node_online(session, steps, node, deadline)
             await self._ensure_guest_running(session, steps, service, node)
+            await self._ensure_service_running(session, steps, service)
             await self._wait_healthy(session, steps, service, deadline)
 
             self._finish(session, run, PipelineStatus.SUCCEEDED)
@@ -525,6 +526,38 @@ class WakePipeline:
             "ok",
             started_at=started,
             detail={"vmid": service.guest_id, "upid": handle.upid},
+        )
+
+    async def _ensure_service_running(
+        self, session: Session, steps: StepRecorder, service: Service
+    ) -> None:
+        """A service with its own controller (a container, an add-on) is started
+        through it once its guest is up. A root with none is up when its guest is."""
+        if not service.controller:
+            return
+        from orchestrator.controllers import ControllerError, build_controller
+
+        started = datetime.now(UTC)
+        try:
+            ctl = build_controller(self._settings, self._proxmox, session, service)
+            if ctl is None:
+                return
+            status = await ctl.status()
+            if status.running:
+                steps.record(
+                    "service_start", "already_running", detail={"controller": ctl.describe()}
+                )
+                return
+            message = await ctl.start()
+        except (ControllerError, ValueError) as exc:
+            raise WakeError(
+                f"starting {service.slug!r} through its controller failed: {exc}"
+            ) from exc
+        steps.record(
+            "service_start",
+            "ok",
+            started_at=started,
+            detail={"controller": ctl.describe(), "message": message},
         )
 
     async def _wait_healthy(

@@ -416,6 +416,15 @@ def _check_json_object(raw: Any, field: str) -> dict[str, Any]:
     return dict(raw)
 
 
+def _check_controller(raw: Any) -> dict[str, Any]:
+    from orchestrator.controllers import validate_controller
+
+    try:
+        return validate_controller(_check_json_object(raw, "controller"))
+    except ValueError as exc:
+        raise _bad_request(str(exc)) from None
+
+
 def _parse_backup_gate(raw: str | None) -> BackupGate:
     try:
         return BackupGate(str(raw or "ignore").strip().lower())
@@ -865,7 +874,7 @@ async def create_service(
         group=body.group,
         node_id=node_id,
         parent_id=parent.id if parent is not None else None,
-        controller=_check_json_object(body.controller, "controller"),
+        controller=_check_controller(body.controller),
         recovery=_check_json_object(body.recovery, "recovery"),
         backup_gate=_parse_backup_gate(body.backup_gate),
         guest_kind=guest_kind,
@@ -923,9 +932,10 @@ def apply_service_update(
             raise _bad_request(f"{flag} must be true or false")
     if "guest_kind" in changes:
         changes["guest_kind"] = _parse_guest_kind(changes["guest_kind"] or "")
-    for key in ("controller", "recovery"):
-        if key in changes:
-            changes[key] = _check_json_object(changes[key], key)
+    if "controller" in changes:
+        changes["controller"] = _check_controller(changes["controller"])
+    if "recovery" in changes:
+        changes["recovery"] = _check_json_object(changes["recovery"], "recovery")
     if "backup_gate" in changes:
         changes["backup_gate"] = _parse_backup_gate(changes["backup_gate"])
     index = TreeIndex.build(session)

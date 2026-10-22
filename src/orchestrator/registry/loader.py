@@ -350,6 +350,13 @@ def validate_references(parsed: RegistryFile) -> None:
                     f"service {svc.slug!r} depends_on {dep!r}, which this file does "
                     f"not define. Services defined here: {known}"
                 )
+        if svc.controller:
+            from orchestrator.controllers import validate_controller
+
+            try:
+                validate_controller(svc.controller)
+            except ValueError as exc:
+                problems.append(f"service {svc.slug!r} controller: {exc}")
         if svc.parent is not None:
             if svc.parent == svc.slug:
                 problems.append(f"service {svc.slug!r} is its own parent")
