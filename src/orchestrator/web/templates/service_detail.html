@@ -1410,7 +1410,7 @@
   function renderPlan(plan) {
     const list = $("plan-list");
     list.innerHTML = "";
-    if (!plan.steps.length) {
+    if (!plan.steps.length && !(plan.required_subs || []).length) {
       list.innerHTML = '<li class="muted">Nothing is woken before this backup (the policy has wake-before-backup off and there are no prerequisites).</li>';
     }
     for (const step of plan.steps) {
@@ -1437,6 +1437,18 @@
         b.textContent = step.blocker;
         li.appendChild(b);
       }
+      list.appendChild(li);
+    }
+    for (const sub of plan.required_subs || []) {
+      const li = document.createElement("li");
+      const slug = document.createElement("code");
+      slug.textContent = sub.slug;
+      const why = document.createElement("span");
+      why.className = "why";
+      why.textContent = sub.can_start
+        ? "required sub-service - started through its " + sub.controller + " controller if stopped, then must be healthy"
+        : "required sub-service - must already be healthy (no controller to start it)";
+      li.append(slug, why);
       list.appendChild(li);
     }
     const warn = $("plan-blockers");

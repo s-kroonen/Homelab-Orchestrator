@@ -76,6 +76,10 @@ class BackupPlan:
     slug: str
     policy: str | None
     steps: list[PlanStep] = field(default_factory=list)
+    #: Sub-services this backup also waits for (backup_gate: required): each must be
+    #: HEALTHY first, and is started through its controller if it is stopped.
+    #: ``[{"slug", "name", "controller", "can_start"}]``.
+    required_subs: list[dict[str, Any]] = field(default_factory=list)
 
     @property
     def blockers(self) -> list[str]:
@@ -99,6 +103,7 @@ class BackupPlan:
             "steps": [s.as_dict() for s in self.steps],
             "blockers": self.blockers,
             "will_wake": self.will_wake,
+            "required_subs": self.required_subs,
         }
 
 
@@ -175,7 +180,26 @@ def resolve_backup_plan(
             continue
         seen.add(slug)
         steps.append(_step_for(session, slug, reason))
-    return BackupPlan(slug=service.slug, policy=policy.name if policy else None, steps=steps)
+    from orchestrator.domain.enums import BackupGate
+    from orchestrator.registry.tree import TreeIndex
+
+    tree = TreeIndex.build(session)
+    subs = [
+        {
+            "slug": d.slug,
+            "name": d.name,
+            "controller": str((d.controller or {}).get("type", "")),
+            "can_start": bool(d.controller),
+        }
+        for d in tree.descendants(service)
+        if d.backup_gate is BackupGate.REQUIRED and tree.is_served(d)
+    ]
+    return BackupPlan(
+        slug=service.slug,
+        policy=policy.name if policy else None,
+        steps=steps,
+        required_subs=subs,
+    )
 
 
 def resolve_policy_prerequisites(session: Session, policy: BackupPolicy) -> list[PlanStep]:

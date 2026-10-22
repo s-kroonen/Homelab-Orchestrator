@@ -313,3 +313,87 @@ def test_cli_parent_and_gate(registry: Path) -> None:
     assert bad.exit_code != 0
     detach = CliRunner().invoke(cli, ["service", "update", "nginx", "--parent", ""])
     assert detach.exit_code == 0
+
+
+# --- backups wait for required sub-services -----------------------------------------
+
+
+async def _run_backup(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, verdicts: dict[str, HealthState]
+) -> Any:
+    """Back up 'portainer' with the health engine answering from ``verdicts``."""
+    from orchestrator.domain.schemas import ServiceVerdict
+    from orchestrator.health.engine import HealthEngine
+    from orchestrator.pipelines.backup import BackupPipeline
+
+    seen: list[str] = []
+
+    async def scan(self: Any, session: Any, service: Any, **kw: Any) -> ServiceVerdict:
+        seen.append(service.slug)
+        return ServiceVerdict(
+            state=verdicts[service.slug], reason=f"{service.slug} is test", probe_results=[]
+        )
+
+    monkeypatch.setattr(HealthEngine, "scan", scan)
+    adapters = client.app.state.adapters  # type: ignore[attr-defined]
+    settings = config_module.get_settings().model_copy(
+        update={"wake_poll_interval_s": 0.001, "wake_timeout_s": 1}
+    )
+    pipe = BackupPipeline(
+        proxmox=adapters.proxmox, pbs=adapters.pbs, settings=settings, power=adapters.power
+    )
+    with Session(get_engine()) as s:
+        try:
+            run = await pipe.run_for_service(s, "portainer", wake=True)
+            return [step["name"] for step in run.steps], seen, None
+        except Exception as exc:
+            return None, seen, exc
+
+
+async def test_a_required_sub_service_that_is_not_healthy_refuses_the_backup(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    client.put("/api/registry/services/nginx", json={"backup_gate": "required"})
+    adapters = client.app.state.adapters  # type: ignore[attr-defined]
+    adapters.proxmox.simulated_guests = [
+        Guest(node="pve1", vmid=101, kind=GuestKind.VM, name="d", status="running")
+    ]
+    run, seen, err = await _run_backup(
+        client, monkeypatch, {"portainer": HealthState.HEALTHY, "nginx": HealthState.FAILED}
+    )
+    assert run is None and "required sub-service 'nginx' is FAILED" in str(err)
+    assert "nginx" in seen
+    # the same sub, ignored: the backup goes ahead (and is judged only on the root)
+    client.put("/api/registry/services/nginx", json={"backup_gate": "ignore"})
+    run, seen, err = await _run_backup(
+        client, monkeypatch, {"portainer": HealthState.HEALTHY, "nginx": HealthState.FAILED}
+    )
+    assert err is None and "nginx" not in seen
+
+
+async def test_a_required_sub_service_that_is_healthy_lets_the_backup_run(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    client.put("/api/registry/services/nginx", json={"backup_gate": "required"})
+    adapters = client.app.state.adapters  # type: ignore[attr-defined]
+    adapters.proxmox.simulated_guests = [
+        Guest(node="pve1", vmid=101, kind=GuestKind.VM, name="d", status="running")
+    ]
+    names, _seen, err = await _run_backup(
+        client, monkeypatch, {"portainer": HealthState.HEALTHY, "nginx": HealthState.HEALTHY}
+    )
+    assert err is None, err
+    assert "sub_gate:nginx" in names and names.index("integrity_gate") < names.index(
+        "sub_gate:nginx"
+    )
+    assert "sub_start:nginx" in names  # it has a controller in the fixture registry
+
+
+def test_the_plan_lists_required_sub_services(client: TestClient) -> None:
+    client.put("/api/registry/services/nginx", json={"backup_gate": "required"})
+    plan = client.get("/api/backup/plan?slug=portainer").json()
+    assert plan["required_subs"] == [
+        {"slug": "nginx", "name": "nginx container", "controller": "portainer", "can_start": True}
+    ]
+    client.put("/api/registry/services/nginx", json={"enabled": False})
+    assert client.get("/api/backup/plan?slug=portainer").json()["required_subs"] == []
