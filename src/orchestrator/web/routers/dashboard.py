@@ -614,6 +614,8 @@ def _validate_probe_config(kind: ProbeKind, config: dict[str, Any]) -> None:
     Pydantic model ``health/probes/network.py`` validates with.
     """
     spec = PROBE_SPECS[kind]
+    if kind is ProbeKind.PORTAINER and bool(config.get("stack")) == bool(config.get("container")):
+        raise _bad_request("a portainer probe needs exactly one of 'stack' or 'container'")
     missing = [f.key for f in spec.fields if f.required and config.get(f.key) in (None, "", [], {})]
     if missing:
         raise _bad_request(f"{kind.value} probe config is missing: {', '.join(missing)}")

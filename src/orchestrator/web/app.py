@@ -62,6 +62,7 @@ from orchestrator.web.routers import (
     proxy_hosts,
     push,
     setup,
+    stacks,
     system,
     traffic,
     ui,
@@ -353,6 +354,7 @@ def create_app() -> FastAPI:
     app.include_router(linked.router)
     app.include_router(deploys.router)
     app.include_router(hooks.router)
+    app.include_router(stacks.router)
     app.include_router(approvals.router)
     app.include_router(system.router)
     app.include_router(display.router)

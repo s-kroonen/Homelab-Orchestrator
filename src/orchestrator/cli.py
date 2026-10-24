@@ -45,6 +45,7 @@ from orchestrator.cli_ip import ip_group
 from orchestrator.cli_notify import notify as notify_group
 from orchestrator.cli_portainer import portainer as portainer_group
 from orchestrator.cli_setup import config_group, init, scaffold
+from orchestrator.cli_stack import stack as stack_group
 from orchestrator.cli_system import system as system_group
 from orchestrator.config import get_settings
 from orchestrator.db.models import Admin, Node, Service, WebAuthnCredential
@@ -952,6 +953,7 @@ cli.add_command(bulk)
 cli.add_command(system_group, name="system")
 cli.add_command(portainer_group, name="portainer")
 cli.add_command(deploy_group, name="deploy")
+cli.add_command(stack_group, name="stack")
 cli.add_command(notify_group, name="notify")
 cli.add_command(admin_group, name="admin")
 

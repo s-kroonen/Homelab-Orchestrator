@@ -14,6 +14,7 @@ from orchestrator.adapters.pbs.dry_run import DryRunPbsAdapter
 from orchestrator.adapters.portainer.api import LivePortainerAdapter
 from orchestrator.adapters.portainer.base import PortainerAdapter
 from orchestrator.adapters.portainer.dry_run import DryRunPortainerAdapter
+from orchestrator.adapters.portainer.shared import set_shared as set_shared_portainer
 from orchestrator.adapters.power.base import PowerAdapter
 from orchestrator.adapters.power.dry_run import DryRunPowerAdapter
 from orchestrator.adapters.power.mqtt import MqttPowerAdapter
@@ -174,6 +175,7 @@ def build_adapters(settings: Settings | None = None) -> AdapterBundle:
     else:
         portainer = LivePortainerAdapter(settings)
 
+    set_shared_portainer(portainer)
     notifier = build_notifier(settings)
 
     log.info(

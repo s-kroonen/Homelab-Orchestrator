@@ -266,6 +266,10 @@ class DryRunPortainerAdapter(PortainerAdapter):
         self._set_containers(stack, "running")
 
     def preview_create(self, spec: StackCreate) -> dict[str, Any]:
+        if spec.source == "string" and not spec.compose_text.strip():
+            raise AdapterRequestError("a stack from text needs the compose text")
+        if spec.source == "git" and not spec.repository_url.strip():
+            raise AdapterRequestError("a stack from Git needs the repository URL")
         body: dict[str, Any] = {
             "name": spec.name,
             "env": [{"name": n, "value": "***"} for n, _ in spec.env],

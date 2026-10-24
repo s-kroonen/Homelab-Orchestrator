@@ -30,6 +30,7 @@ class PortainerController(ServiceController):
         self._key = settings.portainer_api_key.get_secret_value()
         self._verify = settings.portainer_verify_tls
         self._timeout = settings.controller_timeout_s
+        self._read_only = settings.portainer_read_only
         self._endpoint = int(cfg["endpoint"])
         self._container = str(cfg.get("container") or "")
         self._stack_name = str(cfg.get("stack") or "")
@@ -76,7 +77,14 @@ class PortainerController(ServiceController):
             )
         return str(rows[0]["Id"]), str(rows[0].get("State", ""))
 
+    def _writable(self) -> None:
+        if self._read_only:
+            raise ControllerError(
+                "Portainer is read-only here (PORTAINER_READ_ONLY=true): nothing is changed."
+            )
+
     async def _container_action(self, verb: str) -> str:
+        self._writable()
         cid, _ = await self._container_id()
         params = {"t": "10"} if verb in {"stop", "restart"} else None
         r = await self._call(
@@ -103,6 +111,7 @@ class PortainerController(ServiceController):
         raise ControllerError(f"no stack named {self._stack_name!r} on endpoint {self._endpoint}")
 
     async def _stack_action(self, verb: str) -> str:
+        self._writable()
         stack = await self._stack()
         r = await self._call(
             "POST", f"/api/stacks/{stack['Id']}/{verb}", params={"endpointId": self._endpoint}
