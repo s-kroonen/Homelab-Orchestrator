@@ -61,10 +61,77 @@ the same.
 (`:dev` or `:main`; `UPDATE_BRANCH` overrides), or the latest release for a pinned
 `vX.Y.Z` tag, and compares it with the commit the image was built from.
 
-**Back up and update** takes a backup, then runs `SELF_UPDATE_COMMAND` on the Docker
-host. The container cannot touch Docker itself (deliberately: no socket mounted), so the
-command goes through the [host runner](host_runner.md), the same way probes reach the
-host:
+**Back up and update** does the rest, one of three ways (the page uses the best one that is
+set up):
+
+### 1. The updater (recommended: checks the new version, rolls back if it fails)
+
+A small sidecar container, [`scripts/updater.sh`](../scripts/updater.sh), that owns the
+Docker side. Turn it on once, from the project directory on the Docker host:
+
+```bash
+git pull                                   # gets the updater service + script
+docker compose --profile updater up -d updater
+```
+
+Then **Back up and update** on the System page (or `orchestrator-cli system update`):
+
+1. the orchestrator takes a `pre-update` backup and writes a small request file into the
+   shared state volume (`STATE_DIR/update/request`: who asked, which backup to go back to -
+   no commands, no image names);
+2. the updater keeps the running image under a name that survives the tag moving
+   (`orchestrator-rollback:<time>` and `:previous`), pulls the newest build of the **same
+   image and tag** the container already runs, and recreates the orchestrator with
+   `docker compose up -d` - exactly as you would;
+3. it waits for the new container to report **healthy** (`UPDATE_HEALTH_TIMEOUT_S`, 180 s)
+   and then to **stay** healthy without restarting (`UPDATE_SETTLE_S`, 45 s), so a crash
+   loop that happens to be up for a moment does not pass;
+4. **if it does not**: it stops the new container, stages a restore of the `pre-update`
+   backup (the new version may have upgraded the database to a shape the old one cannot
+   read), and starts the previous image again, then verifies *that* the same way. The
+   outcome is `rolled_back` with the reason, and the page shows each step. If the old
+   version will not come up either, it says so and tells you what to run on the host.
+
+You get a notification either way: `update_succeeded`, or `update_rolled_back` /
+`update_failed` (errors, sent to every channel by default). A run that was already up to
+date does nothing and says nothing.
+
+The page follows the run through the restart and reloads when it is done. **Go back to the
+previous build** (and `orchestrator-cli system rollback`) undoes an update that *worked* but
+turned out wrong: it first takes a `pre-rollback` backup of the current data (so the
+rollback itself can be undone), then restores the data from before the update and starts
+the previous image.
+
+What rolling back costs: the data goes back to the `pre-update` backup, so anything recorded
+between the update and the rollback (health history, traffic samples, notifications) is
+lost. That is the price of the old version being able to read its own database.
+
+**The privilege.** The updater can drive the host's Docker (it mounts the socket), which is
+root on the host in practice. That is why it is opt-in, runs from a short script you can
+read, has no network (`network_mode: none`), no ports and a read-only filesystem, and only
+ever acts on the `orchestrator` container: the request can pick a *tag of the image it
+already runs* and a *backup file name*, nothing else (both are validated, and the script
+never evaluates what it reads). The orchestrator container itself still has no Docker
+access. If that is more than you want, use one of the options below.
+
+Notes:
+
+* It updates the **image**. Changes to `docker-compose.yml` or `scripts/` (like the
+  updater itself) arrive with `git pull`; the updater service is not restarted by its own
+  updates - `docker compose --profile updater up -d updater` after a pull.
+* Run compose from the project directory (or set `ORCHESTRATOR_PROJECT_DIR` in `.env` to its
+  absolute path): the updater mounts that directory at the same path so `./config`, `.env`
+  and friends resolve the way they do for you.
+* A container pinned to a digest (`image@sha256:...`) is refused: there is nothing newer.
+* From a shell on the host, without the sidecar: `scripts/updater.sh --update`
+  (`--rollback`, `--tag main`, `--backup <name>`) does the same thing once.
+* `orchestrator-cli system update-status` shows whether the updater is running and how the
+  last run went, step by step.
+
+### 2. A command on the host (no automatic rollback)
+
+`SELF_UPDATE_COMMAND` runs on the Docker host through the [host runner](host_runner.md), the
+same way probes reach the host:
 
 ```bash
 SELF_UPDATE_TRANSPORT={"type": "host_agent", "host": "docker-host"}
@@ -78,10 +145,18 @@ SELF_UPDATE_COMMAND=sh -c '(sleep 3; cd /opt/orchestrator && docker compose pull
 * The command should **detach** (the `( ... ) &` above): `up -d` replaces this very
   container, and the request would otherwise be cut off mid-flight. The page then waits
   for the new version to answer and reloads.
+* Nothing checks the new version: if it does not start, restore the `pre-update` backup and
+  start the old image yourself. The updater above does that for you.
 
-Without those two settings the page shows the two Compose commands to run by hand,
-and still takes the backup. `orchestrator-cli system update-check` / `update` do the same
-from a shell.
+### 3. By hand
+
+Without either, the page shows the two Compose commands to run on the host, and still takes
+the backup:
+
+```bash
+docker compose pull orchestrator
+docker compose up -d orchestrator
+```
 
 ## Restart
 
@@ -95,6 +170,7 @@ from a shell.
 | `SELF_BACKUP_ENABLED` | `true` | the schedule |
 | `SELF_BACKUP_INTERVAL_HOURS` | `24` | |
 | `SELF_BACKUP_KEEP` | `14` | scheduled backups kept |
+| `UPDATE_HEALTH_TIMEOUT_S` / `UPDATE_SETTLE_S` | `180` / `45` | the updater: time to become healthy / to then stay up (set in `.env`, read by compose) |
 | `SELF_UPDATE_TRANSPORT` | blank | where the update command runs (JSON, like a probe's `transport:`) |
 | `SELF_UPDATE_COMMAND` | blank | the update command (split like a shell; no shell is used) |
 | `SELF_UPDATE_TIMEOUT_S` | `120` | |

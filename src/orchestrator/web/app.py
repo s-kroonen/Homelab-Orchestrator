@@ -39,6 +39,7 @@ from orchestrator.scheduler.health_scanner import HealthScanner
 from orchestrator.scheduler.ip_discovery import IpDiscoveryScheduler
 from orchestrator.scheduler.self_backup import SelfBackupScheduler
 from orchestrator.scheduler.traffic_collector import TrafficCollector
+from orchestrator.system.selfupdate import announce_last_result as announce_last_update
 from orchestrator.web.routers import (
     actions,
     activity,
@@ -175,6 +176,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     notify_engine = NotificationEngine(adapters.notifier, settings)
     app.state.notifications = notify_engine
     notify_hooks.install(notify_engine)
+    # Tell people how the last self-update went (an update that rolled back included).
+    await announce_last_update()
 
     # A scheduler that fails to start is logged, not fatal: the maintenance
     # responder and manual backups must stay up, and the dashboard shows the

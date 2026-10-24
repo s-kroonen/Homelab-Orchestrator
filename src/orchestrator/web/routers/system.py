@@ -20,6 +20,7 @@ from sqlmodel import Session
 from orchestrator.audit import log as audit
 from orchestrator.system import backups as bk
 from orchestrator.system import info as sysinfo
+from orchestrator.system import selfupdate as updater
 from orchestrator.system import update as upd
 from orchestrator.web.auth import CurrentAdmin, get_current_admin, require_admin
 from orchestrator.web.deps import SessionDep, SettingsDep
@@ -168,7 +169,14 @@ async def update_check(settings: SettingsDep, refresh: bool = False) -> dict[str
     check = await sysinfo.check_update(settings, force=refresh)
     return {
         **check.as_dict(),
-        "configured": bool(settings.self_update_command.strip()),
+        "configured": bool(settings.self_update_command.strip())
+        or updater.updater_online(settings),
+        "method": (
+            "updater"
+            if updater.updater_online(settings)
+            else ("command" if settings.self_update_command.strip() else "manual")
+        ),
+        "updater": updater.overview(settings),
         "manual_steps": upd.MANUAL_STEPS,
     }
 
@@ -178,7 +186,7 @@ async def update_now(
     session: SessionDep, settings: SettingsDep, admin: CurrentAdmin
 ) -> dict[str, Any]:
     """Back up, then run the configured update command on the host."""
-    result = await upd.run_update(settings)
+    result = await upd.run_update(settings, by=admin.username)
     _audit(
         session,
         admin,
@@ -186,9 +194,61 @@ async def update_now(
         "orchestrator",
         ran=result.ran,
         ok=result.ok,
+        method=result.method,
+        request=result.request_id,
         backup=result.backup.name if result.backup else None,
     )
     return result.as_dict()
+
+
+@api.get("/update/status")
+async def update_status(settings: SettingsDep) -> dict[str, Any]:
+    """Where the updater is: online?, what it is doing, how the last run ended."""
+    return updater.overview(settings)
+
+
+@api.get("/update/log")
+async def update_log(settings: SettingsDep) -> dict[str, str]:
+    return {"log": updater.read_log(settings)}
+
+
+class RollbackIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    #: The backup to restore with it; default: the one taken before the last update.
+    backup: str | None = None
+
+
+@api.post("/update/rollback")
+async def rollback(
+    body: RollbackIn, session: SessionDep, settings: SettingsDep, admin: CurrentAdmin
+) -> dict[str, Any]:
+    """Go back to the previous build (and the data backup taken before the update).
+    Takes a backup of the CURRENT data first, so the rollback itself can be undone."""
+    backup_name = body.backup or updater.last_update_backup(settings)
+    try:
+        safety = await asyncio.to_thread(bk.create_backup, settings, reason="pre-rollback")
+    except bk.BackupError as exc:
+        raise _fail(exc) from exc
+    try:
+        request_id = updater.request_rollback(settings, by=admin.username, backup=backup_name)
+    except updater.UpdaterError as exc:
+        raise _fail(exc, status.HTTP_409_CONFLICT) from exc
+    _audit(
+        session,
+        admin,
+        "system.rollback_requested",
+        "orchestrator",
+        request=request_id,
+        restores=backup_name,
+        safety_backup=safety.name,
+    )
+    return {
+        "request_id": request_id,
+        "restores": backup_name,
+        "safety_backup": safety.name,
+        "message": "Rollback handed to the updater.",
+    }
 
 
 @api.post("/restart")

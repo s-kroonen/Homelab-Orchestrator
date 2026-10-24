@@ -15,6 +15,7 @@ import click
 from orchestrator.config import get_settings
 from orchestrator.system import backups as bk
 from orchestrator.system import info as sysinfo
+from orchestrator.system import selfupdate as updater
 from orchestrator.system import update as upd
 
 
@@ -118,8 +119,9 @@ def system_update_check(as_json: bool) -> None:
 
 @system.command("update")
 def system_update() -> None:
-    """Back up, then run SELF_UPDATE_COMMAND (or print the manual steps)."""
-    result = asyncio.run(upd.run_update(get_settings()))
+    """Back up, then update through the updater sidecar (which rolls back if the new
+    version does not come up), or SELF_UPDATE_COMMAND, or print the manual steps."""
+    result = asyncio.run(upd.run_update(get_settings(), by="cli"))
     if result.backup:
         click.echo(f"Backed up to {result.backup.name}")
     if result.backup_error:
@@ -133,3 +135,51 @@ def system_update() -> None:
         click.echo(result.output)
     if not result.ok:
         raise SystemExit(1)
+
+
+@system.command("update-status")
+@click.option("--json", "as_json", is_flag=True)
+def system_update_status(as_json: bool) -> None:
+    """Is the updater running, and how did the last update go?"""
+    settings = get_settings()
+    data = updater.overview(settings)
+    if as_json:
+        click.echo(json.dumps(data, indent=2, default=str))
+        return
+    click.echo(f"updater : {'online' if data['online'] else 'NOT running'}")
+    st = data["status"]
+    if not st:
+        click.echo("last run: none yet")
+        return
+    click.echo(f"last run: {st.get('action')} {st.get('state')} - {st.get('message')}")
+    if st.get("reason"):
+        click.echo(f"why     : {st['reason']}")
+    for step in st.get("steps", []):
+        click.echo(f"  {step['result']:<5} {step['name']}: {step.get('detail', '')}")
+
+
+@system.command("rollback")
+@click.option(
+    "--backup",
+    default=None,
+    help="Backup to restore (default: the one from before the last update).",
+)
+@click.option("--yes", is_flag=True, help="Skip the confirmation.")
+def system_rollback(backup: str | None, yes: bool) -> None:
+    """Go back to the previous build and the data backup taken before the update."""
+    settings = get_settings()
+    name = backup or updater.last_update_backup(settings)
+    if not yes and not click.confirm(
+        f"Go back to the previous build and restore {name or 'no data backup'}? "
+        "Changes since the update are lost (a backup of the current data is taken first)."
+    ):
+        click.echo("aborted")
+        return
+    try:
+        safety = bk.create_backup(settings, reason="pre-rollback")
+        request_id = updater.request_rollback(settings, by="cli", backup=name)
+    except (bk.BackupError, updater.UpdaterError) as exc:
+        raise click.ClickException(str(exc)) from exc
+    click.echo(
+        f"Backed up current data to {safety.name}; rollback {request_id} handed to the updater."
+    )

@@ -69,6 +69,50 @@ services:
       retries: 3
       start_period: 15s
 
+  # One-click updates from the dashboard, with automatic rollback (docs/system.md).
+  # Opt-in:  docker compose --profile updater up -d updater
+  #
+  # It pulls the newest build of the image the orchestrator already runs, recreates the
+  # orchestrator, waits for it to be healthy and STAY healthy, and if it is not, puts the
+  # previous image back and restores the backup taken before the update. The dashboard asks
+  # it through a small request file in the shared state volume; the request carries no
+  # commands. The orchestrator container itself still has no Docker access.
+  #
+  # THE PRIVILEGE: this container can drive the host's Docker (the socket). That is root on
+  # the host in practice, so it stays a ~300-line script you can read (scripts/updater.sh),
+  # with no network, no ports and no input but that file. Do not enable it if you would
+  # rather update by hand.
+  #
+  # This directory is mounted into the updater at the SAME absolute path as on the host
+  # (compose is run from there, so ./config, .env and friends resolve exactly as they do for
+  # you). The path comes from the shell's $PWD - run compose from this directory - or set
+  # ORCHESTRATOR_PROJECT_DIR in .env to its absolute path if you run it from elsewhere.
+  updater:
+    image: docker:27-cli
+    profiles: ["updater"]
+    container_name: orchestrator-updater
+    restart: unless-stopped
+    network_mode: none
+    read_only: true
+    tmpfs:
+      - /tmp
+    entrypoint: ["sh", "/updater.sh"]
+    environment:
+      PROJECT_DIR: ${ORCHESTRATOR_PROJECT_DIR:-${PWD:-/tmp}}
+      ORCHESTRATOR_CONTAINER: orchestrator
+      ORCHESTRATOR_SERVICE: orchestrator
+      STATE_DIR: /data
+      HOME: /tmp
+      # How long the new version gets to become healthy, and how long it must then stay up.
+      HEALTH_TIMEOUT_S: ${UPDATE_HEALTH_TIMEOUT_S:-180}
+      SETTLE_S: ${UPDATE_SETTLE_S:-45}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - orchestrator_state:/data
+      - ./scripts/updater.sh:/updater.sh:ro
+      # compose is run from the same absolute path as on the host (read-only: it only reads)
+      - ${ORCHESTRATOR_PROJECT_DIR:-${PWD:-/tmp}}:${ORCHESTRATOR_PROJECT_DIR:-${PWD:-/tmp}}:ro
+
   # One-off setup and config commands, run from the same image:
   #   mkdir -p config && touch .env                  # once, on a fresh install
   #   docker compose run --rm setup init             # clean install: writes .env + config/
