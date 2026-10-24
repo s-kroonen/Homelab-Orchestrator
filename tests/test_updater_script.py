@@ -152,6 +152,21 @@ def test_a_healthy_new_version_replaces_the_old_one(rig: Rig) -> None:
     assert (rig.state / "update" / "heartbeat").read_text().split()[1] == "1"
 
 
+def test_it_recreates_the_container_from_the_compose_files_it_was_made_from(rig: Rig) -> None:
+    (rig.project / "docker-compose.override.yml").write_text("services: {}\n")
+    files = f"{rig.project}/docker-compose.yml,{rig.project}/docker-compose.override.yml"
+    rig.new_version("healthy")
+    rig.request(id="u0", action="update")
+
+    rig.run(FAKE_CONFIG_FILES=files)
+
+    (call,) = rig.compose_calls()
+    assert (
+        f"-f {rig.project}/docker-compose.yml -f {rig.project}/docker-compose.override.yml" in call
+    )
+    assert f"--project-directory {rig.project}" in call
+
+
 def test_already_on_the_newest_build_does_nothing(rig: Rig) -> None:
     rig.request(id="u2", action="update")  # the pull brings the same image
 

@@ -152,6 +152,7 @@ def system_update_status(as_json: bool) -> None:
         click.echo("last run: none yet")
         return
     click.echo(f"last run: {st.get('action')} {st.get('state')} - {st.get('message')}")
+    click.echo(f"run id  : {st.get('id')}")
     if st.get("reason"):
         click.echo(f"why     : {st['reason']}")
     for step in st.get("steps", []):

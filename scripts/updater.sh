@@ -3,9 +3,11 @@
 # new version really comes up, and puts the old version (and its data) back if it does not.
 #
 # Runs in two ways, same code:
-#   * as the `updater` sidecar from docker-compose.yml (loops, waiting for a request that the
-#     dashboard's System page writes into the shared state volume), or
-#   * by hand on the Docker host:  scripts/updater.sh --update   (or --rollback)
+#   * as the `updater` sidecar from docker-compose.updater.yml (loops, waiting for a request
+#     that the dashboard's System page writes into the shared state volume), or
+#   * one-shot, still inside that container, from the project directory on the Docker host:
+#       docker compose -f docker-compose.yml -f docker-compose.updater.yml run --rm updater --update
+#     (or --rollback). The state lives in a Docker volume, so it cannot run on the bare host.
 #
 # It only ever acts on THE orchestrator container, and only moves it to another tag of the
 # image it already runs - the request file carries no commands and no image names.
@@ -110,7 +112,19 @@ compose() {
     log "cannot find docker-compose.yml in '$dir' (set PROJECT_DIR; it must be mounted at the same path)"
     return 1
   fi
-  docker compose ${project:+-p "$project"} --project-directory "$dir" -f "$dir/docker-compose.yml" \
+  # the compose file(s) the container was created from (a base file plus overrides), as
+  # the host paths compose recorded - they are mounted here at the same path
+  files="$(container_field '{{index .Config.Labels "com.docker.compose.project.config_files"}}')"
+  args=""
+  oldifs="$IFS"
+  IFS=,
+  for f in $files; do
+    [ -f "$f" ] && args="$args -f $f"
+  done
+  IFS="$oldifs"
+  [ -n "$args" ] || args="-f $dir/docker-compose.yml"
+  # shellcheck disable=SC2086
+  docker compose ${project:+-p "$project"} --project-directory "$dir" $args \
     ${ENV_FILE_ARG:-} "$@"
 }
 
@@ -379,6 +393,13 @@ updater.sh --rollback [--backup NAME]
 EOF
 }
 
+if [ ! -d "$STATE_DIR" ]; then
+  # Not inside the updater container: the state lives in a Docker volume, not on this host
+  # at $STATE_DIR. Run the same script in the updater container instead.
+  printf '%s\n' "$STATE_DIR does not exist here. Run this inside the updater, from the project directory:" \
+    "  docker compose -f docker-compose.yml -f docker-compose.updater.yml run --rm updater ${1:---once}" >&2
+  exit 2
+fi
 mkdir -p "$UPDATE_DIR" 2>/dev/null
 # the orchestrator (not root) must be able to write the request file here
 owner="$(stat -c '%u:%g' "$STATE_DIR" 2>/dev/null || true)"

@@ -339,7 +339,7 @@
     catch (_e) { return; }
     $("updater-state").textContent = o.online
       ? "Updater: running - it checks that the new version comes up and puts the old one back if not."
-      : "Updater: not running. Start it with  docker compose --profile updater up -d  (see docs/system.md) for one-click updates with automatic rollback.";
+      : "Updater: not running. Install it with  sh scripts/install.sh  in the project directory (or the one-line install in docs/system.md) for one-click updates with automatic rollback.";
     if (o.status) renderRun(o.status);
     if (o.running && o.status) follow(o.status.id);
   }
