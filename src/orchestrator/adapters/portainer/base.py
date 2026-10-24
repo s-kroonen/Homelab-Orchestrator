@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
+from typing import Any
 
 
 @dataclass(frozen=True)
@@ -146,6 +147,33 @@ class ContainerStats:
     pids: int = 0
 
 
+@dataclass(frozen=True)
+class StackCreate:
+    """What to ask Portainer to create. Passed straight through to Portainer: the
+    environment values and any Git password are sent and never stored, logged or echoed
+    (see :meth:`PortainerAdapter.preview_create`)."""
+
+    endpoint_id: int
+    name: str
+    #: git | string
+    source: str = "git"
+    # -- source = git
+    repository_url: str = ""
+    reference: str = "refs/heads/main"
+    compose_path: str = "docker-compose.yml"
+    #: A Git credential Portainer already holds (its id), preferred over a password here.
+    git_credential_id: int | None = None
+    git_username: str = ""
+    git_password: str = ""
+    #: Portainer's own auto-update (poll the repository / create its deploy webhook).
+    auto_update: bool = False
+    auto_update_interval: str = ""
+    # -- source = string
+    compose_text: str = ""
+    # -- both: (name, value) pairs
+    env: tuple[tuple[str, str], ...] = ()
+
+
 @dataclass
 class StackListing:
     stacks: list[Stack] = field(default_factory=list)
@@ -182,6 +210,34 @@ class PortainerAdapter(ABC):
 
     @abstractmethod
     async def get_stack(self, endpoint_id: int, name: str) -> Stack | None: ...
+
+    # -- writes (every one refuses when PORTAINER_READ_ONLY=true) ------------------------
+
+    @abstractmethod
+    async def start_stack(self, stack: Stack) -> None: ...
+
+    @abstractmethod
+    async def stop_stack(self, stack: Stack) -> None: ...
+
+    @abstractmethod
+    async def redeploy_stack(
+        self, stack: Stack, *, pull_image: bool = True, prune: bool = False
+    ) -> None:
+        """Re-deploy a Git stack from its repository. Portainer replaces the stack's
+        environment with what the request carries, so the current one is read and sent
+        back unchanged (never exposed)."""
+
+    @abstractmethod
+    def preview_create(self, spec: StackCreate) -> dict[str, Any]:
+        """The exact request :meth:`create_stack` would send, with secrets masked, so it
+        can be shown and confirmed first."""
+
+    @abstractmethod
+    async def create_stack(self, spec: StackCreate) -> Stack: ...
+
+    @abstractmethod
+    async def delete_stack(self, stack: Stack) -> None:
+        """Delete the stack in Portainer. Volumes are kept."""
 
     @abstractmethod
     async def stack_kind(self, stack: Stack) -> str:

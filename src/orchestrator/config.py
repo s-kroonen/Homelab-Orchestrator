@@ -407,6 +407,9 @@ class Settings(BaseSettings):
     portainer_verify_tls: bool = True
     # api | dry_run. dry_run (or DRY_RUN=true) serves sample stacks and containers.
     portainer_adapter: str = "api"
+    # true: the orchestrator may only READ Portainer (no start, stop, redeploy, create or
+    # delete). A guard rail while you are still getting to trust it.
+    portainer_read_only: bool = False
     # The address people open in a browser, for "Open in Portainer" links (blank: PORTAINER_URL).
     portainer_public_url: str = ""
     haos_url: str = ""

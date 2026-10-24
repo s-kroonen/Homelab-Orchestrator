@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
+from typing import Any
 
 from orchestrator.adapters.errors import AdapterRequestError
 from orchestrator.adapters.portainer.base import (
@@ -17,6 +19,7 @@ from orchestrator.adapters.portainer.base import (
     PortainerCheck,
     PortMapping,
     Stack,
+    StackCreate,
     StackListing,
 )
 
@@ -78,6 +81,7 @@ _STACKS = [
 ]
 
 _KINDS = {"dev-xymbols": "build", "media": "image"}
+_BASE_HEALTH: dict[str, str] = {}
 
 
 def _c(
@@ -145,7 +149,19 @@ _CONTAINERS = [
 ]
 
 
+_BASE_HEALTH.update({c.id: c.health for c in _CONTAINERS})
+
+
 class DryRunPortainerAdapter(PortainerAdapter):
+    """Per-instance copies of the sample data, so start / stop / redeploy / create /
+    delete can be tried (and tested) without touching anything real."""
+
+    def __init__(self, settings: Any = None) -> None:
+        self._stacks: list[Stack] = list(_STACKS)
+        self._containers: list[Container] = list(_CONTAINERS)
+        self._read_only = bool(getattr(settings, "portainer_read_only", False))
+        self.calls: list[str] = []
+
     @property
     def configured(self) -> bool:
         return True
@@ -153,6 +169,12 @@ class DryRunPortainerAdapter(PortainerAdapter):
     @property
     def base_url(self) -> str:
         return "https://portainer.example.lan"
+
+    def _writable(self) -> None:
+        if self._read_only:
+            raise AdapterRequestError(
+                "Portainer is read-only here (PORTAINER_READ_ONLY=true): nothing is changed."
+            )
 
     async def check(self) -> PortainerCheck:
         return PortainerCheck(
@@ -170,7 +192,7 @@ class DryRunPortainerAdapter(PortainerAdapter):
 
     async def list_stacks(self, endpoint_id: int | None = None) -> StackListing:
         stacks = sorted(
-            (s for s in _STACKS if endpoint_id is None or s.endpoint_id == endpoint_id),
+            (s for s in self._stacks if endpoint_id is None or s.endpoint_id == endpoint_id),
             key=lambda s: (s.endpoint_id, s.name.lower()),
         )
         listing = StackListing(stacks=stacks)
@@ -180,25 +202,140 @@ class DryRunPortainerAdapter(PortainerAdapter):
 
     async def get_stack(self, endpoint_id: int, name: str) -> Stack | None:
         return next(
-            (s for s in _STACKS if s.endpoint_id == endpoint_id and s.name.lower() == name.lower()),
+            (
+                s
+                for s in self._stacks
+                if s.endpoint_id == endpoint_id and s.name.lower() == name.lower()
+            ),
             None,
         )
 
     async def stack_kind(self, stack: Stack) -> str:
         return _KINDS.get(stack.name, "unknown")
 
+    # -- writes ----------------------------------------------------------------------------------
+
+    def _set_stack(self, stack: Stack, **changes: Any) -> None:
+        self._stacks = [
+            replace(s, **changes) if s is stack or (s.id, s.name) == (stack.id, stack.name) else s
+            for s in self._stacks
+        ]
+
+    def _set_containers(self, stack: Stack, state: str) -> None:
+        self._containers = [
+            (
+                replace(
+                    c,
+                    state=state,
+                    health=(_BASE_HEALTH.get(c.id, "") if state == "running" else ""),
+                    status_text="Up 1 second" if state == "running" else "Exited (0) 1 second ago",
+                )
+                if (c.stack or "").lower() == stack.name.lower()
+                else c
+            )
+            for c in self._containers
+        ]
+
+    async def start_stack(self, stack: Stack) -> None:
+        self._writable()
+        self.calls.append(f"start {stack.name}")
+        self._set_stack(stack, status="active")
+        self._set_containers(stack, "running")
+
+    async def stop_stack(self, stack: Stack) -> None:
+        self._writable()
+        self.calls.append(f"stop {stack.name}")
+        self._set_stack(stack, status="inactive")
+        self._set_containers(stack, "exited")
+
+    async def redeploy_stack(
+        self, stack: Stack, *, pull_image: bool = True, prune: bool = False
+    ) -> None:
+        self._writable()
+        if stack.git is None:
+            raise AdapterRequestError(f"{stack.name!r} was not deployed from a Git repository")
+        self.calls.append(f"redeploy {stack.name}")
+        now = datetime.now(UTC)
+        new_hash = f"{abs(hash((stack.name, now.timestamp()))) % 16**12:012x}"
+        self._set_stack(
+            stack,
+            updated_at=now.isoformat(),
+            status="active",
+            git=replace(stack.git, hash=new_hash),
+        )
+        self._set_containers(stack, "running")
+
+    def preview_create(self, spec: StackCreate) -> dict[str, Any]:
+        body: dict[str, Any] = {
+            "name": spec.name,
+            "env": [{"name": n, "value": "***"} for n, _ in spec.env],
+        }
+        if spec.source == "git":
+            body.update(
+                repositoryURL=spec.repository_url,
+                repositoryReferenceName=spec.reference,
+                composeFile=spec.compose_path,
+            )
+        else:
+            body["stackFileContent"] = "<compose text>"
+        return {
+            "method": "POST",
+            "path": "/api/stacks/create/standalone/"
+            + ("repository" if spec.source == "git" else "string"),
+            "params": {"endpointId": spec.endpoint_id},
+            "body": body,
+        }
+
+    async def create_stack(self, spec: StackCreate) -> Stack:
+        self._writable()
+        if await self.get_stack(spec.endpoint_id, spec.name) is not None:
+            raise AdapterRequestError(
+                f"a stack named {spec.name!r} already exists on environment {spec.endpoint_id}"
+            )
+        self.calls.append(f"create {spec.name}")
+        stack = Stack(
+            id=max([s.id or 0 for s in self._stacks] + [0]) + 1,
+            name=spec.name,
+            endpoint_id=spec.endpoint_id,
+            type="compose",
+            status="active",
+            git=(
+                GitInfo(spec.repository_url, spec.reference, spec.compose_path, "0" * 12)
+                if spec.source == "git"
+                else None
+            ),
+            env_names=tuple(n for n, _ in spec.env),
+            created_at=_NOW.isoformat(),
+            updated_at=_NOW.isoformat(),
+            created_by="orchestrator",
+        )
+        self._stacks.append(stack)
+        return stack
+
+    async def delete_stack(self, stack: Stack) -> None:
+        self._writable()
+        self.calls.append(f"delete {stack.name}")
+        self._stacks = [s for s in self._stacks if (s.id, s.name) != (stack.id, stack.name)]
+        self._containers = [
+            c for c in self._containers if (c.stack or "").lower() != stack.name.lower()
+        ]
+
+    # -- containers ------------------------------------------------------------------------------
+
     async def list_containers(
         self, endpoint_id: int, *, stack: str | None = None, include_stopped: bool = True
     ) -> list[Container]:
         if endpoint_id != 1:
             return []
-        out = [c for c in _CONTAINERS if stack is None or (c.stack or "").lower() == stack.lower()]
+        out = [
+            c for c in self._containers if stack is None or (c.stack or "").lower() == stack.lower()
+        ]
         return sorted(
             (c for c in out if include_stopped or c.state == "running"), key=lambda c: c.name
         )
 
     def _find(self, ref: str) -> Container | None:
-        return next((c for c in _CONTAINERS if c.name == ref or c.id.startswith(ref)), None)
+        return next((c for c in self._containers if c.name == ref or c.id.startswith(ref)), None)
 
     async def get_container(self, endpoint_id: int, ref: str) -> ContainerDetail | None:
         c = self._find(ref) if endpoint_id == 1 else None

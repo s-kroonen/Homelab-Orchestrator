@@ -170,7 +170,7 @@ def build_adapters(settings: Settings | None = None) -> AdapterBundle:
 
     portainer: PortainerAdapter
     if settings.resolve_adapter(settings.portainer_adapter) is AdapterMode.DRY_RUN:
-        portainer = DryRunPortainerAdapter()
+        portainer = DryRunPortainerAdapter(settings)
     else:
         portainer = LivePortainerAdapter(settings)
 

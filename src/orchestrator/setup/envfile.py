@@ -206,6 +206,11 @@ ENV_SECTIONS: tuple[EnvSection, ...] = (
             EnvKey("PORTAINER_VERIFY_TLS"),
             EnvKey("PORTAINER_ADAPTER", "api | dry_run (sample stacks and containers)"),
             EnvKey(
+                "PORTAINER_READ_ONLY",
+                "true = the orchestrator only reads Portainer: no start, stop, redeploy, create "
+                "or delete.",
+            ),
+            EnvKey(
                 "PORTAINER_PUBLIC_URL",
                 "The address you open Portainer at in a browser, for 'Open in Portainer' links "
                 "(blank: PORTAINER_URL).",

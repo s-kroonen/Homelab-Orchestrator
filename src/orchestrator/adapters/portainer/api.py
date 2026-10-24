@@ -31,6 +31,7 @@ from orchestrator.adapters.portainer.base import (
     PortainerAdapter,
     PortainerCheck,
     Stack,
+    StackCreate,
     StackListing,
 )
 from orchestrator.config import Settings
@@ -55,6 +56,19 @@ def _is_tls_failure(exc: BaseException) -> bool:
     return False
 
 
+def _error_text(response: httpx.Response) -> str:
+    """Portainer's own explanation (``{"message", "details"}``) when it gave one."""
+    try:
+        body = response.json()
+    except ValueError:
+        return response.text
+    if isinstance(body, dict):
+        message = " - ".join(str(body[k]) for k in ("message", "details") if body.get(k))
+        if message:
+            return message
+    return response.text
+
+
 class LivePortainerAdapter(PortainerAdapter):
     def __init__(
         self, settings: Settings, *, transport: httpx.AsyncBaseTransport | None = None
@@ -64,6 +78,7 @@ class LivePortainerAdapter(PortainerAdapter):
         self._key = settings.portainer_api_key.get_secret_value()
         self._verify = settings.portainer_verify_tls
         self._timeout = float(settings.controller_timeout_s)
+        self._read_only = settings.portainer_read_only
         self._transport = transport
         self._client: httpx.AsyncClient | None = None
         self._cache: dict[tuple[str, tuple[tuple[str, str], ...]], tuple[float, Any]] = {}
@@ -95,7 +110,14 @@ class LivePortainerAdapter(PortainerAdapter):
             await self._client.aclose()
             self._client = None
 
-    async def _request(self, path: str, params: dict[str, Any] | None = None) -> httpx.Response:
+    async def _request(
+        self,
+        path: str,
+        params: dict[str, Any] | None = None,
+        *,
+        method: str = "GET",
+        json: Any = None,
+    ) -> httpx.Response:
         if not self.configured:
             raise AdapterNotConfigured(
                 "Portainer is not configured - set PORTAINER_URL and PORTAINER_API_KEY"
@@ -104,30 +126,42 @@ class LivePortainerAdapter(PortainerAdapter):
             await self.start()
         assert self._client is not None
         try:
-            response = await self._client.get(path, params=params)
+            response = await self._client.request(method, path, params=params, json=json)
         except httpx.TimeoutException as exc:
-            raise AdapterUnreachable(f"Portainer timed out on GET {path}: {exc}") from exc
+            raise AdapterUnreachable(f"Portainer timed out on {method} {path}: {exc}") from exc
         except httpx.TransportError as exc:
             if _is_tls_failure(exc):
                 raise AdapterTlsError(
-                    f"Portainer's TLS certificate was rejected on GET {path}: {exc}. The host "
+                    f"Portainer's TLS certificate was rejected on {method} {path}: {exc}. The host "
                     "answered - this is certificate trust. Set PORTAINER_VERIFY_TLS=false or "
                     "trust its CA."
                 ) from exc
-            raise AdapterUnreachable(f"Portainer unreachable on GET {path}: {exc}") from exc
+            raise AdapterUnreachable(f"Portainer unreachable on {method} {path}: {exc}") from exc
         if response.status_code in (401, 403):
             raise AdapterAuthError(
-                f"Portainer refused the API key on GET {path} ({response.status_code})",
+                f"Portainer refused the API key on {method} {path} ({response.status_code})"
+                + (
+                    " - writing needs a user with access to the environment"
+                    if method != "GET"
+                    else ""
+                ),
                 status_code=response.status_code,
-                body=response.text[:300],
+                body=_error_text(response),
             )
         if response.status_code >= 400:
             raise AdapterRequestError(
-                f"Portainer answered {response.status_code} on GET {path}: {response.text[:200]}",
+                f"Portainer answered {response.status_code} on {method} {path}: "
+                f"{_error_text(response)[:200]}",
                 status_code=response.status_code,
-                body=response.text[:300],
+                body=_error_text(response)[:300],
             )
         return response
+
+    def _writable(self) -> None:
+        if self._read_only:
+            raise AdapterRequestError(
+                "Portainer is read-only here (PORTAINER_READ_ONLY=true): nothing is changed."
+            )
 
     async def _json(
         self, path: str, params: dict[str, Any] | None = None, *, cache: bool = True
@@ -249,6 +283,151 @@ class LivePortainerAdapter(PortainerAdapter):
         except (AdapterRequestError, AdapterUnreachable, AdapterAuthError):
             return "unknown"
         return parse.classify_compose(str((data or {}).get("StackFileContent", "")))
+
+    # -- writes ------------------------------------------------------------------------------
+
+    async def _raw_stack(self, stack_id: int) -> dict[str, Any]:
+        raw = await self._json(f"/api/stacks/{stack_id}", cache=False)
+        return raw if isinstance(raw, dict) else {}
+
+    @staticmethod
+    def _need_id(stack: Stack) -> int:
+        if stack.id is None:
+            raise AdapterRequestError(
+                f"{stack.name!r} is a compose project Portainer did not create, so Portainer "
+                "cannot start, stop, redeploy or delete it as a stack"
+            )
+        return stack.id
+
+    async def start_stack(self, stack: Stack) -> None:
+        self._writable()
+        sid = self._need_id(stack)
+        await self._request(
+            f"/api/stacks/{sid}/start", {"endpointId": stack.endpoint_id}, method="POST"
+        )
+        self.invalidate()
+
+    async def stop_stack(self, stack: Stack) -> None:
+        self._writable()
+        sid = self._need_id(stack)
+        await self._request(
+            f"/api/stacks/{sid}/stop", {"endpointId": stack.endpoint_id}, method="POST"
+        )
+        self.invalidate()
+
+    async def redeploy_stack(
+        self, stack: Stack, *, pull_image: bool = True, prune: bool = False
+    ) -> None:
+        self._writable()
+        sid = self._need_id(stack)
+        if stack.git is None:
+            raise AdapterRequestError(
+                f"{stack.name!r} was not deployed from a Git repository, so there is nothing "
+                "to re-pull; redeploy it in Portainer (web editor stacks have no Git source)"
+            )
+        raw = await self._raw_stack(sid)
+        git = raw.get("GitConfig") or {}
+        auth = git.get("Authentication") or {}
+        body: dict[str, Any] = {
+            # Portainer REPLACES the stack's environment with this list: send the current
+            # one back untouched, or a redeploy would wipe it. It goes nowhere else.
+            "env": raw.get("Env") or [],
+            "prune": prune,
+            "pullImage": pull_image,
+            "repositoryReferenceName": git.get("ReferenceName", ""),
+            "repositoryAuthentication": bool(auth),
+        }
+        if auth.get("GitCredentialID"):
+            body["repositoryGitCredentialID"] = auth["GitCredentialID"]
+        if auth.get("Username"):
+            body["repositoryUsername"] = auth["Username"]
+        if auth.get("Password"):
+            body["repositoryPassword"] = auth["Password"]
+        await self._request(
+            f"/api/stacks/{sid}/git/redeploy",
+            {"endpointId": stack.endpoint_id},
+            method="PUT",
+            json=body,
+        )
+        self.invalidate()
+
+    def _create_request(self, spec: StackCreate) -> tuple[str, dict[str, Any], dict[str, Any]]:
+        env = [{"name": n, "value": v} for n, v in spec.env]
+        if spec.source == "string":
+            if not spec.compose_text.strip():
+                raise AdapterRequestError("a stack from text needs the compose text")
+            return (
+                "/api/stacks/create/standalone/string",
+                {"endpointId": spec.endpoint_id},
+                {"name": spec.name, "stackFileContent": spec.compose_text, "env": env},
+            )
+        if spec.source != "git":
+            raise AdapterRequestError("a stack comes from a Git repository or from compose text")
+        if not spec.repository_url.strip():
+            raise AdapterRequestError("a stack from Git needs the repository URL")
+        has_auth = bool(spec.git_credential_id or spec.git_username or spec.git_password)
+        body: dict[str, Any] = {
+            "name": spec.name,
+            "repositoryURL": spec.repository_url,
+            "repositoryReferenceName": spec.reference,
+            "composeFile": spec.compose_path,
+            "repositoryAuthentication": has_auth,
+            "env": env,
+            "autoUpdate": (
+                {"interval": spec.auto_update_interval or "5m", "webhook": ""}
+                if spec.auto_update
+                else None
+            ),
+        }
+        if spec.git_credential_id:
+            body["repositoryGitCredentialID"] = spec.git_credential_id
+        elif has_auth:
+            body["repositoryUsername"] = spec.git_username
+            body["repositoryPassword"] = spec.git_password
+        return (
+            "/api/stacks/create/standalone/repository",
+            {"endpointId": spec.endpoint_id},
+            body,
+        )
+
+    def preview_create(self, spec: StackCreate) -> dict[str, Any]:
+        path, params, body = self._create_request(spec)
+        shown = dict(body)
+        shown["env"] = [{"name": e["name"], "value": "***"} for e in body["env"]]
+        if "repositoryPassword" in shown:
+            shown["repositoryPassword"] = "***"
+        if "stackFileContent" in shown:
+            lines = str(shown["stackFileContent"]).count("\n") + 1
+            shown["stackFileContent"] = f"<{lines} line(s) of compose text>"
+        return {"method": "POST", "path": path, "params": params, "body": shown}
+
+    async def create_stack(self, spec: StackCreate) -> Stack:
+        self._writable()
+        path, params, body = self._create_request(spec)
+        response = await self._request(path, params, method="POST", json=body)
+        self.invalidate()
+        data = response.json()
+        return (
+            parse.stack(data)
+            if isinstance(data, dict) and "Id" in data
+            else Stack(
+                id=None,
+                name=spec.name,
+                endpoint_id=spec.endpoint_id,
+                type="compose",
+                status="active",
+            )
+        )
+
+    async def delete_stack(self, stack: Stack) -> None:
+        self._writable()
+        sid = self._need_id(stack)
+        await self._request(
+            f"/api/stacks/{sid}",
+            {"endpointId": stack.endpoint_id, "external": "false", "removeVolumes": "false"},
+            method="DELETE",
+        )
+        self.invalidate()
 
     # -- containers ---------------------------------------------------------------------------
 
