@@ -47,7 +47,9 @@ EVENTS = (
     "restore_succeeded",
     "restore_failed",
     "backup_failed",
+    "backup_retry",
     "wake_failed",
+    "power_restore_failed",
     "test",
 )
 SEVERITIES = ("info", "warn", "error", "critical")
@@ -59,7 +61,9 @@ DEFAULT_EVENTS = (
     "recovered",
     "flapping",
     "backup_failed",
+    "backup_retry",
     "wake_failed",
+    "power_restore_failed",
     "recovery_succeeded",
     "recovery_exhausted",
     "restore_proposed",

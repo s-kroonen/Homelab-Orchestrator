@@ -83,6 +83,11 @@ ENV_SECTIONS: tuple[EnvSection, ...] = (
             EnvKey("LOG_LEVEL", "DEBUG | INFO | WARNING | ERROR"),
             EnvKey("LOG_FORMAT", "json | console"),
             EnvKey(
+                "TIMEZONE",
+                "IANA zone for displayed times and backup cron schedules (Europe/Amsterdam). "
+                "Blank = the container's TZ, else UTC. Changeable on the System page.",
+            ),
+            EnvKey(
                 "DRY_RUN",
                 "Swaps ALL external adapters for logging no-ops: nothing is started,\n"
                 "stopped or backed up. Leave on until `orchestrator-cli check` passes.",
@@ -510,6 +515,15 @@ ENV_SECTIONS: tuple[EnvSection, ...] = (
             EnvKey("BACKUP_TASK_TIMEOUT_S", "A large VM dump can legitimately take hours."),
             EnvKey("VERIFY_TASK_TIMEOUT_S"),
             EnvKey(
+                "BACKUP_RETRY_DELAY_S",
+                "Seconds before a scheduled backup that was blocked, or whose target did not "
+                "turn healthy after boot, is tried again (up to the policy's max attempts).",
+            ),
+            EnvKey(
+                "BACKUP_POWER_OFF_GRACE_S",
+                "Seconds to wait after a backup before powering a node it woke back off.",
+            ),
+            EnvKey(
                 "WAKE_TIMEOUT_S",
                 "Bounds the whole wake pipeline — a cold node can take minutes to POST, "
                 "boot, and bring its guests up.",
@@ -559,6 +573,11 @@ ENV_SECTIONS: tuple[EnvSection, ...] = (
             EnvKey("MAIL_TO", "Where e-mail alerts go (comma-separated). Needs MAIL_SMTP_HOST."),
             EnvKey("MAIL_SMTP_STARTTLS"),
             EnvKey("NOTIFY_WEBHOOK_URL", "Any endpoint that takes a JSON POST."),
+            EnvKey(
+                "PUSH_VAPID_SUBJECT",
+                "Contact the browsers' push services see (mailto: or https URL). Blank = the "
+                "dashboard's https address.",
+            ),
             EnvKey("NOTIFY_WEBHOOK_TOKEN", secret=True),
             EnvKey(
                 "NOTIFICATIONS_ENABLED", "false = no alerts and no feed (state is not tracked)."

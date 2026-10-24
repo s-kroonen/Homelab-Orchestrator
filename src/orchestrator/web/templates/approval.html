@@ -34,11 +34,11 @@
     const rows = [
       ["Service", `${p.name} (${p.service})`],
       ["Guest", `${p.guest_kind} ${p.vmid} on ${p.node}`],
-      ["Restore from", `${p.snapshot} (taken ${new Date(p.snapshot_at).toLocaleString()}, verified)`],
+      ["Restore from", `${p.snapshot} (taken ${fmtTime(p.snapshot_at)}, verified)`],
       ["Why", p.reason],
-      ["Proposed by", `${a.requested_by} at ${new Date(a.requested_at).toLocaleString()}`],
+      ["Proposed by", `${a.requested_by} at ${fmtTime(a.requested_at)}`],
       ["Status", a.status + (a.approved_by ? " by " + a.approved_by : "")],
-      ["Valid until", new Date(a.expires_at).toLocaleString()],
+      ["Valid until", fmtTime(a.expires_at)],
     ];
     $("kv").replaceChildren(...rows.map(([k, v]) => {
       const d = document.createElement("div");
@@ -47,7 +47,7 @@
       d.append(dt, dd); return d;
     }));
     $("warn").hidden = !a.open;
-    $("warn").textContent = `Approving stops guest ${p.vmid}, REPLACES it with the copy from ${new Date(p.snapshot_at).toLocaleString()} (everything newer is lost), starts it again and waits for ${p.service} to be healthy.`;
+    $("warn").textContent = `Approving stops guest ${p.vmid}, REPLACES it with the copy from ${fmtTime(p.snapshot_at)} (everything newer is lost), starts it again and waits for ${p.service} to be healthy.`;
     $("actions").hidden = !a.open;
     const steps = (a.run && a.run.steps) || [];
     $("steps").replaceChildren(...steps.map((s) => { const li = document.createElement("li"); li.className = s.status; li.textContent = `${s.name} - ${s.status}` + (s.detail && s.detail.error ? ": " + s.detail.error : ""); return li; }));

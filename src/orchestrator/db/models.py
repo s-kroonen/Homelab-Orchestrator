@@ -29,6 +29,7 @@ from orchestrator.domain.enums import (
     AuditResult,
     BackupGate,
     BackupMode,
+    BackupWakeMode,
     GuestKind,
     HealthState,
     PipelineKind,
@@ -102,6 +103,15 @@ class BackupPolicy(SQLModel, table=True):
     # healthy) before their backup starts. Default on: a burst node that is off
     # would otherwise just fail the run.
     wake_before_backup: bool = Field(default=True)
+    # Whether the backup honours the wake-on-hit switches of what it wakes
+    # (FOLLOW, default), ignores them (ALWAYS) or wakes nothing (NEVER).
+    wake_mode: BackupWakeMode = Field(default=BackupWakeMode.FOLLOW)
+    # How many times a run is tried when it is blocked or the target does not
+    # become healthy after boot, before giving up and telling you (>= 1).
+    max_attempts: int = Field(default=3)
+    # Put back what the backup changed: guests it started are stopped and a node
+    # it powered on is powered off again (unless something else needs it).
+    restore_power_state: bool = Field(default=True)
     created_at: datetime = Field(default_factory=_utcnow)
     updated_at: datetime = Field(default_factory=_utcnow)
 
@@ -728,6 +738,27 @@ class RecoveryState(SQLModel, table=True):
     updated_at: datetime = Field(default_factory=_utcnow)
 
 
+class PushSubscription(SQLModel, table=True):
+    """One browser/device that turned notifications on (Web Push). The orchestrator
+    encrypts each alert to ``p256dh``/``auth`` and posts it to ``endpoint`` (the browser
+    vendor's push service); the device's service worker shows it."""
+
+    __tablename__ = "push_subscription"
+
+    id: int | None = Field(default=None, primary_key=True)
+    endpoint: str = Field(unique=True, index=True)
+    p256dh: str
+    auth: str
+    #: Who turned it on, and a name for the device.
+    username: str = ""
+    label: str = ""
+    user_agent: str = ""
+    created_at: datetime = Field(default_factory=_utcnow)
+    last_ok_at: datetime | None = None
+    #: The last failure from the push service ("" = the last send worked).
+    last_error: str = ""
+
+
 class Setting(SQLModel, table=True):
     """Tiny key/value store for singleton metadata (last-loaded YAML hash, etc.).
 
@@ -742,6 +773,9 @@ class Setting(SQLModel, table=True):
 
 
 # Well-known Setting keys, so callers don't stringly-type them.
+#: The VAPID key pair identifying this orchestrator to push services:
+#: {"private_pem": "...", "public_key": "<base64url uncompressed point>"}. Secret.
+SETTING_PUSH_VAPID = "push.vapid"
 SETTING_LAST_YAML_LOAD = "registry.last_yaml_load"  # {"path", "sha256", "at"}
 SETTING_LAST_YAML_SAVE = "registry.last_yaml_save"  # {"path", "sha256", "at", "by"}
 #: Proxy hosts deleted here whose Traefik Manager route has not been removed

@@ -37,12 +37,13 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 from sqlmodel import Session, select
 
-from orchestrator.adapters.errors import AdapterError
+from orchestrator.adapters.errors import AdapterError, AdapterUnreachable, TaskTimeout
 from orchestrator.adapters.factory import AdapterBundle
 from orchestrator.audit import log as audit
 from orchestrator.config import Settings
 from orchestrator.db.models import BackupPolicy, Service
 from orchestrator.db.session import session_scope
+from orchestrator.display import get_timezone
 from orchestrator.domain.enums import AuditResult
 from orchestrator.logging_setup import get_logger
 from orchestrator.pipelines.backup import BackupError, BackupPipeline, WakeContext
@@ -106,6 +107,8 @@ class BackupScheduler:
             )
         )
         self._scheduler = AsyncIOScheduler()
+        #: Cron expressions run in this zone (the dashboard's timezone setting).
+        self.timezone: Any = self._scheduler.timezone
         self._lock = asyncio.Lock()
         #: policy name -> why it has no job (bad cron). Shown on the dashboard.
         self.errors: dict[str, str] = {}
@@ -141,6 +144,7 @@ class BackupScheduler:
         with session_scope() as session:
             policies = session.exec(select(BackupPolicy)).all()
             wanted = {p.name: p.schedule_cron.strip() for p in policies}
+            self.timezone = get_timezone(session, self._settings)
 
         for job in self._scheduler.get_jobs():
             if job.id.startswith(_JOB_PREFIX) and job.id[len(_JOB_PREFIX) :] not in wanted:
@@ -152,7 +156,7 @@ class BackupScheduler:
                 self._remove(name)
                 continue
             try:
-                trigger = parse_cron(cron, self._scheduler.timezone)
+                trigger = parse_cron(cron, self.timezone)
             except ValueError as exc:
                 # One bad policy must not take the others' schedules down.
                 self.errors[name] = str(exc)
@@ -213,16 +217,34 @@ class BackupScheduler:
                 # done — not woken and released per service. Per-service extras
                 # and each target are still handled per service, in its own run.
                 pipeline = self._pipeline_factory()
-                prepared = await pipeline.prepare_policy(
-                    session, policy, actor="scheduler", services=len(slugs)
-                )
-                try:
-                    for slug in slugs:
-                        outcomes[slug] = await self._run_one(
-                            session, policy, slug, pipeline, prepared
+                attempts = max(1, int(policy.max_attempts or 1))
+                pending = list(slugs)
+                for attempt in range(1, attempts + 1):
+                    if attempt > 1:
+                        # Only what was blocked / not yet healthy comes back, after a
+                        # pause - the other services in the batch are already done.
+                        await asyncio.sleep(self._settings.backup_retry_delay_s)
+                        session.expire_all()
+                        log.info(
+                            "scheduler.policy.retry",
+                            policy=policy_name,
+                            attempt=attempt,
+                            of=attempts,
+                            services=pending,
                         )
-                finally:
-                    await pipeline.release_prepared(session, prepared)
+                    prepared = await pipeline.prepare_policy(
+                        session, policy, actor="scheduler", services=len(pending)
+                    )
+                    try:
+                        for slug in pending:
+                            outcomes[slug] = await self._run_one(
+                                session, policy, slug, pipeline, prepared, attempt, attempts
+                            )
+                    finally:
+                        await pipeline.release_prepared(session, prepared, policy)
+                    pending = [s for s in pending if outcomes[s].get("retry")]
+                    if not pending:
+                        break
                 return outcomes
 
     async def _run_one(
@@ -232,12 +254,23 @@ class BackupScheduler:
         slug: str,
         pipeline: BackupPipeline,
         prepared: WakeContext,
+        attempt: int = 1,
+        attempts: int = 1,
     ) -> dict[str, Any]:
         try:
             run = await pipeline.run_for_service(
-                session, slug, actor="scheduler", verify=True, prepared=prepared
+                session,
+                slug,
+                actor="scheduler",
+                verify=True,
+                prepared=prepared,
+                attempt=attempt,
+                attempts=attempts,
             )
         except (BackupError, AdapterError) as exc:
+            retryable = isinstance(exc, AdapterUnreachable | TaskTimeout) or bool(
+                getattr(exc, "retryable", False)
+            )
             # The pipeline already recorded the run + audit row; retention is
             # deliberately skipped so a failure never prunes anything.
             log.error(
@@ -247,7 +280,12 @@ class BackupScheduler:
                 error=str(exc),
                 impact="No new backup; retention NOT applied, existing snapshots untouched.",
             )
-            return {"backup": "failed", "error": str(exc)}
+            return {
+                "backup": "failed",
+                "error": str(exc),
+                "attempt": attempt,
+                "retry": retryable and attempt < attempts,
+            }
         except Exception as exc:
             log.error(
                 "scheduler.backup.crashed",

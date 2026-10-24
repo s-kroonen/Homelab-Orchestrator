@@ -23,6 +23,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import time
+from dataclasses import dataclass
 from datetime import UTC, datetime
 
 from sqlmodel import Session, desc, select
@@ -110,6 +111,19 @@ def wake_is_unsupported(node: Node | None) -> bool:
     if node is None:
         return True
     return not node.power_mgr_target and not node.always_on
+
+
+@dataclass(frozen=True)
+class PriorState:
+    """What a service's node and guest were doing before anything was woken."""
+
+    node_id: int
+    node_name: str
+    node_online: bool
+    guest_vmid: int | None
+    guest_kind: GuestKind
+    #: None when there is no guest or it could not be read.
+    guest_running: bool | None
 
 
 class WakePipeline:
@@ -249,8 +263,13 @@ class WakePipeline:
         *,
         actor: str = "system",
         timeout_s: int | None = None,
+        own_runs: set[int] | None = None,
     ) -> PipelineRun:
         """Wake ``slug`` and return only once it is up — or raise.
+
+        ``own_runs``: filled with the id of the wake run THIS call started (not one
+        it merely joined), even if that run then fails - so a backup can tell its
+        own wakes from somebody else's.
 
         What the backup pipeline calls for every prerequisite and target. It
         goes through :meth:`get_or_start`, so a backup that needs a node a
@@ -265,6 +284,8 @@ class WakePipeline:
           by the wake budget), then judged by its final status.
         """
         run, started_new = self.get_or_start(session, slug, actor=actor)
+        if started_new and own_runs is not None and run.id is not None:
+            own_runs.add(run.id)
         if started_new:
             await self._run(session, run, slug, actor=actor, timeout_s=timeout_s)
             return run
@@ -311,6 +332,71 @@ class WakePipeline:
             return False
         guest = next((g for g in guests if g.vmid == eg.guest_id), None)
         return bool(guest and guest.status == "running")
+
+    async def prior_state(self, session: Session, slug: str) -> PriorState | None:
+        """What is up RIGHT NOW for ``slug``'s node and guest - read before a backup
+        wakes anything, so it can later put things back. ``None`` when Proxmox
+        cannot be asked (then nothing is recorded and nothing is turned off)."""
+        service = session.exec(select(Service).where(Service.slug == slug)).one_or_none()
+        node = session.get(Node, service.node_id) if service and service.node_id else None
+        if service is None or node is None or node.id is None:
+            return None
+        try:
+            cluster = await self._proxmox.cluster_status()
+            node_online = self._node_online(cluster, node.name)
+            eg = effective_guest(session, service)
+            running: bool | None = None
+            if node_online and eg.kind is not GuestKind.NONE and eg.guest_id is not None:
+                guests = await self._proxmox.list_guests(node.name)
+                guest = next((g for g in guests if g.vmid == eg.guest_id), None)
+                running = bool(guest and guest.status == "running")
+            elif eg.kind is not GuestKind.NONE and eg.guest_id is not None:
+                running = False  # the node is off, so the guest is
+        except AdapterError:
+            return None
+        return PriorState(
+            node_id=node.id,
+            node_name=node.name,
+            node_online=node_online,
+            guest_vmid=eg.guest_id if eg.kind is not GuestKind.NONE else None,
+            guest_kind=eg.kind,
+            guest_running=running,
+        )
+
+    async def stop_guest(self, node: str, vmid: int, kind: GuestKind) -> str:
+        """Gracefully stop a guest and wait for it. Returns the task status text."""
+        handle = await self._proxmox.stop_guest(node, vmid, kind)
+        status = await self._proxmox.wait_for_task(
+            node, handle.upid, timeout_s=self._settings.wake_guest_start_timeout_s
+        )
+        if not status.succeeded:
+            raise WakeError(
+                f"stopping {kind.value} {vmid} on {node!r} failed: {status.exit_status}"
+            )
+        return handle.upid
+
+    async def power_off_node(self, node: Node, *, reason: str) -> None:
+        """Gracefully power a node off through the power manager."""
+        await self._power.power_off(node.power_mgr_target, reason=reason, force=False)
+
+    @staticmethod
+    def wakes_since(session: Session, node: Node, since: datetime, *, exclude: set[int]) -> int:
+        """Wake runs for services on ``node`` that someone ELSE started after
+        ``since`` - a visitor or another backup who now needs it."""
+        runs = session.exec(select(PipelineRun).where(PipelineRun.kind == PipelineKind.WAKE)).all()
+        count = 0
+        for run in runs:
+            if run.id in exclude or run.service_id is None:
+                continue
+            started = (
+                run.started_at if run.started_at.tzinfo else run.started_at.replace(tzinfo=UTC)
+            )
+            if started < since:
+                continue
+            svc = session.get(Service, run.service_id)
+            if svc is not None and svc.node_id == node.id:
+                count += 1
+        return count
 
     # -- the pipeline body ------------------------------------------------------
 

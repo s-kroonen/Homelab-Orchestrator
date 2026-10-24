@@ -1301,12 +1301,35 @@ def policy_list(path_override: str | None) -> None:
     default=None,
     help="Wake the services this policy backs up (node on, guest running) before each backup.",
 )
+@click.option(
+    "--wake-mode",
+    type=click.Choice(["follow", "always", "never"]),
+    default=None,
+    help=(
+        "How the backup treats the wake-on-hit switches: follow = a node/service with "
+        "wake on hit off is not woken (default), always = wake it anyway, never = wake nothing."
+    ),
+)
+@click.option(
+    "--max-attempts",
+    type=click.IntRange(1, 20),
+    default=None,
+    help="Tries before a blocked / not-yet-healthy scheduled run gives up and notifies (default 3).",
+)
+@click.option(
+    "--restore-power-state/--no-restore-power-state",
+    default=None,
+    help="Stop the guests the backup started and power its node back off afterwards (default on).",
+)
 @click.option("--file", "path_override", default=None)
 def policy_update(
     name: str,
     requires: str | None,
     clear_requires: bool,
     wake_before_backup: bool | None,
+    wake_mode: str | None,
+    max_attempts: int | None,
+    restore_power_state: bool | None,
     path_override: str | None,
 ) -> None:
     """Update a policy's wake settings. Only the flags you pass are touched."""
@@ -1325,6 +1348,12 @@ def policy_update(
         fields["requires"] = _split_slugs(requires)
     if wake_before_backup is not None:
         fields["wake_before_backup"] = wake_before_backup
+    if wake_mode is not None:
+        fields["wake_mode"] = wake_mode
+    if max_attempts is not None:
+        fields["max_attempts"] = max_attempts
+    if restore_power_state is not None:
+        fields["restore_power_state"] = restore_power_state
     if not fields:
         raise click.UsageError("nothing to change — pass at least one option")
 

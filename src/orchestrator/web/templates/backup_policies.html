@@ -37,7 +37,7 @@
           <td>{% if p.schedule_cron %}<code>{{ p.schedule_cron }}</code>{% else %}<span class="muted">manual only</span>{% endif %}</td>
           <td>
             {% if p.schedule_error %}<span class="badge failed">invalid</span> <span class="muted">{{ p.schedule_error }}</span>
-            {% elif p.next_run %}{{ p.next_run }}{% if not p.scheduled %} <span class="badge unknown">not scheduled</span>{% endif %}
+            {% elif p.next_run %}<time data-ts="{{ p.next_run }}">{{ p.next_run }}</time>{% if not p.scheduled %} <span class="badge unknown">not scheduled</span>{% endif %}
             {% else %}<span class="muted">—</span>{% endif %}
           </td>
           <td>
@@ -50,6 +50,8 @@
             {% if not p.requires %}<span class="muted">nothing</span>{% endif %}
             {% for b in p.requires_blockers %}<br><span class="badge failed" title="{{ b.blocker }}">{{ b.slug }}: cannot be woken</span>{% endfor %}
             {% if not p.wake_before_backup %}<br><span class="muted">targets not woken</span>{% endif %}
+            {% if p.wake_mode != "follow" %}<br><span class="muted">wake: {{ p.wake_mode }}</span>{% endif %}
+            {% if not p.restore_power_state %}<br><span class="muted">not put back after</span>{% endif %}
           </td>
           <td>
             {% for slug in p.services %}<code>{{ slug }}</code> {% endfor %}

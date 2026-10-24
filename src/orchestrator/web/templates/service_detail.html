@@ -707,9 +707,7 @@
   }
 
   function fmtWhen(iso) {
-    if (!iso) return "";
-    const d = new Date(iso);
-    return isNaN(d) ? iso : d.toLocaleString();
+    return fmtTime(iso);
   }
 
   function hasPingProbe() {

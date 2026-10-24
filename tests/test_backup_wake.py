@@ -192,7 +192,7 @@ def topo(session: Session) -> dict[str, Any]:
     app = _add_service(session, "app", compute, 101)
     db = _add_service(session, "db", compute, 102)
     gwsvc = _add_service(session, "gwsvc", gw, 103)
-    policy = BackupPolicy(name="nightly", requires=["truenas"])
+    policy = BackupPolicy(name="nightly", requires=["truenas"], max_attempts=1)
     session.add(policy)
     session.commit()
     session.refresh(policy)

@@ -20,6 +20,11 @@ class NotifySeverity(StrEnum):
     CRITICAL = "critical"
 
 
+class NotSent(Exception):
+    """A channel had nobody to send to (e.g. no device has push turned on). Not a
+    failure: the feed shows ``skipped: <why>`` and other channels carry on."""
+
+
 class Notifier(ABC):
     @abstractmethod
     async def notify(

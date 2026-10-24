@@ -20,7 +20,22 @@ log = get_logger(__name__)
 
 
 class BackupError(Exception):
-    """Raised when a backup run cannot proceed or did not succeed."""
+    """Raised when a backup run cannot proceed or did not succeed.
+
+    ``retryable`` is True when trying again later could plausibly work (something
+    could not be woken, the target was not healthy yet after boot, an adapter was
+    unreachable) and False when it could not (the service is FAILED, the dump or
+    verify failed): a scheduled run retries only the first kind, up to the
+    policy's ``max_attempts``.
+    """
+
+    retryable: bool = False
+
+
+class RetryableBackupError(BackupError):
+    """A :class:`BackupError` that a later attempt may get past."""
+
+    retryable = True
 
 
 class Recorder(Protocol):

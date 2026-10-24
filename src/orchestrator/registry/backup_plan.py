@@ -30,7 +30,7 @@ from typing import Any
 from sqlmodel import Session, select
 
 from orchestrator.db.models import BackupPolicy, Node, NodeState, Service
-from orchestrator.domain.enums import PowerState
+from orchestrator.domain.enums import BackupWakeMode, PowerState
 
 REASON_POLICY = "policy prerequisite"
 REASON_SERVICE = "service prerequisite"
@@ -39,6 +39,21 @@ REASON_TARGET = "backup target"
 #: Shown next to a plan step (and in the pipeline's failure) when the node has no
 #: way to be turned on. Kept as one string so the UI, CLI and API agree.
 BLOCKER_NO_POWER_TARGET = "node has no power target — cannot be woken"
+
+
+def _wake_switch_blocker(svc: Service, node: Node) -> str | None:
+    """Why a backup that FOLLOWS the wake-on-hit switches may not wake this."""
+    if not svc.wake_on_hit_enabled:
+        return (
+            f"wake on hit is switched off for service {svc.slug!r} and this backup policy "
+            "follows it (set the policy's wake mode to 'always' to override)"
+        )
+    if not node.wake_on_hit_enabled:
+        return (
+            f"wake on hit is switched off for node {node.name!r} and this backup policy "
+            "follows it (set the policy's wake mode to 'always' to override)"
+        )
+    return None
 
 
 @dataclass(frozen=True)
@@ -76,6 +91,8 @@ class BackupPlan:
     slug: str
     policy: str | None
     steps: list[PlanStep] = field(default_factory=list)
+    #: The policy's wake mode ("follow" / "always" / "never").
+    wake_mode: str = BackupWakeMode.FOLLOW.value
     #: Sub-services this backup also waits for (backup_gate: required): each must be
     #: HEALTHY first, and is started through its controller if it is stopped.
     #: ``[{"slug", "name", "controller", "can_start"}]``.
@@ -103,6 +120,7 @@ class BackupPlan:
             "steps": [s.as_dict() for s in self.steps],
             "blockers": self.blockers,
             "will_wake": self.will_wake,
+            "wake_mode": self.wake_mode,
             "required_subs": self.required_subs,
         }
 
@@ -116,7 +134,12 @@ def _node_power(session: Session, node: Node | None) -> str:
     return state.power_state.value if state is not None else PowerState.UNKNOWN.value
 
 
-def _step_for(session: Session, slug: str, reason: str) -> PlanStep:
+def _step_for(
+    session: Session,
+    slug: str,
+    reason: str,
+    mode: BackupWakeMode = BackupWakeMode.FOLLOW,
+) -> PlanStep:
     svc = session.exec(select(Service).where(Service.slug == slug)).one_or_none()
     if svc is None:
         return PlanStep(
@@ -141,6 +164,8 @@ def _step_for(session: Session, slug: str, reason: str) -> PlanStep:
 
         if wake_is_unsupported(node):
             blocker = BLOCKER_NO_POWER_TARGET
+        elif mode is BackupWakeMode.FOLLOW:
+            blocker = _wake_switch_blocker(svc, node)
     return PlanStep(
         slug=slug,
         name=svc.name,
@@ -166,6 +191,7 @@ def resolve_backup_plan(
     ``wake_before_backup`` is on, and a policy-less manual backup should not
     behave differently from a policy-covered one.
     """
+    mode = policy.wake_mode if policy is not None else BackupWakeMode.FOLLOW
     wanted: list[tuple[str, str]] = []
     if policy is not None:
         wanted += [(s, REASON_POLICY) for s in (policy.requires or [])]
@@ -179,7 +205,9 @@ def resolve_backup_plan(
         if slug in seen:
             continue
         seen.add(slug)
-        steps.append(_step_for(session, slug, reason))
+        steps.append(_step_for(session, slug, reason, mode))
+    if mode is BackupWakeMode.NEVER:
+        steps = []  # this policy wakes nothing; the run uses whatever is up
     from orchestrator.domain.enums import BackupGate
     from orchestrator.registry.tree import TreeIndex
 
@@ -199,6 +227,7 @@ def resolve_backup_plan(
         policy=policy.name if policy else None,
         steps=steps,
         required_subs=subs,
+        wake_mode=mode.value,
     )
 
 
@@ -210,8 +239,8 @@ def resolve_policy_prerequisites(session: Session, policy: BackupPolicy) -> list
     for slug in policy.requires or []:
         if slug not in seen:
             seen.add(slug)
-            steps.append(_step_for(session, slug, REASON_POLICY))
-    return steps
+            steps.append(_step_for(session, slug, REASON_POLICY, policy.wake_mode))
+    return [] if policy.wake_mode is BackupWakeMode.NEVER else steps
 
 
 # ---------------------------------------------------------------------------

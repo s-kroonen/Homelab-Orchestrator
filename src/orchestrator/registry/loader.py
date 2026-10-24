@@ -247,6 +247,9 @@ def _spec_from_db(session: Session) -> RegistryFile:
                 targets=p.targets,
                 requires=list(p.requires or []),
                 wake_before_backup=p.wake_before_backup,
+                wake_mode=p.wake_mode,
+                max_attempts=p.max_attempts,
+                restore_power_state=p.restore_power_state,
             )
             for p in policies
         ],
@@ -492,6 +495,9 @@ def reconcile_yaml_into_db(session: Session, path: Path) -> RegistryFile:
         pol.targets = spec.targets
         pol.requires = clean_slug_list(spec.requires)
         pol.wake_before_backup = spec.wake_before_backup
+        pol.wake_mode = spec.wake_mode
+        pol.max_attempts = spec.max_attempts
+        pol.restore_power_state = spec.restore_power_state
         pol.updated_at = datetime.now(UTC)
 
     session.flush()

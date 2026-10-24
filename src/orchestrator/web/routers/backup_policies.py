@@ -21,7 +21,7 @@ from sqlmodel import Session, select
 
 from orchestrator.audit import log as audit
 from orchestrator.db.models import BackupPolicy, BackupRecord, Service
-from orchestrator.domain.enums import BackupMode
+from orchestrator.domain.enums import BackupMode, BackupWakeMode
 from orchestrator.registry.backup_plan import (
     clean_slug_list,
     requires_problems_from_db,
@@ -62,6 +62,9 @@ class PolicyCreate(BaseModel):
     # backed up. Not Service.depends_on — see docs/backup_wake.md.
     requires: Any = None
     wake_before_backup: bool = True
+    wake_mode: str = "follow"
+    max_attempts: int = 3
+    restore_power_state: bool = True
 
 
 class PolicyUpdate(BaseModel):
@@ -73,6 +76,9 @@ class PolicyUpdate(BaseModel):
     services: Any = None
     requires: Any = None
     wake_before_backup: bool | None = None
+    wake_mode: str | None = None
+    max_attempts: int | None = None
+    restore_power_state: bool | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -82,6 +88,24 @@ class PolicyUpdate(BaseModel):
 
 def _bad(detail: str) -> HTTPException:
     return HTTPException(status_code=400, detail=detail)
+
+
+def _validate_wake_mode(raw: Any) -> BackupWakeMode:
+    try:
+        return BackupWakeMode(str(raw or "").strip().lower())
+    except ValueError:
+        allowed = ", ".join(m.value for m in BackupWakeMode)
+        raise _bad(f"wake_mode must be one of: {allowed}") from None
+
+
+def _validate_max_attempts(raw: Any) -> int:
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        raise _bad("max_attempts must be a whole number") from None
+    if not 1 <= value <= 20:
+        raise _bad("max_attempts must be between 1 and 20")
+    return value
 
 
 def _validate_name(name: str) -> str:
@@ -225,6 +249,9 @@ def policy_to_dict(
         "retention": policy.retention,
         "requires": list(policy.requires or []),
         "wake_before_backup": policy.wake_before_backup,
+        "wake_mode": policy.wake_mode.value,
+        "max_attempts": policy.max_attempts,
+        "restore_power_state": policy.restore_power_state,
         # Prerequisites whose node can never be woken (no power target), so the
         # form and list can warn before a backup fails on it.
         "requires_blockers": [
@@ -250,6 +277,9 @@ def _snapshot(policy: BackupPolicy) -> dict[str, Any]:
         "retention": policy.retention,
         "requires": list(policy.requires or []),
         "wake_before_backup": policy.wake_before_backup,
+        "wake_mode": policy.wake_mode.value,
+        "max_attempts": policy.max_attempts,
+        "restore_power_state": policy.restore_power_state,
     }
 
 
@@ -323,6 +353,9 @@ async def create_policy(
         retention=_validate_retention(body.retention),
         requires=_validate_requires(session, body.requires),
         wake_before_backup=body.wake_before_backup,
+        wake_mode=_validate_wake_mode(body.wake_mode),
+        max_attempts=_validate_max_attempts(body.max_attempts),
+        restore_power_state=bool(body.restore_power_state),
     )
     session.add(policy)
     session.flush()  # assigns policy.id, needed to attach services below
@@ -365,6 +398,14 @@ async def update_policy(
         if body.wake_before_backup is None:
             raise _bad("wake_before_backup must be true or false")
         policy.wake_before_backup = body.wake_before_backup
+    if "wake_mode" in fields:
+        policy.wake_mode = _validate_wake_mode(body.wake_mode)
+    if "max_attempts" in fields:
+        policy.max_attempts = _validate_max_attempts(body.max_attempts)
+    if "restore_power_state" in fields:
+        if body.restore_power_state is None:
+            raise _bad("restore_power_state must be true or false")
+        policy.restore_power_state = body.restore_power_state
     membership = {}
     if "services" in fields:
         membership = _sync_service_membership(
