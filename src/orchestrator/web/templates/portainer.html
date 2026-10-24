@@ -16,6 +16,7 @@
       <input id="p-search" type="search" placeholder="filter stacks" size="20">
       <button class="secondary" id="p-refresh" type="button">Refresh</button>
       <a class="btn secondary" id="p-open" href="#" target="_blank" rel="noopener" hidden>Open Portainer</a>
+      <button id="p-new" type="button" title="Ask Portainer to create a stack">New stack…</button>
     </div>
   </section>
 
@@ -40,7 +41,117 @@
       <tbody id="cont-body"></tbody>
     </table>
     </div>
+    <div class="row" id="d-actions">
+      <button class="secondary small" id="d-adopt" type="button" hidden>Adopt as a sub-service…</button>
+      <button class="secondary small" data-stack-action="start" type="button">Start</button>
+      <button class="secondary small" data-stack-action="stop" type="button">Stop</button>
+      <button class="secondary small" data-stack-action="restart" type="button">Restart</button>
+      <button class="danger small" id="d-delete" type="button">Delete…</button>
+      <span class="msg" id="d-msg"></span>
+    </div>
     <details><summary>The same by hand, on the Docker host</summary><pre class="manual" id="d-cmds"></pre></details>
+  </section>
+
+  <section id="adopt" hidden>
+    <h3>Adopt <span id="a-stack"></span> as a sub-service</h3>
+    <p class="msg">
+      Links the stack here. Nothing is copied from Portainer: only the stack's name and
+      environment number, plus the policies you pick. Review, then create.
+    </p>
+    <p class="msg error" id="a-notes"></p>
+    <div class="grid">
+      <label for="a-slug">Service slug</label><input id="a-slug" type="text">
+      <label for="a-parent">Lives under</label><select id="a-parent"></select>
+      <label for="a-group">Group</label><input id="a-group" type="text" placeholder="optional">
+    </div>
+    <h4>Containers</h4>
+    <div class="table-scroll"><table>
+      <thead><tr><th>Add</th><th>Container</th><th>Sub-service slug</th><th>Backup waits for it</th></tr></thead>
+      <tbody id="a-children"></tbody>
+    </table></div>
+    <h4>Proxy hosts that point at it</h4>
+    <div id="a-hosts" class="checks"></div>
+    <div class="grid">
+      <label>Probes</label>
+      <label class="inline"><input type="checkbox" id="a-probes" checked> add a Portainer probe per container and an HTTP probe through the first proxy host</label>
+      <label for="a-deploy">Deploy method</label>
+      <select id="a-deploy">
+        <option value="">none — add one later</option>
+        <option value="none">guards: none</option>
+        <option value="probes">guards: probes before and after</option>
+        <option value="probes+backup">guards: probes + a recent backup</option>
+      </select>
+      <label for="a-hook">Webhook</label>
+      <select id="a-hook"><option value="">none</option><option value="gitlab">GitLab</option><option value="github">GitHub</option><option value="generic">generic (a token)</option></select>
+    </div>
+    <div class="row">
+      <button id="a-go" type="button">Create the sub-service</button>
+      <button class="secondary" id="a-cancel" type="button">Cancel</button>
+      <span class="msg" id="a-msg"></span>
+    </div>
+    <pre class="manual" id="a-result" hidden></pre>
+  </section>
+
+  <section id="create" hidden>
+    <h3>New stack</h3>
+    <p class="msg">
+      Sent to Portainer, which creates and owns it. Variable values and the Git password go straight
+      to Portainer and are not kept, logged or shown again. Preview the exact request first.
+    </p>
+    <div class="grid">
+      <label for="c-env">Environment</label><select id="c-env"></select>
+      <label for="c-name">Stack name</label><input id="c-name" type="text">
+      <label for="c-source">Source</label>
+      <select id="c-source"><option value="git">a Git repository</option><option value="string">compose text</option></select>
+    </div>
+    <div class="grid" id="c-git">
+      <label for="c-url">Repository URL</label><input id="c-url" type="text" placeholder="https://gitlab.example.com/group/app.git">
+      <label for="c-ref">Reference</label><input id="c-ref" type="text" value="refs/heads/main">
+      <label for="c-path">Compose file</label><input id="c-path" type="text" value="docker-compose.yml">
+      <label for="c-cred">Saved credential</label><input id="c-cred" type="number" min="1" placeholder="a Git credential Portainer already has (its id)">
+      <label for="c-user">…or username</label><input id="c-user" type="text" autocomplete="off">
+      <label for="c-pass">…and password</label><input id="c-pass" type="password" autocomplete="new-password">
+      <label>Auto update</label><label class="inline"><input type="checkbox" id="c-auto"> let Portainer poll the repository</label>
+    </div>
+    <div class="grid" id="c-text" hidden>
+      <label for="c-compose">Compose text</label><textarea id="c-compose" rows="10" spellcheck="false" class="json"></textarea>
+    </div>
+    <h4>Environment variables</h4>
+    <div id="c-vars"></div>
+    <div class="row"><button class="secondary small" id="c-addvar" type="button">Add a variable</button></div>
+    <div class="grid">
+      <label>Also link it</label>
+      <div class="row">
+        <label class="inline"><input type="checkbox" id="c-adopt"> as a sub-service</label>
+        <input id="c-slug" type="text" size="18" placeholder="slug" style="width:auto">
+        <span class="muted">under</span> <select id="c-parent" style="width:auto"></select>
+      </div>
+    </div>
+    <div class="row">
+      <button class="secondary" id="c-preview" type="button">Preview the request</button>
+      <button id="c-go" type="button" disabled>Create in Portainer</button>
+      <button class="secondary" id="c-cancel" type="button">Cancel</button>
+      <span class="msg" id="c-msg"></span>
+    </div>
+    <pre class="manual" id="c-request" hidden></pre>
+  </section>
+
+  <section id="delete" hidden>
+    <h3>Delete <span id="x-stack"></span></h3>
+    <p class="msg error">
+      Deletes the stack in Portainer (its volumes are kept) and then the link here. Containers stop.
+    </p>
+    <p class="msg" id="x-linked"></p>
+    <div class="row">
+      <input id="x-name" type="text" placeholder="type the stack's name to confirm" size="32" autocomplete="off">
+      <label class="inline"><input type="checkbox" id="x-down"> switch linked services off first (in the right order)</label>
+      <label class="inline"><input type="checkbox" id="x-keep"> keep the sub-services (only clear the link)</label>
+    </div>
+    <div class="row">
+      <button class="danger" id="x-go" type="button">Delete the stack</button>
+      <button class="secondary" id="x-cancel" type="button">Cancel</button>
+      <span class="msg" id="x-msg"></span>
+    </div>
   </section>
 
   <section id="logs" hidden>
@@ -70,6 +181,16 @@
   pre.log.wrap { white-space: pre-wrap; overflow-wrap: anywhere; }
   pre.log .err { color: #e5534b; } pre.log .ts { color: #6b7280; }
   pre.manual { background: #11151d; padding: 0.6rem 0.8rem; border-radius: 0.4rem; font-size: 0.8rem; overflow-x: auto; }
+  .grid { display: grid; grid-template-columns: 11rem minmax(0, 1fr); gap: 0.6rem 1rem; align-items: center; margin-bottom: 1rem; }
+  .grid > * { min-width: 0; }
+  .grid > label { color: #9aa4b2; font-size: 0.85rem; }
+  .grid input:not([type=checkbox]), .grid select, .grid textarea { width: 100%; max-width: 100%; }
+  @media (max-width: 40rem) { .grid { grid-template-columns: minmax(0, 1fr); } }
+  .checks { display: flex; flex-wrap: wrap; gap: 0.4rem 1rem; margin-bottom: 0.8rem; }
+  .var-row { display: flex; gap: 0.5rem; margin-bottom: 0.4rem; }
+  .var-row input { flex: 1; min-width: 0; }
+  textarea.json { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+  section[id] h4 { margin: 1rem 0 0.4rem; }
 </style>
 {% endblock %}
 {% block scripts %}

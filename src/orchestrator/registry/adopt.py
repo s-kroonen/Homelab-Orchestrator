@@ -110,6 +110,15 @@ class Suggestion:
         return self.__dict__.copy()
 
 
+def parent_candidates(session: Session) -> list[dict[str, Any]]:
+    """Services a stack can live under: the roots that own a guest."""
+    return [
+        {"slug": s.slug, "name": s.name, "guest": f"{s.guest_kind.value} {s.guest_id}"}
+        for s in session.exec(select(Service).order_by(Service.slug)).all()
+        if s.parent_id is None and s.guest_id is not None
+    ]
+
+
 async def suggest(
     session: Session,
     adapters: AdapterBundle,
@@ -131,21 +140,15 @@ async def suggest(
     except AdapterError as exc:
         raise StackError(str(exc), 502) from exc
 
-    roots = [
-        s
-        for s in session.exec(select(Service).order_by(Service.slug)).all()
-        if s.parent_id is None and s.guest_id is not None
-    ]
-    parents = [
-        {"slug": s.slug, "name": s.name, "guest": f"{s.guest_kind.value} {s.guest_id}"}
-        for s in roots
-    ]
+    parents = parent_candidates(session)
     chosen = parent
     if chosen is None:
         named = [
-            s.slug for s in roots if "portainer" in s.slug.lower() or "portainer" in s.name.lower()
+            p["slug"]
+            for p in parents
+            if "portainer" in p["slug"].lower() or "portainer" in p["name"].lower()
         ]
-        chosen = named[0] if named else (roots[0].slug if len(roots) == 1 else None)
+        chosen = named[0] if named else (parents[0]["slug"] if len(parents) == 1 else None)
 
     slug = free_slug(session, slugify(stack.name))
     out = Suggestion(

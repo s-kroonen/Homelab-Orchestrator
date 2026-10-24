@@ -7,7 +7,7 @@
   const root = $("map-root");
   const state = {
     data: null, view: "boxes", q: "", problems: false, edges: new Set(), selected: null,
-    groupBy: "box", sortBy: "name",
+    groupBy: "box", sortBy: "name", linked: {},
   };
   try {
     state.groupBy = localStorage.getItem("orch:map:groupBy") || state.groupBy;
@@ -60,6 +60,13 @@
     row.append(el("span", "nm", svc.name || svc.slug), badge(svc.verdict));
     if (svc.kind === "sub") row.append(el("span", "chip", "sub"));
     if (svc.controller) row.append(el("span", "chip", svc.controller));
+    if (svc.deploy) row.append(el("span", "chip", "deploys"));
+    const ls = state.linked[svc.slug];
+    if (ls && (ls.state === "mixed" || (ls.drift && ls.state !== "none"))) {
+      const c = el("span", "chip warn", ls.state === "mixed" ? "mixed" : "not as asked");
+      c.title = ls.drift;
+      row.append(c);
+    }
     if (svc.recovery) row.append(el("span", "chip", "auto-recover"));
     if (svc.backup_gate === "required") row.append(el("span", "chip", "backup gate"));
     c.append(row);
@@ -382,6 +389,12 @@
     add("Backup gate", svc.backup_gate);
     add("Last backup", svc.last_backup ? new Date(svc.last_backup.at).toLocaleString() + (svc.last_backup.verified ? " ✓" : "") : "");
     add("Auto-recovery", svc.recovery ? "on" : "");
+    add("Deploys", svc.deploy ? "a deploy method is set" : "");
+    const ls = state.linked[svc.slug];
+    if (ls) {
+      add("Linked state", ls.state + (ls.drift ? " - " + ls.drift : ""));
+      add("Linked parts", ls.parts.map((p) => `${p.label}: ${p.on === true ? "on" : p.on === false ? "off" : "?"}`).join(", "));
+    }
     add("Sub-services", svc.children.map((c) => c.slug).join(", "));
     body.append(dl);
     const acts = el("div", "acts");
@@ -429,7 +442,15 @@
       if (state.selected) openDrawer(state.selected);
     } catch (e) {
       $("m-msg").textContent = "Could not load the map: " + e.message;
+      return;
     }
+    // What is really switched on (reads Portainer, Traefik Manager, Proxmox): after the map is
+    // already drawn, and only an extra - the map works without it.
+    try {
+      state.linked = await apiFetch("GET", "/api/services/linked/all", undefined, { suppressToast: true });
+      render();
+      if (state.selected) openDrawer(state.selected);
+    } catch (_e) { /* keep the map as it is */ }
   }
 
   for (const b of document.querySelectorAll("#view-seg button")) {

@@ -122,6 +122,12 @@ async def suggest(
         raise fail(exc) from exc
 
 
+@router.get("/stacks/parents")
+async def parents(session: SessionDep) -> dict[str, Any]:
+    """The services a new stack can be linked under (roots that own a guest)."""
+    return {"parents": adoption.parent_candidates(session)}
+
+
 @router.post("/stacks/adopt", status_code=status.HTTP_201_CREATED)
 async def adopt(
     body: AdoptIn,
