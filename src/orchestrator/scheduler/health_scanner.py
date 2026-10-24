@@ -67,6 +67,7 @@ from orchestrator.adapters.factory import AdapterBundle
 from orchestrator.config import Settings
 from orchestrator.db.models import HealthScanSample, Service
 from orchestrator.db.session import session_scope
+from orchestrator.deploy.watch import DeployWatcher
 from orchestrator.domain.schemas import ServiceVerdict
 from orchestrator.health.engine import HealthEngine
 from orchestrator.logging_setup import get_logger
@@ -120,6 +121,7 @@ class HealthScanner:
         )
         self._adapters = adapters
         self._linked = LinkedWatcher()
+        self._deploys = DeployWatcher()
         self._scheduler = AsyncIOScheduler()
 
     # -- lifecycle -----------------------------------------------------------
@@ -250,6 +252,7 @@ class HealthScanner:
             return
         try:
             await self._linked.observe(session, self._adapters, self._settings, guest_cache)
+            await self._deploys.observe(session, self._adapters, self._settings)
         except Exception as exc:  # pragma: no cover - defensive
             log.error(
                 "health_scanner.linked_watch_failed", error=str(exc), error_type=type(exc).__name__

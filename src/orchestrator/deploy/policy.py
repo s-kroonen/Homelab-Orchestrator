@@ -118,7 +118,7 @@ def normalize_deploy(raw: dict[str, Any] | None) -> dict[str, Any]:
     _only(post, ("probes", "timeout_s", "settle_s"), "deploy guard.post")
     out["guard"]["post"] = {
         "probes": _bool(post.get("probes", True), "guard.post.probes"),
-        "timeout_s": _int(post.get("timeout_s", 180), "guard.post.timeout_s", 10),
+        "timeout_s": _int(post.get("timeout_s", 180), "guard.post.timeout_s", 1),
         "settle_s": _int(post.get("settle_s", 30), "guard.post.settle_s", 0),
     }
 

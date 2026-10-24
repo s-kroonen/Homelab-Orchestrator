@@ -76,27 +76,35 @@ class SwitchResult:
 # -- refusals -------------------------------------------------------------------------------
 
 
-def _busy(session: Session, ids: list[int | None]) -> str | None:
-    """Why the subtree must not be touched right now, or None."""
+def busy_reason(
+    session: Session, ids: list[int | None], ignore_run: int | None = None
+) -> str | None:
+    """Why the services must not be touched right now (a switch or a deploy is running
+    for one of them), or None."""
     live = [i for i in ids if i is not None]
     if live:
-        running = session.exec(
+        for running in session.exec(
             select(PipelineRun).where(
                 col(PipelineRun.service_id).in_(live),
                 col(PipelineRun.kind).in_([PipelineKind.SWITCH, PipelineKind.DEPLOY]),
                 PipelineRun.status == PipelineStatus.RUNNING,
             )
-        ).first()
-        if running is not None:
-            return f"a {running.kind.value} is already running for this service (run {running.id})"
+        ).all():
+            if running.id != ignore_run:
+                return (
+                    f"a {running.kind.value} is already running for this service "
+                    f"(run {running.id})"
+                )
     return None
 
 
-def _check_allowed(session: Session, svc: Service, tree: TreeIndex, want: bool) -> None:
+def _check_allowed(
+    session: Session, svc: Service, tree: TreeIndex, want: bool, ignore_run: int | None
+) -> None:
     from orchestrator.web.routers.dashboard import _backup_currently_running
 
     subtree = [svc, *tree.descendants(svc)]
-    busy = _busy(session, [s.id for s in subtree])
+    busy = busy_reason(session, [s.id for s in subtree], ignore_run)
     if busy:
         raise SwitchRefused(busy)
     root = tree.root(svc)
@@ -271,6 +279,7 @@ async def switch_service(
     restore_children: bool = False,
     wait_s: float = 120.0,
     poll_s: float = 2.0,
+    ignore_run: int | None = None,
 ) -> SwitchResult:
     """Switch ``slug`` on or off with everything linked to it. Raises
     :class:`SwitchRefused` (nothing done) or ``LookupError`` (no such service)."""
@@ -278,7 +287,7 @@ async def switch_service(
     if svc is None:
         raise LookupError(f"no service {slug!r}")
     tree = TreeIndex.build(session)
-    _check_allowed(session, svc, tree, want)
+    _check_allowed(session, svc, tree, want, ignore_run)
 
     verb = "on" if want else "off"
     run = PipelineRun(

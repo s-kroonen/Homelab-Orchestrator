@@ -75,21 +75,6 @@ def describe(cfg: dict[str, Any]) -> list[str]:
     return lines
 
 
-@deploy.command("show")
-@click.argument("slug")
-@click.option("--json", "as_json", is_flag=True)
-@click.option("--file", "path_override", default=None)
-def deploy_show(slug: str, as_json: bool, path_override: str | None) -> None:
-    """Show SLUG's deploy settings."""
-    _, cfg = _current(slug, path_override)
-    cfg = normalize_deploy(cfg)
-    if as_json:
-        click.echo(json.dumps(cfg, indent=2))
-        return
-    for line in describe(cfg):
-        click.echo(line)
-
-
 @deploy.command("set")
 @click.argument("slug")
 @click.option(
@@ -206,3 +191,152 @@ def deploy_clear(slug: str, path_override: str | None) -> None:
     editor, _ = _current(slug, path_override)
     (editor.get_service(slug) or {}).pop("deploy", None)
     save(editor, f"deploy method removed from {slug!r}")
+
+
+# -- running ----------------------------------------------------------------------------------
+
+
+def _print_run(run: Any) -> None:
+    colour = {"succeeded": "green", "failed": "red", "skipped": "yellow"}.get(run.status.value)
+    click.secho(f"Run #{run.id} - {run.status.value}", fg=colour, bold=True)
+    for step in run.steps:
+        detail = step.get("detail") or {}
+        note = detail.get("error") or detail.get("reason") or detail.get("note") or ""
+        click.echo(f"  {step['status']:<8} {step['name']:<14} {note}")
+    if run.error:
+        click.secho(f"  {run.error}", fg=colour)
+
+
+def _run_deploy(
+    slug: str, *, guards: bool, guards_only: bool, reason: str, actor: str = "cli"
+) -> None:
+    import asyncio
+
+    from sqlmodel import Session
+
+    from orchestrator.adapters.factory import build_adapters
+    from orchestrator.config import get_settings
+    from orchestrator.db.session import build_engine, get_engine
+    from orchestrator.deploy.pipeline import DeployPipeline, DeployRefused, Trigger
+    from orchestrator.domain.enums import PipelineStatus
+    from orchestrator.logging_setup import configure_logging
+
+    configure_logging()
+    build_engine()
+    settings = get_settings()
+    adapters = build_adapters(settings)
+    if settings.dry_run:
+        click.secho("DRY_RUN is on - nothing real is deployed.", fg="yellow")
+
+    async def go() -> Any:
+        await adapters.start_all()
+        try:
+            with Session(get_engine()) as session:
+                run = await DeployPipeline(adapters, settings).run_for_service(
+                    session,
+                    slug,
+                    Trigger("cli", actor),
+                    guards=guards,
+                    guards_only=guards_only,
+                    reason=reason,
+                )
+                session.refresh(run)
+                session.expunge(run)
+                return run
+        finally:
+            await adapters.stop_all()
+
+    try:
+        run = asyncio.run(go())
+    except DeployRefused as exc:
+        raise click.ClickException(str(exc)) from exc
+    _print_run(run)
+    if run.status is not PipelineStatus.SUCCEEDED:
+        raise SystemExit(1)
+
+
+@deploy.command("run")
+@click.argument("slug")
+@click.option(
+    "--unguarded",
+    is_flag=True,
+    help="Skip the pre-guards (probes, backup). Needs --reason; it is audited.",
+)
+@click.option("--reason", default="", help="Why the guards are skipped.")
+def deploy_run(slug: str, unguarded: bool, reason: str) -> None:
+    """Redeploy SLUG's stack through the guards and wait for the result."""
+    if unguarded and not reason.strip():
+        raise click.UsageError("--unguarded needs --reason (it is written to the audit log)")
+    _run_deploy(slug, guards=not unguarded, guards_only=False, reason=reason.strip())
+
+
+@deploy.command("guards")
+@click.argument("slug")
+def deploy_guards(slug: str) -> None:
+    """Run SLUG's pre-guards now and report, without deploying (a backup is not taken)."""
+    _run_deploy(slug, guards=True, guards_only=True, reason="")
+
+
+@deploy.command("history")
+@click.argument("slug")
+@click.option("--limit", type=int, default=10)
+def deploy_history(slug: str, limit: int) -> None:
+    """The latest deploys of SLUG."""
+    from sqlmodel import Session, desc, select
+
+    from orchestrator.db.models import PipelineRun, Service
+    from orchestrator.db.session import build_engine, get_engine
+    from orchestrator.domain.enums import PipelineKind
+
+    build_engine()
+    with Session(get_engine()) as session:
+        svc = session.exec(select(Service).where(Service.slug == slug)).one_or_none()
+        if svc is None:
+            raise click.ClickException(f"no service {slug!r}")
+        runs = session.exec(
+            select(PipelineRun)
+            .where(PipelineRun.service_id == svc.id, PipelineRun.kind == PipelineKind.DEPLOY)
+            .order_by(desc(PipelineRun.started_at))
+            .limit(max(1, limit))
+        ).all()
+        if not runs:
+            click.echo("No deploys yet.")
+        for r in runs:
+            source = next(
+                (s["detail"].get("source", "") for s in r.steps if s["name"] == "trigger"), ""
+            )
+            click.echo(
+                f"#{r.id:<5} {r.started_at:%Y-%m-%d %H:%M}  {r.status.value:<10} "
+                f"{source:<8} {r.error or ''}"
+            )
+
+
+@deploy.command("show")
+@click.argument("target")
+@click.option("--json", "as_json", is_flag=True)
+@click.option("--file", "path_override", default=None)
+def deploy_show(target: str, as_json: bool, path_override: str | None) -> None:
+    """Show a service's deploy settings (a SLUG), or one deploy run (a number)."""
+    if target.isdigit():
+        from sqlmodel import Session
+
+        from orchestrator.db.models import PipelineRun
+        from orchestrator.db.session import build_engine, get_engine
+
+        build_engine()
+        with Session(get_engine()) as session:
+            run = session.get(PipelineRun, int(target))
+            if run is None:
+                raise click.ClickException(f"no run {target}")
+            if as_json:
+                click.echo(json.dumps(run.steps, indent=2))
+            else:
+                _print_run(run)
+        return
+    _, cfg = _current(target, path_override)
+    cfg = normalize_deploy(cfg)
+    if as_json:
+        click.echo(json.dumps(cfg, indent=2))
+        return
+    for line in describe(cfg):
+        click.echo(line)
