@@ -573,6 +573,11 @@ ENV_SECTIONS: tuple[EnvSection, ...] = (
             EnvKey("MAIL_TO", "Where e-mail alerts go (comma-separated). Needs MAIL_SMTP_HOST."),
             EnvKey("MAIL_SMTP_STARTTLS"),
             EnvKey("NOTIFY_WEBHOOK_URL", "Any endpoint that takes a JSON POST."),
+            EnvKey(
+                "PUSH_VAPID_SUBJECT",
+                "Contact the browsers' push services see (mailto: or https URL). Blank = the "
+                "dashboard's https address.",
+            ),
             EnvKey("NOTIFY_WEBHOOK_TOKEN", secret=True),
             EnvKey(
                 "NOTIFICATIONS_ENABLED", "false = no alerts and no feed (state is not tracked)."

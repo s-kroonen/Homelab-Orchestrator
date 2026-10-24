@@ -320,11 +320,12 @@ async def test_multi_notifier_isolates_channels() -> None:
 
 def test_build_notifier_from_settings() -> None:
     base = Settings(dry_run=False, notifier_adapter="auto")
-    assert isinstance(build_notifier(base), NullNotifier)  # nothing configured
+    # nothing configured: only the (device-registered) push channel, which skips itself
+    assert build_notifier(base).channels() == ["push"]
     s = base.model_copy(update={"ntfy_url": "https://n/t", "notify_webhook_url": "https://w"})
-    assert build_notifier(s).channels() == ["ntfy", "webhook"]
+    assert build_notifier(s).channels() == ["ntfy", "webhook", "push"]
     mail = s.model_copy(update={"mail_smtp_host": "m", "mail_to": "a@x, b@x"})
-    assert build_notifier(mail).channels() == ["ntfy", "email", "webhook"]
+    assert build_notifier(mail).channels() == ["ntfy", "email", "webhook", "push"]
     only = mail.model_copy(update={"notifier_adapter": "email"})
     assert build_notifier(only).channels() == ["email"]
     assert isinstance(build_notifier(mail.model_copy(update={"dry_run": True})), NullNotifier)
