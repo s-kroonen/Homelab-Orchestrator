@@ -164,8 +164,12 @@ show it per linked thing.
   **Enable** goes the other way, **innermost first**: wake and start the guest, start the stack,
   wait for probes, then serve the proxy hosts.
 * **Disabling a parent does the same to every descendant** (their proxy hosts and stacks) before
-  its own linked things; enabling a parent only brings up its own things and leaves a child that
-  was off, off, unless asked ("enable everything").
+  its own linked things.
+* **Bringing a parent back up: monitor only, for now.** The server's own startup already brings
+  guests up, and several control planes (Proxmox, Portainer, Traefik) each have their own idea of
+  what starts when, so the orchestrator will first *observe* what came back and show it. Rules
+  ("return the children to the state they had", startup actions, ordering) come later, once
+  there is enough observed behaviour to write them against.
 * Anything that would hurt is refused as today: a guest backup running, a deploy in flight.
   Stopping a guest asks for confirmation each time.
 * **The intent flag stays.** `enabled` in `services.yaml` records what you asked for, because
@@ -238,7 +242,7 @@ and the connectivity check. Each prints what it did and the audit entry it wrote
 
 ## Build order
 
-1. **Portainer client + read side**: shared client, redaction, version check, connectivity
+1. **Portainer client + read side** *(built: see [portainer.md](portainer.md))*: shared client, redaction, version check, connectivity
    check, discovery API and CLI, container state and a log viewer. Read-only, risk-free.
 2. **State and the one switch**: observed state per linked thing (proxy / stack / guest), the
    mixed display, enable/disable across all linked controllers and down the tree, the stack
@@ -269,13 +273,14 @@ one Traefik route over both. What we do now so it can come later without rework:
 The editable adapter instances and the secret store discussed earlier are a separate track and
 are not needed for steps 1-6 (the Portainer URL and key stay in `.env` for now).
 
+## Decided
+
+* `enabled` stays as **intent** next to the observed state (recovery needs "off on purpose").
+* A parent coming up should eventually restore its children to their previous state; for now
+  the orchestrator only **monitors** this (multiple control planes). Rules and startup actions
+  come in a later phase.
+
 ## Still open
 
-1. **Intent vs fully derived**: keep `enabled` as intent next to the observed state (as above,
-   because recovery needs to know "off on purpose"), or derive everything from observation and
-   treat a stopped stack as simply off?
-2. **Enabling a parent**: bring back only its own things (children stay off), or everything
-   under it as it was before the disable? (As written: only its own, plus an explicit
-   "enable everything".)
-3. **Portainer version and edition**: step 1's connectivity check will report it; the exact API
+1. **Portainer version and edition**: step 1's connectivity check will report it; the exact API
    shapes (commit references on redeploy, saved Git credentials on create) depend on it.

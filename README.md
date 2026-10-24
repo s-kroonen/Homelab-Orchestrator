@@ -99,6 +99,7 @@ probing services the orchestrator cannot reach directly,
 [docs/host_runner.md](docs/host_runner.md) for running credentialed checks
 off-container,
 [docs/service_tree.md](docs/service_tree.md) for sub-services, the tree and the map,
+[docs/portainer.md](docs/portainer.md) for reading Portainer stacks, containers and logs,
 [docs/pwa_push.md](docs/pwa_push.md) for installing the app and push notifications,
 [docs/system.md](docs/system.md) for backups, restore, schema upgrades,
 updating (one command or one click, with automatic rollback if the new version does not come up) and

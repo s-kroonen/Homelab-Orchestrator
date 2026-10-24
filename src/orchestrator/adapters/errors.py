@@ -19,6 +19,11 @@ class AdapterError(Exception):
     """Base for every adapter-raised error."""
 
 
+class AdapterNotConfigured(AdapterError):
+    """The adapter has no address or credentials yet. Not a failure of the thing
+    itself: the setting that is missing is named in the message."""
+
+
 class AdapterUnreachable(AdapterError):
     """Transport failed: DNS, connect, TLS, or timeout. Indeterminate."""
 

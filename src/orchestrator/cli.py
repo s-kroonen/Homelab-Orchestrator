@@ -6,7 +6,8 @@
     Registry    service | probe | proxy   edit entries in services.yaml
                 proxy resync-maintenance  backfill the Traefik maintenance middleware (DB, not YAML)
                 proxy status | push       what is not pushed to Traefik Manager yet / push it now
-    Diagnose    check                     can I reach Proxmox and PBS?
+    Diagnose    check                     can I reach Proxmox, PBS, MQTT and Portainer?
+                portainer ...             what Portainer has: stacks, containers, logs
                 transport check           is the host runner / ssh plumbing usable?
                 guests | snapshots        what do Proxmox and PBS see?
                 scan SLUG | --all         what will the backup gate decide?
@@ -40,6 +41,7 @@ from orchestrator.cli_config import probe, proxy
 from orchestrator.cli_config import service as service_group
 from orchestrator.cli_ip import ip_group
 from orchestrator.cli_notify import notify as notify_group
+from orchestrator.cli_portainer import portainer as portainer_group
 from orchestrator.cli_setup import config_group, init, scaffold
 from orchestrator.cli_system import system as system_group
 from orchestrator.config import get_settings
@@ -182,6 +184,7 @@ def check() -> None:
 
             failures += await _check_nodes(adapters)
             failures += await _check_power(adapters)
+            failures += await _check_portainer(adapters)
         finally:
             await adapters.stop_all()
         return failures
@@ -206,6 +209,26 @@ async def _check_nodes(adapters: Any) -> int:
                 "(dashboard: Fill addresses from Proxmox, or set `address:` in services.yaml)",
                 fg="yellow",
             )
+    failures = 0
+    for row in rows:
+        if row.get("ok"):
+            click.secho(f"  OK    {row['target']}: {row['result']['detail']}", fg="green")
+        else:
+            click.secho(f"  FAIL  {row['target']}: {row.get('error')}", fg="red")
+            failures += 1
+    return failures
+
+
+async def _check_portainer(adapters: Any) -> int:
+    """Portainer is optional: not configured is a note, not a failure."""
+    from orchestrator.web.routers.infra import portainer_checks
+
+    rows = await portainer_checks(adapters)
+    if not rows:
+        click.secho(
+            "  --    portainer: not configured (PORTAINER_URL / PORTAINER_API_KEY)", fg="yellow"
+        )
+        return 0
     failures = 0
     for row in rows:
         if row.get("ok"):
@@ -925,6 +948,7 @@ cli.add_command(transport)
 cli.add_command(ip_group, name="ip")
 cli.add_command(bulk)
 cli.add_command(system_group, name="system")
+cli.add_command(portainer_group, name="portainer")
 cli.add_command(notify_group, name="notify")
 cli.add_command(admin_group, name="admin")
 

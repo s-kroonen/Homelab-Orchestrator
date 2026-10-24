@@ -204,6 +204,12 @@ ENV_SECTIONS: tuple[EnvSection, ...] = (
                 secret=True,
             ),
             EnvKey("PORTAINER_VERIFY_TLS"),
+            EnvKey("PORTAINER_ADAPTER", "api | dry_run (sample stacks and containers)"),
+            EnvKey(
+                "PORTAINER_PUBLIC_URL",
+                "The address you open Portainer at in a browser, for 'Open in Portainer' links "
+                "(blank: PORTAINER_URL).",
+            ),
             EnvKey("HAOS_URL", "e.g. http://10.0.0.6:8123. For `controller: {type: haos ...}`."),
             EnvKey(
                 "HAOS_TOKEN",

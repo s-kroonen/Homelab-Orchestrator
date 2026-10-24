@@ -11,6 +11,9 @@ from orchestrator.adapters.notifier.null import NullNotifier
 from orchestrator.adapters.pbs.api import LivePbsAdapter
 from orchestrator.adapters.pbs.base import PbsAdapter
 from orchestrator.adapters.pbs.dry_run import DryRunPbsAdapter
+from orchestrator.adapters.portainer.api import LivePortainerAdapter
+from orchestrator.adapters.portainer.base import PortainerAdapter
+from orchestrator.adapters.portainer.dry_run import DryRunPortainerAdapter
 from orchestrator.adapters.power.base import PowerAdapter
 from orchestrator.adapters.power.dry_run import DryRunPowerAdapter
 from orchestrator.adapters.power.mqtt import MqttPowerAdapter
@@ -33,18 +36,24 @@ class AdapterBundle:
     pbs: PbsAdapter
     proxy: ProxyAdapter
     notifier: Notifier
+    #: Optional: absent in bundles built by hand (tests); always set by build_adapters.
+    portainer: PortainerAdapter | None = None
 
     async def start_all(self) -> None:
         await self.power.start()
         await self.proxmox.start()
         await self.pbs.start()
         await self.proxy.start()
+        if self.portainer is not None:
+            await self.portainer.start()
 
     async def stop_all(self) -> None:
         await self.power.stop()
         await self.proxmox.stop()
         await self.pbs.stop()
         await self.proxy.stop()
+        if self.portainer is not None:
+            await self.portainer.stop()
 
 
 def build_notifier(settings: Settings) -> Notifier:
@@ -159,6 +168,12 @@ def build_adapters(settings: Settings | None = None) -> AdapterBundle:
     else:
         proxy = TraefikManagerProxyAdapter(settings)
 
+    portainer: PortainerAdapter
+    if settings.resolve_adapter(settings.portainer_adapter) is AdapterMode.DRY_RUN:
+        portainer = DryRunPortainerAdapter()
+    else:
+        portainer = LivePortainerAdapter(settings)
+
     notifier = build_notifier(settings)
 
     log.info(
@@ -170,4 +185,11 @@ def build_adapters(settings: Settings | None = None) -> AdapterBundle:
         notifier=type(notifier).__name__,
         dry_run_flag=settings.dry_run,
     )
-    return AdapterBundle(power=power, proxmox=proxmox, pbs=pbs, proxy=proxy, notifier=notifier)
+    return AdapterBundle(
+        power=power,
+        proxmox=proxmox,
+        pbs=pbs,
+        proxy=proxy,
+        notifier=notifier,
+        portainer=portainer,
+    )

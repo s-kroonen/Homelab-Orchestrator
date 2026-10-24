@@ -1,0 +1,212 @@
+"""The Portainer adapter interface and the shapes it returns.
+
+Portainer owns stacks the way Proxmox owns guests: this adapter *reads* them, and the
+orchestrator keeps only links to them. Every shape here is therefore already
+**redacted**: stack environment values, Git credentials, container environments and
+webhook ids never appear in them - only the names, and "there is one".
+"""
+
+from __future__ import annotations
+
+from abc import ABC, abstractmethod
+from dataclasses import dataclass, field
+
+
+@dataclass(frozen=True)
+class PortainerCheck:
+    """One answer to "is Portainer usable?" for the connectivity checks."""
+
+    configured: bool
+    reachable: bool
+    ok: bool
+    version: str = ""
+    edition: str = ""
+    environments: int = 0
+    detail: str = ""
+
+
+@dataclass(frozen=True)
+class Environment:
+    id: int
+    name: str
+    #: docker | agent | edge | kubernetes | azure | unknown
+    type: str
+    #: up | down | unknown
+    status: str
+    url: str = ""
+    running: int | None = None
+    stopped: int | None = None
+    healthy: int | None = None
+    unhealthy: int | None = None
+    stacks: int | None = None
+
+    @property
+    def is_docker(self) -> bool:
+        return self.type in {"docker", "agent", "edge"}
+
+
+@dataclass(frozen=True)
+class GitInfo:
+    url: str  # credentials stripped
+    reference: str = ""
+    path: str = ""
+    hash: str = ""
+    has_credentials: bool = False
+
+
+@dataclass(frozen=True)
+class Stack:
+    #: Portainer's id; None for a compose project Portainer did not create (it is only
+    #: visible through its containers' labels).
+    id: int | None
+    name: str
+    endpoint_id: int
+    #: compose | swarm | kubernetes | unknown
+    type: str
+    #: active | inactive
+    status: str
+    managed: bool = True
+    git: GitInfo | None = None
+    auto_update: bool = False
+    #: Portainer has a deploy webhook for this stack (the id itself is never exposed).
+    has_webhook: bool = False
+    #: Names only. Values are never read out of the client.
+    env_names: tuple[str, ...] = ()
+    created_at: str | None = None
+    updated_at: str | None = None
+    created_by: str = ""
+    updated_by: str = ""
+
+
+@dataclass(frozen=True)
+class PortMapping:
+    private: int
+    proto: str = "tcp"
+    public: int | None = None
+    ip: str = ""
+
+
+@dataclass(frozen=True)
+class Container:
+    id: str
+    name: str
+    #: running | exited | paused | restarting | created | dead | removing
+    state: str
+    #: Docker's own words, e.g. "Up 2 hours (healthy)"
+    status_text: str = ""
+    #: healthy | unhealthy | starting | "" (no health check)
+    health: str = ""
+    image: str = ""
+    image_id: str = ""
+    created_at: str | None = None
+    ports: tuple[PortMapping, ...] = ()
+    #: The compose project / swarm stack it belongs to, and its compose service name.
+    stack: str | None = None
+    service: str | None = None
+
+
+@dataclass(frozen=True)
+class Mount:
+    type: str
+    source: str
+    destination: str
+    read_only: bool = False
+
+
+@dataclass(frozen=True)
+class ContainerDetail:
+    container: Container
+    restart_count: int = 0
+    started_at: str | None = None
+    finished_at: str | None = None
+    exit_code: int | None = None
+    restart_policy: str = ""
+    health_log: tuple[str, ...] = ()
+    mounts: tuple[Mount, ...] = ()
+    networks: tuple[str, ...] = ()
+    tty: bool = False
+    #: Names of the environment variables only; never the values.
+    env_names: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class LogLine:
+    ts: str | None
+    stream: str  # stdout | stderr
+    text: str
+
+
+@dataclass(frozen=True)
+class ContainerStats:
+    cpu_percent: float
+    mem_bytes: int
+    mem_limit: int
+    net_rx_bytes: int = 0
+    net_tx_bytes: int = 0
+    pids: int = 0
+
+
+@dataclass
+class StackListing:
+    stacks: list[Stack] = field(default_factory=list)
+    #: environment id -> why its containers could not be read (the rest is still shown)
+    errors: dict[int, str] = field(default_factory=dict)
+
+
+class PortainerAdapter(ABC):
+    IMPLEMENTED = True
+
+    async def start(self) -> None:
+        return None
+
+    async def stop(self) -> None:
+        return None
+
+    @property
+    @abstractmethod
+    def configured(self) -> bool: ...
+
+    @property
+    @abstractmethod
+    def base_url(self) -> str:
+        """The address people open in a browser (PORTAINER_PUBLIC_URL, else PORTAINER_URL)."""
+
+    @abstractmethod
+    async def check(self) -> PortainerCheck: ...
+
+    @abstractmethod
+    async def list_environments(self) -> list[Environment]: ...
+
+    @abstractmethod
+    async def list_stacks(self, endpoint_id: int | None = None) -> StackListing: ...
+
+    @abstractmethod
+    async def get_stack(self, endpoint_id: int, name: str) -> Stack | None: ...
+
+    @abstractmethod
+    async def stack_kind(self, stack: Stack) -> str:
+        """``image`` | ``build`` | ``mixed`` | ``unknown`` - read from the compose file,
+        which is parsed and discarded, never returned."""
+
+    @abstractmethod
+    async def list_containers(
+        self, endpoint_id: int, *, stack: str | None = None, include_stopped: bool = True
+    ) -> list[Container]: ...
+
+    @abstractmethod
+    async def get_container(self, endpoint_id: int, ref: str) -> ContainerDetail | None:
+        """``ref`` is a container id (any prefix) or its name."""
+
+    @abstractmethod
+    async def logs(
+        self,
+        endpoint_id: int,
+        ref: str,
+        *,
+        tail: int = 200,
+        since: int | None = None,
+        timestamps: bool = True,
+    ) -> list[LogLine]: ...
+
+    @abstractmethod
+    async def stats(self, endpoint_id: int, ref: str) -> ContainerStats: ...

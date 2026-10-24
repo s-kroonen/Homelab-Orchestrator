@@ -405,6 +405,10 @@ class Settings(BaseSettings):
     portainer_url: str = ""
     portainer_api_key: SecretStr = SecretStr("")
     portainer_verify_tls: bool = True
+    # api | dry_run. dry_run (or DRY_RUN=true) serves sample stacks and containers.
+    portainer_adapter: str = "api"
+    # The address people open in a browser, for "Open in Portainer" links (blank: PORTAINER_URL).
+    portainer_public_url: str = ""
     haos_url: str = ""
     haos_token: SecretStr = SecretStr("")
     haos_verify_tls: bool = True

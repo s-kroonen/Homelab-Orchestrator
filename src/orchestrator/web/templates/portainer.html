@@ -1,0 +1,77 @@
+{% extends "base.html" %}
+{% block title %}homelab-orchestrator — Portainer{% endblock %}
+{% block content %}
+  <section>
+    <h2>Portainer</h2>
+    <p class="msg" id="p-status">Loading…</p>
+    <p class="msg">
+      What Portainer has, read live. Portainer owns the stacks; nothing here is copied from it, and
+      environment values, Git credentials and webhook ids are never shown. Every row links to
+      the same object in Portainer.
+    </p>
+    <div class="row">
+      <label class="inline">Environment
+        <select id="p-env"><option value="">all</option></select>
+      </label>
+      <input id="p-search" type="search" placeholder="filter stacks" size="20">
+      <button class="secondary" id="p-refresh" type="button">Refresh</button>
+      <a class="btn secondary" id="p-open" href="#" target="_blank" rel="noopener" hidden>Open Portainer</a>
+    </div>
+  </section>
+
+  <section>
+    <h3>Stacks</h3>
+    <div class="table-scroll">
+    <table>
+      <thead><tr><th>Stack</th><th>Env</th><th>Status</th><th>Kind</th><th>Containers</th><th>Git</th><th>Updated</th><th>Linked to</th><th></th></tr></thead>
+      <tbody id="stack-body"><tr><td colspan="9">Loading…</td></tr></tbody>
+    </table>
+    </div>
+    <p class="msg" id="p-errors"></p>
+  </section>
+
+  <section id="detail" hidden>
+    <h3 id="d-title"></h3>
+    <p class="msg" id="d-meta"></p>
+    <p class="msg" id="d-env"></p>
+    <div class="table-scroll">
+    <table>
+      <thead><tr><th>Container</th><th>State</th><th>Health</th><th>Image</th><th>Ports</th><th>Linked to</th><th></th></tr></thead>
+      <tbody id="cont-body"></tbody>
+    </table>
+    </div>
+    <details><summary>The same by hand, on the Docker host</summary><pre class="manual" id="d-cmds"></pre></details>
+  </section>
+
+  <section id="logs" hidden>
+    <h3>Logs <span class="muted" id="l-name"></span></h3>
+    <div class="row">
+      <select id="l-tail">
+        <option>100</option><option selected>200</option><option>500</option><option>1000</option><option>2000</option>
+      </select>
+      <label class="inline"><input type="checkbox" id="l-follow"> follow</label>
+      <label class="inline"><input type="checkbox" id="l-ts" checked> timestamps</label>
+      <label class="inline"><input type="checkbox" id="l-wrap"> wrap</label>
+      <input id="l-filter" type="search" placeholder="filter lines" size="18">
+      <button class="secondary" id="l-reload" type="button">Reload</button>
+      <button class="secondary" id="l-download" type="button">Download</button>
+      <span class="msg" id="l-msg"></span>
+    </div>
+    <pre class="log" id="l-out"></pre>
+  </section>
+{% endblock %}
+{% block extra_head %}
+<style>
+  select, input[type=search] { padding: 0.4rem; background: #171b24; border: 1px solid #2a2f3a; border-radius: 0.4rem; color: #e6e9ef; }
+  tr.pick { cursor: pointer; } tr.pick:hover td { background: #141925; }
+  tr.sel td { background: #1a2236; }
+  .chip { font-size: 0.7rem; padding: 0 0.4rem; border-radius: 0.8rem; background: #1b2232; color: #9aa4b2; white-space: nowrap; }
+  pre.log { background: #0d1118; border: 1px solid #232938; border-radius: 0.4rem; padding: 0.6rem; max-height: 28rem; overflow: auto; font-size: 0.78rem; line-height: 1.35; white-space: pre; margin: 0.5rem 0 0; }
+  pre.log.wrap { white-space: pre-wrap; overflow-wrap: anywhere; }
+  pre.log .err { color: #e5534b; } pre.log .ts { color: #6b7280; }
+  pre.manual { background: #11151d; padding: 0.6rem 0.8rem; border-radius: 0.4rem; font-size: 0.8rem; overflow-x: auto; }
+</style>
+{% endblock %}
+{% block scripts %}
+<script src="/static/portainer.js"></script>
+{% endblock %}
