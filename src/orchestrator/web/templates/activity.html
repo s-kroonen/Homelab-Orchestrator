@@ -1,26 +1,64 @@
 {% extends "base.html" %}
 {% block title %}homelab-orchestrator — activity{% endblock %}
 {% block content %}
-  <form class="row" method="get" action="/activity">
-    <label class="msg" for="service">Service</label>
-    <select id="service" name="service" onchange="this.form.submit()">
-      <option value="">all services and admin actions</option>
-      {% for slug in slugs %}
-      <option value="{{ slug }}" {% if slug == service %}selected{% endif %}>{{ slug }}</option>
-      {% endfor %}
-    </select>
-    {% if groups %}
-    <label class="msg" for="group">Group</label>
-    <select id="group" name="group" onchange="this.form.submit()">
-      <option value="">all groups</option>
-      {% for g in groups %}
-      <option value="{{ g }}" {% if g == group %}selected{% endif %}>{{ g }}</option>
-      {% endfor %}
-    </select>
+  <form class="filters" method="get" action="/activity" id="filters">
+    <label>Show
+      <select name="kind">
+        <option value="">everything</option>
+        {% for k, label in [("wake", "wakes"), ("backup", "backups"), ("restore", "restores"), ("admin", "what people did"), ("alert", "alerts")] %}
+        <option value="{{ k }}" {% if f.kind == k %}selected{% endif %}>{{ label }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label>Service
+      <select name="service">
+        <option value="">any</option>
+        {% for slug in options.slugs %}<option value="{{ slug }}" {% if slug == f.service %}selected{% endif %}>{{ slug }}</option>{% endfor %}
+      </select>
+    </label>
+    <label>Guest
+      <select name="guest">
+        <option value="">any</option>
+        {% for g in options.guests %}<option value="{{ g.key }}" {% if g.key == f.guest %}selected{% endif %}>{{ g.label }}</option>{% endfor %}
+      </select>
+    </label>
+    <label>Node
+      <select name="node">
+        <option value="">any</option>
+        {% for n in options.nodes %}<option value="{{ n }}" {% if n == f.node %}selected{% endif %}>{{ n }}</option>{% endfor %}
+      </select>
+    </label>
+    {% if options.groups %}
+    <label>Group
+      <select name="group">
+        <option value="">any</option>
+        {% for g in options.groups %}<option value="{{ g }}" {% if g == f.group %}selected{% endif %}>{{ g }}</option>{% endfor %}
+      </select>
+    </label>
     {% endif %}
-    <noscript><button type="submit">Filter</button></noscript>
-    <span class="msg">newest first, last {{ events|length }} event(s)</span>
+    <label>When
+      <select name="since_hours">
+        <option value="">all time</option>
+        {% for h, label in [(1, "last hour"), (24, "last 24 hours"), (168, "last 7 days"), (720, "last 30 days")] %}
+        <option value="{{ h }}" {% if f.since_hours == h %}selected{% endif %}>{{ label }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label>Search
+      <input type="search" name="q" value="{{ f.q }}" placeholder="action, target, error…" size="18">
+    </label>
+    <label class="inline"><input type="checkbox" name="problems" value="true" {% if f.problems %}checked{% endif %}> only problems</label>
+    <span class="actions">
+      <button type="submit">Filter</button>
+      {% if filtered %}<a class="btn secondary" href="/activity">Clear</a>{% endif %}
+    </span>
+    <span class="msg count">{{ events|length }} event(s), newest first</span>
   </form>
+  <script>
+    // Selecting a dropdown applies at once; the search box waits for Enter / Filter.
+    document.querySelectorAll("#filters select, #filters input[type=checkbox]").forEach((el) =>
+      el.addEventListener("change", () => el.form.submit()));
+  </script>
 
   {% macro outcome(value) -%}
     {%- if value in ("succeeded", "ok") -%}<span class="badge healthy">{{ value }}</span>
@@ -34,7 +72,7 @@
       {% if ev.type == "run" %}
       <details>
         <summary class="event-line">
-          <span class="when">{{ ev.at }}</span>
+          <span class="when"><time data-ts="{{ ev.at }}">{{ ev.at }}</time></span>
           <span class="what">{{ ev.kind }}{% if ev.service %} <code>{{ ev.service }}</code>{% endif %}</span>
           {{ outcome(ev.status) }}
           <span class="msg">by {{ ev.actor or "unknown" }} · run #{{ ev.id }}</span>
@@ -51,15 +89,25 @@
           </ol>
           {% else %}<p class="msg">No steps recorded yet.</p>{% endif %}
           <p class="msg">
-            {% if ev.finished_at %}finished {{ ev.finished_at }}{% else %}still running{% endif %}
+            {% if ev.finished_at %}finished <time data-ts="{{ ev.finished_at }}">{{ ev.finished_at }}</time>{% else %}still running{% endif %}
             · correlation <code>{{ ev.correlation_id }}</code>
             {% if ev.audit %}· audit: {% for a in ev.audit %}{{ a.action }} ({{ a.result }}){% if not loop.last %}, {% endif %}{% endfor %}{% endif %}
           </p>
         </div>
       </details>
+      {% elif ev.type == "alert" %}
+      <div class="event-line">
+        <span class="when"><time data-ts="{{ ev.at }}">{{ ev.at }}</time></span>
+        <span class="what">{{ ev.title }}</span>
+        <span class="badge {{ 'failed' if ev.severity in ('error', 'critical') else 'warn' if ev.severity == 'warn' else 'unknown' }}">{{ ev.event }}</span>
+        <span class="msg">{{ ev.level }} <code>{{ ev.target }}</code>
+          {% if ev.suppressed %}· folded: {{ ev.suppressed_reason }}
+          {% elif ev.delivered %}· sent: {% for ch, res in ev.delivered.items() %}{{ ch }} {{ "✓" if res == "ok" else "✗" }}{% if not loop.last %}, {% endif %}{% endfor %}
+          {% else %}· not sent{% endif %}</span>
+      </div>
       {% else %}
       <div class="event-line">
-        <span class="when">{{ ev.at }}</span>
+        <span class="when"><time data-ts="{{ ev.at }}">{{ ev.at }}</time></span>
         <span class="what" style="font-weight:500">{{ ev.action }}{% if ev.target %} <code>{{ ev.target }}</code>{% endif %}</span>
         {{ outcome(ev.result) }}
         <span class="msg">by {{ ev.actor }}</span>
@@ -67,12 +115,17 @@
       {% endif %}
     </li>
     {% else %}
-    <li class="msg">Nothing has happened yet{% if service %} for {{ service }}{% elif group %} for group {{ group }}{% endif %}.</li>
+    <li class="msg">{% if filtered %}Nothing matches these filters.{% else %}Nothing has happened yet.{% endif %}</li>
     {% endfor %}
   </ul>
 {% endblock %}
 {% block extra_head %}
 <style>
+  form.filters { display: flex; flex-wrap: wrap; gap: 0.6rem 1rem; align-items: flex-end; margin-bottom: 1rem; }
+  form.filters label { display: flex; flex-direction: column; gap: 0.2rem; color: #9aa4b2; font-size: 0.8rem; }
+  form.filters label.inline { flex-direction: row; align-items: center; gap: 0.4rem; }
+  form.filters .actions { display: flex; gap: 0.5rem; align-items: center; }
+  form.filters input[type=search] { padding: 0.4rem; background: #171b24; border: 1px solid #2a2f3a; border-radius: 0.4rem; color: #e6e9ef; }
   select { padding: 0.4rem; background: #171b24; border: 1px solid #2a2f3a; border-radius: 0.4rem; color: #e6e9ef; }
   ul.feed { list-style: none; padding: 0; margin: 0; }
   ul.feed > li { padding: 0.6rem 0; border-bottom: 1px solid #1a1e27; font-size: 0.85rem; }

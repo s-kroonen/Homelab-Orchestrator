@@ -48,6 +48,7 @@ from orchestrator.web.routers import (
     backup_policies,
     bulk,
     dashboard,
+    display,
     geo_traffic,
     health,
     infra,
@@ -343,6 +344,7 @@ def create_app() -> FastAPI:
     app.include_router(actions.router)
     app.include_router(approvals.router)
     app.include_router(system.router)
+    app.include_router(display.router)
     app.include_router(notifications.router)
     app.include_router(map_page.router)
     app.include_router(activity.router)

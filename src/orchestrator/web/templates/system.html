@@ -19,6 +19,23 @@
   </section>
 
   <section>
+    <h2>Time and schedules</h2>
+    <p class="msg">
+      Times on every page are shown in this timezone, and backup schedules (the cron times) run in
+      it too: <code>0 3 * * *</code> means 03:00 here. Changing it re-registers the schedules.
+    </p>
+    <div class="row">
+      <input id="tz-input" list="tz-list" size="28" placeholder="Europe/Amsterdam" autocomplete="off">
+      <datalist id="tz-list"></datalist>
+      <button id="tz-save">Save</button>
+      <button class="secondary" id="tz-browser" type="button">Use this browser's</button>
+      <button class="secondary" id="tz-default" type="button">Back to default</button>
+      <span class="msg" id="tz-msg"></span>
+    </div>
+    <p class="msg" id="tz-now"></p>
+  </section>
+
+  <section>
     <h2>Update</h2>
     <p class="msg" id="update-text">Not checked yet.</p>
     <div class="row">
@@ -84,7 +101,38 @@
     const d = Math.floor(s / 86400), h = Math.floor(s % 86400 / 3600), m = Math.floor(s % 3600 / 60);
     return (d ? d + "d " : "") + (h || d ? h + "h " : "") + m + "m";
   }
-  function when(iso) { const d = new Date(iso); return isNaN(d) ? iso : d.toLocaleString(); }
+  function when(iso) { return fmtTime(iso); }
+
+  async function loadTimezone() {
+    try {
+      const [d, zones] = await Promise.all([
+        apiFetch("GET", "/api/display", undefined, { suppressToast: true }),
+        apiFetch("GET", "/api/display/timezones", undefined, { suppressToast: true }),
+      ]);
+      $("tz-list").replaceChildren(...zones.map((z) => { const o = document.createElement("option"); o.value = z; return o; }));
+      $("tz-input").value = d.timezone;
+      $("tz-input").dataset.default = d.default;
+      showNow(d.timezone);
+    } catch (err) { setMsg("tz-msg", err.message, "error"); }
+  }
+  function showNow(zone) {
+    $("tz-now").textContent = "It is now " + fmtTime(new Date().toISOString()) + " in " + zone + ".";
+  }
+  async function saveTimezone(value) {
+    try {
+      const d = await apiFetch("PUT", "/api/display", { timezone: value });
+      OrchTime.set(d.timezone);
+      $("tz-input").value = d.timezone;
+      showNow(d.timezone);
+      setMsg("tz-msg", "Saved. Backup schedules now run in " + d.timezone + ".", "ok");
+    } catch (err) { setMsg("tz-msg", err.message, "error"); }
+  }
+  $("tz-save").addEventListener("click", () => saveTimezone($("tz-input").value.trim()));
+  $("tz-browser").addEventListener("click", () => {
+    $("tz-input").value = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  });
+  $("tz-default").addEventListener("click", () => saveTimezone(""));
+  loadTimezone();
 
   // After a restart/update: wait for the service to stop answering, then answer again.
   async function waitForRestart(msgId) {

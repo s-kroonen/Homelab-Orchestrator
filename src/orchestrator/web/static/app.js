@@ -171,6 +171,68 @@
     };
   })();
 
+  // --- times ---------------------------------------------------------------
+  // Every timestamp is stored in UTC; this shows it in the timezone chosen on the
+  // System page (remembered here so the first paint is already right).
+  //   fmtTime(iso)      "24 Oct 2026 14:03:12"
+  //   fmtAgo(iso)       "3 min ago"
+  //   <time data-ts="ISO"> elements are formatted automatically.
+  const Time = (function () {
+    let tz = "";
+    try { tz = localStorage.getItem("orch:tz") || ""; } catch (_e) { /* storage may be unavailable */ }
+    function formatter(opts) {
+      try { return new Intl.DateTimeFormat("en-GB", Object.assign({ timeZone: tz || undefined }, opts)); }
+      catch (_e) { return new Intl.DateTimeFormat("en-GB", opts); }  // unknown zone: browser's own
+    }
+    function fmt(iso, opts) {
+      if (!iso) return "";
+      const d = new Date(iso);
+      if (isNaN(d)) return String(iso);
+      const f = formatter(opts || {
+        day: "2-digit", month: "short", year: "numeric",
+        hour: "2-digit", minute: "2-digit", second: "2-digit", hourCycle: "h23",
+      });
+      return f.format(d).replace(",", "");
+    }
+    function ago(iso) {
+      const d = new Date(iso);
+      if (isNaN(d)) return "";
+      const s = Math.round((Date.now() - d.getTime()) / 1000);
+      const abs = Math.abs(s);
+      const unit = abs < 90 ? [abs, "s"] : abs < 5400 ? [Math.round(abs / 60), " min"]
+        : abs < 129600 ? [Math.round(abs / 3600), " h"] : [Math.round(abs / 86400), " d"];
+      return unit[0] + unit[1] + (s >= 0 ? " ago" : " from now");
+    }
+    function apply(root) {
+      for (const el of (root || document).querySelectorAll("time[data-ts]")) {
+        el.textContent = fmt(el.dataset.ts);
+        el.title = ago(el.dataset.ts) + " · " + (tz || "browser time");
+      }
+    }
+    async function load() {
+      try {
+        const r = await fetch("/api/display", { headers: { Accept: "application/json" } });
+        if (!r.ok) return;
+        const next = (await r.json()).timezone || "";
+        if (next !== tz) {
+          tz = next;
+          try { localStorage.setItem("orch:tz", tz); } catch (_e) { /* ignore */ }
+        }
+        apply(document);
+        document.dispatchEvent(new CustomEvent("orch:tz", { detail: tz }));
+      } catch (_e) { /* signed out or offline: keep what we have */ }
+    }
+    document.addEventListener("DOMContentLoaded", () => { apply(document); load(); });
+    return { fmt, ago, apply, get tz() { return tz; }, set(next) {
+      tz = next || "";
+      try { localStorage.setItem("orch:tz", tz); } catch (_e) { /* ignore */ }
+      apply(document);
+    } };
+  })();
+
+  window.OrchTime = Time;
+  window.fmtTime = Time.fmt;
+  window.fmtAgo = Time.ago;
   window.PrevPage = PrevPage;
   window.toast = toast;
   window.apiFetch = apiFetch;

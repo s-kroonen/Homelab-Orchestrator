@@ -43,6 +43,7 @@ from orchestrator.audit import log as audit
 from orchestrator.config import Settings
 from orchestrator.db.models import BackupPolicy, Service
 from orchestrator.db.session import session_scope
+from orchestrator.display import get_timezone
 from orchestrator.domain.enums import AuditResult
 from orchestrator.logging_setup import get_logger
 from orchestrator.pipelines.backup import BackupError, BackupPipeline, WakeContext
@@ -106,6 +107,8 @@ class BackupScheduler:
             )
         )
         self._scheduler = AsyncIOScheduler()
+        #: Cron expressions run in this zone (the dashboard's timezone setting).
+        self.timezone: Any = self._scheduler.timezone
         self._lock = asyncio.Lock()
         #: policy name -> why it has no job (bad cron). Shown on the dashboard.
         self.errors: dict[str, str] = {}
@@ -141,6 +144,7 @@ class BackupScheduler:
         with session_scope() as session:
             policies = session.exec(select(BackupPolicy)).all()
             wanted = {p.name: p.schedule_cron.strip() for p in policies}
+            self.timezone = get_timezone(session, self._settings)
 
         for job in self._scheduler.get_jobs():
             if job.id.startswith(_JOB_PREFIX) and job.id[len(_JOB_PREFIX) :] not in wanted:
@@ -152,7 +156,7 @@ class BackupScheduler:
                 self._remove(name)
                 continue
             try:
-                trigger = parse_cron(cron, self._scheduler.timezone)
+                trigger = parse_cron(cron, self.timezone)
             except ValueError as exc:
                 # One bad policy must not take the others' schedules down.
                 self.errors[name] = str(exc)

@@ -57,6 +57,11 @@ class Settings(BaseSettings):
     proxy_adapter: str = "dry_run"
     notifier_adapter: str = "null"
 
+    # IANA timezone times are shown in and backup cron schedules run in (e.g.
+    # Europe/Amsterdam). Blank = the container's TZ, else UTC. Can be changed from the
+    # System page without a restart; this is only the default until someone does.
+    timezone: str = ""
+
     # ---- Web / API --------------------------------------------------------
     http_host: str = "0.0.0.0"
     http_port: int = 8080

@@ -40,7 +40,7 @@ from orchestrator.registry.probe_specs import PROBE_SPECS
 from orchestrator.registry.tree import TreeIndex
 from orchestrator.web.auth import get_current_admin
 from orchestrator.web.deps import SessionDep, SettingsDep
-from orchestrator.web.routers.activity import build_feed
+from orchestrator.web.routers.activity import KINDS, build_feed, filter_options
 from orchestrator.web.routers.backup_policies import policy_to_dict
 from orchestrator.web.routers.dashboard import service_detail
 from orchestrator.web.routers.geo_traffic import build_geo_view
@@ -762,23 +762,58 @@ async def activity_page(
     session: SessionDep,
     service: str | None = Query(None),
     group: str | None = Query(None),
+    node: str | None = Query(None),
+    guest: str | None = Query(None),
+    kind: str | None = Query(None),
+    problems: bool = Query(False),
+    since_hours: str | None = Query(None),
+    q: str | None = Query(None),
 ) -> HTMLResponse | RedirectResponse:
-    """History of wakes, backups and admin actions — see ``routers/activity.py``."""
+    """History of wakes, backups, admin actions and alerts — see ``routers/activity.py``."""
     admin = get_current_admin(request, session)
     if admin is None:
         return RedirectResponse("/login?next=/activity", status_code=303)
 
-    service = service or None  # the filter form submits "" for "all services"
-    group = group or None
+    # the filter form submits "" for "all": normalise every field
+    service, group, node, guest = (
+        (service or None),
+        (group or None),
+        (node or None),
+        (guest or None),
+    )
+    kind = kind if kind in KINDS else None
+    hours = (
+        int(since_hours) if since_hours and since_hours.isdigit() and int(since_hours) > 0 else None
+    )
+    q = (q or "").strip() or None
+    events = build_feed(
+        session,
+        service=service,
+        group=group,
+        node=node,
+        guest=guest,
+        kind=kind,
+        problems=problems,
+        since_hours=hours,
+        q=q,
+    )
     return _templates.TemplateResponse(
         request,
         "activity.html",
         {
             "admin": admin,
-            "events": build_feed(session, service=service, group=group),
-            "service": service,
-            "group": group,
-            "slugs": session.exec(select(Service.slug).order_by(Service.slug)).all(),
-            "groups": sorted({g for g in session.exec(select(Service.group)).all() if g}),
+            "events": events,
+            "f": {
+                "service": service,
+                "group": group,
+                "node": node,
+                "guest": guest,
+                "kind": kind,
+                "problems": problems,
+                "since_hours": hours,
+                "q": q or "",
+            },
+            "options": filter_options(session),
+            "filtered": any((service, group, node, guest, kind, problems, hours, q)),
         },
     )

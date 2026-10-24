@@ -83,6 +83,11 @@ ENV_SECTIONS: tuple[EnvSection, ...] = (
             EnvKey("LOG_LEVEL", "DEBUG | INFO | WARNING | ERROR"),
             EnvKey("LOG_FORMAT", "json | console"),
             EnvKey(
+                "TIMEZONE",
+                "IANA zone for displayed times and backup cron schedules (Europe/Amsterdam). "
+                "Blank = the container's TZ, else UTC. Changeable on the System page.",
+            ),
+            EnvKey(
                 "DRY_RUN",
                 "Swaps ALL external adapters for logging no-ops: nothing is started,\n"
                 "stopped or backed up. Leave on until `orchestrator-cli check` passes.",

@@ -92,7 +92,7 @@
   const csv = (s) => s.split(",").map((x) => x.trim()).filter(Boolean);
   const ticked = (id) => [...$(id).querySelectorAll("input:checked")].map((c) => c.value);
   function tick(id, values) { for (const c of $(id).querySelectorAll("input")) c.checked = values.includes(c.value); }
-  function when(iso) { const d = new Date(iso); return isNaN(d) ? iso : d.toLocaleString(); }
+  function when(iso) { return fmtTime(iso); }
   function td(text, cls) { const e = document.createElement("td"); e.textContent = text; if (cls) e.className = cls; return e; }
 
   async function loadChannels() {
