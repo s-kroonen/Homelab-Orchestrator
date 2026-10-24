@@ -17,7 +17,7 @@ from orchestrator.db import session as session_module
 from orchestrator.db.models import Service
 from orchestrator.db.session import get_engine
 from orchestrator.deploy.policy import check_target, normalize_deploy, preset
-from orchestrator.registry.loader import reconcile_yaml_into_db, read_yaml_file
+from orchestrator.registry.loader import read_yaml_file, reconcile_yaml_into_db
 from orchestrator.web.app import create_app
 from tests.test_proxy_hosts import _login_as_first_admin
 
@@ -170,7 +170,7 @@ def test_the_file_is_checked_when_loaded(registry: Path) -> None:
     from orchestrator.registry.loader import validate_references
 
     parsed, _ = read_yaml_file(registry)
-    with pytest.raises(Exception, match="plain.*Portainer stack"):
+    with pytest.raises(Exception, match=r"plain.*Portainer stack"):
         validate_references(parsed)
 
 
