@@ -118,7 +118,9 @@ def overview(settings: Settings) -> dict[str, Any]:
 
 def _write_request(settings: Settings, fields: dict[str, str]) -> str:
     if not updater_online(settings):
-        raise UpdaterError("the updater is not running (docker compose --profile updater up -d)")
+        raise UpdaterError(
+            "the updater is not running (run scripts/install.sh in the project directory)"
+        )
     status = read_status(settings)
     if is_running(status) or request_pending(settings):
         raise UpdaterError("an update is already in progress")

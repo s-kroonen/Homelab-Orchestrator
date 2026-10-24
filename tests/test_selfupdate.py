@@ -134,7 +134,7 @@ def test_without_an_updater_or_a_command_it_says_how_to_set_one_up(client: TestC
     assert info["method"] == "manual" and info["configured"] is False
     assert info["updater"]["online"] is False
     r = client.post("/api/system/update").json()
-    assert r["ran"] is False and "--profile updater" in r["message"] and r["manual_steps"]
+    assert r["ran"] is False and "scripts/install.sh" in r["message"] and r["manual_steps"]
 
 
 def test_the_check_reports_the_updater_and_the_last_run(client: TestClient) -> None:

@@ -107,7 +107,7 @@ async def run_update(settings: Settings, *, by: str = "dashboard") -> UpdateResu
     if not command:
         result.message = (
             "Updating from the dashboard is not set up: start the updater "
-            "(docker compose --profile updater up -d) or set SELF_UPDATE_COMMAND. "
+            "(run scripts/install.sh in the project directory) or set SELF_UPDATE_COMMAND. "
             "Run these on the Docker host instead."
         )
         return result

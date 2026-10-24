@@ -24,6 +24,7 @@ case "$1" in
       '{{.RestartCount}}')
         if [ "$(cat "$S/container.behavior" 2>/dev/null)" = "flap" ]; then counter; else echo 0; fi ;;
       *project.working_dir*) echo "$FAKE_PROJECT_DIR" ;;
+      *project.config_files*) echo "${FAKE_CONFIG_FILES:-$FAKE_PROJECT_DIR/docker-compose.yml}" ;;
       *compose.project*) echo "homelab" ;;
     esac
     [ -f "$S/container.image" ] || exit 1

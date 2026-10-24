@@ -1,0 +1,55 @@
+# One-click updates from the dashboard, with automatic rollback (docs/system.md).
+#
+# An add-on to docker-compose.yml, not a replacement for it - leave your own compose file
+# alone and run both:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.updater.yml up -d updater
+#
+# What it needs next to docker-compose.yml:   scripts/updater.sh  (the script below runs)
+#   mkdir -p scripts
+#   curl -fsSL -o scripts/updater.sh \
+#     https://raw.githubusercontent.com/s-kroonen/homelab-orchestrator/dev/scripts/updater.sh
+#
+# What it does: pulls the newest build of the image the orchestrator already runs, recreates
+# the orchestrator, waits for it to be healthy and STAY healthy, and if it is not, puts the
+# previous image back and restores the backup taken before the update. The dashboard asks it
+# through a small request file in the shared state volume; the request carries no commands.
+# The orchestrator container itself still has no Docker access.
+#
+# THE PRIVILEGE: this container can drive the host's Docker (the socket). That is root on the
+# host in practice, so it is a script you can read (scripts/updater.sh), with no network, no
+# ports and no input but that file. Read it before you start it, and do not use this file if
+# you would rather update by hand.
+#
+# This project directory is mounted into the updater at the SAME absolute path as on the host
+# (compose is run from there, so ./config, .env and friends resolve exactly as they do for
+# you). The path comes from the shell's $PWD - run compose from this directory - or set
+# ORCHESTRATOR_PROJECT_DIR in .env to its absolute path if you run it from elsewhere.
+services:
+  updater:
+    image: docker:27-cli
+    container_name: orchestrator-updater
+    restart: unless-stopped
+    network_mode: none
+    read_only: true
+    tmpfs:
+      - /tmp
+    entrypoint: ["sh", "/updater.sh"]
+    environment:
+      PROJECT_DIR: ${ORCHESTRATOR_PROJECT_DIR:-${PWD:-/tmp}}
+      ORCHESTRATOR_CONTAINER: orchestrator
+      ORCHESTRATOR_SERVICE: orchestrator
+      STATE_DIR: /data
+      HOME: /tmp
+      # How long the new version gets to become healthy, and how long it must then stay up.
+      HEALTH_TIMEOUT_S: ${UPDATE_HEALTH_TIMEOUT_S:-180}
+      SETTLE_S: ${UPDATE_SETTLE_S:-45}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - orchestrator_state:/data
+      - ./scripts/updater.sh:/updater.sh:ro
+      # compose is run from the same absolute path as on the host (read-only: it only reads)
+      - ${ORCHESTRATOR_PROJECT_DIR:-${PWD:-/tmp}}:${ORCHESTRATOR_PROJECT_DIR:-${PWD:-/tmp}}:ro
+
+# The orchestrator_state volume is declared in docker-compose.yml; this joins it - which is
+# why the two files are always used together.

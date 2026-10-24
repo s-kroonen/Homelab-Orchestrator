@@ -67,12 +67,31 @@ set up):
 ### 1. The updater (recommended: checks the new version, rolls back if it fails)
 
 A small sidecar container, [`scripts/updater.sh`](../scripts/updater.sh), that owns the
-Docker side. Turn it on once, from the project directory on the Docker host:
+Docker side. One command installs it - and everything else - in the project directory
+(the one with your `docker-compose.yml` and `.env`; no git checkout needed):
 
 ```bash
-git pull                                   # gets the updater service + script
-docker compose --profile updater up -d updater
+cd ~/orchestrator          # your project directory
+curl -fsSL https://raw.githubusercontent.com/s-kroonen/homelab-orchestrator/main/scripts/install.sh | sh
 ```
+
+(Use `.../dev/scripts/install.sh` instead of `.../main/...` if you follow the `:dev` image.
+Prefer to read it first - it can start something that drives Docker - download it, `less`
+it, then `sh install.sh`.) It puts four files in place, next to each other:
+`docker-compose.yml`, `docker-compose.updater.yml` (the updater add-on),
+`scripts/updater.sh` and `scripts/install.sh` itself; **never touches `.env` or `config/`**;
+then starts the updater and the orchestrator. Its rules for files:
+
+* a file you changed yourself is left alone: the new version is written beside it as
+  `<file>.new` and you are told to `diff` them;
+* a file it wrote and you did not touch is updated in place, the old one kept as `<file>.bak`;
+* `--ref dev|main|vX.Y.Z|<commit>` picks which version of the files (default: whatever the
+  running image follows), `--no-updater` skips the add-on, `--no-start` only places files.
+
+**Updating later is the same one command again** (`sh scripts/install.sh`), the **Update**
+button on the System page, or `docker exec orchestrator orchestrator-cli system update`.
+When the updater is running, all three go through it, with the safety net below; the script
+also refreshes the compose files and the updater first, which the other two do not.
 
 Then **Back up and update** on the System page (or `orchestrator-cli system update`):
 
@@ -116,15 +135,17 @@ access. If that is more than you want, use one of the options below.
 
 Notes:
 
-* It updates the **image**. Changes to `docker-compose.yml` or `scripts/` (like the
-  updater itself) arrive with `git pull`; the updater service is not restarted by its own
-  updates - `docker compose --profile updater up -d updater` after a pull.
+* The updater updates the **image**. Changes to the compose files or the scripts (including
+  the updater itself) arrive by running `sh scripts/install.sh` again; the updater service
+  is not restarted by its own updates.
 * Run compose from the project directory (or set `ORCHESTRATOR_PROJECT_DIR` in `.env` to its
   absolute path): the updater mounts that directory at the same path so `./config`, `.env`
   and friends resolve the way they do for you.
 * A container pinned to a digest (`image@sha256:...`) is refused: there is nothing newer.
-* From a shell on the host, without the sidecar: `scripts/updater.sh --update`
-  (`--rollback`, `--tag main`, `--backup <name>`) does the same thing once.
+* One-shot from a shell on the host (the state lives in a Docker volume, so the script runs
+  inside the updater container):
+  `docker compose -f docker-compose.yml -f docker-compose.updater.yml run --rm updater --update`
+  (also `--rollback`, `--tag main`, `--backup <name>`).
 * `orchestrator-cli system update-status` shows whether the updater is running and how the
   last run went, step by step.
 
