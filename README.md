@@ -101,7 +101,8 @@ off-container,
 [docs/service_tree.md](docs/service_tree.md) for sub-services, the tree and the map,
 [docs/pwa_push.md](docs/pwa_push.md) for installing the app and push notifications,
 [docs/system.md](docs/system.md) for backups, restore, schema upgrades,
-updating and restarting the orchestrator from the dashboard,
+updating (one click, with automatic rollback if the new version does not come up) and
+restarting the orchestrator from the dashboard,
 [docs/service_ips.md](docs/service_ips.md) for how service IPs are found
 (guest agent, LXC, ARP, DHCP) and the ping probe, and
 [docs/proxmox_connectivity.md](docs/proxmox_connectivity.md) for the single

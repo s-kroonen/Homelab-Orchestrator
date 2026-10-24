@@ -45,6 +45,18 @@
     </div>
     <pre class="manual" id="update-manual" hidden></pre>
     <p class="msg" id="update-msg"></p>
+    <p class="msg" id="updater-state"></p>
+
+    <div id="update-progress" class="progress" hidden>
+      <div class="banner" id="update-banner"></div>
+      <ol class="steps" id="update-steps"></ol>
+      <div class="row">
+        <button class="secondary small" id="update-log-btn" type="button">Show the updater's log</button>
+        <button class="secondary small" id="rollback-btn" type="button" hidden
+          title="Starts the previous build again and restores the backup taken before the update">Go back to the previous build</button>
+      </div>
+      <pre class="manual" id="update-log" hidden></pre>
+    </div>
   </section>
 
   <section>
@@ -84,6 +96,17 @@
   dl.kv dd { margin: 0; overflow-wrap: anywhere; }
   .banner { padding: 0.6rem 0.8rem; border-radius: 0.4rem; margin-bottom: 0.9rem; font-size: 0.85rem; display: flex; gap: 0.75rem; align-items: center; flex-wrap: wrap; }
   .banner.warn { background: #3b2e14; border: 1px solid #e5a63e; }
+  .progress { margin-top: 0.9rem; }
+  .banner.ok { background: #113b23; border: 1px solid #3ecf6d; }
+  .banner.bad { background: #3b1414; border: 1px solid #e5534b; }
+  .banner.busy { background: #142a3b; border: 1px solid #5ba8e5; }
+  ol.steps { list-style: none; padding: 0; margin: 0 0 0.7rem; font-size: 0.85rem; }
+  ol.steps li { padding: 0.15rem 0; }
+  ol.steps li::before { display: inline-block; width: 1.3rem; }
+  ol.steps li.OK::before { content: "✓"; color: #3ecf6d; }
+  ol.steps li.FAIL::before { content: "✗"; color: #e5534b; }
+  ol.steps li.SKIP::before { content: "–"; color: #9aa4b2; }
+  ol.steps .detail { color: #9aa4b2; }
   pre.manual { background: #11151d; padding: 0.6rem 0.8rem; border-radius: 0.4rem; font-size: 0.8rem; overflow-x: auto; }
 </style>
 {% endblock %}
@@ -254,6 +277,73 @@
   });
 
   let updateInfo = null;
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  const FINISHED = ["succeeded", "rolled_back", "failed"];
+  let following = null;
+
+  function renderRun(st) {
+    const box = $("update-progress");
+    if (!st) { box.hidden = true; return; }
+    box.hidden = false;
+    const b = $("update-banner");
+    const running = st.state === "running";
+    b.className = "banner " + (running ? "busy" : st.state === "succeeded" ? "ok" : "bad");
+    const what = st.action === "rollback" ? "Rollback" : "Update";
+    const head = running ? what + " in progress - " + (st.step || "starting")
+      : st.state === "succeeded" ? what + " done: " + st.message
+      : st.state === "rolled_back" ? what + " FAILED, the previous version was put back: " + st.reason
+      : what + " FAILED: " + st.message + (st.reason ? " (" + st.reason + ")" : "");
+    b.textContent = head + (st.finished_at ? "  [" + when(st.finished_at) + "]" : "");
+    $("update-steps").replaceChildren(...(st.steps || []).map((s) => {
+      const li = document.createElement("li"); li.className = s.result;
+      li.append(document.createTextNode(s.name.replace(/_/g, " ")));
+      if (s.detail) { const d = document.createElement("span"); d.className = "detail"; d.textContent = "  " + s.detail; li.append(d); }
+      return li;
+    }));
+    $("rollback-btn").hidden = !(FINISHED.includes(st.state) && st.action === "update" && st.state === "succeeded" && st.from_image !== st.to_image);
+  }
+
+  // Follow a run to its end. The orchestrator restarts in the middle, so failed polls are
+  // expected: keep going until the updater's own status says it is over.
+  async function follow(requestId) {
+    if (following) return;
+    following = requestId;
+    const started = Date.now();
+    let sawDown = false;
+    while (Date.now() - started < 25 * 60 * 1000) {
+      await sleep(2000);
+      let o;
+      try { o = await apiFetch("GET", "/api/system/update/status", undefined, { suppressToast: true }); }
+      catch (_e) { sawDown = true; setMsg("update-msg", "The orchestrator is restarting…", ""); continue; }
+      const st = o.status;
+      if (st && (!requestId || st.id === requestId)) {
+        renderRun(st);
+        if (FINISHED.includes(st.state)) {
+          following = null;
+          setMsg("update-msg", "", "");
+          if (st.state === "succeeded" && st.from_image !== st.to_image) {
+            setMsg("update-msg", "Reloading with the new version…", "ok");
+            await sleep(2500); location.reload();
+          }
+          return;
+        }
+      }
+    }
+    following = null;
+    setMsg("update-msg", "The updater has not reported back in 25 minutes - check it on the Docker host.", "error");
+  }
+
+  async function loadUpdaterState() {
+    let o;
+    try { o = await apiFetch("GET", "/api/system/update/status", undefined, { suppressToast: true }); }
+    catch (_e) { return; }
+    $("updater-state").textContent = o.online
+      ? "Updater: running - it checks that the new version comes up and puts the old one back if not."
+      : "Updater: not running. Start it with  docker compose --profile updater up -d  (see docs/system.md) for one-click updates with automatic rollback.";
+    if (o.status) renderRun(o.status);
+    if (o.running && o.status) follow(o.status.id);
+  }
+
   async function checkUpdate(refresh) {
     setMsg("update-msg", "", "");
     $("update-text").textContent = "Asking GitHub…";
@@ -272,7 +362,10 @@
   }
   $("update-check-btn").addEventListener("click", () => checkUpdate(true));
   $("update-btn").addEventListener("click", async () => {
-    if (!confirm("Take a backup, then update and restart the orchestrator?")) return;
+    const safe = updateInfo && updateInfo.method === "updater"
+      ? "Take a backup, then update? If the new version does not come up healthy, the old one is put back."
+      : "Take a backup, then update and restart the orchestrator?";
+    if (!confirm(safe)) return;
     setMsg("update-msg", "Backing up and starting the update…", "");
     let r;
     try { r = await apiFetch("POST", "/api/system/update", undefined, { suppressToast: true }); }
@@ -284,9 +377,25 @@
       setMsg("update-msg", r.message + (r.output ? " " + r.output : ""), "error");
       return;
     }
+    if (r.method === "updater") { setMsg("update-msg", r.message, ""); follow(r.request_id); return; }
     waitForRestart("update-msg");
   });
+  $("rollback-btn").addEventListener("click", async () => {
+    if (!confirm("Go back to the previous build and restore the data backup taken before the update? Changes made since the update are lost (a backup of the current data is taken first).")) return;
+    try {
+      const r = await apiFetch("POST", "/api/system/update/rollback", {}, { suppressToast: true });
+      setMsg("update-msg", r.message + " Safety backup: " + r.safety_backup, "");
+      follow(r.request_id);
+    } catch (err) { setMsg("update-msg", err.message, "error"); }
+  });
+  $("update-log-btn").addEventListener("click", async () => {
+    const pre = $("update-log");
+    if (!pre.hidden) { pre.hidden = true; return; }
+    try { pre.textContent = (await apiFetch("GET", "/api/system/update/log", undefined, { suppressToast: true })).log || "(empty)"; }
+    catch (err) { pre.textContent = err.message; }
+    pre.hidden = false;
+  });
 
-  loadInfo(); loadBackups(); checkUpdate(false);
+  loadInfo(); loadBackups(); checkUpdate(false); loadUpdaterState();
 </script>
 {% endblock %}

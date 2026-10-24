@@ -12,6 +12,7 @@ from typing import Any
 from orchestrator.config import Settings
 from orchestrator.health.transports.base import TransportError
 from orchestrator.logging_setup import get_logger
+from orchestrator.system import selfupdate
 from orchestrator.system.backups import BackupError, BackupInfo, create_backup
 
 log = get_logger(__name__)
@@ -32,6 +33,9 @@ class UpdateResult:
     output: str = ""
     message: str = ""
     manual_steps: list[str] = field(default_factory=list)
+    #: "updater" (the compose sidecar), "command" (SELF_UPDATE_COMMAND) or "manual".
+    method: str = "manual"
+    request_id: str | None = None
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -43,6 +47,8 @@ class UpdateResult:
             "output": self.output,
             "message": self.message,
             "manual_steps": self.manual_steps,
+            "method": self.method,
+            "request_id": self.request_id,
         }
 
 
@@ -62,8 +68,9 @@ def update_argv(command: str) -> list[str]:
     return shlex.split(command)
 
 
-async def run_update(settings: Settings) -> UpdateResult:
-    """Back up first, then run the configured update command on the host.
+async def run_update(settings: Settings, *, by: str = "dashboard") -> UpdateResult:
+    """Back up first, then hand the update to the updater sidecar (which checks the new
+    version and rolls back if it fails) or, without one, run the configured command.
 
     The container is normally replaced while the command runs, so the command
     should detach (see ``SELF_UPDATE_COMMAND`` in docs/system.md); the caller
@@ -75,10 +82,32 @@ async def run_update(settings: Settings) -> UpdateResult:
         result.backup_error = str(exc)
         log.warning("system.update.backup_failed", error=str(exc))
 
+    if selfupdate.updater_online(settings):
+        try:
+            result.request_id = selfupdate.request_update(
+                settings, by=by, backup=result.backup.name if result.backup else None
+            )
+        except selfupdate.UpdaterError as exc:
+            result.message = str(exc)
+            return result
+        result.method, result.ran, result.ok = "updater", True, True
+        result.message = (
+            "Update handed to the updater: it pulls the new build, restarts the orchestrator "
+            "and puts the old version back if the new one does not come up healthy."
+            + (
+                ""
+                if result.backup
+                else " No backup could be taken, so a rollback restores the old build only."
+            )
+        )
+        return result
+
     command = settings.self_update_command.strip()
+    result.method = "command" if command else "manual"
     if not command:
         result.message = (
-            "Updating from the dashboard is not set up (SELF_UPDATE_COMMAND). "
+            "Updating from the dashboard is not set up: start the updater "
+            "(docker compose --profile updater up -d) or set SELF_UPDATE_COMMAND. "
             "Run these on the Docker host instead."
         )
         return result
