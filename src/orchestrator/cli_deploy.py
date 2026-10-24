@@ -340,3 +340,49 @@ def deploy_show(target: str, as_json: bool, path_override: str | None) -> None:
         return
     for line in describe(cfg):
         click.echo(line)
+
+
+@deploy.command("webhook")
+@click.argument("slug")
+@click.option("--rotate", is_flag=True, help="Create a new secret (replacing the old). Shown once.")
+@click.option("--remove", is_flag=True, help="Delete the secret: the webhook stops working.")
+def deploy_webhook(slug: str, rotate: bool, remove: bool) -> None:
+    """The deploy webhook of SLUG: its URL, what to enter in GitLab / GitHub, its secret.
+
+    The webhook itself is switched on with `deploy set SLUG --webhook gitlab`. The secret is
+    kept in the orchestrator's database and shown only when it is created.
+    """
+    from sqlmodel import Session, select
+
+    from orchestrator.config import get_settings
+    from orchestrator.db.models import Service
+    from orchestrator.db.session import build_engine, get_engine
+    from orchestrator.deploy import webhook as hook
+    from orchestrator.deploy.policy import webhook_of
+
+    build_engine()
+    settings = get_settings()
+    with Session(get_engine()) as session:
+        svc = session.exec(select(Service).where(Service.slug == slug)).one_or_none()
+        if svc is None:
+            raise click.ClickException(f"no service {slug!r}")
+        cfg = webhook_of(svc.deploy)
+        if remove:
+            click.echo("Secret removed." if hook.remove_secret(session, slug) else "No secret set.")
+            return
+        if cfg is None:
+            raise click.ClickException(
+                f"{slug!r} has no webhook: turn it on with  deploy set {slug} --webhook gitlab"
+            )
+        url = hook.webhook_url(settings, slug)
+        if rotate or not hook.has_secret(session, slug):
+            secret = hook.rotate_secret(session, slug)
+            click.secho("Secret (copy it now; it is not shown again):", bold=True)
+            click.echo(f"  {secret}")
+        else:
+            click.echo("A secret is set. --rotate makes a new one.")
+        click.echo(
+            f"provider : {cfg['provider']}" + (f", branch {cfg['branch']}" if cfg["branch"] else "")
+        )
+        for line in hook.setup_hint(cfg["provider"], url):
+            click.echo(f"  {line}")
