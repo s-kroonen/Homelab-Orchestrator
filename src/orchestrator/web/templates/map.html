@@ -12,6 +12,21 @@
         <button type="button" data-view="boxes" class="on">Boxes</button>
         <button type="button" data-view="tree">Tree</button>
       </div>
+      <label class="inline" id="m-group-wrap">Group by
+        <select id="m-group">
+          <option value="box">node, then guest</option>
+          <option value="group">group</option>
+          <option value="ip">address (subnet)</option>
+        </select>
+      </label>
+      <label class="inline">Sort by
+        <select id="m-sort">
+          <option value="name">name</option>
+          <option value="status">status (problems first)</option>
+          <option value="ip">IP address</option>
+          <option value="group">group</option>
+        </select>
+      </label>
       <input id="m-search" type="search" placeholder="search service / host / ip" size="24">
       <label class="inline"><input type="checkbox" id="m-problems"> only problems</label>
       <span class="edge-toggles" id="edge-toggles">
@@ -37,6 +52,7 @@
 <style>
   body.has-sidebar .wrap { max-width: none; }
   .map-bar { display: flex; flex-wrap: wrap; gap: 0.6rem 1rem; align-items: center; }
+  .map-bar select { padding: 0.3rem; background: #171b24; border: 1px solid #2a2f3a; border-radius: 0.4rem; color: #e6e9ef; }
   .seg { display: inline-flex; border: 1px solid #2a3040; border-radius: 0.4rem; overflow: hidden; }
   .seg button { background: #151a24; color: #9aa4b2; border: 0; padding: 0.35rem 0.8rem; cursor: pointer; }
   .seg button.on { background: #1f2a44; color: #e6e9ef; }

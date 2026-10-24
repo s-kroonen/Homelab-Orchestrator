@@ -135,4 +135,6 @@ def test_map_page_renders_and_is_in_the_nav(client: TestClient) -> None:
     assert r.status_code == 200
     assert 'id="map-root"' in r.text and "/static/map.js" in r.text
     assert 'href="/map"' in r.text
+    # grouping / ordering controls (by box, group or subnet; by name, status, IP, group)
+    assert 'id="m-group"' in r.text and 'value="ip"' in r.text and 'id="m-sort"' in r.text
     assert client.get("/static/map.js").status_code == 200

@@ -5,7 +5,14 @@
   "use strict";
   const $ = (id) => document.getElementById(id);
   const root = $("map-root");
-  const state = { data: null, view: "boxes", q: "", problems: false, edges: new Set(), selected: null };
+  const state = {
+    data: null, view: "boxes", q: "", problems: false, edges: new Set(), selected: null,
+    groupBy: "box", sortBy: "name",
+  };
+  try {
+    state.groupBy = localStorage.getItem("orch:map:groupBy") || state.groupBy;
+    state.sortBy = localStorage.getItem("orch:map:sortBy") || state.sortBy;
+  } catch (_e) { /* storage may be unavailable */ }
   for (const c of document.querySelectorAll("#edge-toggles input")) if (c.checked) state.edges.add(c.dataset.edge);
 
   function el(tag, cls, text) {
@@ -16,6 +23,8 @@
   }
   const badge = (verdict) => el("span", "badge " + (verdict === "parked" ? "disabled" : verdict), verdict);
   const isBad = (v) => v === "failed" || v === "down";
+
+  function flatten(svc) { return [svc, ...svc.children.flatMap(flatten)]; }
 
   // -- filtering --------------------------------------------------------------
   function matches(svc) {
@@ -60,7 +69,7 @@
     c.addEventListener("click", (ev) => { ev.stopPropagation(); openDrawer(svc.slug); });
     if (svc.children.length) {
       const kids = el("div", "kids");
-      for (const k of svc.children) if (showSvc(k)) kids.append(card(k));
+      for (const k of svc.children.slice().sort(comparator())) if (showSvc(k)) kids.append(card(k));
       c.append(kids);
     }
     return c;
@@ -84,7 +93,7 @@
       const gh = el("div", "box-h");
       gh.append(el("span", "t", `${g.kind} ${g.vmid}`), el("span", "chip", g.status));
       gb.append(gh);
-      for (const s of svcs) gb.append(card(s));
+      for (const s of svcs.slice().sort(comparator())) gb.append(card(s));
       box.append(gb);
     }
     const loose = n.loose.filter(showSvc);
@@ -99,11 +108,77 @@
     return box;
   }
 
+  // -- ordering ---------------------------------------------------------------
+  const RANK = { failed: 0, down: 1, unknown: 2, parked: 3, disabled: 4, healthy: 5 };
+  function ipKey(ip) {
+    const m = /^(\d+)\.(\d+)\.(\d+)\.(\d+)$/.exec(ip || "");
+    return m ? ((+m[1] * 256 + +m[2]) * 256 + +m[3]) * 256 + +m[4] : Infinity;
+  }
+  function byName(a, b) { return (a.name || a.slug).localeCompare(b.name || b.slug, undefined, { numeric: true }); }
+  function comparator() {
+    switch (state.sortBy) {
+      case "ip": return (a, b) => ipKey(a.ip) - ipKey(b.ip) || byName(a, b);
+      case "status": return (a, b) => (RANK[a.verdict] ?? 9) - (RANK[b.verdict] ?? 9) || byName(a, b);
+      case "group": return (a, b) => (a.group || "\uffff").localeCompare(b.group || "\uffff") || byName(a, b);
+      default: return byName;
+    }
+  }
+  const subnet = (ip) => (/^\d+\.\d+\.\d+\./.test(ip || "") ? ip.split(".").slice(0, 3).join(".") + ".x" : "");
+
+  // Every root service with where it lives, for the layouts that are not "by box".
+  function roots(data) {
+    const out = [];
+    for (const n of data.nodes) {
+      for (const g of n.guests) for (const s of g.services) out.push({ svc: s, node: n.name, guest: `${g.kind} ${g.vmid}` });
+      for (const s of n.loose) out.push({ svc: s, node: n.name, guest: "" });
+    }
+    return out;
+  }
+
+  // One box per group / subnet, services (with their sub-services nested) inside.
+  function sectionBoxes(data) {
+    const sections = new Map();
+    for (const r of roots(data)) {
+      if (!showSvc(r.svc)) continue;
+      let key, title;
+      if (state.groupBy === "group") { key = r.svc.group || ""; title = key || "no group"; }
+      else { key = subnet(r.svc.ip); title = key || "no address"; }
+      if (!sections.has(key)) sections.set(key, { title, key, items: [] });
+      sections.get(key).items.push(r);
+    }
+    const ordered = [...sections.values()].sort((a, b) =>
+      (a.key === "" ? 1 : 0) - (b.key === "" ? 1 : 0) ||
+      (state.groupBy === "ip" ? ipKey(a.key.replace(/x$/, "0")) - ipKey(b.key.replace(/x$/, "0")) : a.title.localeCompare(b.title)));
+    const cmp = comparator();
+    return ordered.map((sec) => {
+      const box = el("div", "box");
+      const h = el("div", "box-h");
+      const bad = sec.items.filter((r) => isBad(r.svc.verdict)).length;
+      h.append(el("span", "t", sec.title), el("span", "s", `${sec.items.length} service(s)`));
+      if (bad) { const b = badge("failed"); b.textContent = `${bad} problem(s)`; h.append(b); }
+      box.append(h);
+      for (const r of sec.items.sort((a, b) => cmp(a.svc, b.svc))) {
+        const c = card(r.svc);
+        const where = el("div", "meta", `on ${r.node}${r.guest ? " · " + r.guest : ""}`);
+        c.insertBefore(where, c.querySelector(".kids"));
+        box.append(c);
+      }
+      return box;
+    });
+  }
+
   function renderBoxes(data) {
     const cols = el("div", "cols");
     const entry = el("div");
     entry.append(el("h3", "col-h", "Entry · " + data.entry.name));
-    for (const h of data.entry.hosts) {
+    const slugGroup = new Map(roots(data).concat([]).flatMap((r) => flatten(r.svc)).map((s) => [s.slug, s]));
+    const hosts = [...data.entry.hosts].sort((a, b) => {
+      const sa = slugGroup.get(a.service), sb = slugGroup.get(b.service);
+      if (state.groupBy === "group") return ((sa && sa.group) || "\uffff").localeCompare((sb && sb.group) || "\uffff") || a.hostname.localeCompare(b.hostname);
+      if (state.groupBy === "ip" || state.sortBy === "ip") return ipKey(sa && sa.ip) - ipKey(sb && sb.ip) || a.hostname.localeCompare(b.hostname);
+      return a.hostname.localeCompare(b.hostname);
+    });
+    for (const h of hosts) {
       if (state.q && !h.hostname.toLowerCase().includes(state.q) && !(h.service || "").includes(state.q)) continue;
       if (state.problems) continue;
       const d = el("div", "host" + (h.served ? "" : " off"), h.hostname);
@@ -112,11 +187,15 @@
       entry.append(d);
     }
     const mid = el("div");
-    mid.append(el("h3", "col-h", "Boxes"));
-    for (const n of data.nodes) {
-      const box = nodeBox(n);
-      if ((state.q || state.problems) && !box.querySelector(".card")) continue;
-      mid.append(box);
+    mid.append(el("h3", "col-h", { box: "Boxes", group: "Groups", ip: "Addresses" }[state.groupBy] || "Boxes"));
+    if (state.groupBy === "box") {
+      for (const n of data.nodes) {
+        const box = nodeBox(n);
+        if ((state.q || state.problems) && !box.querySelector(".card")) continue;
+        mid.append(box);
+      }
+    } else {
+      mid.append(...sectionBoxes(data));
     }
     const pbs = el("div");
     pbs.append(el("h3", "col-h", "Backups"));
@@ -213,7 +292,7 @@
     li.append(a, document.createTextNode(" "), badge(svc.verdict));
     const bits = [svc.ip, ...svc.hosts.map((h) => h.hostname + (h.served ? "" : " (off)"))].filter(Boolean);
     if (bits.length) li.append(el("span", "meta", "  " + bits.join(" · ")));
-    const kids = svc.children.filter(showSvc);
+    const kids = svc.children.filter(showSvc).sort(comparator());
     if (kids.length) {
       const ul = el("ul");
       kids.forEach((k) => ul.append(treeSvc(k)));
@@ -221,7 +300,37 @@
     }
     return li;
   }
+  function renderTreeSections(data) {
+    const wrap = el("div", "tree");
+    const ul = el("ul");
+    const by = new Map();
+    for (const r of roots(data)) {
+      if (!showSvc(r.svc)) continue;
+      const key = state.groupBy === "group" ? (r.svc.group || "") : subnet(r.svc.ip);
+      if (!by.has(key)) by.set(key, []);
+      by.get(key).push(r);
+    }
+    const cmp = comparator();
+    const keys = [...by.keys()].sort((a, b) => (a === "" ? 1 : 0) - (b === "" ? 1 : 0) || a.localeCompare(b, undefined, { numeric: true }));
+    for (const key of keys) {
+      const li = el("li");
+      li.append(el("span", "lvl", state.groupBy === "group" ? "group" : "subnet"),
+        el("strong", "", key || (state.groupBy === "group" ? "no group" : "no address")));
+      const inner = el("ul");
+      for (const r of by.get(key).sort((a, b) => cmp(a.svc, b.svc))) {
+        const item = treeSvc(r.svc);
+        item.insertBefore(el("span", "meta", ` on ${r.node}${r.guest ? " · " + r.guest : ""} `), item.querySelector("ul"));
+        inner.append(item);
+      }
+      li.append(inner);
+      ul.append(li);
+    }
+    wrap.append(ul);
+    root.replaceChildren(wrap);
+  }
+
   function renderTree(data) {
+    if (state.groupBy !== "box") { renderTreeSections(data); return; }
     const wrap = el("div", "tree");
     const ul = el("ul");
     for (const n of data.nodes) {
@@ -230,7 +339,7 @@
         el("span", "chip", "power " + n.power));
       const inner = el("ul");
       for (const g of n.guests) {
-        const svcs = g.services.filter(showSvc);
+        const svcs = g.services.filter(showSvc).sort(comparator());
         if (!svcs.length && (state.q || state.problems)) continue;
         const gl = el("li");
         gl.append(el("span", "lvl", "guest"), el("strong", "", `${g.kind} ${g.vmid}`), document.createTextNode(" "),
@@ -328,6 +437,14 @@
       state.view = b.dataset.view;
       for (const o of document.querySelectorAll("#view-seg button")) o.classList.toggle("on", o === b);
       document.getElementById("edge-toggles").style.display = state.view === "boxes" ? "" : "none";
+      render();
+    });
+  }
+  for (const [id, key] of [["m-group", "groupBy"], ["m-sort", "sortBy"]]) {
+    $(id).value = state[key];
+    $(id).addEventListener("change", (e) => {
+      state[key] = e.target.value;
+      try { localStorage.setItem("orch:map:" + key, state[key]); } catch (_e) { /* ignore */ }
       render();
     });
   }
