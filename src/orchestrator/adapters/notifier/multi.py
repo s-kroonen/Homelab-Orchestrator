@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
-from orchestrator.adapters.notifier.base import Notifier, NotifySeverity
+from orchestrator.adapters.notifier.base import Notifier, NotifySeverity, NotSent
 from orchestrator.logging_setup import get_logger
 
 log = get_logger(__name__)
@@ -43,6 +43,8 @@ class MultiNotifier(Notifier):
                     approve_url=approve_url,
                 )
                 out[name] = "ok"
+            except NotSent as exc:
+                out[name] = f"skipped: {exc}"
             except Exception as exc:  # one dead channel never blocks the others
                 log.warning("notify.channel_failed", channel=name, error=str(exc))
                 out[name] = f"error: {exc}"[:300]
@@ -60,6 +62,7 @@ class MultiNotifier(Notifier):
         results = await self.notify_via(
             None, severity=severity, title=title, body=body, tags=tags, approve_url=approve_url
         )
-        failed = {k: v for k, v in results.items() if v != "ok"}
-        if results and len(failed) == len(results):
+        failed = {k: v for k, v in results.items() if v.startswith("error")}
+        attempted = [v for v in results.values() if not v.startswith("skipped")]
+        if attempted and len(failed) == len(attempted):
             raise RuntimeError("; ".join(f"{k}: {v}" for k, v in failed.items()))

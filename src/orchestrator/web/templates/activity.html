@@ -102,7 +102,7 @@
         <span class="badge {{ 'failed' if ev.severity in ('error', 'critical') else 'warn' if ev.severity == 'warn' else 'unknown' }}">{{ ev.event }}</span>
         <span class="msg">{{ ev.level }} <code>{{ ev.target }}</code>
           {% if ev.suppressed %}· folded: {{ ev.suppressed_reason }}
-          {% elif ev.delivered %}· sent: {% for ch, res in ev.delivered.items() %}{{ ch }} {{ "✓" if res == "ok" else "✗" }}{% if not loop.last %}, {% endif %}{% endfor %}
+          {% elif ev.delivered %}· sent: {% for ch, res in ev.delivered.items() %}{{ ch }} {{ "✓" if res == "ok" else "–" if res.startswith("skipped") else "✗" }}{% if not loop.last %}, {% endif %}{% endfor %}
           {% else %}· not sent{% endif %}</span>
       </div>
       {% else %}

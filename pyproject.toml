@@ -37,6 +37,7 @@ dependencies = [
     "structlog~=24.4",
     "ruamel.yaml~=0.18",
     "geoip2~=4.8",
+    "pywebpush~=2.0",
 ]
 
 [project.optional-dependencies]

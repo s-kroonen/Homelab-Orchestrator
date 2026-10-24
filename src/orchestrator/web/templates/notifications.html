@@ -1,6 +1,33 @@
 {% extends "base.html" %}
 {% block title %}homelab-orchestrator — notifications{% endblock %}
 {% block content %}
+  <section id="device-section">
+    <h2>This device</h2>
+    <p class="msg">
+      Install the dashboard as an app and turn on notifications, and alerts reach this phone or
+      computer even when the dashboard is closed. It needs the dashboard's <strong>https</strong>
+      address (a plain <code>http://</code> LAN address cannot do push), and on an iPhone the app
+      has to be added to the Home Screen first. Set <code>NOTIFIER_ADAPTER=auto</code> in
+      <code>.env</code> so alerts are actually sent to channels.
+    </p>
+    <dl class="kv" id="device-kv"></dl>
+    <div class="row">
+      <button id="dev-install" hidden>Install the app</button>
+      <button id="dev-enable">Turn on notifications on this device</button>
+      <button class="secondary" id="dev-local" title="Shows a notification from this browser only; no server, no push service">Show a test notification here</button>
+      <button class="secondary" id="dev-push" title="The server pushes a real notification to this device through the browser vendor's push service">Send a test through the server</button>
+      <button class="secondary" id="dev-disable" hidden>Turn off on this device</button>
+      <span class="msg" id="dev-msg"></span>
+    </div>
+    <h3>Devices with notifications on</h3>
+    <div class="table-scroll">
+    <table>
+      <thead><tr><th>Device</th><th>By</th><th>Since</th><th>Last result</th><th></th></tr></thead>
+      <tbody id="dev-body"><tr><td colspan="5">Loading…</td></tr></tbody>
+    </table>
+    </div>
+  </section>
+
   <section>
     <h2>Channels</h2>
     <p class="msg" id="channels-text">Loading…</p>
@@ -82,6 +109,10 @@
   details.rule-form { margin-top: 0.75rem; }
   details.rule-form summary { cursor: pointer; color: #5b8def; }
   tr.suppressed td { color: #7b8494; }
+  dl.kv { display: grid; grid-template-columns: max-content 1fr; gap: 0.25rem 1.25rem; font-size: 0.85rem; margin: 0 0 1rem; }
+  dl.kv > div { display: contents; }
+  dl.kv dt { color: #9aa4b2; }
+  dl.kv dd { margin: 0; overflow-wrap: anywhere; }
   .sent-ok { color: #3ecf6d; } .sent-bad { color: #e5534b; }
 </style>
 {% endblock %}
@@ -94,6 +125,87 @@
   function tick(id, values) { for (const c of $(id).querySelectorAll("input")) c.checked = values.includes(c.value); }
   function when(iso) { return fmtTime(iso); }
   function td(text, cls) { const e = document.createElement("td"); e.textContent = text; if (cls) e.className = cls; return e; }
+
+  // -- this device (PWA + Web Push) ------------------------------------------------
+  async function refreshDevice() {
+    const s = await OrchPush.status();
+    const rows = [
+      ["Secure address (https)", s.secure ? "yes" : "no - push needs https or localhost"],
+      ["Browser can do push", s.supported ? "yes" : "no"],
+      ["Installed as an app", s.installed ? "yes" : s.canInstall ? "not yet - the button below installs it" : "no"],
+      ["Permission", s.permission],
+      ["Notifications on for this device", s.subscribed ? "yes" : "no"],
+    ];
+    if (s.needsHomeScreen) rows.push(["iPhone / iPad", "Add this page to the Home Screen first (Share → Add to Home Screen), then open it from there"]);
+    $("device-kv").replaceChildren(...rows.flatMap(([k, v]) => {
+      const row = document.createElement("div");
+      const dt = document.createElement("dt"); dt.textContent = k;
+      const dd = document.createElement("dd"); dd.textContent = v;
+      row.append(dt, dd); return [row];
+    }));
+    $("dev-install").hidden = !s.canInstall;
+    $("dev-enable").hidden = s.subscribed;
+    $("dev-disable").hidden = !s.subscribed;
+    $("dev-push").disabled = !s.subscribed;
+    $("dev-enable").disabled = !(s.supported && s.secure);
+    return s;
+  }
+  async function loadDevices() {
+    let list;
+    try { list = await apiFetch("GET", "/api/push/subscriptions", undefined, { suppressToast: true }); }
+    catch (err) { $("dev-body").replaceChildren(); return; }
+    const mine = (await OrchPush.status()).endpoint;
+    if (!list.length) { const tr = document.createElement("tr"); const t = td("No device yet."); t.colSpan = 5; tr.append(t); $("dev-body").replaceChildren(tr); return; }
+    $("dev-body").replaceChildren(...list.map((d) => {
+      const tr = document.createElement("tr");
+      const name = td(d.label || d.user_agent || ("device " + d.id) + (d.endpoint === mine ? "  (this one)" : ""));
+      if (d.endpoint === mine && d.label) name.textContent = d.label + "  (this one)";
+      const res = d.last_error ? td("✗ " + d.last_error, "sent-bad") : d.last_ok_at ? td("✓ " + when(d.last_ok_at), "sent-ok") : td("not used yet");
+      const act = document.createElement("td");
+      const rm = document.createElement("button"); rm.className = "secondary small"; rm.textContent = "Remove";
+      rm.addEventListener("click", async () => {
+        try { await apiFetch("DELETE", "/api/push/subscriptions/" + d.id); } finally { await refreshDevice(); await loadDevices(); }
+      });
+      act.append(rm);
+      tr.append(name, td(d.username), td(when(d.created_at)), res, act);
+      return tr;
+    }));
+  }
+  $("dev-install").addEventListener("click", async () => {
+    try { await OrchPush.install(); } catch (e) { setMsg("dev-msg", e.message, "error"); }
+    refreshDevice();
+  });
+  $("dev-enable").addEventListener("click", async () => {
+    setMsg("dev-msg", "Asking the browser…", "");
+    try {
+      const label = prompt("Name this device", OrchPush.guessLabel());
+      if (label === null) { setMsg("dev-msg", "", ""); return; }
+      await OrchPush.enable(label.trim());
+      setMsg("dev-msg", "Turned on. Use 'Send a test through the server' to check it.", "ok");
+    } catch (e) { setMsg("dev-msg", e.message, "error"); }
+    await refreshDevice(); await loadDevices();
+  });
+  $("dev-disable").addEventListener("click", async () => {
+    try { await OrchPush.disable(); setMsg("dev-msg", "Turned off on this device.", "ok"); }
+    catch (e) { setMsg("dev-msg", e.message, "error"); }
+    await refreshDevice(); await loadDevices();
+  });
+  $("dev-local").addEventListener("click", async () => {
+    try { await OrchPush.testLocal(); setMsg("dev-msg", "Shown. If nothing appeared, check the OS notification settings for this browser.", "ok"); }
+    catch (e) { setMsg("dev-msg", e.message, "error"); }
+  });
+  $("dev-push").addEventListener("click", async () => {
+    setMsg("dev-msg", "Sending…", "");
+    try {
+      const me = (await OrchPush.status()).endpoint;
+      const r = await apiFetch("POST", "/api/push/test", { endpoint: me }, { suppressToast: true });
+      setMsg("dev-msg", Object.entries(r.results).map(([k, v]) => k + ": " + v).join("; "), r.ok ? "ok" : "error");
+    } catch (e) { setMsg("dev-msg", e.message, "error"); }
+    loadDevices();
+  });
+  document.addEventListener("orch:installable", refreshDevice);
+  document.addEventListener("orch:installed", refreshDevice);
+  OrchPush.ready.then(() => { refreshDevice(); loadDevices(); });
 
   async function loadChannels() {
     try {
@@ -186,7 +298,7 @@
       const parts = Object.entries(e.delivered || {});
       if (e.suppressed) sent.textContent = e.suppressed_reason;
       else if (!parts.length) sent.textContent = "-";
-      else for (const [k, v] of parts) { const s = document.createElement("span"); s.className = v === "ok" ? "sent-ok" : "sent-bad"; s.textContent = k + (v === "ok" ? " ✓ " : " ✗ "); s.title = v; sent.append(s); }
+      else for (const [k, v] of parts) { const s = document.createElement("span"); const skipped = v.startsWith("skipped"); s.className = v === "ok" ? "sent-ok" : skipped ? "muted" : "sent-bad"; s.textContent = k + (v === "ok" ? " ✓ " : skipped ? " – " : " ✗ "); s.title = v; sent.append(s); }
       const what = td(e.title); what.title = e.body;
       tr.append(td(when(e.at)), td(e.level), td(e.target), td(e.event + (e.severity ? " (" + e.severity + ")" : "")), what, sent);
       body.append(tr);

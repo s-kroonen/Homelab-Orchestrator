@@ -75,14 +75,19 @@ def build_notifier(settings: Settings) -> Notifier:
         channels["webhook"] = WebhookNotifier(
             settings.notify_webhook_url.strip(), settings.notify_webhook_token.get_secret_value()
         )
-    if kind in {"ntfy", "email", "webhook"}:
+    # Phones and desktops that turned notifications on in the dashboard (PWA). Always
+    # offered: with no device registered it just reports "no device".
+    from orchestrator.notify.push import WebPushNotifier
+
+    channels["push"] = WebPushNotifier(settings)
+    if kind in {"ntfy", "email", "webhook", "push"}:
         channels = {k: v for k, v in channels.items() if k == kind}
     if not channels:
         log.warning(
             "adapters.notifier.no_channels",
             requested=kind,
             impact="Alerts are only logged and shown in the feed on /notifications.",
-            fix="Set NTFY_URL, MAIL_SMTP_HOST + MAIL_TO, or NOTIFY_WEBHOOK_URL.",
+            fix="Set NTFY_URL, MAIL_SMTP_HOST + MAIL_TO, NOTIFY_WEBHOOK_URL, or turn on push on the Notifications page.",
         )
         return NullNotifier()
     return MultiNotifier(channels)

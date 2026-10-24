@@ -738,6 +738,27 @@ class RecoveryState(SQLModel, table=True):
     updated_at: datetime = Field(default_factory=_utcnow)
 
 
+class PushSubscription(SQLModel, table=True):
+    """One browser/device that turned notifications on (Web Push). The orchestrator
+    encrypts each alert to ``p256dh``/``auth`` and posts it to ``endpoint`` (the browser
+    vendor's push service); the device's service worker shows it."""
+
+    __tablename__ = "push_subscription"
+
+    id: int | None = Field(default=None, primary_key=True)
+    endpoint: str = Field(unique=True, index=True)
+    p256dh: str
+    auth: str
+    #: Who turned it on, and a name for the device.
+    username: str = ""
+    label: str = ""
+    user_agent: str = ""
+    created_at: datetime = Field(default_factory=_utcnow)
+    last_ok_at: datetime | None = None
+    #: The last failure from the push service ("" = the last send worked).
+    last_error: str = ""
+
+
 class Setting(SQLModel, table=True):
     """Tiny key/value store for singleton metadata (last-loaded YAML hash, etc.).
 
@@ -752,6 +773,9 @@ class Setting(SQLModel, table=True):
 
 
 # Well-known Setting keys, so callers don't stringly-type them.
+#: The VAPID key pair identifying this orchestrator to push services:
+#: {"private_pem": "...", "public_key": "<base64url uncompressed point>"}. Secret.
+SETTING_PUSH_VAPID = "push.vapid"
 SETTING_LAST_YAML_LOAD = "registry.last_yaml_load"  # {"path", "sha256", "at"}
 SETTING_LAST_YAML_SAVE = "registry.last_yaml_save"  # {"path", "sha256", "at", "by"}
 #: Proxy hosts deleted here whose Traefik Manager route has not been removed

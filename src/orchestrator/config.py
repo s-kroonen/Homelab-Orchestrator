@@ -409,6 +409,10 @@ class Settings(BaseSettings):
     haos_token: SecretStr = SecretStr("")
     haos_verify_tls: bool = True
     controller_timeout_s: int = 20
+    # Contact the browsers' push services see with each Web Push (a mailto: or https
+    # URL). Blank = the dashboard's own address when it is https, else a placeholder.
+    push_vapid_subject: str = ""
+
     # ---- Notification engine (docs/notifications.md) -----------------------
     notifications_enabled: bool = True
     #: A state change must be seen on this many consecutive scans before it is announced.

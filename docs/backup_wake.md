@@ -197,6 +197,31 @@ picker and the *Wake the services being backed up first* toggle; the service pag
 
 ## What it does not do (yet)
 
-It does not power nodes back **off** after a backup they were woken for. Today the
-power manager's own idle shutdown takes care of that once the holds are released.
-An opt-in "power back off" is on the [roadmap](roadmap.md).
+Nothing about wake-on-hit: a node woken by a *visitor* is still switched off by whatever
+manages idle shutdown on your side (the orchestrator only puts back what a *backup* changed).
+
+## Wake mode, retries and putting things back
+
+Set per backup policy (Backup policies -> Edit, or `orchestrator-cli policy update NAME`):
+
+* **Wake switches** (`wake_mode`): `follow` (default) - a backup does not wake a service or
+  node whose *wake on hit* switch is off, and says so in the plan and the run;
+  `always` - wake it anyway, the backup is your own request; `never` - wake nothing and use
+  whatever is up.
+* **Tries** (`max_attempts`, default 3): a scheduled run that is *blocked* (something could
+  not be woken, or the switch above) or whose target is *not healthy after boot* is tried
+  again after `BACKUP_RETRY_DELAY_S` (default 5 min), up to this many times. You get a
+  `backup_retry` notification for each try that will be repeated and one `backup_failed`
+  ("after 3 tries") when it gives up - then it waits for the next scheduled run. A service
+  that is definitively FAILED, a failed dump or a failed verify are never retried.
+* **Put it back afterwards** (`restore_power_state`, default on): the backup remembers what
+  it found. Guests it had to start are stopped again; a node it powered on is powered off
+  (graceful) after `BACKUP_POWER_OFF_GRACE_S`. A node that was already on stays on. A node is
+  left alone - and the step says why - when something else still holds it, when someone
+  else woke a service on it during the backup, or when it is always-on / has no power target.
+  A scheduled batch powers the node off once, after its last service. If powering off fails
+  you get a `power_restore_failed` notification.
+
+Before this, nodes were only *held* during a backup and then released, relying on the power
+manager to switch them off; the MQTT power manager has no idle shutdown of its own, so a node
+woken for a 05:00 backup stayed on.
