@@ -186,6 +186,8 @@ class ServiceSpec(BaseModel):
     controller: dict[str, Any] = Field(default_factory=dict)
     #: Limited automatic recovery; {} = off. See Service.recovery.
     recovery: dict[str, Any] = Field(default_factory=dict)
+    #: How the linked Portainer stack is redeployed and guarded; {} = no deploy method.
+    deploy: dict[str, Any] = Field(default_factory=dict)
     #: Sub-services only: does the root's backup wait for it? See Service.backup_gate.
     backup_gate: BackupGate = BackupGate.IGNORE
     #: The operator's manual address. See Service.ip_address — discovered

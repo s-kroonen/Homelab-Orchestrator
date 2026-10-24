@@ -40,6 +40,7 @@ from orchestrator.cli_bulk import bulk
 from orchestrator.cli_config import policy as policy_group
 from orchestrator.cli_config import probe, proxy
 from orchestrator.cli_config import service as service_group
+from orchestrator.cli_deploy import deploy as deploy_group
 from orchestrator.cli_ip import ip_group
 from orchestrator.cli_notify import notify as notify_group
 from orchestrator.cli_portainer import portainer as portainer_group
@@ -950,6 +951,7 @@ cli.add_command(ip_group, name="ip")
 cli.add_command(bulk)
 cli.add_command(system_group, name="system")
 cli.add_command(portainer_group, name="portainer")
+cli.add_command(deploy_group, name="deploy")
 cli.add_command(notify_group, name="notify")
 cli.add_command(admin_group, name="admin")
 
