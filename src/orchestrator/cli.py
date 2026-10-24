@@ -33,6 +33,7 @@ from typing import Any
 import click
 from sqlmodel import Session, select
 
+from orchestrator import cli_linked  # noqa: F401  (adds service state|enable|disable)
 from orchestrator.adapters.errors import AdapterError, AdapterTlsError, AdapterUnreachable
 from orchestrator.adapters.factory import build_adapters
 from orchestrator.cli_bulk import bulk

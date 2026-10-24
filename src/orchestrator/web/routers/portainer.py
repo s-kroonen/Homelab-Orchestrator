@@ -26,6 +26,7 @@ from orchestrator.adapters.errors import (
     AdapterUnreachable,
 )
 from orchestrator.adapters.portainer.base import Container, PortainerAdapter, Stack
+from orchestrator.adapters.portainer.links import container_url, env_url, stack_url
 from orchestrator.db.models import Service
 from orchestrator.web.auth import get_current_admin, require_admin
 from orchestrator.web.deps import AdaptersDep, SessionDep
@@ -83,22 +84,6 @@ def _links(session: Session) -> dict[tuple[str, int, str], list[str]]:
 # -- "open in Portainer" and the same thing by hand ----------------------------------------
 
 
-def _env_url(base: str, eid: int) -> str:
-    return f"{base}/#!/{eid}/docker/dashboard" if base else ""
-
-
-def _stack_url(base: str, s: Stack) -> str:
-    if not base:
-        return ""
-    if s.id is not None:
-        return f"{base}/#!/{s.endpoint_id}/docker/stacks/{s.name}?id={s.id}&type=2&regular=true"
-    return f"{base}/#!/{s.endpoint_id}/docker/stacks/{s.name}?type=2&external=true"
-
-
-def _container_url(base: str, eid: int, cid: str) -> str:
-    return f"{base}/#!/{eid}/docker/containers/{cid}" if base else ""
-
-
 def _stack_view(
     s: Stack,
     base: str,
@@ -107,7 +92,7 @@ def _stack_view(
     kind: str | None = None,
 ) -> dict[str, Any]:
     data = asdict(s)
-    data["open_url"] = _stack_url(base, s)
+    data["open_url"] = stack_url(base, s)
     data["linked_services"] = links.get(("stack", s.endpoint_id, s.name.lower()), [])
     data["host_commands"] = [
         f"docker compose -p {s.name} ps",
@@ -126,7 +111,7 @@ def _container_view(
 ) -> dict[str, Any]:
     data = asdict(c)
     data["endpoint_id"] = eid
-    data["open_url"] = _container_url(base, eid, c.id)
+    data["open_url"] = container_url(base, eid, c.id)
     data["linked_services"] = links.get(("container", eid, c.name.lower()), [])
     return data
 
@@ -148,7 +133,7 @@ async def environments(adapters: AdaptersDep) -> list[dict[str, Any]]:
         envs = await adapter.list_environments()
     except AdapterError as exc:
         raise _fail(exc) from exc
-    return [{**asdict(e), "open_url": _env_url(adapter.base_url, e.id)} for e in envs]
+    return [{**asdict(e), "open_url": env_url(adapter.base_url, e.id)} for e in envs]
 
 
 @api.get("/stacks")

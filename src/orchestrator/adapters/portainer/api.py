@@ -431,6 +431,24 @@ class LivePortainerAdapter(PortainerAdapter):
 
     # -- containers ---------------------------------------------------------------------------
 
+    async def container_action(self, endpoint_id: int, ref: str, verb: str) -> str:
+        if verb not in {"start", "stop", "restart"}:
+            raise AdapterRequestError(f"unknown container action {verb!r}")
+        self._writable()
+        cid = await self._resolve(endpoint_id, ref)
+        if cid is None:
+            raise AdapterRequestError(
+                f"no container {ref!r} on Portainer environment {endpoint_id}"
+            )
+        params = {"t": "10"} if verb in {"stop", "restart"} else None
+        await self._request(
+            f"/api/endpoints/{endpoint_id}/docker/containers/{cid}/{verb}",
+            params,
+            method="POST",
+        )
+        self.invalidate()
+        return f"{verb} sent to container {ref}"
+
     async def list_containers(
         self, endpoint_id: int, *, stack: str | None = None, include_stopped: bool = True
     ) -> list[Container]:

@@ -95,6 +95,9 @@ class PipelineKind(StrEnum):
     BACKUP = "backup"
     RESTORE = "restore"
     SCAN = "scan"
+    #: enable/disable of a service and everything linked to it (docs/portainer_deploys.md)
+    SWITCH = "switch"
+    DEPLOY = "deploy"
 
 
 class PipelineStatus(StrEnum):

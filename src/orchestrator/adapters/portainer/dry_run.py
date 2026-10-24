@@ -322,6 +322,32 @@ class DryRunPortainerAdapter(PortainerAdapter):
 
     # -- containers ------------------------------------------------------------------------------
 
+    async def container_action(self, endpoint_id: int, ref: str, verb: str) -> str:
+        if verb not in {"start", "stop", "restart"}:
+            raise AdapterRequestError(f"unknown container action {verb!r}")
+        self._writable()
+        c = self._find(ref) if endpoint_id == 1 else None
+        if c is None:
+            raise AdapterRequestError(
+                f"no container {ref!r} on Portainer environment {endpoint_id}"
+            )
+        self.calls.append(f"{verb} container {c.name}")
+        up = verb != "stop"
+        self._containers = [
+            (
+                replace(
+                    x,
+                    state="running" if up else "exited",
+                    health=_BASE_HEALTH.get(x.id, "") if up else "",
+                    status_text="Up 1 second" if up else "Exited (0) 1 second ago",
+                )
+                if x.id == c.id
+                else x
+            )
+            for x in self._containers
+        ]
+        return f"{verb} sent to container {c.name}"
+
     async def list_containers(
         self, endpoint_id: int, *, stack: str | None = None, include_stopped: bool = True
     ) -> list[Container]:

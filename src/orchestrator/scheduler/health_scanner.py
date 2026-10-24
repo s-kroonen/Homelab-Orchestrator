@@ -73,6 +73,7 @@ from orchestrator.logging_setup import get_logger
 from orchestrator.notify.engine import NotificationEngine
 from orchestrator.notify.monitor import collect
 from orchestrator.recovery.engine import RecoveryEngine
+from orchestrator.registry.linked_watch import LinkedWatcher
 from orchestrator.registry.tree import TreeIndex
 
 log = get_logger(__name__)
@@ -117,6 +118,8 @@ class HealthScanner:
         self._engine = HealthEngine(
             settings=settings, proxmox=adapters.proxmox if adapters is not None else None
         )
+        self._adapters = adapters
+        self._linked = LinkedWatcher()
         self._scheduler = AsyncIOScheduler()
 
     # -- lifecycle -----------------------------------------------------------
@@ -205,6 +208,7 @@ class HealthScanner:
 
                 inserted = self._store_samples(session, cache)
                 await self._announce(session, cache, guest_cache, tree)
+                await self._watch_linked(session, guest_cache)
                 # Pruning is independent of whether this cycle's scans
                 # succeeded — a probe hiccup must not also stop old samples
                 # from eventually being cleaned up. session_scope commits on
@@ -238,6 +242,18 @@ class HealthScanner:
                 await self._recovery.run_cycle(session, cache, tree)
         except Exception as exc:  # pragma: no cover - defensive
             log.error("health_scanner.notify_failed", error=str(exc), error_type=type(exc).__name__)
+
+    async def _watch_linked(self, session: Session, guest_cache: Any) -> None:
+        """Report linked things (stack, proxy route, guest) that were changed outside the
+        orchestrator. Monitoring only. Never raises."""
+        if self._adapters is None:
+            return
+        try:
+            await self._linked.observe(session, self._adapters, self._settings, guest_cache)
+        except Exception as exc:  # pragma: no cover - defensive
+            log.error(
+                "health_scanner.linked_watch_failed", error=str(exc), error_type=type(exc).__name__
+            )
 
     def _store_samples(self, session: Session, cache: dict[str, ServiceVerdict]) -> int:
         """Write one HealthScanSample per slug in ``cache`` this cycle.

@@ -46,7 +46,8 @@ DEFAULT_EVENTS = 100
 
 #: What the "kind" filter accepts: a pipeline kind, ``admin`` (what people did:
 #: audit rows that belong to no run) or ``alert`` (notification events).
-KINDS = (*(k.value for k in PipelineKind if k is not PipelineKind.SCAN), "admin", "alert")
+RUN_KINDS = tuple(k.value for k in PipelineKind if k is not PipelineKind.SCAN)
+KINDS = (*RUN_KINDS, "admin", "alert")
 
 #: Alert events and severities that count as "a problem" for the problems-only filter.
 _PROBLEM_SEVERITIES = ("warn", "error", "critical")
@@ -175,7 +176,7 @@ def build_feed(
     combine as an intersection: the events about those services - and, for a node
     or guest, about the node or guest itself (``node:<name>`` / ``guest:<n>/<id>``
     audit rows and node/guest alerts). ``kind`` narrows the sort of event
-    (``wake``, ``backup``, ``restore``, ``admin``, ``alert``); ``problems`` keeps only
+    (``wake``, ``backup``, ``restore``, ``switch``, ``deploy``, ``admin``, ``alert``); ``problems`` keeps only
     what failed; ``since_hours`` only the recent past; ``q`` is a text search over
     the action, target, error and alert text. Audit rows with no service target
     (logins, invites) drop out as soon as a place filter is set.
@@ -187,8 +188,8 @@ def build_feed(
     text = (q or "").strip()
     events: list[dict[str, Any]] = []
 
-    want_runs = kind in (None, "wake", "backup", "restore")
-    want_audit = kind in (None, "admin") or kind in ("wake", "backup", "restore")
+    want_runs = kind in (None, *RUN_KINDS)
+    want_audit = kind in (None, "admin") or kind in RUN_KINDS
     want_alerts = kind in (None, "alert")
 
     # -- pipeline runs --------------------------------------------------------
@@ -196,7 +197,7 @@ def build_feed(
     run_cids: list[str] = []
     if want_runs:
         stmt = select(PipelineRun).order_by(desc(PipelineRun.started_at)).limit(limit)
-        if kind in ("wake", "backup", "restore"):
+        if kind in RUN_KINDS:
             stmt = stmt.where(PipelineRun.kind == PipelineKind(kind))
         if scope is not None:
             # An empty id set matches NO runs (`in_([])` is a false clause), which
@@ -240,7 +241,7 @@ def build_feed(
         events.append(event)
 
     # -- audit rows that are not part of a run ----------------------------------
-    if want_audit and kind not in ("wake", "backup", "restore"):
+    if want_audit and kind not in RUN_KINDS:
         audit_stmt = select(AuditEntry).order_by(desc(AuditEntry.created_at)).limit(limit)
         if scope is not None:
             audit_stmt = audit_stmt.where(col(AuditEntry.target).in_(scope.audit_targets()))
@@ -344,7 +345,9 @@ async def activity(
     group: str | None = Query(None, description="Only events for services tagged with this group"),
     node: str | None = Query(None, description="Only events for this node (and what runs on it)"),
     guest: str | None = Query(None, description="Only events for this guest, as node/vmid"),
-    kind: str | None = Query(None, description="wake | backup | restore | admin | alert"),
+    kind: str | None = Query(
+        None, description="wake | backup | restore | switch | deploy | admin | alert"
+    ),
     problems: bool = Query(False, description="Only what failed"),
     since_hours: int | None = Query(None, ge=1, le=24 * 365),
     q: str | None = Query(None, description="Text to look for"),

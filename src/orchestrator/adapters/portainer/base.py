@@ -240,6 +240,11 @@ class PortainerAdapter(ABC):
         """Delete the stack in Portainer. Volumes are kept."""
 
     @abstractmethod
+    async def container_action(self, endpoint_id: int, ref: str, verb: str) -> str:
+        """``start`` | ``stop`` | ``restart`` one container (by id or name). Returns a short
+        message; raises when it is not found or Portainer refuses."""
+
+    @abstractmethod
     async def stack_kind(self, stack: Stack) -> str:
         """``image`` | ``build`` | ``mixed`` | ``unknown`` - read from the compose file,
         which is parsed and discarded, never returned."""
