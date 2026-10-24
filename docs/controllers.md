@@ -7,7 +7,7 @@ service's `controller:` block (the **Controller (JSON)** box on the service page
 
 | `type` | Acts on | Needs |
 |---|---|---|
-| `portainer` | a container or stack | `PORTAINER_URL`, `PORTAINER_API_KEY` (an access token). `{type: portainer, endpoint: 2, container: nginx}` or `stack: media` |
+| `portainer` | a container or stack (see [portainer_deploys.md](portainer_deploys.md) for linking, the switch and deploys; `PORTAINER_READ_ONLY` makes it refuse) | `PORTAINER_URL`, `PORTAINER_API_KEY` (an access token). `{type: portainer, endpoint: 2, container: nginx}` or `stack: media` |
 | `haos` | a Home Assistant add-on or the Core | `HAOS_URL`, `HAOS_TOKEN` (long-lived token of an **admin** user). `{type: haos, addon: core_mosquitto}` or `{type: haos, core: true}` |
 | `docker` | a container via the docker CLI | a transport. `{type: docker, container: nginx, transport: {type: host_agent, host: media-vm}}` |
 | `systemd` | a unit | a transport. `{type: systemd, unit: caddy, transport: {...}}` |

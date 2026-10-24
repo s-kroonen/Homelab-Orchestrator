@@ -1,8 +1,9 @@
 # Portainer: what it has, read live
 
 The **Portainer** page (`/portainer`), `orchestrator-cli portainer ...` and `/api/portainer`
-show what Portainer knows: environments, stacks, containers, logs and stats. This is the first
-step of [plan_portainer_deploys.md](plan_portainer_deploys.md): **read only**.
+show what Portainer knows: environments, stacks, containers, logs and stats. Adopting, creating,
+deleting and deploying stacks - the write side - is in
+[portainer_deploys.md](portainer_deploys.md); this page is the read side.
 
 Portainer owns stacks the way Proxmox owns guests. The orchestrator reads them and, later,
 creates and deletes them only through Portainer's API. It copies nothing: no compose files, no
@@ -21,8 +22,9 @@ PORTAINER_PUBLIC_URL=              # what you open in a browser, if different (f
 PORTAINER_ADAPTER=api              # dry_run serves sample data (DRY_RUN=true does too)
 ```
 
-The token acts as the user that created it, so use a user with **read** access to the
-environments (it never writes in this version). `orchestrator-cli check` and the Connectivity
+The token acts as the user that created it, so for reading only a user with **read** access to
+the environments is enough; the write side ([portainer_deploys.md](portainer_deploys.md)) needs
+one that can manage stacks, and `PORTAINER_READ_ONLY=true` makes every write refuse. `orchestrator-cli check` and the Connectivity
 page list Portainer (reachable, key accepted, version, edition, environments) and each
 environment; an environment Portainer reports as down shows as a finding. Portainer not
 configured is a note, not a failure.

@@ -1,5 +1,9 @@
 # Plan: managing Portainer stacks and containers, deploys and guards
 
+> **Status:** steps 1-6 are built and tested against fakes; how to use them is in
+> [portainer_deploys.md](portainer_deploys.md). Not yet run against a real Portainer - see the
+> "not verified" section there. This page keeps the design and the reasons.
+
 Goal: everything about one deployed application - its Portainer stack, its containers
 (including the database), its proxy host(s) and its deploy pipeline - becomes **one
 sub-service** in the orchestrator, with one enable/disable switch, one place to monitor it,
@@ -244,17 +248,17 @@ and the connectivity check. Each prints what it did and the audit entry it wrote
 
 1. **Portainer client + read side** *(built: see [portainer.md](portainer.md))*: shared client, redaction, version check, connectivity
    check, discovery API and CLI, container state and a log viewer. Read-only, risk-free.
-2. **State and the one switch**: observed state per linked thing (proxy / stack / guest), the
+2. **State and the one switch** *(built)*: observed state per linked thing (proxy / stack / guest), the
    mixed display, enable/disable across all linked controllers and down the tree, the stack
    page (overview, control, logs, links out). Also finishes the old "disable does something on
    Proxmox" item for root services.
-3. **Adoption, create and delete**: the wizard (UI + CLI + API), create/delete a stack through
+3. **Adoption, create and delete** *(built)*: the wizard (UI + CLI + API), create/delete a stack through
    Portainer, proxy-host linking from the service side, probe and child suggestions.
-4. **Deploy method and runs**: `deploy:` config, `PipelineKind.deploy`, manual redeploy for image
+4. **Deploy method and runs** *(built)*: `deploy:` config, `PipelineKind.deploy`, manual redeploy for image
    and build stacks, outside-deploy detection with post checks, history in Activity.
-5. **Guards**: pre probes, the backup freshness rule, the post health gate, `on_failure`
+5. **Guards** *(built)*: pre probes, the backup freshness rule, the post health gate, `on_failure`
    (notify / stop / restore-with-approval), the webhook with provider verification and its lock.
-6. **Polish**: map and tree show stacks and deploy state, deploy filters and notification
+6. **Polish** *(built, except the research items)*: map and tree show stacks and deploy state, deploy filters and notification
    events, docs. Later research: dump backups, `redeploy_previous`, GitLab.
 
 Each step ships on its own and is useful alone; 1-3 change nothing about how you deploy today.
