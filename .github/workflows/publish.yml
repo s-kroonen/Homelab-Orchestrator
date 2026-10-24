@@ -27,6 +27,14 @@ on:
     tags: ["v*.*.*"]
   workflow_dispatch:
 
+# Only the newest push per branch/tag publishes. Without this, merges a minute
+# apart ran in parallel and whichever image finished LAST won the moving tag
+# (:dev ended up on the oldest commit). A cancelled run never pushes, and the
+# newest run always starts after the ones it cancels.
+concurrency:
+  group: publish-${{ github.ref }}
+  cancel-in-progress: true
+
 env:
   REGISTRY: ghcr.io
   # Image name defaults to <owner>/<repo-lowercase>. metadata-action lowercases it.
