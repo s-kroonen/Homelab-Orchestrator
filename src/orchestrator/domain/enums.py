@@ -54,6 +54,15 @@ class WakeTrigger(StrEnum):
     BUTTON = "button"  # the visitor has to press Start on the page
 
 
+class BackupWakeMode(StrEnum):
+    """How a backup policy treats the wake-on-hit switches (``Service`` /
+    ``Node.wake_on_hit_enabled``) when it needs something woken."""
+
+    FOLLOW = "follow"  # honour them: a switched-off node/service is not woken
+    ALWAYS = "always"  # wake it anyway - the backup is the operator's own request
+    NEVER = "never"  # wake nothing; back up whatever is up
+
+
 class BackupGate(StrEnum):
     """What a sub-service means for its root's backup (see Service.backup_gate)."""
 

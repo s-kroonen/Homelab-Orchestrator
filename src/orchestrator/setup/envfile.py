@@ -510,6 +510,15 @@ ENV_SECTIONS: tuple[EnvSection, ...] = (
             EnvKey("BACKUP_TASK_TIMEOUT_S", "A large VM dump can legitimately take hours."),
             EnvKey("VERIFY_TASK_TIMEOUT_S"),
             EnvKey(
+                "BACKUP_RETRY_DELAY_S",
+                "Seconds before a scheduled backup that was blocked, or whose target did not "
+                "turn healthy after boot, is tried again (up to the policy's max attempts).",
+            ),
+            EnvKey(
+                "BACKUP_POWER_OFF_GRACE_S",
+                "Seconds to wait after a backup before powering a node it woke back off.",
+            ),
+            EnvKey(
                 "WAKE_TIMEOUT_S",
                 "Bounds the whole wake pipeline — a cold node can take minutes to POST, "
                 "boot, and bring its guests up.",

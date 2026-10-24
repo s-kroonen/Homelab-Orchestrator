@@ -50,6 +50,8 @@
             {% if not p.requires %}<span class="muted">nothing</span>{% endif %}
             {% for b in p.requires_blockers %}<br><span class="badge failed" title="{{ b.blocker }}">{{ b.slug }}: cannot be woken</span>{% endfor %}
             {% if not p.wake_before_backup %}<br><span class="muted">targets not woken</span>{% endif %}
+            {% if p.wake_mode != "follow" %}<br><span class="muted">wake: {{ p.wake_mode }}</span>{% endif %}
+            {% if not p.restore_power_state %}<br><span class="muted">not put back after</span>{% endif %}
           </td>
           <td>
             {% for slug in p.services %}<code>{{ slug }}</code> {% endfor %}

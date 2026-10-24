@@ -14,7 +14,14 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from orchestrator.domain.enums import BackupGate, BackupMode, GuestKind, ProbeKind, WakeTrigger
+from orchestrator.domain.enums import (
+    BackupGate,
+    BackupMode,
+    BackupWakeMode,
+    GuestKind,
+    ProbeKind,
+    WakeTrigger,
+)
 
 
 def _collapse_slugs(value: list[str]) -> list[str]:
@@ -55,6 +62,13 @@ class BackupPolicySpec(BaseModel):
     requires: list[str] = Field(default_factory=list)
     #: Wake the services being backed up first. See BackupPolicy.wake_before_backup.
     wake_before_backup: bool = True
+    #: follow (honour wake-on-hit switches) | always | never. See BackupPolicy.wake_mode.
+    wake_mode: BackupWakeMode = BackupWakeMode.FOLLOW
+    #: Tries before a blocked / not-healthy run gives up and notifies (>= 1).
+    max_attempts: int = Field(default=3, ge=1, le=20)
+    #: Stop what the backup started and power its node back off. See
+    #: BackupPolicy.restore_power_state.
+    restore_power_state: bool = True
 
     _collapse_requires = field_validator("requires")(_collapse_slugs)
 

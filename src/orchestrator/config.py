@@ -342,6 +342,13 @@ class Settings(BaseSettings):
     # ---- Task timeouts ----------------------------------------------------
     backup_task_timeout_s: int = 7200  # a large VM dump can legitimately take hours
     verify_task_timeout_s: int = 1800
+    # A scheduled backup that was blocked or whose target did not become healthy
+    # after boot is tried again this many seconds later, up to the policy's
+    # max_attempts (default 3), then it gives up and notifies.
+    backup_retry_delay_s: int = 300
+    # After a backup, wait this long before powering a node it woke back off, so a
+    # request that arrives right at the end is not pulled out from under.
+    backup_power_off_grace_s: int = 30
     # A cold node can legitimately take minutes to POST, boot, and bring its
     # guests up — this bounds the whole wake pipeline, node-online and health
     # polling both count against it.

@@ -45,7 +45,7 @@ from orchestrator.health.engine import HealthEngine
 from orchestrator.logging_setup import get_logger, new_correlation_id
 from orchestrator.notify.hooks import announce
 from orchestrator.pipelines.backup_wake import BackupWaker, WakeContext
-from orchestrator.pipelines.steps import BackupError, StepRecorder
+from orchestrator.pipelines.steps import BackupError, RetryableBackupError, StepRecorder
 from orchestrator.pipelines.wake import WakePipeline
 from orchestrator.registry.backup_plan import (
     BackupPlan,
@@ -103,6 +103,8 @@ class BackupPipeline:
         gate: bool = True,
         wake: bool = True,
         prepared: WakeContext | None = None,
+        attempt: int = 1,
+        attempts: int = 1,
     ) -> PipelineRun:
         """Back up one service. Returns the completed :class:`PipelineRun`.
 
@@ -117,6 +119,10 @@ class BackupPipeline:
         ``prepared`` is a :class:`WakeContext` from :meth:`prepare_policy`: the
         policy-level prerequisites a scheduled batch already woke and holds, which
         this run must not wake (or release) again.
+
+        ``attempt`` / ``attempts`` say which try of how many this is (a scheduled
+        run retries a blocked or not-yet-healthy target). A retryable failure with
+        tries left announces "will retry"; the last one announces the give-up.
         """
         correlation_id = new_correlation_id()
         service, node, policy = self._resolve(session, slug)
@@ -168,7 +174,9 @@ class BackupPipeline:
             else:
                 steps.record("pbs_verify", "skipped", detail={"reason": "verify=False"})
 
-            await self._release_wake(session, steps, wake_ctx)
+            await self._release_wake(
+                session, steps, wake_ctx, restore=True, policy=policy, defer_to=prepared
+            )
             self._finish(session, run, PipelineStatus.SUCCEEDED)
             audit.record(
                 session,
@@ -186,7 +194,11 @@ class BackupPipeline:
             # a bad backup — label them so phase 4's gate logic and the operator
             # can tell "we don't know" from "it failed".
             indeterminate = isinstance(exc, AdapterUnreachable | TaskTimeout)
-            await self._release_wake(session, steps, wake_ctx)
+            retryable = indeterminate or bool(getattr(exc, "retryable", False))
+            will_retry = retryable and attempt < attempts
+            await self._release_wake(
+                session, steps, wake_ctx, restore=True, policy=policy, defer_to=prepared
+            )
             steps.record(
                 "aborted",
                 "indeterminate" if indeterminate else "failed",
@@ -204,26 +216,70 @@ class BackupPipeline:
                     "run_id": run.id,
                     "error": str(exc),
                     "indeterminate": indeterminate,
+                    "attempt": attempt,
+                    "attempts": attempts,
+                    "will_retry": will_retry,
                 },
             )
             session.commit()
-            await announce(
+            await self._announce_failure(
                 session,
-                level="service",
-                key=slug,
-                name=service.name,
-                event="backup_failed",
-                severity="warn" if indeterminate else "error",
-                title=f"Backup of {service.name} {'could not run' if indeterminate else 'FAILED'}",
-                body=str(exc)[:1500],
-                scope={"slug": slug, "group": service.group},
+                service,
+                exc,
+                indeterminate=indeterminate,
+                attempt=attempt,
+                attempts=attempts,
+                will_retry=will_retry,
             )
             raise
         finally:
             # Whatever happened — including an exception this method does not
             # handle or a cancelled request — never leave a node pinned awake.
             # Idempotent: the paths above already released on their way out.
-            await self._release_wake(session, steps, wake_ctx)
+            await self._release_wake(
+                session, steps, wake_ctx, restore=True, policy=policy, defer_to=prepared
+            )
+
+    @staticmethod
+    async def _announce_failure(
+        session: Session,
+        service: Service,
+        exc: Exception,
+        *,
+        indeterminate: bool,
+        attempt: int,
+        attempts: int,
+        will_retry: bool,
+    ) -> None:
+        scope = {"slug": service.slug, "group": service.group}
+        if will_retry:
+            await announce(
+                session,
+                level="service",
+                key=service.slug,
+                name=service.name,
+                event="backup_retry",
+                severity="warn",
+                title=f"Backup of {service.name} blocked (try {attempt} of {attempts})",
+                body=f"{str(exc)[:1300]}\n\nIt will be tried again shortly.",
+                scope=scope,
+            )
+            return
+        tries = f" after {attempt} tries" if attempts > 1 and attempt > 1 else ""
+        gave_up = (
+            " It will not be retried again until the next scheduled run." if attempts > 1 else ""
+        )
+        await announce(
+            session,
+            level="service",
+            key=service.slug,
+            name=service.name,
+            event="backup_failed",
+            severity="warn" if indeterminate else "error",
+            title=f"Backup of {service.name} {'could not run' if indeterminate else 'FAILED'}{tries}",
+            body=f"{str(exc)[:1300]}{gave_up if attempt >= attempts and attempts > 1 else ''}",
+            scope=scope,
+        )
 
     # -- wake phase ----------------------------------------------------------
 
@@ -293,9 +349,26 @@ class BackupPipeline:
         )
         session.commit()
 
-    async def _release_wake(self, session: Session, steps: StepRecorder, ctx: WakeContext) -> None:
-        if self._waker is not None and ctx.held:
+    async def _release_wake(
+        self,
+        session: Session,
+        steps: StepRecorder,
+        ctx: WakeContext,
+        *,
+        restore: bool = False,
+        policy: BackupPolicy | None = None,
+        defer_to: WakeContext | None = None,
+    ) -> None:
+        """Release the holds and, when the policy says so, put back what the backup
+        changed (guests it started, nodes it powered on). Idempotent."""
+        if self._waker is None:
+            return
+        if ctx.held:
             await self._waker.release(session, ctx, steps)
+        if restore and ctx.prior and (policy is None or policy.restore_power_state):
+            await self._waker.restore(session, ctx, steps, defer_to=defer_to)
+        elif restore and ctx.prior:
+            ctx.prior.clear()
 
     async def prepare_policy(
         self, session: Session, policy: BackupPolicy, *, actor: str = "scheduler", services: int = 1
@@ -330,9 +403,15 @@ class BackupPipeline:
             )
         return ctx
 
-    async def release_prepared(self, session: Session, ctx: WakeContext) -> None:
+    async def release_prepared(
+        self, session: Session, ctx: WakeContext, policy: BackupPolicy
+    ) -> None:
         if self._waker is not None and ctx.held:
             await self._waker.release(session, ctx, None)
+        if self._waker is not None and ctx.prior and policy.restore_power_state:
+            await self._waker.restore(session, ctx, None)
+        elif ctx.prior:
+            ctx.prior.clear()
 
     # -- steps ---------------------------------------------------------------
 
@@ -425,7 +504,7 @@ class BackupPipeline:
             # The guest gate: node offline or guest not running. Always
             # required for a backup — there is nothing consistent to dump
             # from a guest that is not running, and the probes never ran.
-            raise BackupError(
+            raise RetryableBackupError(
                 f"integrity gate refused {service.slug!r}: the guest is not running "
                 f"(DOWN) — {verdict.reason.split(' — ', 1)[0]}. The guest is stopped or "
                 f"its node is off, so its health could not be checked and no backup was "
@@ -439,7 +518,7 @@ class BackupPipeline:
                 f"{verdict.reason}. The last known-good backup is untouched. "
                 f"This service is a restore candidate."
             )
-        raise BackupError(
+        raise RetryableBackupError(
             f"integrity gate refused {service.slug!r}: health could not be "
             f"established (UNKNOWN) — {verdict.reason}. Failing closed: no backup "
             f"was taken and the last known-good backup is untouched. This is not "
@@ -502,7 +581,7 @@ class BackupPipeline:
                         detail={"controller": ctl.describe()},
                     )
             except (ControllerError, ValueError, AssertionError) as exc:
-                raise BackupError(
+                raise RetryableBackupError(
                     f"required sub-service {sub.slug!r} could not be started through its "
                     f"controller: {exc}"
                 ) from exc
@@ -538,7 +617,9 @@ class BackupPipeline:
                 HealthState.DOWN: "is not running",
                 HealthState.UNKNOWN: "could not be verified (UNKNOWN)",
             }.get(verdict.state, verdict.state.value)
-            raise BackupError(
+            raise (
+                RetryableBackupError if verdict.state is not HealthState.FAILED else BackupError
+            )(
                 f"integrity gate refused {service.slug!r}: its required sub-service "
                 f"{sub.slug!r} {how} - {verdict.reason}. No backup was taken and the last "
                 f"known-good backup is untouched. (Set {sub.slug!r} to backup_gate: ignore "

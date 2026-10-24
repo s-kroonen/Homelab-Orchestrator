@@ -29,6 +29,7 @@ from orchestrator.domain.enums import (
     AuditResult,
     BackupGate,
     BackupMode,
+    BackupWakeMode,
     GuestKind,
     HealthState,
     PipelineKind,
@@ -102,6 +103,15 @@ class BackupPolicy(SQLModel, table=True):
     # healthy) before their backup starts. Default on: a burst node that is off
     # would otherwise just fail the run.
     wake_before_backup: bool = Field(default=True)
+    # Whether the backup honours the wake-on-hit switches of what it wakes
+    # (FOLLOW, default), ignores them (ALWAYS) or wakes nothing (NEVER).
+    wake_mode: BackupWakeMode = Field(default=BackupWakeMode.FOLLOW)
+    # How many times a run is tried when it is blocked or the target does not
+    # become healthy after boot, before giving up and telling you (>= 1).
+    max_attempts: int = Field(default=3)
+    # Put back what the backup changed: guests it started are stopped and a node
+    # it powered on is powered off again (unless something else needs it).
+    restore_power_state: bool = Field(default=True)
     created_at: datetime = Field(default_factory=_utcnow)
     updated_at: datetime = Field(default_factory=_utcnow)
 

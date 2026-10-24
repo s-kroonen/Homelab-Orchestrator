@@ -37,6 +37,10 @@ def _isolated_settings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Itera
     monkeypatch.setenv("RUN_MIGRATIONS_ON_START", "false")
     monkeypatch.setenv("LOG_FORMAT", "console")
     monkeypatch.setenv("LOG_LEVEL", "WARNING")
+    # Tests must never sit through the real pauses between backup retries or
+    # before a node is powered back off.
+    monkeypatch.setenv("BACKUP_RETRY_DELAY_S", "0")
+    monkeypatch.setenv("BACKUP_POWER_OFF_GRACE_S", "0")
     monkeypatch.setenv("SESSION_SECRET", "test-only")
     # Don't inherit any developer's stray adapter config.
     for key in ("POWER_ADAPTER", "PROXMOX_ADAPTER", "PBS_ADAPTER"):

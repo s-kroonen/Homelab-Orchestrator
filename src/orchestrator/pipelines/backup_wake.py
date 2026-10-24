@@ -32,6 +32,7 @@ existed.
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
@@ -40,9 +41,11 @@ from sqlmodel import Session, select
 
 from orchestrator.adapters.errors import AdapterError, AdapterUnreachable
 from orchestrator.config import Settings
-from orchestrator.db.models import Node, Service
+from orchestrator.db.models import Node, NodeState, Service
+from orchestrator.domain.enums import GuestKind
 from orchestrator.logging_setup import get_logger
-from orchestrator.pipelines.steps import BackupError, Recorder
+from orchestrator.notify.hooks import announce
+from orchestrator.pipelines.steps import Recorder, RetryableBackupError
 from orchestrator.pipelines.wake import WakeError, WakePipeline, WakeUnsupportedError
 from orchestrator.registry.backup_plan import BLOCKER_NO_POWER_TARGET, PlanStep
 
@@ -55,7 +58,7 @@ NO_POWER_TARGET_MESSAGE = (
 _UNTOUCHED = "No backup was taken and the last known-good backup is untouched."
 
 
-class PrerequisiteError(BackupError):
+class PrerequisiteError(RetryableBackupError):
     """A prerequisite or the backup target could not be brought up. The backup
     run fails at this step; the gate and the dump never run."""
 
@@ -82,6 +85,18 @@ class HeldNode:
 
 
 @dataclass
+class NodePrior:
+    """What a node was doing before this backup touched it - what to put back."""
+
+    node_id: int
+    node_name: str
+    #: The node was already on. If False, the backup powered it on and, when done,
+    #: powers it off again (graceful); if True only the guests it started are stopped.
+    was_online: bool
+    started_guests: list[tuple[int, GuestKind]] = field(default_factory=list)
+
+
+@dataclass
 class WakeContext:
     """What a wake phase leaves behind: the holds still to release, and the
     per-service outcome so a later run can replay it."""
@@ -91,6 +106,11 @@ class WakeContext:
     results: dict[str, tuple[str, dict[str, Any]]] = field(default_factory=dict)
     error: str | None = None
     failed_slug: str | None = None
+    #: node name -> what it was before we woke anything on it.
+    prior: dict[str, NodePrior] = field(default_factory=dict)
+    #: ids of the wake runs this context started (so "someone else woke it" can be told apart).
+    wake_run_ids: set[int] = field(default_factory=set)
+    started_at: datetime = field(default_factory=lambda: datetime.now(UTC))
 
     @property
     def held_node_ids(self) -> set[int]:
@@ -189,7 +209,10 @@ class BackupWaker:
             if already_up:
                 detail["already_up"] = True
             else:
-                run = await self._wake.ensure_awake(session, entry.slug, actor=actor)
+                await self._remember_prior(session, entry.slug, ctx)
+                run = await self._wake.ensure_awake(
+                    session, entry.slug, actor=actor, own_runs=ctx.wake_run_ids
+                )
                 detail.update(woke=True, wake_run_id=run.id)
         except WakeUnsupportedError:
             self._fail(ctx, sink, entry, self._blocker_message(entry, force=True), kind="failed")
@@ -225,6 +248,131 @@ class BackupWaker:
             return
         handle = await self._wake.assert_hold(session, sink, node, reason=reason, ttl_s=ttl_s)
         ctx.held.append(HeldNode(node_id=node.id, node_name=node.name, handle=handle))
+
+    async def _remember_prior(self, session: Session, slug: str, ctx: WakeContext) -> None:
+        """Note what the node and guest were doing before this wake, once per node
+        (a node already recorded as 'we powered it on' stays that way)."""
+        prior = await self._wake.prior_state(session, slug)
+        if prior is None:
+            return
+        node = ctx.prior.setdefault(
+            prior.node_name,
+            NodePrior(prior.node_id, prior.node_name, was_online=prior.node_online),
+        )
+        if prior.guest_running is False and prior.guest_vmid is not None:
+            item = (prior.guest_vmid, prior.guest_kind)
+            if item not in node.started_guests:
+                node.started_guests.append(item)
+
+    # -- putting things back ---------------------------------------------------
+
+    async def restore(
+        self,
+        session: Session,
+        ctx: WakeContext,
+        steps: Recorder | None,
+        *,
+        defer_to: WakeContext | None = None,
+    ) -> None:
+        """Return nodes and guests to the state they were in before the backup:
+        stop the guests it started, and power off a node it powered on - unless
+        something else now needs them (another hold, or a wake somebody else
+        started since). Never raises; a failure is recorded, announced, and the
+        node simply stays on. ``defer_to``: a scheduled batch is still running, so
+        a node it powered on is handed to the batch to power off at the very end
+        rather than between two services."""
+        sink: Recorder = steps or _LogSteps()
+        if defer_to is not None:
+            # The batch's own wakes must not look like "somebody else's".
+            defer_to.wake_run_ids |= ctx.wake_run_ids
+        while ctx.prior:
+            name, prior = ctx.prior.popitem()
+            step = f"restore_state:{name}"
+            node = session.get(Node, prior.node_id)
+            if node is None:
+                continue
+            if defer_to is not None and not prior.was_online:
+                defer_to.prior.setdefault(name, prior)
+                sink.record(step, "deferred", detail={"reason": "the batch is still running"})
+                continue
+            try:
+                await self._restore_node(session, ctx, sink, step, node, prior)
+            except Exception as exc:
+                session.rollback()
+                sink.record(step, "failed", detail={"error": str(exc)})
+                log.error(
+                    "backup.restore_state_failed",
+                    node=name,
+                    error=str(exc),
+                    impact="The node/guests the backup started were left running.",
+                )
+                try:
+                    await announce(
+                        session,
+                        level="node",
+                        key=name,
+                        name=name,
+                        event="power_restore_failed",
+                        severity="warn",
+                        title=f"{name} could not be put back after the backup",
+                        body=f"{exc}\n\nThe node was turned on for a backup and is still on.",
+                        scope={"node": name},
+                    )
+                except Exception:  # announce is best-effort
+                    log.warning("backup.restore_announce_failed", node=name)
+
+    async def _restore_node(
+        self,
+        session: Session,
+        ctx: WakeContext,
+        sink: Recorder,
+        step: str,
+        node: Node,
+        prior: NodePrior,
+    ) -> None:
+        busy = self._busy_reason(session, ctx, node)
+        if busy:
+            sink.record(step, "skipped", detail={"reason": busy})
+            return
+        if prior.was_online:
+            for vmid, kind in prior.started_guests:
+                started = datetime.now(UTC)
+                upid = await self._wake.stop_guest(node.name, vmid, kind)
+                sink.record(
+                    step,
+                    "ok",
+                    started_at=started,
+                    detail={"action": "stop_guest", "vmid": vmid, "kind": kind.value, "upid": upid},
+                )
+            return
+        if node.always_on or not node.power_mgr_target:
+            sink.record(step, "skipped", detail={"reason": "node cannot be powered off here"})
+            return
+        grace = self._settings.backup_power_off_grace_s
+        if grace > 0:
+            await asyncio.sleep(grace)
+            busy = self._busy_reason(session, ctx, node)
+            if busy:
+                sink.record(step, "skipped", detail={"reason": busy})
+                return
+        started = datetime.now(UTC)
+        await self._wake.power_off_node(node, reason="backup finished: back to the prior state")
+        sink.record(
+            step,
+            "ok",
+            started_at=started,
+            detail={"action": "power_off", "power_mgr_target": node.power_mgr_target},
+        )
+
+    def _busy_reason(self, session: Session, ctx: WakeContext, node: Node) -> str | None:
+        """Why this node must be left alone, or None."""
+        state = session.get(NodeState, node.id) if node.id is not None else None
+        if state is not None and state.hold_count > 0:
+            who = ", ".join(str(r.get("reason", "?")) for r in state.current_hold_reasons)
+            return f"other work still holds it ({who or f'hold_count={state.hold_count}'})"
+        if self._wake.wakes_since(session, node, ctx.started_at, exclude=ctx.wake_run_ids):
+            return "something else woke a service on it during the backup"
+        return None
 
     async def release(self, session: Session, ctx: WakeContext, steps: Recorder | None) -> None:
         """Release every hold in ``ctx`` (idempotent). Never raises: a failing

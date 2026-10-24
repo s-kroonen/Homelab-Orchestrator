@@ -63,6 +63,28 @@
           or you bring them up yourself. The cron time is when the wake <em>starts</em>: leave boot
           time headroom.
         </p>
+        <label for="f-wake-mode">Wake switches
+          <select id="f-wake-mode">
+            {% for value, label in [("follow", "Follow wake on hit (a node or service with it off is not woken)"), ("always", "Always wake, ignore the wake on hit switches"), ("never", "Never wake anything (use what is up)")] %}
+            <option value="{{ value }}" {% if (policy.wake_mode if policy else "follow") == value %}selected{% endif %}>{{ label }}</option>
+            {% endfor %}
+          </select>
+        </label>
+        <label for="f-attempts">Tries
+          <input id="f-attempts" type="number" min="1" max="20"
+            value="{{ policy.max_attempts if policy else 3 }}">
+        </label>
+        <p class="msg muted help">
+          When a scheduled run is blocked or its target is not healthy after boot, it is tried
+          again after a pause, up to this many tries, then it gives up and notifies you.
+        </p>
+        <label class="inline wake-toggle"><input type="checkbox" id="f-restore"
+          {% if not policy or policy.restore_power_state %}checked{% endif %}>
+          Put it back afterwards</label>
+        <p class="msg muted help">
+          Stops the guests the backup started and powers its node off again, unless something
+          else is using the node. A node that was already on is left on.
+        </p>
       </fieldset>
       <fieldset>
         <legend>Target services</legend>
@@ -126,6 +148,9 @@
     return {
       requires,
       wake_before_backup: document.getElementById("f-wake-before").checked,
+      wake_mode: document.getElementById("f-wake-mode").value,
+      max_attempts: Number(document.getElementById("f-attempts").value) || 3,
+      restore_power_state: document.getElementById("f-restore").checked,
       schedule_cron: document.getElementById("f-cron").value.trim(),
       mode: document.getElementById("f-mode").value,
       retention,
