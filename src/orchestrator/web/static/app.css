@@ -97,6 +97,9 @@ header .who { color: #9aa4b2; font-size: 0.85rem; }
   padding: 1rem 0.4rem 0;
 }
 
+.live-dot { width: 0.5rem; height: 0.5rem; border-radius: 50%; background: #3a4150; flex: none; }
+.live-dot.on { background: #3ecf6d; box-shadow: 0 0 0.35rem #3ecf6d88; }
+
 body.has-sidebar { padding: 0; }
 body.has-sidebar .wrap { margin-left: 15rem; padding: 2rem 2rem; max-width: 84rem; }
 

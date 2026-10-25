@@ -103,6 +103,7 @@ off-container,
 [docs/portainer_deploys.md](docs/portainer_deploys.md) for stacks as sub-services: one on/off switch,
 adopt / create / delete, guarded deploys and the deploy webhook,
 [docs/pwa_push.md](docs/pwa_push.md) for installing the app and push notifications,
+[docs/live_updates.md](docs/live_updates.md) for pages that update as things change (Server-Sent Events),
 [docs/system.md](docs/system.md) for backups, restore, schema upgrades,
 updating (one command or one click, with automatic rollback if the new version does not come up) and
 restarting the orchestrator from the dashboard,

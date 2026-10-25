@@ -66,7 +66,7 @@
     {% endblock %}
     {% if admin %}
     <div class="who">
-      {{ admin.username }}
+      <span class="live-dot" id="live-dot" title="Not live: this page refreshes on a timer"></span>{{ admin.username }}
       <button class="logout" id="logout-btn">Log out</button>
     </div>
     {% endif %}
@@ -81,6 +81,7 @@
 {# Not deferred: pages (notifications) call OrchPush from their own inline scripts, which run
    before a deferred script would. It only registers listeners, so loading it here is cheap. #}
 <script src="/static/pwa.js"></script>
+{% if admin %}<script src="/static/live.js"></script>{% endif %}
 <script>
   (() => {
     const sb = document.querySelector(".sidebar");

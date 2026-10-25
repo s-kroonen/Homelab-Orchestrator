@@ -578,7 +578,24 @@
     if ((svcBulk && svcBulk.hasSelection()) || nodeBulk.hasSelection()) return true;
     return false;
   }
+  // Live: reload when a verdict, a run or the registry changed; the timer is the fallback when
+  // the stream is not connected and a slow safety net when it is (CLI changes cannot push).
+  let dashTimer = null;
+  function dashReload() {
+    if (shouldSkipAutoReload()) { dashTimer = setTimeout(dashReload, 5000); return; }
+    location.reload();
+  }
+  if (window.OrchLive) {
+    OrchLive.on(["run", "health", "registry"], () => {
+      clearTimeout(dashTimer);
+      dashTimer = setTimeout(dashReload, 500);
+    }, { wait: 3000 });
+  }
+  let dashQuiet = 0;
   setInterval(() => {
+    dashQuiet += 60;
+    if (window.OrchLive && OrchLive.connected && dashQuiet < 600) return;
+    dashQuiet = 0;
     if (!shouldSkipAutoReload()) location.reload();
   }, 60000);
 </script>

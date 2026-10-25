@@ -311,6 +311,7 @@ def _tree_info(session: Session, svc: Service) -> dict[str, Any]:
         "served": index.is_served(svc),
         "children": [
             {
+                "id": c.id,
                 "slug": c.slug,
                 "name": c.name,
                 "enabled": c.enabled,

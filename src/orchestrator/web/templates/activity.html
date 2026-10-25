@@ -119,6 +119,25 @@
     {% endfor %}
   </ul>
 {% endblock %}
+{% block scripts %}
+<script>
+  // Live: new activity shows as a bar to click, so the list never moves under someone reading it.
+  if (window.OrchLive) {
+    let n = 0;
+    OrchLive.on(["run", "audit", "alert"], () => {
+      n += 1;
+      let bar = document.getElementById("new-activity");
+      if (!bar) {
+        bar = document.createElement("button");
+        bar.id = "new-activity"; bar.type = "button"; bar.className = "secondary";
+        bar.addEventListener("click", () => location.reload());
+        document.getElementById("filters").after(bar);
+      }
+      bar.textContent = "New activity - show it";
+    }, { wait: 1000 });
+  }
+</script>
+{% endblock %}
 {% block extra_head %}
 <style>
   form.filters { display: flex; flex-wrap: wrap; gap: 0.6rem 1rem; align-items: flex-end; margin-bottom: 1rem; }
