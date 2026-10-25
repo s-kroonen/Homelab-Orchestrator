@@ -660,7 +660,7 @@ def test_a_metadata_document_client_can_connect(
         }
 
     monkeypatch.setattr(cimd, "fetch_client_metadata", fake)
-    verifier, challenge = _pkce()
+    _verifier, challenge = _pkce()
     q = urlencode(
         {
             "response_type": "code",
