@@ -172,6 +172,30 @@ post-guards    probes healthy within timeout_s, then healthy for settle_s
   after it was created. Rotate it if it leaked. The tab and the CLI show what to enter in GitLab
   or GitHub.
 
+### Calling it from GitHub Actions
+
+Every service has **its own key** (a key opens its own webhook and its own run status, nothing
+else). The *Webhook* section of the tab has a **GitHub pipeline** block - a complete workflow
+(`.github/workflows/deploy-<slug>.yml`) to copy; `deploy webhook SLUG --github` prints the same.
+
+* The key is read from a repository secret named after the service (`DEPLOY_KEY_DEV_XYMBOLS`):
+  add it once under *Settings > Secrets and variables > Actions*. The block never contains the key
+  unless you tick *write the key into the block* - possible only right after the key was created,
+  and not something to commit.
+* Any provider's webhook also accepts the key as a bearer token, which is what the block uses.
+* The job **fails with the reason** when: the key is missing; the orchestrator cannot be reached
+  (down, wrong URL, not reachable from the runner - a GitHub-hosted runner needs a public address,
+  otherwise use a self-hosted runner); the key is refused (401); the webhook is not switched on
+  (404); the deploy is refused (409 busy / deploys disabled; 423 service switched off); the
+  orchestrator itself errors (5xx).
+* It then **waits for the result** (`GET /hooks/deploy/{slug}/runs/{id}`, same key, only step
+  names and reasons): *skipped* means a guard blocked it before anything changed, *failed* shows
+  the failing steps (for example the probe that never turned healthy), and the job only succeeds
+  when the deploy ended healthy. A push to another branch than the one set is acknowledged and
+  the job ends successfully without deploying. It gives up after 30 minutes and says the deploy
+  may still be running.
+* Without `ORCHESTRATOR_PUBLIC_URL` the block has a `YOUR-ORCHESTRATOR` placeholder URL.
+
 ## Reference
 
 | | UI | CLI | API |

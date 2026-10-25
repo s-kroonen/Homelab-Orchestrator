@@ -5,6 +5,8 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import os
+import shutil
 import time
 from pathlib import Path
 from typing import Any
@@ -331,3 +333,334 @@ def test_cli_webhook_shows_the_secret_once(tmp_path: Path, monkeypatch: pytest.M
             "Secret removed"
             in run.invoke(cli, ["deploy", "webhook", "dev-xymbols", "--remove"]).output
         )
+
+
+# -- one key per service ---------------------------------------------------------------------------
+
+SECOND = """\
+  - slug: other
+    name: other
+    parent: portainer-vm
+    controller: {type: portainer, endpoint: 1, stack: media}
+    deploy:
+      trigger: {webhook: {provider: generic, branch: ""}}
+      guard: {pre: {probes: false}, post: {probes: false}}
+"""
+
+
+@pytest.fixture
+def two(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Any:
+    path = tmp_path / "services.yaml"
+    path.write_text(
+        REGISTRY.replace("PROVIDER", "gitlab").replace(
+            "  - slug: media\n", SECOND + "  - slug: media\n"
+        )
+    )
+    monkeypatch.setenv("SERVICES_YAML_PATH", str(path))
+    monkeypatch.setenv("WAKE_POLL_INTERVAL_S", "0.001")
+    monkeypatch.setenv("ORCHESTRATOR_PUBLIC_URL", "https://orch.example.lan")
+    config_module.reset_settings_cache()
+    session_module.create_all_for_tests()
+    with Session(get_engine()) as s:
+        reconcile_yaml_into_db(s, path)
+        s.commit()
+    with TestClient(create_app()) as c:
+        _login_as_first_admin(c, monkeypatch)
+        yield c
+
+
+def test_every_service_has_its_own_key(two: TestClient) -> None:
+    a = new_secret(two)
+    b = two.post("/api/services/other/deploy/webhook").json()["secret"]
+    assert a != b
+    # a key opens its own service only - for a deploy and for reading a run
+    assert (
+        two.post("/hooks/deploy/other", headers={"Authorization": f"Bearer {a}"}).status_code == 401
+    )
+    assert (
+        two.post("/hooks/deploy/dev-xymbols", headers={"Authorization": f"Bearer {b}"}).status_code
+        == 401
+    )
+    ok = two.post("/hooks/deploy/dev-xymbols", headers={"Authorization": f"Bearer {a}"}, json={})
+    assert ok.status_code == 202
+    run_id = ok.json()["run_id"]
+    wait_run(two, run_id)
+    assert (
+        two.get(
+            f"/hooks/deploy/dev-xymbols/runs/{run_id}", headers={"Authorization": f"Bearer {b}"}
+        ).status_code
+        == 401
+    )
+    # ...and the other service cannot read this service's run even with its own key
+    assert (
+        two.get(
+            f"/hooks/deploy/other/runs/{run_id}", headers={"Authorization": f"Bearer {b}"}
+        ).status_code
+        == 404
+    )
+    assert two.get(f"/hooks/deploy/dev-xymbols/runs/{run_id}").status_code == 401
+    assert (
+        two.post("/api/services/other/deploy/webhook").json()["secret"] != b
+    )  # replacing gives a new one
+
+
+def _bearer_works(client: TestClient) -> None:
+    secret = new_secret(client)
+    r = client.post(
+        "/hooks/deploy/dev-xymbols",
+        headers={"Authorization": f"Bearer {secret}"},
+        json={"ref": "refs/heads/dev"},
+    )
+    assert r.status_code == 202 and r.json()["started"] is True, r.text
+    wait_run(client, r.json()["run_id"])
+    assert (
+        client.post(
+            "/hooks/deploy/dev-xymbols", headers={"Authorization": "Bearer nope"}
+        ).status_code
+        == 401
+    )
+
+
+def test_the_bearer_key_works_for_a_gitlab_service(gitlab: TestClient) -> None:
+    _bearer_works(gitlab)
+
+
+def test_the_bearer_key_works_for_a_github_service(github: TestClient) -> None:
+    _bearer_works(github)
+
+
+def test_run_status_shows_steps_and_reasons_but_nothing_else(generic: TestClient) -> None:
+    secret = new_secret(generic)
+    HEALTH["dev-xymbols"] = HealthState.FAILED
+    r = generic.post("/hooks/deploy/dev-xymbols", headers={"Authorization": f"Bearer {secret}"})
+    wait_run(generic, r.json()["run_id"])
+    body = generic.get(
+        f"/hooks/deploy/dev-xymbols/runs/{r.json()['run_id']}",
+        headers={"Authorization": f"Bearer {secret}"},
+    ).json()
+    assert body["status"] == "skipped" and "before the deploy" in body["error"]
+    assert {"name", "status", "message"} == set(body["steps"][0])
+    assert any(s["status"] == "failed" and s["message"] for s in body["steps"])
+    assert (
+        generic.get(
+            "/hooks/deploy/dev-xymbols/runs/9999", headers={"Authorization": f"Bearer {secret}"}
+        ).status_code
+        == 404
+    )
+    assert (
+        generic.get(
+            "/hooks/deploy/media/runs/1", headers={"Authorization": f"Bearer {secret}"}
+        ).status_code
+        == 404
+    )
+
+
+# -- the GitHub pipeline block -----------------------------------------------------------------------
+
+
+def test_the_github_block_uses_the_repository_secret_not_the_key(generic: TestClient) -> None:
+    import yaml
+
+    before = generic.get("/api/services/dev-xymbols/deploy").json()["webhook"]
+    assert before["github"]["secret_name"] == "DEPLOY_KEY_DEV_XYMBOLS"
+    created = generic.post("/api/services/dev-xymbols/deploy/webhook").json()
+    secret = created["secret"]
+    shown = generic.get("/api/services/dev-xymbols/deploy")
+    assert secret not in shown.text  # never again after creation
+    text = shown.json()["webhook"]["github"]["workflow"]
+    doc = yaml.safe_load(text)
+    assert doc["name"] == "Deploy dev-xymbols"
+    assert doc[True]["push"][
+        "branches"
+    ]  # YAML 1.1 reads `on` as true == ["main"]  # no branch set: main, the user edits it
+    env = doc["jobs"]["deploy"]["steps"][0]["env"]
+    assert env["DEPLOY_URL"] == "https://orch.example.lan/hooks/deploy/dev-xymbols"
+    assert env["DEPLOY_KEY"] == "${{ secrets.DEPLOY_KEY_DEV_XYMBOLS }}"
+    # the version with the key in it exists only in the response that created the key
+    assert secret in created["github_inline_key"] and secret not in created["github"]["workflow"]
+    assert (
+        yaml.safe_load(created["github_inline_key"])["jobs"]["deploy"]["steps"][0]["env"][
+            "DEPLOY_KEY"
+        ]
+        == secret
+    )
+
+
+def test_the_block_names_the_configured_branch(gitlab: TestClient) -> None:
+    import yaml
+
+    text = gitlab.get("/api/services/dev-xymbols/deploy").json()["webhook"]["github"]["workflow"]
+    assert yaml.safe_load(text)[True]["push"]["branches"] == ["dev"]
+
+
+# -- the block, run for real ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def live(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Any:
+    """The app on a real port, so the generated script can curl it."""
+    import socket
+    import threading
+
+    import httpx
+    import uvicorn
+
+    from tests import test_proxy_hosts as th
+
+    sock = socket.socket()
+    sock.bind(("127.0.0.1", 0))
+    port = sock.getsockname()[1]
+    sock.close()
+    base = f"http://127.0.0.1:{port}"
+    path = tmp_path / "services.yaml"
+    path.write_text(REGISTRY.replace("PROVIDER", "github"))
+    monkeypatch.setenv("SERVICES_YAML_PATH", str(path))
+    monkeypatch.setenv("WAKE_POLL_INTERVAL_S", "0.001")
+    monkeypatch.setenv("ORCHESTRATOR_PUBLIC_URL", base)
+    monkeypatch.setenv("WEBAUTHN_ORIGIN", base)
+    monkeypatch.setenv("WEBAUTHN_RP_ID", "127.0.0.1")
+    config_module.reset_settings_cache()
+    session_module.create_all_for_tests()
+    with Session(get_engine()) as s:
+        reconcile_yaml_into_db(s, path)
+        s.commit()
+    th._fake_verify_registration(monkeypatch, b"cred-1")
+    server = uvicorn.Server(
+        uvicorn.Config(create_app(), host="127.0.0.1", port=port, log_level="error")
+    )
+    thread = threading.Thread(target=server.run, daemon=True)
+    thread.start()
+    for _ in range(100):
+        try:
+            httpx.get(base + "/healthz", timeout=1)
+            break
+        except httpx.HTTPError:
+            time.sleep(0.1)
+    admin = httpx.Client(base_url=base)
+    assert (
+        admin.post(
+            "/api/auth/register/begin", json={"username": "storm", "invite_token": None}
+        ).status_code
+        == 200
+    )
+    reg = admin.post(
+        "/api/auth/register/complete",
+        json={
+            "username": "storm",
+            "device_label": "t",
+            "invite_token": None,
+            "credential": th._credential(b"cred-1"),
+        },
+    )
+    assert reg.status_code == 200, reg.text
+    yield admin, base
+    server.should_exit = True
+    thread.join(5)
+
+
+def _run_block(
+    admin: Any, base: str, key: str | None, *, url: str | None = None
+) -> tuple[int, str]:
+    """Run the generated workflow's script the way a runner would."""
+    import subprocess
+
+    import yaml
+
+    text = admin.get("/api/services/dev-xymbols/deploy").json()["webhook"]["github"]["workflow"]
+    step = yaml.safe_load(text)["jobs"]["deploy"]["steps"][0]
+    env = {
+        "PATH": os.environ["PATH"],
+        "DEPLOY_URL": url or f"{base}/hooks/deploy/dev-xymbols",
+        "DEPLOY_KEY": key or "",
+        "REF": "refs/heads/dev",
+        "SHA": "abcdef0123456789",
+        "ACTOR": "storm",
+        "DEPLOY_POLL_S": "1",
+    }
+    done = subprocess.run(
+        ["bash", "-c", step["run"]],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=120,
+        cwd=os.environ.get("TMPDIR", "/tmp"),
+    )
+    return done.returncode, done.stdout + done.stderr
+
+
+@pytest.mark.skipif(not (shutil.which("jq") and shutil.which("curl")), reason="needs jq and curl")
+def test_the_block_succeeds_when_the_deploy_is_healthy(live: Any) -> None:
+    admin, base = live
+    key = admin.post("/api/services/dev-xymbols/deploy/webhook").json()["secret"]
+    code, out = _run_block(admin, base, key)
+    assert code == 0, out
+    assert "started" in out and "Deployed and healthy" in out
+
+
+@pytest.mark.skipif(not (shutil.which("jq") and shutil.which("curl")), reason="needs jq and curl")
+def test_the_block_reports_every_way_it_can_go_wrong(live: Any) -> None:
+    admin, base = live
+    key = admin.post("/api/services/dev-xymbols/deploy/webhook").json()["secret"]
+
+    code, out = _run_block(admin, base, None)
+    assert code == 1 and "key is empty" in out and "DEPLOY_KEY_DEV_XYMBOLS" in out
+
+    code, out = _run_block(admin, base, "wrong")
+    assert code == 1 and "rejected the key (401)" in out
+
+    code, out = _run_block(admin, base, key, url="http://127.0.0.1:1/hooks/deploy/dev-xymbols")
+    assert code == 1 and "Could not reach the orchestrator" in out
+
+    code, out = _run_block(admin, base, key, url=f"{base}/hooks/deploy/ghost")
+    assert code == 1 and "no deploy webhook" in out
+
+    HEALTH["dev-xymbols"] = HealthState.FAILED  # a guard says no
+    code, out = _run_block(admin, base, key)
+    assert code == 1 and "Blocked before anything changed" in out and "before the deploy" in out
+    HEALTH.clear()
+
+    assert admin.post("/api/services/dev-xymbols/switch", json={"state": "off"}).status_code == 200
+    code, out = _run_block(admin, base, key)
+    assert code == 1 and "switched off in the orchestrator (423)" in out
+    assert admin.post("/api/services/dev-xymbols/switch", json={"state": "on"}).status_code == 200
+
+
+@pytest.mark.skipif(not (shutil.which("jq") and shutil.which("curl")), reason="needs jq and curl")
+def test_the_block_fails_the_job_when_the_deploy_goes_wrong_after_the_redeploy(
+    live: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    admin, base = live
+    key = admin.post("/api/services/dev-xymbols/deploy/webhook").json()["secret"]
+    calls: list[str] = []
+
+    async def scan(self: Any, session: Any, service: Any, **kw: Any) -> ServiceVerdict:
+        # healthy until the stack has been redeployed, then broken
+        bad = bool(calls) and service.slug == "dev-xymbols"
+        return ServiceVerdict(
+            state=HealthState.FAILED if bad else HealthState.HEALTHY,
+            reason="502 from the app",
+            probe_results=[],
+        )
+
+    from orchestrator.deploy import pipeline as deploy_pipeline
+
+    original = deploy_pipeline.DeployPipeline._redeploy
+
+    async def redeploy(self: Any, *a: Any, **kw: Any) -> None:
+        await original(self, *a, **kw)
+        calls.append("redeployed")
+
+    monkeypatch.setattr(HealthEngine, "scan", scan)
+    monkeypatch.setattr(deploy_pipeline.DeployPipeline, "_redeploy", redeploy)
+    code, out = _run_block(admin, base, key)
+    assert code == 1, out
+    assert "The deploy failed" in out and "502 from the app" in out
+
+
+def test_cli_prints_the_github_block(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    with make_client(tmp_path, monkeypatch, "github"):
+        out = CliRunner().invoke(cli, ["deploy", "webhook", "dev-xymbols", "--github"])
+        assert out.exit_code == 0, out.output
+        assert ".github/workflows/deploy-dev-xymbols.yml" in out.output
+        assert "secrets.DEPLOY_KEY_DEV_XYMBOLS" in out.output
+        assert "https://orch.example.lan/hooks/deploy/dev-xymbols" in out.output

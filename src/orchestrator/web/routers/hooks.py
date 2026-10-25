@@ -95,7 +95,49 @@ async def deploy_webhook(
     return {"started": True, **run_view(run, slug)}
 
 
+@public.get("/hooks/deploy/{slug}/runs/{run_id}")
+async def deploy_webhook_run(
+    slug: str, run_id: int, request: Request, session: SessionDep
+) -> dict[str, Any]:
+    """How a deploy this service's webhook started is going, for the caller (a CI job) that
+    waits for it. Authenticated by the same key; shows only step names, results and reasons -
+    and only for a deploy of this service."""
+    svc = session.exec(select(Service).where(Service.slug == slug)).one_or_none()
+    if svc is None or webhook_of(svc.deploy) is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "no such webhook")
+    try:
+        hook.authenticate(
+            session,
+            slug,
+            headers={k.lower(): v for k, v in request.headers.items()},
+            query=dict(request.query_params),
+        )
+    except hook.WebhookRejected:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "not authorised") from None
+    run = session.get(PipelineRun, run_id)
+    if run is None or run.kind is not PipelineKind.DEPLOY or run.service_id != svc.id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "no such deploy")
+    return {
+        "run_id": run.id,
+        "status": run.status.value,
+        "error": run.error or "",
+        "steps": [
+            {
+                "name": st["name"],
+                "status": st["status"],
+                "message": str((st.get("detail") or {}).get("error") or "")[:300],
+            }
+            for st in run.steps
+        ],
+    }
+
+
 # -- admin: the secret, and a summary for the Deploy panel ---------------------------------------
+
+
+def _public(url: str) -> str:
+    """The webhook URL, or a placeholder when no public address is configured."""
+    return f"https://YOUR-ORCHESTRATOR{url}" if url.startswith("/") else url
 
 
 def _service(session: SessionDep, slug: str) -> Service:
@@ -127,6 +169,8 @@ async def deploy_summary(slug: str, session: SessionDep, settings: SettingsDep) 
             "secret_set": hook.has_secret(session, slug),
             "url": url if cfg else None,
             "setup": hook.setup_hint(cfg["provider"], url) if cfg else [],
+            "github": hook.github_workflow(slug, _public(url), cfg["branch"]) if cfg else None,
+            "url_is_public": not url.startswith("/"),
         },
         "last": run_view(last, slug) if last else None,
     }
@@ -156,6 +200,12 @@ async def create_webhook_secret(
         "secret": secret,
         "url": url,
         "setup": hook.setup_hint(cfg["provider"], url),
+        "github": hook.github_workflow(slug, _public(url), cfg["branch"]),
+        # the same workflow with the key written into it - only possible right now, and not
+        # something to commit to a repository
+        "github_inline_key": hook.github_workflow(slug, _public(url), cfg["branch"], key=secret)[
+            "workflow"
+        ],
         "note": "Copy the secret now: it cannot be shown again, only replaced.",
     }
 

@@ -346,7 +346,10 @@ def deploy_show(target: str, as_json: bool, path_override: str | None) -> None:
 @click.argument("slug")
 @click.option("--rotate", is_flag=True, help="Create a new secret (replacing the old). Shown once.")
 @click.option("--remove", is_flag=True, help="Delete the secret: the webhook stops working.")
-def deploy_webhook(slug: str, rotate: bool, remove: bool) -> None:
+@click.option(
+    "--github", "github", is_flag=True, help="Print the GitHub Actions workflow that calls it."
+)
+def deploy_webhook(slug: str, rotate: bool, remove: bool, github: bool) -> None:
     """The deploy webhook of SLUG: its URL, what to enter in GitLab / GitHub, its secret.
 
     The webhook itself is switched on with `deploy set SLUG --webhook gitlab`. The secret is
@@ -386,3 +389,16 @@ def deploy_webhook(slug: str, rotate: bool, remove: bool) -> None:
         )
         for line in hook.setup_hint(cfg["provider"], url):
             click.echo(f"  {line}")
+        if github:
+            block = hook.github_workflow(
+                slug,
+                url if not url.startswith("/") else f"https://YOUR-ORCHESTRATOR{url}",
+                cfg["branch"],
+            )
+            click.echo("")
+            click.echo(
+                f"Save as {block['path']}, and add the repository secret {block['secret_name']} "
+                "with this service's key:"
+            )
+            click.echo("")
+            click.echo(block["workflow"])

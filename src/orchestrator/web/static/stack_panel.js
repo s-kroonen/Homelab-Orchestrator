@@ -297,6 +297,28 @@
   });
 
   // -- webhook ------------------------------------------------------------------------------------
+  // -- the GitHub Actions block ------------------------------------------------------------------
+  const gh = { plain: "", inline: "", name: "", path: "" };
+  function renderGithub() {
+    const useKey = $("gh-inline").checked && gh.inline;
+    $("gh-block").textContent = useKey ? gh.inline : gh.plain;
+    $("gh-intro").textContent = gh.plain
+      ? `Save this as ${gh.path} in the repository. Its key is read from the repository secret ${gh.name}; ` +
+        "every service has its own key, so each repository (or service) gets its own secret. The job fails, " +
+        "with the reason, if the orchestrator cannot be reached, refuses the key, blocks the deploy, or the deploy does not end up healthy."
+      : "";
+  }
+  $("gh-inline").addEventListener("change", renderGithub);
+  $("gh-copy").addEventListener("click", async () => {
+    const text = $("gh-block").textContent;
+    try { await navigator.clipboard.writeText(text); msg("gh-msg", "Copied.", "ok"); }
+    catch (e) {
+      const t = el("textarea"); t.value = text; document.body.append(t); t.select();
+      try { document.execCommand("copy"); msg("gh-msg", "Copied.", "ok"); } catch (e2) { msg("gh-msg", "Select the block and copy it by hand.", "error"); }
+      t.remove();
+    }
+  });
+
   async function loadHook() {
     const has = SERVICE.deploy && Object.keys(SERVICE.deploy).length > 0;
     const hookCfg = has ? SERVICE.deploy.trigger.webhook : null;
@@ -307,6 +329,12 @@
       const w = d.webhook;
       $("dp-hook-text").textContent = `${w.provider}${w.branch ? ", branch " + w.branch : ""} → ${w.url}. ` + (w.secret_set ? "A secret is set." : "No secret yet: create one before pointing anything at it.");
       $("dp-hook-del").hidden = !w.secret_set;
+      if (w.github) {
+        gh.plain = w.github.workflow; gh.name = w.github.secret_name; gh.path = w.github.path;
+        $("gh-warn").hidden = w.url_is_public;
+        $("gh-warn").textContent = w.url_is_public ? "" : "No public address is configured (ORCHESTRATOR_PUBLIC_URL), so the block has a placeholder URL: replace YOUR-ORCHESTRATOR with the address the runner can reach.";
+        renderGithub();
+      }
       $("dp-hook-new").textContent = w.secret_set ? "Replace the secret" : "Create the secret";
     } catch (e) { $("dp-hook-text").textContent = err(e); }
   }
@@ -317,6 +345,10 @@
       $("dp-hook-secret").hidden = false;
       $("dp-hook-secret-text").textContent = r.secret;
       $("dp-hook-setup").textContent = r.setup.join("\n");
+      gh.inline = r.github_inline_key; gh.plain = r.github.workflow; gh.name = r.github.secret_name; gh.path = r.github.path;
+      $("gh-inline").disabled = false; $("gh-inline").checked = false;
+      $("dp-hook-setup").textContent += `\n\nGitHub: add a repository secret named ${r.github.secret_name} with the key above.`;
+      renderGithub();
       loadHook();
     } catch (e) { toast(err(e), "error"); }
   });
