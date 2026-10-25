@@ -18,6 +18,7 @@ Topics and their data:
 * ``audit``    something was done: ``action``, ``target``
 * ``alert``    the notification engine recorded an event
 * ``registry`` a service, probe, proxy host or node changed: ``what``, ``service_id`` when known
+* ``mcp``      an assistant's call, connection or request for approval changed: ``what``
 
 Everything runs in one process, so this is an in-memory fan-out; a subscriber that cannot keep up
 loses its oldest events (they are only hints).
@@ -186,6 +187,10 @@ def _describe(obj: Any) -> tuple[str, str, dict[str, Any]] | None:
         )
     if isinstance(obj, m.Node):
         return "registry", f"node:{obj.id}", {"what": "node"}
+    if isinstance(obj, m.McpCall | m.McpGrant):
+        return "mcp", f"{type(obj).__name__}:{obj.id}", {"what": type(obj).__name__[3:].lower()}
+    if isinstance(obj, m.PendingApproval) and getattr(obj.kind, "value", obj.kind) == "mcp_action":
+        return "mcp", f"request:{obj.id}", {"what": "request"}
     return None
 
 

@@ -308,3 +308,7 @@ but it should be made after hitting a concrete wall, not ahead of one.
 - [ ] DHCP lease readers for OPNsense / pfSense (their APIs) and Kea — new `DhcpLeaseSource` implementations next to the dnsmasq one (`ipdiscovery/dhcp.py`).
 - [ ] Proxy hosts: show/edit a route's raw YAML from the orchestrator (TM `/api/routes/{id}/raw`) for options this form doesn't cover.
 
+- [x] MCP server (`/mcp`, OAuth like Claude's connectors): roles and permissions per connection or personal token, a history page, and human approval for dangerous requests. See docs/mcp.md.
+- [ ] MCP: limit a token to some services / groups (today permissions are per capability, not per service).
+- [ ] MCP: also serve `resources` (registry, runbooks) and `prompts` (a "morning check" prompt); today it is tools only.
+- [ ] MCP: approve a request straight from the push notification (action button) instead of opening the page.

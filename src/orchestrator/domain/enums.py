@@ -130,6 +130,7 @@ class ApprovalKind(StrEnum):
     POWER_OFF = "power_off"
     CONFIG_CHANGE = "config_change"
     ADMIN_INVITE = "admin_invite"  # a link an existing admin can hand out to add another
+    MCP_ACTION = "mcp_action"  # a dangerous call an AI assistant made, waiting for a person
 
 
 class RouterProvider(StrEnum):

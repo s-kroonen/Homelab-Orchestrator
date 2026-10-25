@@ -11,7 +11,7 @@ small dot above your name in the sidebar is green while the stream is open.
   probe / proxy host / node, an event is published (`orchestrator/events.py`). Every pipeline,
   controller and API call is covered with nothing added to them, and a rolled-back write publishes
   nothing.
-* **Events are hints, not state.** `run`, `health`, `audit`, `alert`, `registry`, each with at
+* **Events are hints, not state.** `run`, `health`, `audit`, `alert`, `registry`, `mcp`, each with at
   most an id (`service_id`, `run_id`, a verdict). A page that gets one re-reads what it shows from
   the API; one that missed one loses nothing. A client that cannot keep up loses its oldest events.
 * **The browser side** is `static/live.js` (`OrchLive.on(topic, fn, {wait})`, debounced), loaded
@@ -25,6 +25,7 @@ small dot above your name in the sidebar is green while the stream is open.
 | Dashboard, Map | re-read when any verdict, run or registry change arrives |
 | Activity | shows a "New activity - show it" bar (the list never moves under you) |
 | Notifications | the feed reloads on a new alert |
+| AI assistants, approval page | refresh on any call, connection or request |
 
 Each keeps its old timer as a **fallback**: every 30-60 s while the stream is not connected, and
 every 5-10 minutes when it is - because a change made by the CLI runs in another process and cannot

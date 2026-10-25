@@ -1,0 +1,97 @@
+{% extends "base.html" %}
+{% block title %}homelab-orchestrator — AI assistants{% endblock %}
+{% block extra_head %}
+<style>
+  .chip { display: inline-block; padding: 0.05rem 0.45rem; margin: 0 0.15rem 0.15rem 0; border-radius: 0.6rem; background: #1d2330; font-size: 0.75rem; }
+  .chip.propose { background: #3b2e14; }
+  .st-ok { color: #3ecf6d; } .st-error, .st-refused, .st-denied { color: #e5534b; }
+  .st-pending, .st-waiting { color: #e5a63e; } .st-approved { color: #5b8def; } .st-expired, .st-revoked { color: #9aa4b2; }
+  .risk-dangerous { color: #e5534b; } .risk-act { color: #e5a63e; } .risk-read { color: #9aa4b2; }
+  code.url { overflow-wrap: anywhere; }
+  .filters { display: flex; gap: 0.5rem; flex-wrap: wrap; margin-bottom: 0.6rem; align-items: center; }
+  .filters select, .filters input { width: auto; }
+  details.args pre { margin: 0.3rem 0 0; max-width: 28rem; overflow: auto; font-size: 0.75rem; }
+  dl.kv { display: grid; grid-template-columns: max-content 1fr; gap: 0.35rem 1.25rem; font-size: 0.9rem; }
+  dl.kv > div { display: contents; } dl.kv dt { color: #9aa4b2; } dl.kv dd { margin: 0; overflow-wrap: anywhere; }
+  .banner.warn { background: #3b2e14; border: 1px solid #e5a63e; padding: 0.6rem 0.8rem; border-radius: 0.4rem; margin-bottom: 0.9rem; }
+  .newtoken { background: #14301f; border: 1px solid #3ecf6d; padding: 0.7rem; border-radius: 0.4rem; margin-top: 0.7rem; }
+</style>
+{% endblock %}
+{% block content %}
+  <section>
+    <h2>AI assistants</h2>
+    <p class="msg">
+      Let an assistant such as Claude look at your server space and run a few guarded commands. It
+      connects over MCP and signs in with OAuth, so you choose per connection what it may do. Anything
+      dangerous waits here for you.
+    </p>
+    <div id="off" class="banner warn" hidden>MCP is switched off (<code>MCP_ENABLED=false</code>). Nothing below is reachable.</div>
+    <dl class="kv">
+      <div><dt>MCP address</dt><dd><code class="url" id="mcp-url">…</code> <button class="secondary small" id="copy-url">Copy</button></dd></div>
+      <div><dt>Add to Claude</dt><dd>Settings → Connectors → Add custom connector → paste the address → sign in here and choose a role.
+        In Claude Code: <code id="cc-cmd">…</code></dd></div>
+    </dl>
+  </section>
+
+  <section>
+    <h2>Waiting for you <span class="msg" id="waiting-count"></span></h2>
+    <div class="table-scroll">
+    <table>
+      <thead><tr><th>Asked</th><th>Connection</th><th>What</th><th>Status</th><th></th></tr></thead>
+      <tbody id="req-body"><tr><td colspan="5">Loading…</td></tr></tbody>
+    </table>
+    </div>
+  </section>
+
+  <section>
+    <h2>Connections and tokens</h2>
+    <div class="table-scroll">
+    <table>
+      <thead><tr><th>Name</th><th>Kind</th><th>Role</th><th>Permissions</th><th>Last used</th><th>State</th><th></th></tr></thead>
+      <tbody id="grant-body"><tr><td colspan="7">Loading…</td></tr></tbody>
+    </table>
+    </div>
+    <h3>New personal token</h3>
+    <p class="msg">For a client that cannot do OAuth (a script, the MCP inspector). It is shown once.</p>
+    <div class="filters">
+      <input id="pt-label" placeholder="Name" maxlength="80">
+      <select id="pt-role"></select>
+      <select id="pt-expires">
+        <option value="">never expires</option><option value="30">30 days</option>
+        <option value="90">90 days</option><option value="365">1 year</option>
+      </select>
+      <label><input type="checkbox" id="pt-confirm"> ask before every change</label>
+      <button id="pt-make">Create token</button>
+    </div>
+    <div id="pt-out"></div>
+  </section>
+
+  <section>
+    <h2>History</h2>
+    <div class="filters">
+      <select id="f-conn"><option value="">any connection</option></select>
+      <select id="f-status"><option value="">any result</option>
+        <option>ok</option><option>error</option><option>refused</option><option>pending</option><option>denied</option></select>
+      <select id="f-risk"><option value="">any risk</option><option>read</option><option>act</option><option>dangerous</option></select>
+      <input id="f-tool" placeholder="tool">
+    </div>
+    <div class="table-scroll">
+    <table>
+      <thead><tr><th>When</th><th>Connection</th><th>Tool</th><th>Risk</th><th>Result</th><th>Details</th></tr></thead>
+      <tbody id="hist-body"><tr><td colspan="6">Loading…</td></tr></tbody>
+    </table>
+    </div>
+  </section>
+
+  <section>
+    <h2>Roles and tools</h2>
+    <div id="roles"></div>
+    <details><summary>Every tool</summary>
+      <div class="table-scroll"><table>
+        <thead><tr><th>Tool</th><th>Needs</th><th>Risk</th><th>What it does</th></tr></thead>
+        <tbody id="tool-body"></tbody>
+      </table></div>
+    </details>
+  </section>
+{% endblock %}
+{% block scripts %}<script src="/static/assistants.js"></script>{% endblock %}

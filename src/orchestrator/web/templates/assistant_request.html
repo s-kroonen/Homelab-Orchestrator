@@ -1,0 +1,70 @@
+{% extends "base.html" %}
+{% block title %}homelab-orchestrator — approve a request{% endblock %}
+{% block content %}
+  <section>
+    <h2>An assistant wants to act</h2>
+    <div class="banner warn" id="warn" hidden></div>
+    <dl class="kv" id="kv"><div><dt>Loading…</dt><dd></dd></div></dl>
+    <div class="row" id="actions" hidden>
+      <button class="danger" id="approve-btn">Approve and run it</button>
+      <button class="secondary" id="deny-btn">Deny</button>
+    </div>
+    <p class="msg" id="msg"></p>
+    <pre id="result" hidden></pre>
+    <p><a href="/assistants">All requests and history</a></p>
+  </section>
+{% endblock %}
+{% block extra_head %}
+<style>
+  dl.kv { display: grid; grid-template-columns: max-content 1fr; gap: 0.25rem 1.25rem; font-size: 0.9rem; }
+  dl.kv > div { display: contents; } dl.kv dt { color: #9aa4b2; } dl.kv dd { margin: 0; overflow-wrap: anywhere; }
+  .banner.warn { background: #3b2e14; border: 1px solid #e5a63e; padding: 0.6rem 0.8rem; border-radius: 0.4rem; margin-bottom: 0.9rem; font-size: 0.9rem; }
+  #result { background: #151a23; padding: 0.6rem; border-radius: 0.4rem; max-height: 22rem; overflow: auto; font-size: 0.8rem; }
+</style>
+{% endblock %}
+{% block scripts %}
+<script>
+  const TOKEN = {{ token|tojson }};
+  const $ = (id) => document.getElementById(id);
+  function setMsg(text, kind) { const el = $("msg"); el.textContent = text; el.className = "msg" + (kind ? " " + kind : ""); }
+  async function load() {
+    let r;
+    try { r = await apiFetch("GET", "/api/assistants/requests/" + TOKEN, undefined, { suppressToast: true }); }
+    catch (err) { setMsg(err.message, "error"); return; }
+    const rows = [
+      ["What", r.summary],
+      ["Tool", r.title + " (" + r.tool + ")"],
+      ["Asked by", r.connection + " at " + fmtTime(r.requested_at)],
+      ["Why you are asked", r.why],
+      ["Arguments", JSON.stringify(r.args)],
+      ["Status", r.status + (r.decided_by ? " by " + r.decided_by : "")],
+      ["Open until", fmtTime(r.expires_at)],
+    ];
+    $("kv").replaceChildren(...rows.map(([k, v]) => {
+      const d = document.createElement("div");
+      const dt = document.createElement("dt"); dt.textContent = k;
+      const dd = document.createElement("dd"); dd.textContent = v;
+      d.append(dt, dd); return d;
+    }));
+    $("warn").hidden = !r.open;
+    $("warn").textContent = "Approving runs exactly this, now, as " + r.connection + ": " + r.summary;
+    $("actions").hidden = !r.open;
+    if (r.result) {
+      $("result").hidden = false;
+      $("result").textContent = r.result.ok ? r.result.output : "Failed: " + r.result.error;
+    }
+  }
+  async function decide(what) {
+    $("approve-btn").disabled = $("deny-btn").disabled = true;
+    try {
+      await apiFetch("POST", "/api/assistants/requests/" + TOKEN + "/" + what, undefined, { suppressToast: true });
+      setMsg(what === "approve" ? "Approved." : "Denied.", "ok");
+    } catch (err) { setMsg(err.message, "error"); }
+    load();
+  }
+  $("approve-btn").addEventListener("click", () => decide("approve"));
+  $("deny-btn").addEventListener("click", () => decide("deny"));
+  if (window.OrchLive) OrchLive.on("mcp", load, { wait: 500 });
+  load();
+</script>
+{% endblock %}
