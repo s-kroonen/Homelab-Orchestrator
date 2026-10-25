@@ -417,6 +417,14 @@ async def _switch_on(
 ) -> None:
     session = sw.session
     state = await read_linked(session, sw.adapters, sw.settings, svc, ctx)
+    if state.node_off:
+        # Nothing can be started on a node that is off; waking it is a separate, deliberate step.
+        sw.step(
+            "host",
+            "failed",
+            error=f"{state.host_down} - wake it first (wake the service, or the node on Connectivity)",
+        )
+        return
 
     # 1. innermost first: the guest, then the stack / container
     for part in state.parts:
@@ -438,6 +446,8 @@ async def _switch_on(
     # 3. children come back only if asked; otherwise they are watched, not started
     revived = [svc]
     if restore_children:
+        # The guest may just have been started: read the children against what is true now.
+        ctx = await gather_context(session, sw.adapters)
         for child in tree.descendants(svc):
             if not child.enabled:
                 continue

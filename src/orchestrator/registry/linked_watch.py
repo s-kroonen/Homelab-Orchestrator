@@ -66,7 +66,8 @@ class LinkedWatcher:
                 continue
             state = await read_linked(session, adapters, settings, svc, ctx)
             live.add(svc.slug)
-            if not state.drift:
+            # A node or guest that is off is the health alerts' business, not "changed outside".
+            if not state.drift or state.host_down:
                 if svc.slug in self._reported:
                     audit.record(
                         session,

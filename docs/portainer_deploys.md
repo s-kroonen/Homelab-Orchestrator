@@ -97,6 +97,22 @@ A proxy host switched off on its own is left out of the comparison - that was it
 
 `orchestrator-cli service state SLUG` prints the same table as the page.
 
+### When the node or guest is off
+
+Everything a stack or container runs on lives on the root service's guest, so the state takes
+that into account (the same node + guest check the health gate uses):
+
+* **Node offline, or guest stopped:** the stack, container and controller are shown **off** with the
+  reason ("not running: node 'pve1' is offline"), Portainer is not even asked, a still-served proxy
+  host says "nothing is running behind it", and the state is **off** with the note *asked to be on,
+  but node 'pve1' is offline* - not "mixed" and not "unknown". The map chip reads "host is off".
+* This is not reported as "changed outside the orchestrator": a node that is off is a health alert's
+  business.
+* **Switching on** under an offline node stops with a failed `host` step that says so (wake the
+  service or the node first); a merely *stopped* guest on a live node is started by the switch as
+  before. Switching off skips parts that are already off.
+* **Proxmox itself unreadable** stays "unknown": the orchestrator does not guess off.
+
 ## Deploys
 
 A service linked to a stack that was deployed from Git can have a **deploy method**

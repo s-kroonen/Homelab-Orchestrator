@@ -42,7 +42,9 @@
     const tabBadge = $("stack-tab-state");
     tabBadge.hidden = st.state === "none";
     setBadge(tabBadge, st.state);
-    $("ls-drift").textContent = st.drift
+    $("ls-drift").textContent = st.host_down
+      ? "Nothing is running here: " + st.host_down + "." + (st.served ? " It is meant to be on, so wake it." : "")
+      : st.drift
       ? "Not what was asked for: " + st.drift + (st.unknown.length ? "" : ".")
       : st.state === "none" ? "Nothing is linked to this service yet: no proxy host, controller or guest." : "";
     $("ls-drift").className = "msg" + (st.drift ? " error" : "");
