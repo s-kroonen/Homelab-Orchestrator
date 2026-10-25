@@ -179,6 +179,19 @@ docker compose pull orchestrator
 docker compose up -d orchestrator
 ```
 
+### If the port moves
+
+The compose file publishes `"${ORCHESTRATOR_BIND_ADDR:-127.0.0.1}:8080:8080"`: without
+`ORCHESTRATOR_BIND_ADDR` in `.env` the dashboard is reachable from this host only, and a Traefik on
+another machine (or `http://<host>:8080` from another machine) gets a 502 / nothing. A compose file
+that does not carry your own edit brings that default back, and the container still reports healthy.
+So `scripts/install.sh` says so when the orchestrator ends up published on loopback - loudly ("THE
+PORT MOVED") when it was on the LAN before the update - and the updater records a `published_port`
+warning step (shown on this page and in `update-status`) when an update moves the port from the LAN
+to loopback. Neither fails the update: rolling back would bring the same compose file, and the same
+bind, back. The fix is one line in `.env` (`ORCHESTRATOR_BIND_ADDR=0.0.0.0`, or this host's LAN IP)
+and `docker compose up -d --force-recreate orchestrator`.
+
 ## Restart
 
 **Restart the orchestrator** stops the process (SIGTERM); the Compose policy

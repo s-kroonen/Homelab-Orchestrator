@@ -251,8 +251,13 @@ class HealthScanner:
         if self._adapters is None:
             return
         try:
-            await self._linked.observe(session, self._adapters, self._settings, guest_cache)
-            await self._deploys.observe(session, self._adapters, self._settings)
+            # Monitoring only: never let a slow Portainer / proxy hold up the health cycle.
+            await asyncio.wait_for(
+                self._linked.observe(session, self._adapters, self._settings, guest_cache), 45
+            )
+            await asyncio.wait_for(
+                self._deploys.observe(session, self._adapters, self._settings), 30
+            )
         except Exception as exc:  # pragma: no cover - defensive
             log.error(
                 "health_scanner.linked_watch_failed", error=str(exc), error_type=type(exc).__name__

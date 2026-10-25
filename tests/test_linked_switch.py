@@ -426,3 +426,63 @@ def test_cli_state_disable_enable_and_the_registry_file_follows(
 
     refused = run.invoke(cli, ["service", "enable", "ghost"])
     assert refused.exit_code != 0 and "no service" in refused.output
+
+
+# -- a slow or unreachable Portainer must not slow everything down ------------------------------------
+
+
+def test_an_unreachable_portainer_is_asked_once_per_pass(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import asyncio
+
+    from orchestrator.adapters.errors import AdapterUnreachable
+    from orchestrator.config import get_settings
+    from orchestrator.registry.linked import gather_context, read_linked
+
+    adapters = client.app.state.adapters  # type: ignore[attr-defined]
+    asked: list[str] = []
+
+    async def down(endpoint_id: int, name: str) -> Any:
+        asked.append(name)
+        raise AdapterUnreachable("Portainer unreachable")
+
+    monkeypatch.setattr(adapters.portainer, "get_stack", down)
+
+    async def go() -> list[Any]:
+        with Session(get_engine()) as s:
+            ctx = await gather_context(s, adapters, light=True)
+            out = []
+            for slug in ("dev-xymbols", "dev-xymbols-db"):
+                svc = s.exec(select(Service).where(Service.slug == slug)).one()
+                out.append(await read_linked(s, adapters, get_settings(), svc, ctx))
+            return out
+
+    states = asyncio.run(go())
+    assert asked == ["dev-xymbols"]  # the container service did not ask again
+    assert all(p.on is None for st in states for p in st.parts)
+
+
+def test_the_light_pass_does_not_run_command_controllers(client: TestClient) -> None:
+    import asyncio
+
+    from orchestrator.config import get_settings
+    from orchestrator.registry.linked import gather_context, read_linked
+
+    adapters = client.app.state.adapters  # type: ignore[attr-defined]
+
+    async def go() -> tuple[int, int]:
+        with Session(get_engine()) as s:
+            svc = s.exec(select(Service).where(Service.slug == "lonely")).one()
+            svc.controller = {"type": "docker", "container": "x", "transport": {"type": "local"}}
+            s.add(svc)
+            s.commit()
+            light = await read_linked(
+                s, adapters, get_settings(), svc, await gather_context(s, adapters, light=True)
+            )
+            full = await read_linked(
+                s, adapters, get_settings(), svc, await gather_context(s, adapters)
+            )
+            return len(light.parts), len(full.parts)
+
+    assert asyncio.run(go()) == (0, 1)

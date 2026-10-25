@@ -4,12 +4,22 @@
 #   FAKE_UPDATER_RUNNING=1    the updater container is running
 #   FAKE_OLD_IMAGE=1          the running image has no `system update-status` command
 #   FAKE_IMAGE=<ref>          the running container's image reference
+#   FAKE_PORT=<addr>          what `docker port orchestrator 8080` says before the update
+#   FAKE_PORT_AFTER=<addr>    ... and after it (default: unchanged)
 S="$FAKE_DOCKER_STATE"
 mkdir -p "$S"
 echo "$*" >>"$S/calls"
 case "$1" in
   compose)
     case "$2" in version) echo "Docker Compose version v2.29.0"; exit 0 ;; esac
+    case "$*" in *"up -d orchestrator") : >"$S/upped" ;; esac
+    exit 0 ;;
+  port)
+    if [ -f "$S/started" ] || [ -f "$S/upped" ]; then
+      [ -n "${FAKE_PORT_AFTER:-${FAKE_PORT:-}}" ] && echo "${FAKE_PORT_AFTER:-$FAKE_PORT}"
+    else
+      [ -n "${FAKE_PORT:-}" ] && echo "$FAKE_PORT"
+    fi
     exit 0 ;;
   inspect)
     name="$(eval echo "\${$#}")"

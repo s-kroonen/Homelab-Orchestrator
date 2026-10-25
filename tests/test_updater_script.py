@@ -369,3 +369,42 @@ def test_old_rollback_images_are_pruned(rig: Rig) -> None:
         p.name for p in rig.map.glob("orchestrator-rollback_*") if "previous" not in p.name
     )
     assert len(kept) == 2 and kept[-1] > "orchestrator-rollback_2026"  # the newest stay
+
+
+# -- the published port ------------------------------------------------------------------------
+
+
+def _ports(rig: Rig, before: str, after: str) -> None:
+    (rig.docker / "port.before").write_text(before + "\n")
+    (rig.docker / "port.after").write_text(after + "\n")
+
+
+def test_an_update_that_moves_the_port_to_loopback_succeeds_but_warns(rig: Rig) -> None:
+    rig.new_version("healthy")
+    _ports(rig, "0.0.0.0:8080", "127.0.0.1:8080")
+    rig.request(id="u1", action="update", by="storm", backup=BACKUP)
+
+    result = rig.run()
+
+    assert result.returncode == 0, result.stderr
+    st = rig.status()
+    assert (
+        st["state"] == "succeeded"
+    )  # rolling back would not help: the same compose brings it back
+    (warn,) = [s for s in st["steps"] if s["name"] == "published_port"]
+    assert warn["result"] == "WARN"
+    assert "0.0.0.0:8080" in warn["detail"] and "127.0.0.1:8080" in warn["detail"]
+    assert "ORCHESTRATOR_BIND_ADDR=0.0.0.0" in warn["detail"]
+
+
+@pytest.mark.parametrize(
+    ("before", "after"),
+    [("0.0.0.0:8080", "0.0.0.0:8080"), ("127.0.0.1:8080", "127.0.0.1:8080"), ("", "")],
+)
+def test_an_unchanged_or_lan_port_is_not_mentioned(rig: Rig, before: str, after: str) -> None:
+    rig.new_version("healthy")
+    _ports(rig, before, after)
+    rig.request(id="u1", action="update", by="storm", backup=BACKUP)
+
+    assert rig.run().returncode == 0
+    assert not [s for s in rig.status()["steps"] if s["name"] == "published_port"]
