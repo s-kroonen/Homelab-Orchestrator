@@ -48,7 +48,7 @@ class LinkedWatcher:
     ) -> int:
         """One pass. Returns how many new outside changes were reported. ``guest_cache`` is
         the cycle's single Proxmox read when called from the health scanner."""
-        ctx = await gather_context(session, adapters, guest_cache)
+        ctx = await gather_context(session, adapters, guest_cache, light=True)
         busy = {
             r.service_id
             for r in session.exec(

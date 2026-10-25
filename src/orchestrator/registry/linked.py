@@ -14,7 +14,7 @@ from typing import Any
 
 from sqlmodel import Session, select
 
-from orchestrator.adapters.errors import AdapterError
+from orchestrator.adapters.errors import AdapterError, AdapterNotConfigured, AdapterUnreachable
 from orchestrator.adapters.factory import AdapterBundle
 from orchestrator.adapters.portainer.links import container_url, stack_url
 from orchestrator.adapters.proxy.base import RouteInfo, find_route
@@ -131,10 +131,20 @@ class LinkedContext:
     routes: list[RouteInfo] | None
     #: One Proxmox read of every guest, shared with whoever else is reading this cycle.
     guest_cache: GuestStateCache | None = None
+    #: Why Portainer could not be reached during this pass; later reads fail at once instead of
+    #: each waiting out its own timeout.
+    portainer_down: str = ""
+    #: Skip controllers that run a command (docker / systemd / command over a transport): a
+    #: pass that runs every few seconds or for every service must not start those.
+    light: bool = False
 
 
 async def gather_context(
-    session: Session, adapters: AdapterBundle, guest_cache: GuestStateCache | None = None
+    session: Session,
+    adapters: AdapterBundle,
+    guest_cache: GuestStateCache | None = None,
+    *,
+    light: bool = False,
 ) -> LinkedContext:
     routes: list[RouteInfo] | None = None
     proxy = getattr(adapters, "proxy", None)
@@ -146,7 +156,9 @@ async def gather_context(
     proxmox = getattr(adapters, "proxmox", None)
     if guest_cache is None and proxmox is not None:
         guest_cache = GuestStateCache(proxmox)
-    return LinkedContext(tree=TreeIndex.build(session), routes=routes, guest_cache=guest_cache)
+    return LinkedContext(
+        tree=TreeIndex.build(session), routes=routes, guest_cache=guest_cache, light=light
+    )
 
 
 def portainer_cfg(svc: Service) -> dict[str, Any] | None:
@@ -196,7 +208,9 @@ def _proxy_part(ph: ProxyHost, ctx: LinkedContext, served: bool) -> Part:
     )
 
 
-async def _portainer_part(adapters: AdapterBundle, cfg: dict[str, Any]) -> Part:
+async def _portainer_part(
+    adapters: AdapterBundle, cfg: dict[str, Any], ctx: LinkedContext | None = None
+) -> Part:
     adapter = getattr(adapters, "portainer", None)
     eid = int(cfg["endpoint"])
     stack_name = str(cfg.get("stack") or "")
@@ -205,6 +219,8 @@ async def _portainer_part(adapters: AdapterBundle, cfg: dict[str, Any]) -> Part:
     label = f"{kind} {name}"
     if adapter is None or not adapter.configured:
         return Part(kind, name, label, None, "Portainer is not set up")
+    if ctx is not None and ctx.portainer_down:
+        return Part(kind, name, label, None, ctx.portainer_down)
     base = adapter.base_url
     try:
         if stack_name:
@@ -235,6 +251,8 @@ async def _portainer_part(adapters: AdapterBundle, cfg: dict[str, Any]) -> Part:
             container_url(base, eid, c.id),
         )
     except AdapterError as exc:
+        if ctx is not None and isinstance(exc, AdapterUnreachable | AdapterNotConfigured):
+            ctx.portainer_down = str(exc)
         return Part(kind, name, label, None, str(exc))
 
 
@@ -292,8 +310,8 @@ async def read_linked(
         state.parts.append(_proxy_part(ph, ctx, served))
     cfg = portainer_cfg(svc)
     if cfg is not None:
-        state.parts.append(await _portainer_part(adapters, cfg))
-    elif svc.controller:
+        state.parts.append(await _portainer_part(adapters, cfg, ctx))
+    elif svc.controller and not ctx.light:
         part = await _controller_part(session, adapters, settings, svc)
         if part is not None:
             state.parts.append(part)

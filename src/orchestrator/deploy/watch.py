@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from sqlmodel import Session, col, select
 
-from orchestrator.adapters.errors import AdapterError
+from orchestrator.adapters.errors import AdapterError, AdapterUnreachable
 from orchestrator.adapters.factory import AdapterBundle
 from orchestrator.adapters.portainer.base import Stack
 from orchestrator.config import Settings
@@ -67,6 +67,8 @@ class DeployWatcher:
                 continue
             try:
                 stack = await adapter.get_stack(int(cfg["endpoint"]), str(cfg["stack"]))
+            except AdapterUnreachable:
+                break  # Portainer is not answering: the other stacks would only wait too
             except AdapterError:
                 continue
             if stack is None:

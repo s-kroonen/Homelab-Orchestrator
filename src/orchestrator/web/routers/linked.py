@@ -53,7 +53,7 @@ async def linked_all(
     session: SessionDep, adapters: AdaptersDep, settings: SettingsDep
 ) -> dict[str, Any]:
     """Every service that has something linked: ``{slug: state}`` (for the map and lists)."""
-    ctx = await gather_context(session, adapters)
+    ctx = await gather_context(session, adapters, light=True)
     out: dict[str, Any] = {}
     for svc in session.exec(select(Service).order_by(Service.slug)).all():
         state = await read_linked(session, adapters, settings, svc, ctx)
