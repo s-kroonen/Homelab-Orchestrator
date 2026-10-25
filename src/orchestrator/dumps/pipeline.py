@@ -345,13 +345,17 @@ class DumpPipeline:
         assert portainer is not None  # _check already said so
         started = datetime.now(UTC)
         with part.open("wb") as raw, gzip.GzipFile(fileobj=raw, mode="wb", compresslevel=6) as gz:
+
+            def sink(chunk: bytes) -> None:
+                gz.write(chunk)
+
             try:
                 outcome = await asyncio.wait_for(
                     portainer.exec_stream(
                         endpoint,
                         container,
                         build_command(cfg),
-                        lambda chunk: None if gz.write(chunk) is None else None,
+                        sink,
                         timeout_s=float(cfg["timeout_s"]),
                     ),
                     timeout=float(cfg["timeout_s"]),
