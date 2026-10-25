@@ -486,3 +486,96 @@ def test_the_light_pass_does_not_run_command_controllers(client: TestClient) -> 
             return len(light.parts), len(full.parts)
 
     assert asyncio.run(go()) == (0, 1)
+
+
+# -- a node or guest that is off ------------------------------------------------------------------
+
+
+def _node_off(client: TestClient) -> None:
+    from orchestrator.adapters.proxmox.base import ClusterNode, ClusterStatus
+
+    pve = client.app.state.adapters.proxmox  # type: ignore[attr-defined]
+    pve.simulated_cluster = ClusterStatus(nodes=[ClusterNode(name="pve1", online=False)])
+    pve.simulated_guests = []  # an offline node lists no guests
+
+
+def test_a_node_that_is_off_makes_everything_on_it_off_not_unknown(client: TestClient) -> None:
+    _host(client, "dev-xymbols")
+    _node_off(client)
+    portainer = _portainer(client)
+    asked: list[Any] = []
+    real = portainer.get_stack
+
+    async def spy(*a: Any, **k: Any) -> Any:
+        asked.append(a)
+        return await real(*a, **k)
+
+    portainer.get_stack = spy
+    st = _state(client, "dev-xymbols")
+    parts = {p["kind"]: p for p in st["parts"]}
+    assert parts["stack"]["on"] is False and "offline" in parts["stack"]["detail"]
+    assert "nothing is running behind it" in parts["proxy"]["detail"]
+    assert st["state"] == "off" and st["host_down"]
+    assert st["drift"].startswith("asked to be on, but node 'pve1' is offline")
+    assert st["disagreeing"] == [] and st["unknown"] == []
+    assert asked == []  # Portainer was not even asked
+
+    root = _state(client, "portainer-vm")
+    assert root["parts"][0]["on"] is False and "offline" in root["parts"][0]["detail"]
+    assert root["state"] == "off"
+
+
+def test_a_stopped_guest_is_the_same_story(client: TestClient) -> None:
+    _host(client, "dev-xymbols")
+    pve = client.app.state.adapters.proxmox  # type: ignore[attr-defined]
+    pve.simulated_guests = [replace(g, status="stopped") for g in pve.simulated_guests]
+    st = _state(client, "dev-xymbols")
+    assert st["state"] == "off" and "stopped" in st["host_down"]
+    assert next(p for p in st["parts"] if p["kind"] == "stack")["on"] is False
+
+
+def test_an_unreadable_proxmox_is_still_unknown_not_off(client: TestClient) -> None:
+    _host(client, "dev-xymbols")
+    pve = client.app.state.adapters.proxmox  # type: ignore[attr-defined]
+
+    async def boom() -> Any:
+        from orchestrator.adapters.errors import AdapterUnreachable
+
+        raise AdapterUnreachable("no route to proxmox")
+
+    pve.cluster_status = boom
+    st = _state(client, "dev-xymbols")
+    assert st["host_down"] == ""
+    assert next(p for p in st["parts"] if p["kind"] == "stack")["on"] is True  # Portainer answered
+
+
+def test_switching_on_under_an_offline_node_says_why_instead_of_failing_blindly(
+    client: TestClient,
+) -> None:
+    _host(client, "dev-xymbols")
+    assert _switch(client, "dev-xymbols", "off").status_code == 200
+    _node_off(client)
+    out = _switch(client, "dev-xymbols", "on").json()
+    assert out["ok"] is False
+    failed = [s for s in out["steps"] if s["status"] == "failed"]
+    assert (
+        failed
+        and "offline" in failed[0]["detail"]["error"]
+        and "wake" in failed[0]["detail"]["error"]
+    )
+
+
+def test_a_node_that_is_off_is_not_reported_as_changed_outside(client: TestClient) -> None:
+    import asyncio
+
+    from orchestrator.config import get_settings
+    from orchestrator.registry.linked_watch import CONFIRM_CYCLES, LinkedWatcher
+
+    _host(client, "dev-xymbols")
+    _node_off(client)
+    adapters = client.app.state.adapters  # type: ignore[attr-defined]
+    watcher = LinkedWatcher()
+    with Session(get_engine()) as s:
+        for _ in range(CONFIRM_CYCLES + 1):
+            reported = asyncio.run(watcher.observe(s, adapters, get_settings()))
+        assert reported == 0

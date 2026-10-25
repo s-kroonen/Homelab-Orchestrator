@@ -9,7 +9,7 @@ the parts, and ``mixed`` always says which parts disagree. See docs/portainer_de
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 from sqlmodel import Session, select
@@ -21,7 +21,7 @@ from orchestrator.adapters.proxy.base import RouteInfo, find_route
 from orchestrator.config import Settings
 from orchestrator.controllers import ControllerError, build_controller
 from orchestrator.db.models import ProxyHost, Service
-from orchestrator.health.guest_gate import GuestStateCache
+from orchestrator.health.guest_gate import GuestCheck, GuestStateCache, check_guest
 from orchestrator.registry.proxy_push import is_live_managed, ref_of
 from orchestrator.registry.tree import TreeIndex
 
@@ -62,6 +62,12 @@ class LinkedState:
     #: Intent AND every ancestor's intent: should this be on?
     served: bool
     parts: list[Part] = field(default_factory=list)
+    #: Why nothing can be running: the node or the guest everything lives on is off ('' = it
+    #: is up, or could not be read). Then the stack / container / controller are *off*, not
+    #: unknown, and the state is judged from that.
+    host_down: str = ""
+    #: The reason is the node itself (a stopped guest on a live node can simply be started).
+    node_off: bool = False
 
     @property
     def counted(self) -> list[Part]:
@@ -73,6 +79,8 @@ class LinkedState:
         counted = self.counted
         if not counted:
             return "none"
+        if self.host_down:
+            return "off"
         known = {p.on for p in counted if p.on is not None}
         if not known:
             return "unknown"
@@ -83,6 +91,8 @@ class LinkedState:
     @property
     def disagreeing(self) -> list[Part]:
         """The parts that are not in the state the rest are in (all of the minority)."""
+        if self.host_down:
+            return []
         counted = [p for p in self.counted if p.on is not None]
         on = [p for p in counted if p.on]
         off = [p for p in counted if not p.on]
@@ -100,6 +110,8 @@ class LinkedState:
         state = self.state
         if state in {"none", "unknown"}:
             return ""
+        if self.host_down:
+            return f"asked to be on, but {self.host_down}" if self.served else ""
         if state == "mixed":
             bad = ", ".join(f"{p.label} {'on' if p.on else 'off'}" for p in self.disagreeing)
             return f"the linked parts disagree: {bad}"
@@ -115,6 +127,8 @@ class LinkedState:
             "intent": self.intent,
             "served": self.served,
             "state": self.state,
+            "host_down": self.host_down,
+            "node_off": self.node_off,
             "drift": self.drift,
             "parts": [p.as_dict() for p in self.parts],
             "disagreeing": [p.ref for p in self.disagreeing],
@@ -137,6 +151,8 @@ class LinkedContext:
     #: Skip controllers that run a command (docker / systemd / command over a transport): a
     #: pass that runs every few seconds or for every service must not start those.
     light: bool = False
+    #: root slug -> the node + guest check, read once per pass.
+    hosts: dict[str, GuestCheck] = field(default_factory=dict)
 
 
 async def gather_context(
@@ -209,7 +225,10 @@ def _proxy_part(ph: ProxyHost, ctx: LinkedContext, served: bool) -> Part:
 
 
 async def _portainer_part(
-    adapters: AdapterBundle, cfg: dict[str, Any], ctx: LinkedContext | None = None
+    adapters: AdapterBundle,
+    cfg: dict[str, Any],
+    ctx: LinkedContext | None = None,
+    host_down: str = "",
 ) -> Part:
     adapter = getattr(adapters, "portainer", None)
     eid = int(cfg["endpoint"])
@@ -217,6 +236,8 @@ async def _portainer_part(
     kind = "stack" if stack_name else "container"
     name = stack_name or str(cfg.get("container") or "")
     label = f"{kind} {name}"
+    if host_down:  # it lives on a guest that is not running: no need to ask Portainer
+        return Part(kind, name, label, False, f"not running: {host_down}")
     if adapter is None or not adapter.configured:
         return Part(kind, name, label, None, "Portainer is not set up")
     if ctx is not None and ctx.portainer_down:
@@ -257,7 +278,11 @@ async def _portainer_part(
 
 
 async def _controller_part(
-    session: Session, adapters: AdapterBundle, settings: Settings, svc: Service
+    session: Session,
+    adapters: AdapterBundle,
+    settings: Settings,
+    svc: Service,
+    host_down: str = "",
 ) -> Part | None:
     try:
         ctl = build_controller(settings, adapters.proxmox, session, svc)
@@ -265,6 +290,8 @@ async def _controller_part(
         return Part("controller", svc.slug, "controller", None, str(exc))
     if ctl is None:
         return None
+    if host_down:
+        return Part("controller", svc.slug, ctl.describe(), False, f"not running: {host_down}")
     try:
         st = await ctl.status()
     except ControllerError as exc:
@@ -272,8 +299,34 @@ async def _controller_part(
     return Part("controller", svc.slug, ctl.describe(), st.running, st.state)
 
 
+async def host_check(
+    session: Session, ctx: LinkedContext, svc: Service
+) -> tuple[GuestCheck | None, str]:
+    """Is the node up and the guest running that ``svc`` lives on? ``(check, "")``, or
+    ``(None, why)`` when that cannot be told (no guest, Proxmox not set up)."""
+    from orchestrator.db.models import Node
+
+    eg = ctx.tree.effective_guest(svc)
+    if not eg.has_guest or eg.guest_id is None:
+        return None, ""
+    if ctx.guest_cache is None:
+        return None, "Proxmox is not set up"
+    cached = ctx.hosts.get(eg.root_slug)
+    if cached is not None:
+        return cached, ""
+    node = session.get(Node, eg.node_id) if eg.node_id is not None else None
+    check = await check_guest(
+        ctx.guest_cache,
+        node_name=node.name if node else None,
+        guest_kind=eg.kind,
+        guest_id=eg.guest_id,
+    )
+    ctx.hosts[eg.root_slug] = check
+    return check, ""
+
+
 async def _guest_part(
-    session: Session, adapters: AdapterBundle, ctx: LinkedContext, svc: Service
+    session: Session, ctx: LinkedContext, svc: Service, check: GuestCheck | None, why: str
 ) -> Part | None:
     from orchestrator.db.models import Node
 
@@ -284,15 +337,14 @@ async def _guest_part(
     if node is None:
         return None
     label = f"{eg.kind.value} {eg.guest_id} on {node.name}"
-    if ctx.guest_cache is None:
-        return Part("guest", str(eg.guest_id), label, None, "Proxmox is not set up")
-    guests, error = await ctx.guest_cache.guests()
-    if guests is None:
-        return Part("guest", str(eg.guest_id), label, None, error or "Proxmox could not be read")
-    guest = next((g for g in guests if g.vmid == eg.guest_id and g.node == node.name), None)
-    if guest is None:
-        return Part("guest", str(eg.guest_id), label, None, "not found on the node")
-    return Part("guest", str(eg.guest_id), label, guest.status == "running", guest.status)
+    ref = str(eg.guest_id)
+    if check is None:
+        return Part("guest", ref, label, None, why or "Proxmox could not be read")
+    if check.outcome == "up":
+        return Part("guest", ref, label, True, check.guest_status or "running")
+    if check.outcome == "down":
+        return Part("guest", ref, label, False, check.message)
+    return Part("guest", ref, label, None, check.message)
 
 
 async def read_linked(
@@ -306,16 +358,25 @@ async def read_linked(
     ctx = ctx or await gather_context(session, adapters)
     served = ctx.tree.is_served(svc)
     state = LinkedState(slug=svc.slug, intent=svc.enabled, served=served)
+    check, why = await host_check(session, ctx, svc)
+    down = check.message if check is not None and check.down else ""
+    state.host_down = down
+    state.node_off = bool(check is not None and check.down and check.node_online is False)
     for ph in proxy_hosts_of(session, svc):
-        state.parts.append(_proxy_part(ph, ctx, served))
+        proxy_part = _proxy_part(ph, ctx, served)
+        if down and proxy_part.on:
+            proxy_part = replace(
+                proxy_part, detail=f"{proxy_part.detail}, but nothing is running behind it"
+            )
+        state.parts.append(proxy_part)
     cfg = portainer_cfg(svc)
     if cfg is not None:
-        state.parts.append(await _portainer_part(adapters, cfg, ctx))
+        state.parts.append(await _portainer_part(adapters, cfg, ctx, down))
     elif svc.controller and not ctx.light:
-        part = await _controller_part(session, adapters, settings, svc)
+        part = await _controller_part(session, adapters, settings, svc, down)
         if part is not None:
             state.parts.append(part)
-    guest = await _guest_part(session, adapters, ctx, svc)
+    guest = await _guest_part(session, ctx, svc, check, why)
     if guest is not None:
         state.parts.append(guest)
     return state

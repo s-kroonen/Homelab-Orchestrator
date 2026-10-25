@@ -63,7 +63,7 @@
     if (svc.deploy) row.append(el("span", "chip", "deploys"));
     const ls = state.linked[svc.slug];
     if (ls && (ls.state === "mixed" || (ls.drift && ls.state !== "none"))) {
-      const c = el("span", "chip warn", ls.state === "mixed" ? "mixed" : "not as asked");
+      const c = el("span", "chip warn", ls.host_down ? "host is off" : ls.state === "mixed" ? "mixed" : "not as asked");
       c.title = ls.drift;
       row.append(c);
     }
