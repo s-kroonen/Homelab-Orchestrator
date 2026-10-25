@@ -41,6 +41,9 @@ class Part:
     #: Off by its own choice (a proxy host switched off on its own): not part of the
     #: agreement, so it never makes the service look mixed.
     deliberate: bool = False
+    #: Waiting for a push from here (never created in Traefik Manager): nothing was changed
+    #: outside, so it is not part of the agreement either - until it is pushed.
+    pending: bool = False
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -51,6 +54,7 @@ class Part:
             "detail": self.detail,
             "open_url": self.open_url,
             "deliberate": self.deliberate,
+            "pending": self.pending,
         }
 
 
@@ -71,7 +75,7 @@ class LinkedState:
 
     @property
     def counted(self) -> list[Part]:
-        return [p for p in self.parts if not p.deliberate]
+        return [p for p in self.parts if not p.deliberate and not p.pending]
 
     @property
     def state(self) -> str:
@@ -212,8 +216,22 @@ def _proxy_part(ph: ProxyHost, ctx: LinkedContext, served: bool) -> Part:
         )
     route = find_route(ctx.routes, ref_of(ph), ph.hostname)
     if route is None:
+        if not (ph.pushed_sig or ""):
+            # Never created there from here: it is waiting for "Push now", not changed outside.
+            return Part(
+                "proxy",
+                ph.hostname,
+                f"proxy {ph.hostname}",
+                False,
+                "not pushed to Traefik Manager yet (Push now)",
+                pending=True,
+            )
         return Part(
-            "proxy", ph.hostname, f"proxy {ph.hostname}", False, "no route in Traefik Manager"
+            "proxy",
+            ph.hostname,
+            f"proxy {ph.hostname}",
+            False,
+            "the route is gone from Traefik Manager",
         )
     return Part(
         "proxy",

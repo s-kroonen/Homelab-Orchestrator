@@ -302,7 +302,17 @@ async def _proxy_hosts(ctx: ToolContext, a: dict[str, Any]) -> Any:
     from orchestrator.web.routers import proxy_hosts
 
     rows = await proxy_hosts.list_proxy_hosts(ctx.session, ctx.settings, ctx.adapters)
-    keep = ("hostname", "upstream", "enabled", "router_provider", "service", "sync", "state")
+    keep = (
+        "hostname",
+        "upstream",
+        "enabled",
+        "router_provider",
+        "service_slug",
+        "sync_state",
+        "sync_changes",
+        "live_status",
+        "served",
+    )
     return [{k: r[k] for k in keep if k in r} for r in rows]
 
 
@@ -733,8 +743,9 @@ TOOLS: dict[str, Tool] = {
         Tool(
             "list_proxy_hosts",
             "List proxy hosts",
-            "The reverse-proxy hosts: hostname, upstream, enabled, which service, and whether "
-            "the router agrees.",
+            "The reverse-proxy hosts: hostname, upstream, enabled, which service, and where each "
+            "stands against Traefik Manager (sync_state: in_sync, pending_create = not pushed "
+            "yet, pending_update, detached, external, local) with what differs.",
             "read",
             _proxy_hosts,
         ),

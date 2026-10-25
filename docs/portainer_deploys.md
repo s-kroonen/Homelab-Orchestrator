@@ -113,6 +113,17 @@ that into account (the same node + guest check the health gate uses):
   before. Switching off skips parts that are already off.
 * **Proxmox itself unreadable** stays "unknown": the orchestrator does not guess off.
 
+### What counts as "changed outside"
+
+* A proxy host that was **never pushed** to Traefik Manager is *pending*, not changed: it shows
+  "not pushed yet (Push now)", is left out of the agreement and does not raise an alert. Press
+  **Push now** (or `orchestrator-cli proxy push`) to create it. A host you switched **off** is
+  pushed too, but stays off (created parked, disabled last), and never counts either way.
+* A route that was pushed and is **gone** from Traefik Manager is a real change.
+* What was already reported is read back from the audit log after a restart or an update, so a
+  standing disagreement is announced **once**, not after every restart; it is announced again
+  only when the disagreement itself changes or after it has been cleared.
+
 ## Deploys
 
 A service linked to a stack that was deployed from Git can have a **deploy method**

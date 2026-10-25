@@ -731,3 +731,20 @@ def test_cli_approves_a_waiting_request(client: TestClient) -> None:
     done = runner.invoke(cli, ["mcp", "approve", token])
     assert done.exit_code == 0, done.output
     assert client.get(f"/api/assistants/requests/{token}").json()["status"] == "approved"
+
+
+def test_proxy_hosts_show_where_they_stand_against_the_router(client: TestClient) -> None:
+    with Session(get_engine()) as s:
+        from orchestrator.db.models import Service
+
+        sid = s.exec(select(Service).where(Service.slug == "wiki")).one().id
+    made = client.post(
+        "/api/proxy-hosts",
+        json={"hostname": "wiki.example.com", "upstream": "http://10.0.0.9:80", "service_id": sid},
+    )
+    assert made.status_code == 201, made.text
+    got = connect(client, ["read"])
+    out = call(client, got["access_token"], "list_proxy_hosts")
+    assert out["isError"] is False
+    text = out["content"][0]["text"]
+    assert "wiki.example.com" in text and "sync_state" in text and "wiki" in text

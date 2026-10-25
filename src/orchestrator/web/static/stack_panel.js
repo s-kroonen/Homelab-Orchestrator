@@ -57,6 +57,7 @@
         const tr = el("tr");
         const name = el("td"); name.append(el("strong", "", p.label));
         if (p.deliberate) name.append(document.createTextNode(" "), el("span", "chip", "switched off on its own"));
+        if (p.pending) name.append(document.createTextNode(" "), el("span", "chip", "not pushed yet"));
         const now = el("td"); now.append(partBadge(p.on));
         const act = el("td");
         if (p.open_url) { const a = el("a", "", "Open in Portainer"); a.href = p.open_url; a.target = "_blank"; a.rel = "noopener"; act.append(a); }
