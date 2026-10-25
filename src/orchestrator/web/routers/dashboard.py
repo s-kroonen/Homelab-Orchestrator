@@ -582,6 +582,17 @@ def _check_backup_exclusion(excluded: bool, reason: str) -> None:
         raise _bad_request("backup_excluded=true needs a backup_excluded_reason")
 
 
+def _check_not_excluded_in_policy(excluded: bool, reason: str, policy_id: int | None) -> None:
+    """A service that is never backed up (the VM hosting the PBS datastore, TrueNAS) cannot
+    be in a backup policy: the policy would run it every time and the pipeline would only
+    refuse it."""
+    if excluded and policy_id is not None:
+        raise _bad_request(
+            f"this service is never backed up ({reason.strip() or 'backup_excluded'}), so it "
+            "cannot be in a backup policy - remove the policy, or un-exclude the service"
+        )
+
+
 def _check_ip_address(raw: str | None) -> str:
     """The manual IP through the one shared validator (registry/ip_address.py)."""
     try:
@@ -899,6 +910,9 @@ async def create_service(
     _check_node_exists(session, node_id)
     _check_policy_exists(session, body.backup_policy_id)
     _check_backup_exclusion(body.backup_excluded, body.backup_excluded_reason)
+    _check_not_excluded_in_policy(
+        body.backup_excluded, body.backup_excluded_reason, body.backup_policy_id
+    )
     depends_on = _check_depends_on(session, slug, body.depends_on)
     backup_requires = _check_backup_requires(
         session,
@@ -1035,6 +1049,15 @@ def apply_service_update(
     _check_backup_exclusion(
         changes.get("backup_excluded", svc.backup_excluded),
         changes.get("backup_excluded_reason", svc.backup_excluded_reason),
+    )
+    if changes.get("backup_excluded") and svc.backup_policy_id is not None:
+        # Excluding a service that is in a policy takes it out of it (unless this very
+        # request tries to keep it there, which the check below refuses).
+        changes.setdefault("backup_policy_id", None)
+    _check_not_excluded_in_policy(
+        changes.get("backup_excluded", svc.backup_excluded),
+        changes.get("backup_excluded_reason", svc.backup_excluded_reason),
+        changes.get("backup_policy_id", svc.backup_policy_id),
     )
 
     state = session.get(ServiceState, svc.id) if "ip_address" in changes else None

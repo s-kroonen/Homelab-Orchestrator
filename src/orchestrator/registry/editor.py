@@ -110,7 +110,7 @@ class RegistryEditor:
             ) from exc
 
         try:
-            validate_references(parsed)
+            validate_references(parsed, strict=True)
         except ValueError as exc:
             raise RegistryEditError(
                 f"the edit would produce an invalid services.yaml: {exc}"

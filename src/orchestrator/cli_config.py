@@ -1182,6 +1182,9 @@ def service_update(
         fields["enabled"] = enabled
     if backup_excluded is not None:
         fields["backup_excluded"] = backup_excluded
+        if backup_excluded and backup_policy is None:
+            # a service that is never backed up cannot stay in a backup policy
+            fields["backup_policy"] = None
         if backup_excluded and not reason:
             reason = click.prompt(
                 "  Why is this excluded? (recorded in the refusal message)",
