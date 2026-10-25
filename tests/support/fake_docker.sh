@@ -29,6 +29,11 @@ case "$1" in
     esac
     [ -f "$S/container.image" ] || exit 1
     ;;
+  port)
+    # what the container's 8080 is published on: port.before until compose recreated it, then port.after
+    if [ -f "$S/composed" ] && [ -f "$S/port.after" ]; then cat "$S/port.after"
+    elif [ -f "$S/port.before" ]; then cat "$S/port.before"; fi
+    ;;
   image)
     # image inspect -f '{{.Id}}' REF
     id="$(resolve "$5")"
@@ -66,6 +71,7 @@ case "$1" in
     case "$*" in *--force-recreate*) ;; *) [ -f "$S/compose_fail_new" ] && exit 1 ;; esac
     [ -f "$S/compose_fail_all" ] && exit 1
     echo "COMPOSE ORCHESTRATOR_IMAGE=$ORCHESTRATOR_IMAGE ARGS=$*" >>"$S/compose_calls"
+    : >"$S/composed"
     id="$(resolve "$ORCHESTRATOR_IMAGE")"
     echo "$id" >"$S/container.image"
     echo "$ORCHESTRATOR_IMAGE" >"$S/container.ref"

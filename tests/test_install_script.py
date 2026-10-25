@@ -234,3 +234,47 @@ def test_no_start_only_places_the_files(rig: Rig) -> None:
 
     assert result.returncode == 0 and "not starting anything" in result.stdout
     assert all(c.startswith("compose version") for c in rig.calls())
+
+
+# -- the port the orchestrator is published on ---------------------------------------------------
+
+
+@pytest.mark.parametrize("updater", ["1", ""])
+def test_it_warns_when_the_update_moved_the_port_to_loopback(rig: Rig, updater: str) -> None:
+    rig.env_file("ORCHESTRATOR_IMAGE=x/y:dev\n")
+    result = rig.run(
+        FAKE_HAS_ORCHESTRATOR="1",
+        FAKE_UPDATER_RUNNING=updater,
+        FAKE_OLD_IMAGE="" if updater else "1",
+        FAKE_PORT="0.0.0.0:8080",
+        FAKE_PORT_AFTER="127.0.0.1:8080",
+    )
+    assert result.returncode == 0, result.stderr
+    assert "THE PORT MOVED" in result.stderr
+    assert "0.0.0.0:8080" in result.stderr and "127.0.0.1:8080" in result.stderr
+    assert "ORCHESTRATOR_BIND_ADDR=0.0.0.0" in result.stderr
+    assert "Done." in result.stdout  # a warning, not a failure
+
+
+def test_it_notes_a_loopback_bind_even_when_nothing_moved(rig: Rig) -> None:
+    rig.env_file("ORCHESTRATOR_IMAGE=x/y:dev\n")
+    result = rig.run(
+        FAKE_HAS_ORCHESTRATOR="1", FAKE_UPDATER_RUNNING="1", FAKE_PORT="127.0.0.1:8080"
+    )
+    assert result.returncode == 0, result.stderr
+    assert "only this host can reach it" in result.stderr
+    assert "THE PORT MOVED" not in result.stderr
+
+
+def test_a_lan_bind_gets_no_warning(rig: Rig) -> None:
+    rig.env_file("ORCHESTRATOR_IMAGE=x/y:dev\n")
+    result = rig.run(FAKE_HAS_ORCHESTRATOR="1", FAKE_UPDATER_RUNNING="1", FAKE_PORT="0.0.0.0:8080")
+    assert result.returncode == 0, result.stderr
+    assert "BIND_ADDR" not in result.stderr and "only this host" not in result.stderr
+
+
+def test_a_first_install_on_loopback_is_noted_too(rig: Rig) -> None:
+    rig.env_file("ORCHESTRATOR_IMAGE=x/y:dev\n")
+    result = rig.run(FAKE_PORT_AFTER="127.0.0.1:8080")
+    assert result.returncode == 0, result.stderr
+    assert "only this host can reach it" in result.stderr

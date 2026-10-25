@@ -95,6 +95,10 @@ finish() { # finish STATE MESSAGE [REASON]
 
 # -- docker helpers -----------------------------------------------------------
 
+# "addr:port" the container's 8080 is published on (empty if it is not running / not published).
+published_addr() { docker port "$CONTAINER" 8080 2>/dev/null | head -n 1; }
+is_loopback() { case "$1" in 127.*|"[::1]"*|"::1"*) return 0 ;; esac; return 1; }
+
 container_field() { docker inspect -f "$1" "$CONTAINER" 2>/dev/null; }
 image_id_of() { docker image inspect -f '{{.Id}}' "$1" 2>/dev/null; }
 sha_of_container() {
@@ -260,6 +264,7 @@ do_update() {
     return 0
   fi
 
+  bind_before="$(published_addr)"
   step "recreate" "OK" "starting $S_TO_IMAGE in place of $S_FROM_IMAGE"
   if ! ORCHESTRATOR_IMAGE="$target" compose up -d --no-deps --pull never "$SERVICE" >/dev/null 2>&1; then
     step "recreate" "FAIL" "docker compose up failed"
@@ -273,6 +278,11 @@ do_update() {
     docker tag "$cur_id" "$ROLLBACK_REPO:previous"
     prune_rollback_images
     step "verify" "OK" "healthy and stable"
+    bind_after="$(published_addr)"
+    if is_loopback "$bind_after" && [ -n "$bind_before" ] && ! is_loopback "$bind_before"; then
+      # Rolling back would not help (the same compose file brings it back): say so, loudly.
+      step "published_port" "WARN" "the port moved from $bind_before to $bind_after - only this host can reach it now. Set ORCHESTRATOR_BIND_ADDR=0.0.0.0 in .env and run: docker compose up -d --force-recreate orchestrator"
+    fi
     finish "succeeded" "Updated from ${S_FROM_SHA:-$S_FROM_IMAGE} to ${S_TO_SHA:-$S_TO_IMAGE}."
     return 0
   fi

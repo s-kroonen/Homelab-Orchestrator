@@ -183,6 +183,28 @@ fi
 
 # -- start / update ---------------------------------------------------------------------------
 
+# Which address the container's port 8080 is published on ("127.0.0.1:8080", "0.0.0.0:8080", or
+# nothing when there is no such container). Loopback means only THIS host can reach the dashboard:
+# a Traefik on another machine, or http://<this-host>:8080, gets nothing.
+published_addr() { docker port orchestrator 8080 2>/dev/null | head -n 1 || true; }
+is_loopback() { case "$1" in 127.*|"[::1]"*|"::1"*) return 0 ;; esac; return 1; }
+bind_before="$(published_addr)"
+
+warn_if_loopback() {
+  now_bind="$(published_addr)"
+  is_loopback "$now_bind" || return 0
+  say ""
+  if [ -n "$bind_before" ] && ! is_loopback "$bind_before"; then
+    warn "THE PORT MOVED: the orchestrator was published on $bind_before and is now only on $now_bind."
+    warn "Anything that is not on this host - Traefik elsewhere, http://<this-host>:8080 - can no longer reach it (a 502 / bad gateway)."
+  else
+    warn "The orchestrator is published on $now_bind: only this host can reach it."
+    warn "That is right if Traefik runs on THIS host. If it runs elsewhere, or you open http://<this-host>:8080 from another machine, it cannot connect."
+  fi
+  warn "To publish it on the LAN:  echo 'ORCHESTRATOR_BIND_ADDR=0.0.0.0' >> .env  (or this host's LAN IP)  and  docker compose up -d --force-recreate orchestrator"
+  warn "(ORCHESTRATOR_BIND_ADDR is read from .env; a docker-compose.yml without it falls back to 127.0.0.1.)"
+}
+
 COMPOSE_UPDATER="docker compose -f docker-compose.yml -f docker-compose.updater.yml"
 container_exists() { docker inspect -f '{{.Id}}' "$1" >/dev/null 2>&1; }
 container_running() { [ "$(docker inspect -f '{{.State.Running}}' "$1" 2>/dev/null || echo false)" = "true" ]; }
@@ -229,7 +251,7 @@ if container_exists orchestrator && can_delegate; then
       shown="$now"
     fi
     case "$now" in
-      *" succeeded "*) say "Done."; exit 0 ;;
+      *" succeeded "*) warn_if_loopback; say "Done."; exit 0 ;;
       *" rolled_back "*) die "The update failed and the previous version was put back. Details: docker exec orchestrator orchestrator-cli system update-status" ;;
       *" failed "*) die "The update failed. Details: docker exec orchestrator orchestrator-cli system update-status" ;;
     esac
@@ -244,4 +266,5 @@ else
 fi
 docker compose pull orchestrator
 docker compose up -d orchestrator
+warn_if_loopback
 say "Done. Open the dashboard's System page; once it shows 'Updater: running', updates there roll back on failure."
