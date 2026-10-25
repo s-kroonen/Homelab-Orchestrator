@@ -636,6 +636,99 @@ class PendingApproval(SQLModel, table=True):
     status: ApprovalStatus = Field(default=ApprovalStatus.PENDING, index=True)
 
 
+class McpClient(SQLModel, table=True):
+    """An application that registered itself to connect over MCP (RFC 7591 registration, or a
+    Client ID Metadata Document fetched from its own https client_id)."""
+
+    __tablename__ = "mcp_client"
+
+    id: int | None = Field(default=None, primary_key=True)
+    client_id: str = Field(index=True, unique=True)
+    name: str = ""
+    redirect_uris: list[str] = Field(default_factory=list, sa_column=Column(JSON))
+    #: "dcr" (registered) or "cimd" (metadata document).
+    kind: str = "dcr"
+    created_at: datetime = Field(default_factory=_utcnow)
+    last_seen_at: datetime | None = None
+
+
+class McpGrant(SQLModel, table=True):
+    """One connection (or personal token): who allowed it, with which role and scopes.
+
+    Only hashes of the tokens are stored. ``access_expires_at`` is empty for a personal token,
+    which never expires until revoked."""
+
+    __tablename__ = "mcp_grant"
+
+    id: int | None = Field(default=None, primary_key=True)
+    #: "oauth" (a connector) or "personal" (a token made by hand).
+    kind: str = "oauth"
+    label: str = ""
+    client_id: str = ""
+    client_name: str = ""
+    #: The admin who allowed it.
+    admin_username: str = ""
+    role: str = "viewer"
+    scopes: list[str] = Field(default_factory=list, sa_column=Column(JSON))
+    #: Ask a human before EVERY change, not only the dangerous ones.
+    confirm_writes: bool = False
+    access_hash: str = Field(default="", index=True)
+    access_expires_at: datetime | None = None
+    refresh_hash: str = Field(default="", index=True)
+    #: The refresh token before the last rotation: presenting it again means a copy leaked.
+    prev_refresh_hash: str = ""
+    #: The connection is dropped after this (extended by every refresh).
+    expires_at: datetime | None = None
+    created_at: datetime = Field(default_factory=_utcnow)
+    last_used_at: datetime | None = None
+    revoked_at: datetime | None = None
+
+
+class McpAuthCode(SQLModel, table=True):
+    """The short-lived code an admin's consent produces, exchanged once for tokens (PKCE)."""
+
+    __tablename__ = "mcp_auth_code"
+
+    id: int | None = Field(default=None, primary_key=True)
+    code_hash: str = Field(index=True, unique=True)
+    client_id: str
+    redirect_uri: str
+    code_challenge: str
+    scopes: list[str] = Field(default_factory=list, sa_column=Column(JSON))
+    role: str = "viewer"
+    label: str = ""
+    confirm_writes: bool = False
+    admin_username: str = ""
+    resource: str = ""
+    expires_at: datetime
+    used_at: datetime | None = None
+
+
+class McpCall(SQLModel, table=True):
+    """The history: every tool call an assistant made, what it asked and how it went."""
+
+    __tablename__ = "mcp_call"
+
+    id: int | None = Field(default=None, primary_key=True)
+    at: datetime = Field(default_factory=_utcnow, index=True)
+    grant_id: int | None = Field(default=None, index=True)
+    label: str = ""
+    client_name: str = ""
+    role: str = ""
+    tool: str = Field(default="", index=True)
+    #: read | act | dangerous
+    risk: str = "read"
+    #: Arguments with secrets redacted.
+    args: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))
+    #: ok | error | refused | pending | approved | denied | expired
+    status: str = "ok"
+    summary: str = ""
+    duration_ms: int = 0
+    #: The PendingApproval token when a human was asked.
+    approval_token: str | None = Field(default=None, index=True)
+    decided_by: str | None = None
+
+
 class StateSnapshotMarker(SQLModel, table=True):
     """Bookkeeping for the periodic SQLite → NFS dump job."""
 

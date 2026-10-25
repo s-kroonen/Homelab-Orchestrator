@@ -610,6 +610,26 @@ ENV_SECTIONS: tuple[EnvSection, ...] = (
             EnvKey("APPROVAL_TTL_HOURS", "How long a restore approval link stays valid."),
         ),
     ),
+    EnvSection(
+        "mcp",
+        "MCP server (docs/mcp.md)",
+        (
+            EnvKey(
+                "MCP_ENABLED",
+                "Serve /mcp for AI assistants (Claude connectors) and its OAuth endpoints.\n"
+                "Needs EXTERNAL_URL (or WEBAUTHN_ORIGIN) to be the address Claude can reach.",
+            ),
+            EnvKey("MCP_ACCESS_TTL_S", "Lifetime of an access token (it is refreshed)."),
+            EnvKey(
+                "MCP_REFRESH_TTL_DAYS", "A connection unused for this long must be re-authorised."
+            ),
+            EnvKey("MCP_APPROVAL_TTL_MIN", "How long a request that needs a human stays open."),
+            EnvKey(
+                "MCP_CIMD_HOSTS",
+                "Hosts whose client metadata documents are fetched (comma-separated).",
+            ),
+        ),
+    ),
 )
 
 #: Values describing the Docker deployment rather than the app's own defaults.

@@ -45,6 +45,7 @@ from orchestrator.web.routers import (
     actions,
     activity,
     approvals,
+    assistants,
     auth,
     backup,
     backup_policies,
@@ -59,6 +60,8 @@ from orchestrator.web.routers import (
     infra,
     linked,
     maintenance,
+    mcp_endpoint,
+    mcp_oauth,
     notifications,
     portainer,
     proxy_hosts,
@@ -360,6 +363,9 @@ def create_app() -> FastAPI:
     app.include_router(events.router)
     app.include_router(stacks.router)
     app.include_router(approvals.router)
+    app.include_router(assistants.router)
+    app.include_router(mcp_endpoint.router)
+    app.include_router(mcp_oauth.router)
     app.include_router(system.router)
     app.include_router(display.router)
     app.include_router(notifications.router)

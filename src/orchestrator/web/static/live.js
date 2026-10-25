@@ -43,7 +43,7 @@
     state.source = src;
     src.addEventListener("hello", () => { state.connected = true; dot(true); });
     src.onerror = () => { state.connected = false; dot(false); }; // the browser retries
-    for (const topic of ["run", "health", "audit", "alert", "registry"]) {
+    for (const topic of ["run", "health", "audit", "alert", "registry", "mcp"]) {
       src.addEventListener(topic, (ev) => {
         let data = {};
         try { data = JSON.parse(ev.data || "{}"); } catch (e) { /* a hint without data */ }

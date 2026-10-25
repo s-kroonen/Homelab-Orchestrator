@@ -47,7 +47,9 @@
 {% block scripts %}
 <script>
   const inviteToken = {{ invite_token | tojson }};
-  const nextUrl = new URLSearchParams(location.search).get("next") || "/";
+  // Only a path on this site: "?next=https://elsewhere" or "//elsewhere" must not carry a login away.
+  const wanted = new URLSearchParams(location.search).get("next") || "/";
+  const nextUrl = wanted.startsWith("/") && !wanted.startsWith("//") && !wanted.startsWith("/\\") ? wanted : "/";
 
   function setMsg(id, text, kind) {
     const el = document.getElementById(id);

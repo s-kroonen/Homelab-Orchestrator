@@ -401,6 +401,17 @@ class Settings(BaseSettings):
     #: How admins reach this dashboard from their phone/browser, for the links in alerts
     #: (falls back to ORCHESTRATOR_PUBLIC_URL, which is the gateway-side address).
     external_url: str = ""
+    # ---- MCP server: an AI assistant's eye on the server space (docs/mcp.md) -----
+    #: Serve /mcp and its OAuth endpoints. false = they answer 404.
+    mcp_enabled: bool = True
+    #: Lifetime of an access token; the client refreshes it with its refresh token.
+    mcp_access_ttl_s: int = 3600
+    #: A connection nobody used for this long stops working (each refresh extends it).
+    mcp_refresh_ttl_days: int = 90
+    #: How long a request that needs a human stays open for approval.
+    mcp_approval_ttl_min: int = 60
+    #: Hosts whose Client ID Metadata Documents are fetched (comma-separated). Claude's own.
+    mcp_cimd_hosts: str = "claude.ai,claude.com"
     # ---- Controllers: acting on one service itself (docs/controllers.md) ------
     portainer_url: str = ""
     portainer_api_key: SecretStr = SecretStr("")
