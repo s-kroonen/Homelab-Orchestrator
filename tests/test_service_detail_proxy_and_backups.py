@@ -106,7 +106,7 @@ def test_service_page_hides_guest_power_row_when_service_has_no_guest(
     assert 'guest-power-row").hidden = !hasGuest' in page.text
 
 
-def test_service_page_renders_tablist_and_four_panels_with_counts(client: TestClient) -> None:
+def test_service_page_renders_tablist_and_five_panels_with_counts(client: TestClient) -> None:
     node = _make_node(client)
     svc = _make_service(client, node["id"], slug="media")
     for name in ("web", "port"):
@@ -129,12 +129,12 @@ def test_service_page_renders_tablist_and_four_panels_with_counts(client: TestCl
     assert page.status_code == 200, page.text
     html = page.text
     assert 'role="tablist"' in html
-    for tab in ("overview", "probes", "proxy-hosts", "backups"):
+    for tab in ("overview", "probes", "proxy-hosts", "backups", "stack"):
         assert f'id="tab-{tab}" data-tab="{tab}"' in html
         assert f'aria-controls="panel-{tab}"' in html
         assert f'role="tabpanel" id="panel-{tab}" aria-labelledby="tab-{tab}"' in html
-    assert html.count('role="tab" class="tab"') == 4
-    assert html.count('class="tabpanel" role="tabpanel"') == 4
+    assert html.count('role="tab" class="tab"') == 5
+    assert html.count('class="tabpanel" role="tabpanel"') == 5
     assert '<span class="tab-count" id="probes-count">2</span>' in html
     assert '<span class="tab-count" id="proxy-hosts-count">1</span>' in html
     # Overview is selected server-side; the others start hidden until the JS

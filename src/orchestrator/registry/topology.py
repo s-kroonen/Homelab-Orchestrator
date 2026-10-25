@@ -72,6 +72,7 @@ def _service_node(
         "group": svc.group,
         "ip": ip,
         "controller": str((svc.controller or {}).get("type", "")),
+        "deploy": bool(svc.deploy) and bool(svc.deploy.get("enabled", True)),
         "recovery": bool(svc.recovery) and bool(svc.recovery.get("enabled", True)),
         "backup_gate": svc.backup_gate.value if svc.parent_id is not None else "",
         "probes": {

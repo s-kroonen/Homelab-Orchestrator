@@ -175,6 +175,20 @@ PROBE_SPECS: dict[ProbeKind, ProbeKindSpec] = {
             ),
         ),
     ),
+    ProbeKind.PORTAINER: ProbeKindSpec(
+        summary="Portainer stack or container — running, none unhealthy (no SSH needed)",
+        suggested_name="portainer",
+        default_timeout_s=15,
+        caution=(
+            "Says the containers are up and their own health checks pass - not that the "
+            "application behind them answers. Pair it with an HTTP probe for that."
+        ),
+        fields=(
+            FieldSpec("endpoint", "Portainer environment number", required=True, parse=int),
+            FieldSpec("stack", "Stack name (or leave blank and give a container)", default=None),
+            FieldSpec("container", "Container name (when not a stack)", default=None),
+        ),
+    ),
     ProbeKind.DB_MARIADB: ProbeKindSpec(
         summary="MariaDB integrity — mariadb-check plus a single-transaction dump",
         suggested_name="mariadb-integrity",
@@ -354,6 +368,7 @@ def kinds_by_menu_order() -> list[ProbeKind]:
         ProbeKind.MQTT,
         ProbeKind.SYSTEMD,
         ProbeKind.DOCKER_PROJECT,
+        ProbeKind.PORTAINER,
         ProbeKind.DB_MARIADB,
         ProbeKind.DB_REDIS,
         ProbeKind.DB_MONGO,

@@ -49,15 +49,20 @@ from orchestrator.web.routers import (
     backup_policies,
     bulk,
     dashboard,
+    deploys,
     display,
     geo_traffic,
     health,
+    hooks,
     infra,
+    linked,
     maintenance,
     notifications,
+    portainer,
     proxy_hosts,
     push,
     setup,
+    stacks,
     system,
     traffic,
     ui,
@@ -346,10 +351,15 @@ def create_app() -> FastAPI:
     app.include_router(proxy_hosts.catalog_router)
     app.include_router(bulk.router)
     app.include_router(actions.router)
+    app.include_router(linked.router)
+    app.include_router(deploys.router)
+    app.include_router(hooks.router)
+    app.include_router(stacks.router)
     app.include_router(approvals.router)
     app.include_router(system.router)
     app.include_router(display.router)
     app.include_router(notifications.router)
+    app.include_router(portainer.router)
     app.include_router(push.router)
     app.include_router(map_page.router)
     app.include_router(activity.router)

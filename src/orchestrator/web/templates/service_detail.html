@@ -34,6 +34,9 @@
       <span class="tab-count" id="proxy-hosts-count">{{ service.proxy_hosts|length }}</span></button>
     <button type="button" role="tab" class="tab" id="tab-backups" data-tab="backups"
             aria-controls="panel-backups" aria-selected="false" tabindex="-1">Backups</button>
+    <button type="button" role="tab" class="tab" id="tab-stack" data-tab="stack"
+            aria-controls="panel-stack" aria-selected="false" tabindex="-1">On / off &amp; deploys
+      <span class="badge unknown" id="stack-tab-state" hidden></span></button>
   </div>
 
   <div class="tabpanel" role="tabpanel" id="panel-overview" aria-labelledby="tab-overview" tabindex="0">
@@ -425,6 +428,167 @@
     </table>
   </section>
   </div>
+
+  <div class="tabpanel" role="tabpanel" id="panel-stack" aria-labelledby="tab-stack" tabindex="0" hidden>
+  <section id="onoff">
+    <h2>On / off <span class="badge unknown" id="ls-state">…</span></h2>
+    <p class="msg">
+      What is really running, read from Traefik Manager, Portainer and Proxmox right now. The
+      switch below acts on all of it: off takes the proxy hosts out first, then stops the stack;
+      on starts the stack, waits for it, then serves the proxy hosts. Anything below this
+      service goes first when switching off.
+    </p>
+    <p class="msg" id="ls-drift"></p>
+    <div class="table-scroll">
+    <table>
+      <thead><tr><th>Linked thing</th><th>Now</th><th>Detail</th><th></th></tr></thead>
+      <tbody id="ls-body"><tr><td colspan="4" class="muted">Loading…</td></tr></tbody>
+    </table>
+    </div>
+    <div class="row">
+      <button id="ls-on">Switch on</button>
+      <button class="danger" id="ls-off">Switch off</button>
+      <button class="secondary" id="ls-apply-on" hidden title="Make every linked part match 'on'">Apply on</button>
+      <button class="secondary" id="ls-apply-off" hidden title="Make every linked part match 'off'">Apply off</button>
+      <button class="secondary" id="ls-refresh">Re-read</button>
+      <span class="msg" id="ls-msg"></span>
+    </div>
+    <div class="row">
+      <label class="inline" id="ls-guest-wrap" hidden><input type="checkbox" id="ls-guest"> also stop the Proxmox guest (asks every time)</label>
+      <label class="inline" id="ls-children-wrap" hidden><input type="checkbox" id="ls-children"> also start the sub-services that were on (otherwise they are only watched)</label>
+    </div>
+    <div class="row" id="ls-stack-controls" hidden>
+      <span class="msg">Stack in Portainer, without touching the proxy:</span>
+      <button class="secondary small" data-stack-action="start">Start</button>
+      <button class="secondary small" data-stack-action="stop">Stop</button>
+      <button class="secondary small" data-stack-action="restart">Restart</button>
+    </div>
+    <ol class="steps" id="ls-steps" aria-live="polite" hidden></ol>
+    <p class="msg">
+      The switch is recorded in <a href="/activity?kind=switch">Activity</a>. From a shell:
+      <code>orchestrator-cli service state {{ service.slug }}</code>,
+      <code>service disable {{ service.slug }}</code>, <code>service enable {{ service.slug }}</code>.
+    </p>
+  </section>
+
+  <section id="stack-hosts">
+    <h2>Proxy hosts</h2>
+    <p class="msg">The proxy hosts linked to this service. Linking one changes the route on the next push to Traefik Manager.</p>
+    <div id="ph-linked" class="checks"></div>
+    <div id="ph-cands-wrap" hidden>
+      <p class="msg">Proxy hosts that point at a port this stack publishes:</p>
+      <div id="ph-cands" class="checks"></div>
+    </div>
+    <div class="row">
+      <input id="ph-name" type="text" size="30" placeholder="any proxy host's name">
+      <label class="inline"><input type="checkbox" id="ph-force"> move it if it is on another service</label>
+      <button class="secondary" id="ph-link">Link</button>
+      <span class="msg" id="ph-msg"></span>
+    </div>
+  </section>
+
+  <section id="deploys">
+    <h2>Deploys</h2>
+    <p class="msg" id="dp-intro"></p>
+    <div id="dp-settings" hidden>
+      <div class="grid">
+        <label for="dp-preset">Guards</label>
+        <select id="dp-preset">
+          <option value="">(choose a starting point)</option>
+          <option value="none">none — redeploy and check the stack came up</option>
+          <option value="probes">probes — healthy before and after</option>
+          <option value="probes+backup">probes + a recent backup</option>
+        </select>
+        <label>Before the deploy</label>
+        <div>
+          <label class="inline"><input type="checkbox" id="dp-pre-probes"> probes must be healthy</label><br>
+          <label class="inline"><input type="checkbox" id="dp-backup"> a verified backup newer than</label>
+          <input type="number" id="dp-backup-age" min="1" value="24" style="width:5rem"> hours
+          <label class="inline"><input type="checkbox" id="dp-take" checked> take one when it is older</label>
+        </div>
+        <label>After the deploy</label>
+        <div>
+          <label class="inline"><input type="checkbox" id="dp-post-probes" checked> probes must turn healthy within</label>
+          <input type="number" id="dp-timeout" min="1" value="180" style="width:5rem"> s,
+          then stay healthy for <input type="number" id="dp-settle" min="0" value="30" style="width:5rem"> s
+        </div>
+        <label for="dp-onfail">If it fails</label>
+        <select id="dp-onfail">
+          <option value="notify">notify and leave it as it is</option>
+          <option value="stop">stop it (switch it off) and notify</option>
+          <option value="restore_backup">propose restoring the backup (needs your approval)</option>
+        </select>
+        <label>Redeploy</label>
+        <div>
+          <label class="inline"><input type="checkbox" id="dp-pull" checked> pull images</label>
+          <label class="inline"><input type="checkbox" id="dp-prune"> prune</label>
+          <label class="inline"><input type="checkbox" id="dp-enabled" checked> deploys allowed</label>
+        </div>
+        <label for="dp-hook">Webhook</label>
+        <div>
+          <select id="dp-hook">
+            <option value="">none (manual only)</option>
+            <option value="gitlab">GitLab</option><option value="github">GitHub</option><option value="generic">generic (a token)</option>
+          </select>
+          <input id="dp-branch" type="text" size="14" placeholder="branch (any)">
+        </div>
+      </div>
+      <div class="row">
+        <button id="dp-save">Apply deploy settings</button>
+        <button class="danger" id="dp-remove" hidden>Remove deploy method</button>
+        <span class="msg" id="dp-msg">Applies to the live registry; Save to YAML keeps it.</span>
+      </div>
+    </div>
+
+    <div id="dp-actions" hidden>
+      <div class="row">
+        <button id="dp-run">Redeploy now</button>
+        <button class="secondary" id="dp-guards">Run the guards only</button>
+        <button class="danger" id="dp-unguarded" title="Skips the checks before the deploy. Needs a reason; it is audited.">Redeploy without guards…</button>
+        <span class="msg" id="dp-run-msg"></span>
+      </div>
+      <ol class="steps" id="dp-steps" aria-live="polite" hidden></ol>
+    </div>
+
+    <div id="dp-hook-box" hidden>
+      <h3>Webhook</h3>
+      <p class="msg" id="dp-hook-text"></p>
+      <div class="row">
+        <button class="secondary" id="dp-hook-new">Create / replace the secret</button>
+        <button class="secondary" id="dp-hook-del" hidden>Remove the secret</button>
+      </div>
+      <div class="panel" id="dp-hook-secret" hidden>
+        <p class="msg ok">Copy the secret now. It is not stored where it can be shown again.</p>
+        <pre class="manual" id="dp-hook-secret-text"></pre>
+        <pre class="manual" id="dp-hook-setup"></pre>
+      </div>
+      <h3>GitHub pipeline</h3>
+      <p class="msg" id="gh-intro"></p>
+      <p class="msg error" id="gh-warn" hidden></p>
+      <div class="row">
+        <button class="secondary" id="gh-copy" type="button">Copy the block</button>
+        <label class="inline" title="Only possible right after the key was created. Never commit a key.">
+          <input type="checkbox" id="gh-inline" disabled> write the key into the block
+        </label>
+        <span class="msg" id="gh-msg"></span>
+      </div>
+      <pre class="manual" id="gh-block"></pre>
+    </div>
+
+    <h3>History</h3>
+    <div class="table-scroll">
+    <table>
+      <thead><tr><th>Started</th><th>From</th><th>Result</th><th></th></tr></thead>
+      <tbody id="dp-history"><tr><td colspan="4" class="muted">Loading…</td></tr></tbody>
+    </table>
+    </div>
+    <p class="msg">
+      Deploys are in <a href="/activity?kind=deploy">Activity</a> too. From a shell:
+      <code>orchestrator-cli deploy run {{ service.slug }}</code>, <code>deploy guards</code>,
+      <code>deploy history</code>, <code>deploy set</code>, <code>deploy webhook</code>.
+    </p>
+  </section>
+  </div>
 {% endblock %}
 {% block extra_head %}
 <style>
@@ -467,6 +631,9 @@
   .tabpanel:focus { outline: none; }
   .tabpanel:focus-visible { outline: 1px dashed #2a2f3a; outline-offset: 4px; }
   .checks { display: flex; flex-wrap: wrap; gap: 0.4rem 1rem; }
+  .chip { font-size: 0.8rem; padding: 0.15rem 0.5rem; border-radius: 0.8rem; background: #1b2232; color: #c7cfdb; white-space: nowrap; }
+  .chip button { margin-left: 0.3rem; }
+  pre.manual { background: #11151d; padding: 0.6rem 0.8rem; border-radius: 0.4rem; font-size: 0.8rem; overflow-x: auto; }
   textarea.json { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; min-height: 10rem; }
   .panel { border: 1px solid #2a2f3a; border-radius: 0.5rem; padding: 1rem; margin-bottom: 1rem; }
   .panel h3 { font-size: 0.9rem; margin: 0 0 0.75rem; }
@@ -1691,6 +1858,7 @@
     if (active && /^(INPUT|TEXTAREA|SELECT)$/.test(active.tagName)) return true;
     if (svcFormDirty || reqFormDirty) return true;
     if (backupInFlight) return true;
+    if (window.StackPanel && window.StackPanel.busy()) return true;
     if (!$("probe-editor").hidden) return true;
     return false;
   }
@@ -1699,4 +1867,5 @@
     location.reload();
   }, 60000);
 </script>
+<script src="/static/stack_panel.js"></script>
 {% endblock %}

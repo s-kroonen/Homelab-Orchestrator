@@ -35,12 +35,16 @@ or not) and every service and sub-service, and announces CHANGES:
 * UNKNOWN ("we could not look") is never announced.
 
 Pipelines add **backup_failed** and **wake_failed**; the recovery loop adds
-**recovery_attempt / recovery_succeeded / recovery_exhausted** and **restore_proposed**.
+**recovery_attempt / recovery_succeeded / recovery_exhausted** and **restore_proposed**. Stacks
+linked to Portainer add **switch_failed**, **outside_change** (a linked thing was changed outside
+the orchestrator), and for deploys **deploy_blocked**, **deploy_failed**, **deploy_succeeded**
+and **deploy_outside** - see [portainer_deploys.md](portainer_deploys.md).
 
 ## Rules
 
 With **no rules**, `failed`, `down`, `recovered`, `flapping`, `backup_failed`, `wake_failed`,
-`recovery_succeeded`, `recovery_exhausted` and `restore_proposed` go to every channel
+`recovery_succeeded`, `recovery_exhausted`, `restore_proposed`, `switch_failed`, `outside_change`,
+`deploy_blocked` and `deploy_failed` go to every channel
 (`recovery_attempt` stays in the feed unless a rule asks for it). A rule narrows or routes: levels
 (`node` / `guest` / `service` / `sub`), scope (services, groups, nodes), events, the
 least severity (`info` < `warn` < `error` < `critical`) and channels. An empty list

@@ -120,6 +120,7 @@ def write_yaml_file(path: Path, registry: RegistryFile) -> str:
             ("parent", None),
             ("controller", {}),
             ("recovery", {}),
+            ("deploy", {}),
             ("backup_gate", "ignore"),
         ):
             if svc.get(key, default) == default:
@@ -194,6 +195,7 @@ def _spec_from_db(session: Session) -> RegistryFile:
                 backup_policy=policy_name,
                 controller=dict(svc.controller or {}),
                 recovery=dict(svc.recovery or {}),
+                deploy=dict(svc.deploy or {}),
                 backup_gate=svc.backup_gate,
                 ip_address=svc.ip_address or "",
                 probes=[
@@ -367,6 +369,13 @@ def validate_references(parsed: RegistryFile) -> None:
                 normalize_policy(svc.recovery)
             except ValueError as exc:
                 problems.append(f"service {svc.slug!r} recovery: {exc}")
+        if svc.deploy:
+            from orchestrator.deploy.policy import check_target, normalize_deploy
+
+            try:
+                check_target(normalize_deploy(svc.deploy), svc.controller or {})
+            except ValueError as exc:
+                problems.append(f"service {svc.slug!r} deploy: {exc}")
         if svc.parent is not None:
             if svc.parent == svc.slug:
                 problems.append(f"service {svc.slug!r} is its own parent")
@@ -554,6 +563,7 @@ def reconcile_yaml_into_db(session: Session, path: Path) -> RegistryFile:
         svc.guest_id = spec.guest_id
         svc.controller = dict(spec.controller)
         svc.recovery = dict(spec.recovery)
+        svc.deploy = dict(spec.deploy)
         svc.backup_gate = spec.backup_gate
         svc.enabled = spec.enabled
         svc.backup_excluded = spec.backup_excluded

@@ -79,6 +79,7 @@ class ProbeKind(StrEnum):
     SYSTEMD = "systemd"  # ssh + `systemctl is-active`
     MQTT = "mqtt"  # observe a topic within a window
     DOCKER_PROJECT = "docker_project"  # all containers in a compose project healthy
+    PORTAINER = "portainer"  # a Portainer stack or container: running, none unhealthy
     DB_REDIS = "db_redis"  # BGSAVE + redis-check-rdb on the dump
     DB_MONGO = "db_mongo"  # mongodump validate (WiredTiger)
     DB_SQLITE = "db_sqlite"  # PRAGMA integrity_check on a copy
@@ -95,6 +96,9 @@ class PipelineKind(StrEnum):
     BACKUP = "backup"
     RESTORE = "restore"
     SCAN = "scan"
+    #: enable/disable of a service and everything linked to it (docs/portainer_deploys.md)
+    SWITCH = "switch"
+    DEPLOY = "deploy"
 
 
 class PipelineStatus(StrEnum):

@@ -53,6 +53,12 @@ EVENTS = (
     "update_succeeded",
     "update_rolled_back",
     "update_failed",
+    "switch_failed",
+    "outside_change",
+    "deploy_succeeded",
+    "deploy_failed",
+    "deploy_blocked",
+    "deploy_outside",
     "test",
 )
 SEVERITIES = ("info", "warn", "error", "critical")
@@ -70,6 +76,10 @@ DEFAULT_EVENTS = (
     "update_succeeded",
     "update_rolled_back",
     "update_failed",
+    "switch_failed",
+    "outside_change",
+    "deploy_failed",
+    "deploy_blocked",
     "recovery_succeeded",
     "recovery_exhausted",
     "restore_proposed",

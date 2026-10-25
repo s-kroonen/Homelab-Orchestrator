@@ -208,6 +208,9 @@ class Service(SQLModel, table=True):
     controller: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))
     # Limited automatic recovery. {} = off. See orchestrator.recovery.
     recovery: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))
+    # How the linked Portainer stack is redeployed and what guards it. {} = no deploy
+    # method. Orchestrator-only: the stack itself lives in Portainer. See orchestrator.deploy.
+    deploy: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))
     # For a sub-service: does its root's backup wait for it? IGNORE (default) or
     # REQUIRED (healthy before the dump; started first if stopped).
     backup_gate: BackupGate = Field(default=BackupGate.IGNORE)

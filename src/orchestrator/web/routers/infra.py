@@ -115,6 +115,61 @@ async def power_checks(session: Session, adapters: Any) -> list[dict[str, Any]]:
     return rows
 
 
+async def portainer_checks(adapters: Any) -> list[dict[str, Any]]:
+    """Portainer's own check (reachable, key accepted, version) plus one row per Docker
+    environment it manages. Empty when Portainer is not configured: it is optional."""
+    adapter = getattr(adapters, "portainer", None)
+    if adapter is None or not adapter.configured:
+        return []
+    check = await adapter.check()
+    if not check.ok:
+        return [
+            {
+                "target": "portainer",
+                "reachable": check.reachable,
+                "error": check.detail,
+                "kind": "unreachable" if not check.reachable else "refused",
+            }
+        ]
+    rows: list[dict[str, Any]] = [
+        {"target": "portainer", "reachable": True, "ok": True, "result": {"detail": check.detail}}
+    ]
+    try:
+        envs = await adapter.list_environments()
+    except AdapterError as exc:
+        return [
+            *rows,
+            {
+                "target": "portainer:environments",
+                "reachable": False,
+                "error": str(exc),
+                "kind": "unreachable",
+            },
+        ]
+    for env in envs:
+        label = f"portainer:env {env.id} ({env.name})"
+        if env.status == "down":
+            rows.append(
+                {
+                    "target": label,
+                    "reachable": False,
+                    "error": "Portainer reports this environment as down",
+                    "kind": "unreachable",
+                }
+            )
+        else:
+            running = f", {env.running} running" if env.running is not None else ""
+            rows.append(
+                {
+                    "target": label,
+                    "reachable": True,
+                    "ok": True,
+                    "result": {"detail": f"{env.type}, {env.status}{running}"},
+                }
+            )
+    return rows
+
+
 #: Bounds the whole power check (the MQTT adapter waits on its own too).
 _POWER_CHECK_TIMEOUT_S = 15.0
 
@@ -184,6 +239,7 @@ async def infra_status(
             datastore,
             *await node_checks(session, adapters),
             *await power_checks(session, adapters),
+            *await portainer_checks(adapters),
         ],
     }
 
