@@ -157,8 +157,8 @@ configured to run. Admin-only.
 
 The original collector, `TrafficCollector`, still runs when
 `TRAEFIK_API_URL` is set. Its samples are no longer what `/traffic` draws
-(the access-log rollups are), but it keeps feeding the wake-on-hit stand-in
-below. Traefik Manager does not proxy `/metrics`, so this path needs direct
+(the access-log rollups are), but it can also feed the wake-on-hit stand-in
+below - which no longer needs it: the access-log collector wakes on new lines for a host as well. Traefik Manager does not proxy `/metrics`, so this path needs direct
 access to Traefik's API.
 
 ### Required on the Traefik side
@@ -274,6 +274,19 @@ exactly as unconditional as they are today. Wake-on-hit runs are recorded
 with `actor="traefik_hit"` in the audit trail / `PipelineRun` history, so
 they're distinguishable from `actor="api"` (manual/API) and
 `actor="scheduler"` (backups).
+
+### Two sources, one decision
+
+Wake-on-hit works without `TRAEFIK_API_URL`: every poll of the **access log** (the collector behind
+`/traffic`) treats a new line for a proxy host with `wake_on_hit` on as a hit, and the Prometheus
+collector does the same when its request counter goes up. Both go through one function
+(`pipelines/wake_on_hit.py`) with the gate below, so a hit seen by both starts one wake
+(`WakePipeline.get_or_start` refuses a second run while one is running or inside
+`WAKE_RETRY_COOLDOWN_S`). The access-log collector's status (the strip on the traffic pages,
+`GET /api/traffic/collector-status`) lists the services it woke in `woken`. Latency is up to one
+poll interval (`ACCESS_LOG_POLL_INTERVAL_S`). A request the orchestrator itself makes through the
+proxy host (an HTTP probe on the public name) is a hit like any other: a service that is down
+and probed through its proxy host is woken by its own probe if the three switches allow it.
 
 ### The three-way gate
 

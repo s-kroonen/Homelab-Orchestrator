@@ -170,10 +170,10 @@ every other optional integration here. Once it's set:
   and puts it back afterwards (policy option `restore_power_state`, default on; never
   anything that was already on, never while another hold exists). See
   [backup_wake.md](backup_wake.md).
-- **Follow-up: wake-on-hit from the access log.** The wake-on-hit stand-in
-  still rides on the Prometheus `TrafficCollector`, so it only works with
-  `TRAEFIK_API_URL` set. The access-log collector sees the same "new traffic
-  on a proxy host" signal and could drive it too.
+- ~~**Follow-up: wake-on-hit from the access log.**~~ **Done.** The access-log
+  collector now drives wake-on-hit too (shared decision in
+  `pipelines/wake_on_hit.py`), so it works without `TRAEFIK_API_URL`. See
+  [traffic_metrics.md](traffic_metrics.md#two-sources-one-decision).
 
 ## Done: guest gate (DOWN)
 

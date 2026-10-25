@@ -63,6 +63,8 @@ from orchestrator.config import AdapterMode, Settings
 from orchestrator.db.models import GeoTrafficSample, ProxyHost, Setting, TrafficRollup
 from orchestrator.db.session import session_scope
 from orchestrator.logging_setup import get_logger
+from orchestrator.pipelines.wake import WakePipeline
+from orchestrator.pipelines.wake_on_hit import maybe_wake
 from orchestrator.registry.access_log import AccessLogEntry, normalize_router_name, parse_lines
 from orchestrator.registry.geoip import GeoIP
 from orchestrator.registry.traefik_status import fetch_router_details
@@ -241,6 +243,7 @@ def _empty_status(now: datetime) -> dict[str, Any]:
         "unmatched_routers": [],
         "rollups_written": 0,
         "geo_samples_written": 0,
+        "woken": [],
     }
 
 
@@ -253,6 +256,10 @@ class AccessLogCollector:
         self._adapters = adapters
         self._geoip = GeoIP(settings)
         self._scheduler = AsyncIOScheduler()
+        # Wake-on-hit from the same lines (see _wake_on_hit); needs the power + Proxmox adapters.
+        self._wake_pipeline = WakePipeline(
+            power=adapters.power, proxmox=adapters.proxmox, settings=settings
+        )
 
     # -- lifecycle -------------------------------------------------------
 
@@ -442,6 +449,8 @@ class AccessLogCollector:
             if self._settings.geoip_enabled:
                 status["geo_samples_written"] = self._store_geo(session, new_matched)
 
+            status["woken"] = self._wake_on_hit(session, new_matched)
+
             _save_setting(
                 session, CURSOR_SETTING_KEY, _advance_cursor(entries, cursor).to_setting()
             )
@@ -461,6 +470,34 @@ class AccessLogCollector:
             rollups=status["rollups_written"],
             geo=status["geo_samples_written"],
         )
+
+    def _wake_on_hit(
+        self, session: Session, entries: list[tuple[AccessLogEntry, ProxyHost | None]]
+    ) -> list[str]:
+        """New access-log lines for a proxy host are a hit on it: wake the service behind it when
+        the gates allow (``ProxyHost.wake_on_hit`` AND the service's AND the node's switch, see
+        :mod:`orchestrator.pipelines.wake_on_hit`). This is the same stand-in the Prometheus
+        collector provides, for installs that have no ``TRAEFIK_API_URL``. A failure here never
+        affects the rollups. Returns the slugs a wake was started for."""
+        hosts: dict[int, ProxyHost] = {}
+        for _entry, ph in entries:
+            if ph is not None and ph.id is not None and ph.wake_on_hit:
+                hosts[ph.id] = ph
+        woken: list[str] = []
+        for ph in hosts.values():
+            try:
+                slug = maybe_wake(session, self._wake_pipeline, ph, source="access_log")
+            except Exception as exc:  # pragma: no cover - defensive
+                log.error(
+                    "access_log_collector.wake_on_hit_crashed",
+                    proxy_host=ph.hostname,
+                    error=str(exc),
+                    error_type=type(exc).__name__,
+                )
+                continue
+            if slug:
+                woken.append(slug)
+        return woken
 
     def _store_geo(
         self, session: Session, entries: list[tuple[AccessLogEntry, ProxyHost | None]]

@@ -52,21 +52,19 @@ from sqlmodel import Session, desc, select
 
 from orchestrator.adapters.factory import AdapterBundle
 from orchestrator.config import Settings
-from orchestrator.db.models import Node, ProxyHost, Service, ServiceState, TrafficSample
+from orchestrator.db.models import ProxyHost, TrafficSample
 from orchestrator.db.session import session_scope
-from orchestrator.domain.enums import HealthState, WakeTrigger
 from orchestrator.logging_setup import get_logger
-from orchestrator.pipelines.wake import WakeError, WakePipeline
+from orchestrator.pipelines.wake import WakePipeline
+from orchestrator.pipelines.wake_on_hit import WAKE_ON_HIT_ACTOR, maybe_wake
 from orchestrator.registry.traefik_status import fetch_router_details, fetch_router_metrics
-from orchestrator.web.wake_support import fire_background
 
 log = get_logger(__name__)
 
 _JOB_ID = "traefik-traffic-poll"
 
-#: Actor recorded on PipelineRun / audit rows for this path, distinguishing it
-#: from actor="api" (the manual/API wake) and actor="scheduler" (backups).
-WAKE_ON_HIT_ACTOR = "traefik_hit"
+# WAKE_ON_HIT_ACTOR lives with the shared decision (pipelines/wake_on_hit.py); re-exported here.
+__all__ = ["WAKE_ON_HIT_ACTOR", "TrafficCollector"]
 
 
 def hostname_to_proxy_host(session: Session) -> dict[str, ProxyHost]:
@@ -227,93 +225,16 @@ class TrafficCollector:
         previous_total: int | None,
         current_total: int,
     ) -> None:
-        """Fire the wake pipeline for this poll's ``proxy_host`` when the
-        three-way gate, the "already down" check and the "new traffic this
-        poll" check all say so. See the module docstring for the design.
-
-        Dedup/cooldown is NOT reinvented here — ``WakePipeline.get_or_start``
-        already refuses to start a second run while one is RUNNING, or
-        within ``WAKE_RETRY_COOLDOWN_S`` of the last one finishing, which is
-        exactly what keeps repeated hits during an outage from spamming wake
-        attempts. This method only decides WHETHER to call it at all.
-        """
+        """Wake the service behind ``proxy_host`` when this poll saw NEW traffic on it and the
+        gates in :mod:`orchestrator.pipelines.wake_on_hit` allow it."""
         if self._wake_pipeline is None:
-            return  # no AdapterBundle given — wake-on-hit is inert.
-
-        if not proxy_host.wake_on_hit:
-            return
-
-        # A brand-new host has nothing to compare against yet; a decrease
-        # means Traefik's own counter reset (it restarted), which is "no
-        # delta available," never "negative traffic" — see TrafficSample's
-        # docstring. Either way, no NEW traffic is confirmed this poll.
+            return  # no AdapterBundle given - wake-on-hit is inert.
+        # A brand-new host has nothing to compare against yet; a decrease means Traefik's own
+        # counter reset (it restarted), which is "no delta available", never "negative traffic" -
+        # see TrafficSample's docstring. Either way, no NEW traffic is confirmed this poll.
         if previous_total is None or current_total <= previous_total:
             return
-
-        if proxy_host.service_id is None:
-            return
-        service = session.get(Service, proxy_host.service_id)
-        if service is None or service.id is None or not service.wake_on_hit_enabled:
-            return
-        if service.wake_trigger is not WakeTrigger.CALL:
-            return  # a Start-button service is never woken by traffic alone
-
-        if service.node_id is None:
-            return
-        node = session.get(Node, service.node_id)
-        if node is None or not node.wake_on_hit_enabled:
-            return
-
-        if not self._is_down(session, service):
-            return
-
-        try:
-            run, started_new = self._wake_pipeline.get_or_start(
-                session, service.slug, actor=WAKE_ON_HIT_ACTOR
-            )
-        except WakeError as exc:
-            # Disabled service, no node, etc. — nothing to do; the manual
-            # wake path would hit the same error, this just never surfaces
-            # it to anyone.
-            log.warning(
-                "traffic_collector.wake_on_hit_skipped",
-                service=service.slug,
-                proxy_host=proxy_host.hostname,
-                error=str(exc),
-            )
-            return
-
-        if started_new:
-            log.info(
-                "traffic_collector.wake_on_hit_triggered",
-                service=service.slug,
-                proxy_host=proxy_host.hostname,
-                run_id=run.id,
-            )
-            fire_background(self._wake_pipeline, run, service.slug, actor=WAKE_ON_HIT_ACTOR)
-
-    @staticmethod
-    def _is_down(session: Session, service: Service) -> bool:
-        """ "Down" for wake-on-hit purposes: a definite FAILED verdict, or no
-        verdict has ever been recorded at all (the service has never been
-        scanned, so there is no evidence it is up — safe to try, and
-        ``get_or_start``'s cooldown stops this from being tried repeatedly).
-
-        Deliberately NOT true for an existing UNKNOWN verdict: that can mean
-        a blocked dependency, a probe/transport config error, or a transient
-        network blip unrelated to the node's power state — treating it as
-        "down" would auto-wake services on signals that have nothing to do
-        with whether the node is actually off, which is a much higher-cost
-        mistake here than for the backup gate UNKNOWN already serves (no
-        backup vs. an unwanted power-on + guest start).
-
-        DOWN (the guest gate: node offline or guest not running) counts too —
-        it is the most direct evidence there is that a wake is what's needed.
-        """
-        state = session.get(ServiceState, service.id)
-        if state is None:
-            return True
-        return state.last_verdict in (HealthState.FAILED, HealthState.DOWN)
+        maybe_wake(session, self._wake_pipeline, proxy_host, source="prometheus")
 
     def _prune(self, session: Session) -> None:
         """Delete samples older than ``TRAEFIK_METRICS_RETENTION_DAYS``. Run as

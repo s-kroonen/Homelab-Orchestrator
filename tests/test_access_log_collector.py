@@ -1090,3 +1090,86 @@ def test_flag_emoji_helper() -> None:
 def test_traffic_pages_link_to_each_other(client: TestClient) -> None:
     assert 'href="/traffic/geo"' in client.get("/traffic").text
     assert 'href="/traffic"' in client.get("/traffic/geo").text
+
+
+# ---------------------------------------------------------------------------
+# wake-on-hit from the access log (no TRAEFIK_API_URL / Prometheus needed)
+# ---------------------------------------------------------------------------
+
+
+def _wake_starts() -> list[Any]:
+    from orchestrator.db.models import AuditEntry
+
+    with Session(get_engine()) as s:
+        return list(s.exec(select(AuditEntry).where(AuditEntry.action == "wake.start")).all())
+
+
+def _hit_setup(session: Session, service: Service, **ph_flags: Any) -> None:
+    ph = ProxyHost(hostname="app.example.com", service_id=service.id, **ph_flags)
+    session.add(ph)
+    session.commit()
+
+
+async def test_a_hit_on_a_down_service_wakes_it(session: Session, service: Service) -> None:
+    from orchestrator.db.models import ServiceState
+    from orchestrator.domain.enums import HealthState
+    from orchestrator.pipelines.wake_on_hit import WAKE_ON_HIT_ACTOR
+
+    session.add(ServiceState(service_id=service.id, last_verdict=HealthState.FAILED))
+    _hit_setup(session, service, wake_on_hit=True)
+    collector, _ = _collector([_line("10.0.0.9", f"{_D}:42:00 +0000")], geoip=False)
+
+    status = await collector.poll_once()
+
+    assert status["woken"] == ["thing"]
+    (start,) = _wake_starts()
+    assert start.actor == WAKE_ON_HIT_ACTOR and start.target == "service:thing"
+    # the same lines again are not new traffic: nothing more happens
+    again = await collector.poll_once()
+    assert again["woken"] == [] and len(_wake_starts()) == 1
+
+
+@pytest.mark.parametrize("why", ["host_off", "service_off", "node_off", "button", "up"])
+async def test_the_gates_still_apply(session: Session, service: Service, why: str) -> None:
+    from orchestrator.db.models import Node, ServiceState
+    from orchestrator.domain.enums import HealthState, WakeTrigger
+
+    svc = session.get(Service, service.id)
+    assert svc is not None
+    state = HealthState.HEALTHY if why == "up" else HealthState.FAILED
+    session.add(ServiceState(service_id=svc.id, last_verdict=state))
+    if why == "service_off":
+        svc.wake_on_hit_enabled = False
+    if why == "button":
+        svc.wake_trigger = WakeTrigger.BUTTON
+    if why == "node_off":
+        node = session.get(Node, svc.node_id)
+        assert node is not None
+        node.wake_on_hit_enabled = False
+        session.add(node)
+    session.add(svc)
+    _hit_setup(session, service, wake_on_hit=why != "host_off")
+    collector, _ = _collector([_line("10.0.0.9", f"{_D}:42:00 +0000")], geoip=False)
+
+    status = await collector.poll_once()
+
+    assert status["woken"] == [] and _wake_starts() == []
+    assert status["matched"] == 1  # the rollups are written regardless
+
+
+async def test_a_wake_that_cannot_start_never_breaks_the_rollups(
+    session: Session, service: Service, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from orchestrator.pipelines import wake_on_hit
+
+    def boom(*_a: Any, **_k: Any) -> None:
+        raise RuntimeError("no power adapter")
+
+    monkeypatch.setattr(wake_on_hit.WakePipeline, "get_or_start", boom)
+    _hit_setup(session, service, wake_on_hit=True)
+    collector, _ = _collector([_line("10.0.0.9", f"{_D}:42:00 +0000")], geoip=False)
+
+    status = await collector.poll_once()
+
+    assert status["ok"] is True and status["woken"] == []
+    assert len(_rollups()) == 1
