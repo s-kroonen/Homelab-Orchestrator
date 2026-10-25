@@ -1874,7 +1874,29 @@
     if (!$("probe-editor").hidden) return true;
     return false;
   }
+  // Live: reload when something about THIS service (or one under it) changed - a run, a verdict,
+  // an edit - instead of on a timer. The 60 s timer stays as the fallback when the stream is not
+  // connected (a proxy that buffers it) and a slow safety net when it is (changes made by the CLI
+  // run in another process, which cannot push).
+  const relevant = (d) => d.service_id === undefined || d.service_id === null || d.service_id === SERVICE.id
+    || (SERVICE.children || []).some((c) => c.id === d.service_id);
+  let liveTimer = null;
+  function liveReload() {
+    if (shouldSkipAutoReload()) { liveTimer = setTimeout(liveReload, 5000); return; }
+    location.reload();
+  }
+  if (window.OrchLive) {
+    OrchLive.on(["run", "health", "registry"], (d) => {
+      if (!relevant(d)) return;
+      clearTimeout(liveTimer);
+      liveTimer = setTimeout(liveReload, 500);
+    }, { wait: 1500 });
+  }
+  let quiet = 0;
   setInterval(() => {
+    quiet += 60;
+    if (window.OrchLive && OrchLive.connected && quiet < 600) return;
+    quiet = 0;
     if (shouldSkipAutoReload()) return;
     location.reload();
   }, 60000);

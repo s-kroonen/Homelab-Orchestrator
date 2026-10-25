@@ -29,6 +29,7 @@ from orchestrator import __version__
 from orchestrator.adapters.factory import build_adapters
 from orchestrator.config import get_settings
 from orchestrator.db.session import build_engine, session_scope
+from orchestrator.events import install_db_hooks
 from orchestrator.logging_setup import configure_logging, get_logger
 from orchestrator.notify import hooks as notify_hooks
 from orchestrator.notify.engine import NotificationEngine
@@ -51,6 +52,7 @@ from orchestrator.web.routers import (
     dashboard,
     deploys,
     display,
+    events,
     geo_traffic,
     health,
     hooks,
@@ -107,6 +109,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     configure_logging()
     log = get_logger(__name__)
     settings = get_settings()
+    install_db_hooks()  # committed writes -> live-update events (orchestrator/events.py)
 
     log.info(
         "orchestrator.start",
@@ -354,6 +357,7 @@ def create_app() -> FastAPI:
     app.include_router(linked.router)
     app.include_router(deploys.router)
     app.include_router(hooks.router)
+    app.include_router(events.router)
     app.include_router(stacks.router)
     app.include_router(approvals.router)
     app.include_router(system.router)

@@ -480,6 +480,15 @@
   $("m-refresh").addEventListener("click", load);
   $("drawer-close").addEventListener("click", closeDrawer);
   window.addEventListener("resize", () => { if (state.view === "boxes") { drawEdges(); wireHover(); } });
-  setInterval(() => { if (!document.hidden) load(); }, 30000);
+  // Live: re-read when a verdict, a run or the registry changed; the timer is the fallback when the
+  // stream is not connected and a slow safety net when it is.
+  if (window.OrchLive) OrchLive.on(["run", "health", "registry"], () => { if (!document.hidden) load(); }, { wait: 1500 });
+  let quiet = 0;
+  setInterval(() => {
+    quiet += 30;
+    if (window.OrchLive && OrchLive.connected && quiet < 300) return;
+    quiet = 0;
+    if (!document.hidden) load();
+  }, 30000);
   load();
 })();

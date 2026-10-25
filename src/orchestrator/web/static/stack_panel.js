@@ -373,4 +373,15 @@
   loadHosts();
   loadHistory();
   loadHook();
+
+  // Live: a deploy, a switch or a health change on this service (or below it) refreshes the state
+  // table and the history without a reload; busy() keeps the page's own reload away meanwhile.
+  if (window.OrchLive) {
+    const mine = new Set([SERVICE.id, ...(SERVICE.children || []).map((c) => c.id)]);
+    OrchLive.on(["run", "health", "registry"], (d) => {
+      if (d.service_id !== undefined && d.service_id !== null && !mine.has(d.service_id)) return;
+      loadLinked();
+      loadHistory();
+    }, { wait: 800 });
+  }
 })();
