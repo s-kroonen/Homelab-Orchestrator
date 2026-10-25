@@ -686,7 +686,11 @@ def test_metadata_documents_are_only_fetched_from_trusted_hosts(client: TestClie
     from orchestrator.mcp.store import OAuthError
 
     settings = config_module.get_settings()
-    for bad in ("https://evil.example/client.json", "https://169.254.169.254/x", "https://claude.ai/"):
+    for bad in (
+        "https://evil.example/client.json",
+        "https://169.254.169.254/x",
+        "https://claude.ai/",
+    ):
         with pytest.raises(OAuthError):
             asyncio.run(cimd.fetch_client_metadata(settings, bad))
 
@@ -718,7 +722,9 @@ def test_cli_approves_a_waiting_request(client: TestClient) -> None:
     from orchestrator.cli import cli
 
     got = connect(client, ["read", "control", "propose"])
-    call(client, got["access_token"], "guest_power", {"node": "pve1", "vmid": 101, "action": "stop"})
+    call(
+        client, got["access_token"], "guest_power", {"node": "pve1", "vmid": 101, "action": "stop"}
+    )
     token = _only_request(client)["request_id"]
     runner = CliRunner()
     assert token in runner.invoke(cli, ["mcp", "requests"]).output
