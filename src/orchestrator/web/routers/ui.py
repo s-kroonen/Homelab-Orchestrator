@@ -531,7 +531,16 @@ def _policy_form_context(session: Session) -> dict[str, Any]:
     list of modes."""
     services = session.exec(select(Service).order_by(Service.slug)).all()
     return {
-        "services": [{"slug": s.slug, "group": s.group} for s in services],
+        "services": [
+            {
+                "slug": s.slug,
+                "group": s.group,
+                # never backed up (e.g. the VM hosting the PBS datastore): not selectable
+                "excluded": s.backup_excluded,
+                "reason": s.backup_excluded_reason,
+            }
+            for s in services
+        ],
         "requirable": _requirable_services(session),
         "groups": sorted({s.group for s in services if s.group}),
         "modes": [m.value for m in BackupMode],

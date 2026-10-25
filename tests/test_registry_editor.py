@@ -86,7 +86,8 @@ def test_editing_preserves_comments(registry: Path) -> None:
 def test_unrelated_fields_survive_an_update(registry: Path) -> None:
     """Updating one field must not reset the others."""
     editor = RegistryEditor(registry)
-    editor.upsert_service("haos", {"backup_excluded": True})
+    # excluding takes it out of its policy: that is the one rule it may not break
+    editor.upsert_service("haos", {"backup_excluded": True, "backup_policy": None})
     editor.save()
 
     reloaded = RegistryEditor(registry)
@@ -94,7 +95,13 @@ def test_unrelated_fields_survive_an_update(registry: Path) -> None:
     assert svc["backup_excluded"] is True
     assert svc["guest_id"] == 111  # untouched
     assert svc["name"] == "Home Assistant"
-    assert svc["backup_policy"] == "daily-frequent"
+
+
+def test_an_excluded_service_cannot_be_saved_inside_a_policy(registry: Path) -> None:
+    editor = RegistryEditor(registry)
+    editor.upsert_service("haos", {"backup_excluded": True})  # still in daily-frequent
+    with pytest.raises(RegistryEditError, match="cannot be in a policy"):
+        editor.save()
 
 
 def test_invalid_edit_is_refused_before_touching_disk(registry: Path) -> None:

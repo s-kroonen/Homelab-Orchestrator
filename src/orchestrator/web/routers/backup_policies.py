@@ -17,7 +17,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, ConfigDict
-from sqlmodel import Session, select
+from sqlmodel import Session, col, select
 
 from orchestrator.audit import log as audit
 from orchestrator.db.models import BackupPolicy, BackupRecord, Service
@@ -153,6 +153,19 @@ def _validate_services(session: Session, services: Any) -> list[str]:
     missing = [s for s in services if s not in known]
     if missing:
         raise _bad(f"services references unknown service(s): {missing}")
+    excluded = session.exec(
+        select(Service).where(
+            col(Service.slug).in_(services), col(Service.backup_excluded).is_(True)
+        )
+    ).all()
+    if excluded:
+        listed = "; ".join(
+            f"{s.slug} ({s.backup_excluded_reason or 'no reason recorded'})" for s in excluded
+        )
+        raise _bad(
+            f"cannot be in a backup policy - never backed up: {listed}. Un-exclude the service "
+            "first if that is wrong."
+        )
     return services
 
 

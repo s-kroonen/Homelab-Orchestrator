@@ -88,6 +88,9 @@
       </fieldset>
       <fieldset>
         <legend>Target services</legend>
+        {% if services|selectattr("excluded")|list %}
+        <p class="msg">Services marked <em>never back up</em> (for example the VM that hosts the PBS storage) cannot be chosen: a backup of them is refused. They can still be woken for a backup through <em>requires</em> above.</p>
+        {% endif %}
         {% if groups %}
         <div class="row" id="group-select-row">
           <span class="muted">Select group:</span>
@@ -99,8 +102,8 @@
         {% endif %}
         <div class="services">
           {% for svc in services %}
-          <label class="inline"><input type="checkbox" name="svc" value="{{ svc.slug }}" data-group="{{ svc.group }}"
-            {% if policy and svc.slug in policy.services %}checked{% endif %}> {{ svc.slug }}{% if svc.group %} <span class="muted">({{ svc.group }})</span>{% endif %}</label>
+          <label class="inline"{% if svc.excluded %} title="Never backed up: {{ svc.reason or 'excluded' }}"{% endif %}><input type="checkbox" name="svc" value="{{ svc.slug }}" data-group="{{ svc.group }}"
+            {% if svc.excluded %}disabled{% elif policy and svc.slug in policy.services %}checked{% endif %}> {{ svc.slug }}{% if svc.group %} <span class="muted">({{ svc.group }})</span>{% endif %}{% if svc.excluded %} <span class="badge disabled">never backed up</span>{% endif %}</label>
           {% else %}<span class="muted">No services registered.</span>{% endfor %}
         </div>
       </fieldset>
@@ -202,7 +205,7 @@
   for (const btn of document.querySelectorAll("[data-select-group]")) {
     btn.addEventListener("click", () => {
       const grp = btn.dataset.selectGroup;
-      const boxes = [...document.querySelectorAll(`input[name=svc][data-group="${grp}"]`)];
+      const boxes = [...document.querySelectorAll(`input[name=svc][data-group="${grp}"]:not(:disabled)`)];
       if (!boxes.length) return;
       const allChecked = boxes.every((cb) => cb.checked);
       for (const cb of boxes) cb.checked = !allChecked;

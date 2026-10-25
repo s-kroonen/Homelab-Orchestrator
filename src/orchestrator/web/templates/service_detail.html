@@ -1627,6 +1627,7 @@
     $("run-backup-btn").title = names.length
       ? `Wakes first, in order: ${names.join(", ")} — and holds them awake until the backup finishes`
       : "Backs up without waking anything";
+    if ($("f-backup-excluded").checked) return;  // the "never back up" note stays
     $("run-backup-hint").textContent = wakes.length
       ? `Run backup now will wake, in order: ${names.join(" → ")} (nodes already on are left alone).`
       : "";
@@ -1830,6 +1831,17 @@
   }
 
   fillServiceForm(SERVICE);
+  // A service that is never backed up cannot be in a backup policy, and cannot be backed up.
+  function syncExcluded() {
+    const ex = $("f-backup-excluded").checked;
+    if (ex) $("f-policy").value = "";
+    $("f-policy").disabled = ex;
+    $("f-policy").title = ex ? "Never backed up, so it cannot be in a backup policy" : "";
+    $("run-backup-btn").disabled = ex || backupInFlight;
+    if (ex) $("run-backup-hint").textContent = "This service is marked never back up" + ($("f-backup-reason").value ? " (" + $("f-backup-reason").value + ")" : "") + ": a backup of it is refused.";
+  }
+  $("f-backup-excluded").addEventListener("change", syncExcluded);
+  syncExcluded();
   fillRequirements(SERVICE);
   loadPlan();
   renderProbes();

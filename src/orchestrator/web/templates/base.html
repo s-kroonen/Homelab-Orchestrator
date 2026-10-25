@@ -78,7 +78,9 @@
   </div>
 
 <script src="/static/app.js"></script>
-<script src="/static/pwa.js" defer></script>
+{# Not deferred: pages (notifications) call OrchPush from their own inline scripts, which run
+   before a deferred script would. It only registers listeners, so loading it here is cheap. #}
+<script src="/static/pwa.js"></script>
 <script>
   (() => {
     const sb = document.querySelector(".sidebar");

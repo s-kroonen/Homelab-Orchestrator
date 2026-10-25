@@ -338,8 +338,13 @@ def _parent_problems(parents: dict[str, str | None]) -> list[str]:
     return problems
 
 
-def validate_references(parsed: RegistryFile) -> None:
-    """Check every cross-reference inside the file resolves within the file."""
+def validate_references(parsed: RegistryFile, *, strict: bool = False) -> None:
+    """Check every cross-reference inside the file resolves within the file.
+
+    ``strict`` (what an edit must pass before it is saved) also refuses putting a
+    ``backup_excluded`` service in a backup policy; loading an existing file only warns
+    about that and lets the exclusion win, so a file written before the guard still starts.
+    """
     node_names = {n.name for n in parsed.nodes}
     policy_names = {p.name for p in parsed.backup_policies}
     slugs = {s.slug for s in parsed.services}
@@ -424,6 +429,24 @@ def validate_references(parsed: RegistryFile) -> None:
     cycle = _find_dependency_cycle({s.slug: list(s.depends_on) for s in parsed.services})
     if cycle:
         problems.append("depends_on forms a cycle: " + " -> ".join(cycle))
+
+    if strict:
+        excluded_slugs = {s.slug: s for s in parsed.services if s.backup_excluded}
+        for svc in excluded_slugs.values():
+            if svc.backup_policy:
+                problems.append(
+                    f"service {svc.slug!r} is backup_excluded ({svc.backup_excluded_reason or 'no reason'}) "
+                    f"but is in backup policy {svc.backup_policy!r}: a service that is never backed up "
+                    "cannot be in a policy - remove backup_policy from it"
+                )
+        for pol in parsed.backup_policies:
+            for slug in (pol.targets or {}).get("services") or []:
+                if slug in excluded_slugs:
+                    problems.append(
+                        f"backup policy {pol.name!r} targets {slug!r}, which is backup_excluded "
+                        f"({excluded_slugs[slug].backup_excluded_reason or 'no reason'}): "
+                        "remove it from the targets"
+                    )
 
     problems += requires_problems(
         service_requires={s.slug: list(s.backup_requires) for s in parsed.services},
@@ -574,7 +597,8 @@ def reconcile_yaml_into_db(session: Session, path: Path) -> RegistryFile:
         svc.backup_requires = clean_slug_list(spec.backup_requires)
         svc.ip_address = spec.ip_address
         svc.node_id = node.id
-        svc.backup_policy_id = policy.id if policy else None
+        # backup_excluded wins over a policy that (against the rules) still names the service
+        svc.backup_policy_id = policy.id if policy and not spec.backup_excluded else None
         svc.updated_at = datetime.now(UTC)
         session.flush()  # need svc.id for children
 

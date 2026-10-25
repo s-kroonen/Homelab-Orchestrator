@@ -52,6 +52,15 @@ A required service may be `backup_excluded` — the storage VM usually is, becau
 it hosts the pool PBS lives on. That is fine and expected: exclusion stops it
 being *backed up*, not being *woken*.
 
+**A `backup_excluded` service can never be in a policy** (TrueNAS, or whatever hosts the PBS
+storage): the policy form shows it greyed out as "never backed up", the API and the bulk
+"set policy" action refuse to put it in one or to name it in a policy's targets, the CLI/editor
+refuses to save a file that does, and a scheduled run never resolves it as a target. Marking a
+service as excluded takes it out of the policy it was in. (A file written before this rule still
+loads - the exclusion wins and a warning is logged - but it cannot be saved again until the
+contradiction is removed.) The backup pipeline itself still refuses it unconditionally, with no
+override.
+
 ### Previewing it
 
 ```bash

@@ -35,7 +35,7 @@ from typing import Any
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
-from sqlmodel import Session, select
+from sqlmodel import Session, col, select
 
 from orchestrator.adapters.errors import AdapterError, AdapterUnreachable, TaskTimeout
 from orchestrator.adapters.factory import AdapterBundle
@@ -85,7 +85,21 @@ def resolve_targets(session: Session, policy: BackupPolicy) -> list[str]:
         )
     # dict.fromkeys: dedupe, keep explicit-first order (an operator listing
     # slugs in targets is also stating the order they want them run in).
-    return list(dict.fromkeys([*explicit, *attached]))
+    slugs = list(dict.fromkeys([*explicit, *attached]))
+    if not slugs:
+        return slugs
+    # A service marked backup_excluded (the VM hosting the PBS datastore, say) is never a
+    # target, whatever a policy still says: the backup pipeline would only refuse it, every run.
+    excluded = set(
+        session.exec(
+            select(Service.slug).where(
+                col(Service.slug).in_(slugs), col(Service.backup_excluded).is_(True)
+            )
+        ).all()
+    )
+    for slug in excluded:
+        log.warning("scheduler.target_excluded", policy=policy.name, service=slug)
+    return [s for s in slugs if s not in excluded]
 
 
 class BackupScheduler:
