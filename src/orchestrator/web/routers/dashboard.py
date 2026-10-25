@@ -123,6 +123,7 @@ class ServiceCreate(_Body):
     controller: dict[str, Any] = Field(default_factory=dict)
     recovery: dict[str, Any] = Field(default_factory=dict)
     deploy: dict[str, Any] = Field(default_factory=dict)
+    dump: dict[str, Any] = Field(default_factory=dict)
     backup_gate: str = BackupGate.IGNORE.value
     guest_kind: str = GuestKind.NONE.value
     guest_id: int | None = None
@@ -157,6 +158,7 @@ class ServiceUpdate(_Body):
     controller: dict[str, Any] | None = None
     recovery: dict[str, Any] | None = None
     deploy: dict[str, Any] | None = None
+    dump: dict[str, Any] | None = None
     #: "ignore" or "required" - see Service.backup_gate.
     backup_gate: str | None = None
     depends_on: list[str] | None = None
@@ -352,6 +354,7 @@ def service_detail(session: Session, svc: Service) -> dict[str, Any]:
         "controller": dict(svc.controller or {}),
         "recovery": dict(svc.recovery or {}),
         "deploy": dict(svc.deploy or {}),
+        "dump": dict(svc.dump or {}),
         "backup_gate": svc.backup_gate.value,
         "recovery_state": _recovery_state(session, svc),
         "backup_policy_id": svc.backup_policy_id,
@@ -454,6 +457,17 @@ def _check_deploy(raw: Any, controller: dict[str, Any]) -> dict[str, Any]:
     except ValueError as exc:
         raise _bad_request(str(exc)) from None
     return deploy
+
+
+def _check_dump(raw: Any, controller: dict[str, Any]) -> dict[str, Any]:
+    from orchestrator.dumps.policy import check_target, normalize_dump
+
+    try:
+        dump = normalize_dump(_check_json_object(raw, "dump"))
+        check_target(dump, controller)
+    except ValueError as exc:
+        raise _bad_request(str(exc)) from None
+    return dump
 
 
 def _check_controller(raw: Any) -> dict[str, Any]:
@@ -933,6 +947,7 @@ async def create_service(
         controller=_check_controller(body.controller),
         recovery=_check_recovery(body.recovery),
         deploy=_check_deploy(body.deploy, _check_controller(body.controller)),
+        dump=_check_dump(body.dump, _check_controller(body.controller)),
         backup_gate=_parse_backup_gate(body.backup_gate),
         guest_kind=guest_kind,
         guest_id=body.guest_id,
@@ -997,6 +1012,11 @@ def apply_service_update(
         # A deploy needs a Portainer stack link, so check the pair as it will be saved.
         changes["deploy"] = _check_deploy(
             changes.get("deploy", svc.deploy),
+            changes.get("controller", svc.controller or {}),
+        )
+    if "dump" in changes or "controller" in changes:
+        changes["dump"] = _check_dump(
+            changes.get("dump", svc.dump),
             changes.get("controller", svc.controller or {}),
         )
     if "backup_gate" in changes:

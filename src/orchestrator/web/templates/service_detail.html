@@ -588,6 +588,65 @@
       <code>deploy history</code>, <code>deploy set</code>, <code>deploy webhook</code>.
     </p>
   </section>
+
+  <section id="dumps" hidden>
+    <h2>Dumps <span class="badge unknown" id="du-state" hidden></span></h2>
+    <p class="msg" id="du-intro"></p>
+    <div id="du-settings">
+      <div class="grid">
+        <label for="du-type">What is it</label>
+        <select id="du-type">
+          <option value="postgres">PostgreSQL</option>
+          <option value="mysql">MySQL</option>
+          <option value="mariadb">MariaDB</option>
+          <option value="mongo">MongoDB</option>
+          <option value="sqlite">SQLite file</option>
+          <option value="command">Other (a command)</option>
+        </select>
+        <label for="du-db" id="du-db-label">Database</label>
+        <input id="du-db" type="text" placeholder="blank = every database">
+        <label for="du-path" id="du-path-label" hidden>Database file</label>
+        <input id="du-path" type="text" placeholder="/data/app.db" hidden>
+        <label for="du-command" id="du-command-label" hidden>Command</label>
+        <textarea id="du-command" rows="2" placeholder="runs in the container; its output is the dump" hidden></textarea>
+        <label for="du-container">Container</label>
+        <input id="du-container" type="text" placeholder="blank = this service's own container">
+        <label for="du-schedule">Schedule</label>
+        <input id="du-schedule" type="text" placeholder="0 3 * * *  (blank = only when you press the button)">
+        <label>Keep</label>
+        <div>the newest <input type="number" id="du-keep" min="1" value="7" style="width:5rem"> dumps,
+          nothing older than <input type="number" id="du-days" min="0" value="0" style="width:5rem"> days (0 = no limit)</div>
+        <label></label>
+        <label class="inline"><input type="checkbox" id="du-enabled" checked> dumps allowed</label>
+      </div>
+      <div class="row">
+        <button id="du-save">Apply dump settings</button>
+        <button class="danger" id="du-remove" hidden>Remove dump settings</button>
+        <span class="msg" id="du-msg">Applies to the live registry; Save to YAML keeps it.</span>
+      </div>
+    </div>
+    <div id="du-actions" hidden>
+      <div class="row">
+        <button id="du-run">Dump now</button>
+        <span class="msg" id="du-run-msg"></span>
+      </div>
+      <ol class="steps" id="du-steps" aria-live="polite" hidden></ol>
+      <h3>Files</h3>
+      <p class="msg" id="du-where"></p>
+      <div class="table-scroll">
+      <table>
+        <thead><tr><th>Taken</th><th>Size</th><th>Checked</th><th></th></tr></thead>
+        <tbody id="du-files"><tr><td colspan="4" class="muted">Loading…</td></tr></tbody>
+      </table>
+      </div>
+      <details><summary>Putting a dump back (on the Docker host)</summary><pre class="manual" id="du-restore"></pre>
+        <p class="msg">A restore overwrites live data, so it is a command you run on purpose, not a button.</p></details>
+    </div>
+    <p class="msg">
+      From a shell: <code>orchestrator-cli dump run {{ service.slug }}</code>, <code>dump list</code>,
+      <code>dump set</code>. See docs/dumps.md.
+    </p>
+  </section>
   </div>
 {% endblock %}
 {% block extra_head %}
@@ -1902,4 +1961,5 @@
   }, 60000);
 </script>
 <script src="/static/stack_panel.js"></script>
+<script src="/static/dumps_panel.js"></script>
 {% endblock %}

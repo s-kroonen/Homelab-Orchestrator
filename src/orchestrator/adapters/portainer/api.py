@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import ssl
 import time
+from collections.abc import Callable
 from typing import Any
 
 import httpx
@@ -27,6 +28,7 @@ from orchestrator.adapters.portainer.base import (
     ContainerDetail,
     ContainerStats,
     Environment,
+    ExecResult,
     LogLine,
     PortainerAdapter,
     PortainerCheck,
@@ -43,6 +45,8 @@ log = get_logger(__name__)
 #: are served from memory. Logs and stats are never cached.
 CACHE_TTL_S = 5.0
 _MAX_TAIL = 2000
+#: How much of a command's stderr is kept.
+_STDERR_KEEP = 2000
 
 
 def _is_tls_failure(exc: BaseException) -> bool:
@@ -448,6 +452,81 @@ class LivePortainerAdapter(PortainerAdapter):
         )
         self.invalidate()
         return f"{verb} sent to container {ref}"
+
+    async def exec_stream(
+        self,
+        endpoint_id: int,
+        ref: str,
+        cmd: list[str],
+        sink: Callable[[bytes], None],
+        *,
+        timeout_s: float = 1800.0,
+    ) -> ExecResult:
+        self._writable()
+        if not self.configured:
+            raise AdapterNotConfigured(
+                "Portainer is not configured - set PORTAINER_URL and PORTAINER_API_KEY"
+            )
+        cid = await self._resolve(endpoint_id, ref)
+        if cid is None:
+            raise AdapterRequestError(
+                f"no container {ref!r} on Portainer environment {endpoint_id}"
+            )
+        base = f"/api/endpoints/{endpoint_id}/docker"
+        created = (
+            await self._request(
+                f"{base}/containers/{cid}/exec",
+                method="POST",
+                json={"AttachStdout": True, "AttachStderr": True, "Tty": False, "Cmd": cmd},
+            )
+        ).json()
+        exec_id = str((created or {}).get("Id") or "")
+        if not exec_id:
+            raise AdapterRequestError("Portainer did not return an exec id")
+        if self._client is None:
+            await self.start()
+        assert self._client is not None
+        demux = parse.FrameDemux()
+        errors = bytearray()
+        total = 0
+
+        def take(frames: list[tuple[str, bytes]]) -> None:
+            nonlocal total
+            for stream, payload in frames:
+                if stream == "stderr":
+                    errors.extend(payload)
+                    del errors[:-_STDERR_KEEP]
+                else:
+                    total += len(payload)
+                    sink(payload)
+
+        try:
+            async with self._client.stream(
+                "POST",
+                f"{base}/exec/{exec_id}/start",
+                json={"Detach": False, "Tty": False},
+                timeout=httpx.Timeout(self._timeout, read=timeout_s),
+            ) as response:
+                if response.status_code >= 400:
+                    body = (await response.aread()).decode("utf-8", "replace")[:200]
+                    raise AdapterRequestError(
+                        f"Portainer answered {response.status_code} starting the command: {body}",
+                        status_code=response.status_code,
+                    )
+                async for chunk in response.aiter_raw():
+                    take(demux.feed(chunk))
+            take(demux.finish())
+        except httpx.TimeoutException as exc:
+            raise AdapterUnreachable(f"Portainer timed out while the command ran: {exc}") from exc
+        except httpx.TransportError as exc:
+            raise AdapterUnreachable(f"Portainer connection dropped mid-command: {exc}") from exc
+        info = await self._json(f"{base}/exec/{exec_id}/json", cache=False)
+        code = (info or {}).get("ExitCode")
+        return ExecResult(
+            exit_code=int(code) if isinstance(code, int) else None,
+            stderr=errors.decode("utf-8", "replace").strip(),
+            stdout_bytes=total,
+        )
 
     async def list_containers(
         self, endpoint_id: int, *, stack: str | None = None, include_stopped: bool = True

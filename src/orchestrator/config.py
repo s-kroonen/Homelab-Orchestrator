@@ -401,6 +401,11 @@ class Settings(BaseSettings):
     #: How admins reach this dashboard from their phone/browser, for the links in alerts
     #: (falls back to ORCHESTRATOR_PUBLIC_URL, which is the gateway-side address).
     external_url: str = ""
+    # ---- Dumps: a database backed up on its own (docs/dumps.md) --------------------
+    #: Where dump files are kept; blank = <STATE_DIR>/dumps. Point it at a mount (NFS) to keep
+    #: them off this host.
+    dump_dir: str = ""
+
     # ---- MCP server: an AI assistant's eye on the server space (docs/mcp.md) -----
     #: Serve /mcp and its OAuth endpoints. false = they answer 404.
     mcp_enabled: bool = True

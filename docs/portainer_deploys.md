@@ -247,8 +247,7 @@ start with `stack stop` / `start` of a throwaway stack.
 
 ## Not built (kept possible)
 
-* Backups of a **sub-service on its own** (a database dump through Portainer's exec) - the guest
-  is the unit today.
+* ~~Backups of a sub-service on its own~~ - built as **dumps**, see [dumps.md](dumps.md).
 * `redeploy_previous`, GitLab pipelines reporting back, a second Portainer / redundant replicas
   (controllers can name an `instance` later without a rewrite), and rules for what a parent
   coming back should start.

@@ -211,6 +211,9 @@ class Service(SQLModel, table=True):
     # How the linked Portainer stack is redeployed and what guards it. {} = no deploy
     # method. Orchestrator-only: the stack itself lives in Portainer. See orchestrator.deploy.
     deploy: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))
+    # How this service's own data is dumped (a database inside a Portainer container). {} = no
+    # dump. See orchestrator.dumps and docs/dumps.md.
+    dump: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))
     # For a sub-service: does its root's backup wait for it? IGNORE (default) or
     # REQUIRED (healthy before the dump; started first if stopped).
     backup_gate: BackupGate = Field(default=BackupGate.IGNORE)
@@ -598,6 +601,31 @@ class BackupRecord(SQLModel, table=True):
     verified: bool = Field(default=False)
     verified_at: datetime | None = None
     protected: bool = Field(default=False, index=True)  # the known-good pin
+    created_at: datetime = Field(default_factory=_utcnow, index=True)
+
+
+class DumpRecord(SQLModel, table=True):
+    """One dump file of a service's own data (docs/dumps.md). The file lives under
+    ``DUMP_DIR``; ``path`` is relative to it."""
+
+    __tablename__ = "dump_record"
+
+    id: int | None = Field(default=None, primary_key=True)
+    service_id: int | None = Field(
+        default=None,
+        sa_column=Column(ForeignKey("service.id", ondelete="SET NULL")),
+    )
+    service_slug: str = Field(index=True)
+    pipeline_run_id: int | None = Field(
+        default=None,
+        sa_column=Column(ForeignKey("pipeline_run.id", ondelete="SET NULL")),
+    )
+    path: str
+    kind: str = ""
+    size_bytes: int = 0
+    sha256: str = ""
+    verified: bool = False
+    protected: bool = Field(default=False, index=True)
     created_at: datetime = Field(default_factory=_utcnow, index=True)
 
 

@@ -611,6 +611,17 @@ ENV_SECTIONS: tuple[EnvSection, ...] = (
         ),
     ),
     EnvSection(
+        "dumps",
+        "Dumps (docs/dumps.md)",
+        (
+            EnvKey(
+                "DUMP_DIR",
+                "Where a service's own database dumps are kept. Blank = STATE_DIR/dumps.\n"
+                "Mount a share here to keep them off this host.",
+            ),
+        ),
+    ),
+    EnvSection(
         "mcp",
         "MCP server (docs/mcp.md)",
         (

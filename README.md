@@ -104,6 +104,7 @@ off-container,
 adopt / create / delete, guarded deploys and the deploy webhook,
 [docs/pwa_push.md](docs/pwa_push.md) for installing the app and push notifications,
 [docs/live_updates.md](docs/live_updates.md) for pages that update as things change (Server-Sent Events),
+[docs/dumps.md](docs/dumps.md) for dumping a database on its own (through Portainer), kept and checked,
 [docs/mcp.md](docs/mcp.md) for connecting Claude (MCP over OAuth): roles, tokens, history and human approval of dangerous requests,
 [docs/system.md](docs/system.md) for backups, restore, schema upgrades,
 updating (one command or one click, with automatic rollback if the new version does not come up) and

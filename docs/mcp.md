@@ -56,9 +56,9 @@ may not use is not even listed to the assistant.
 
 * **read**: `orchestrator_status`, `list_services`, `get_service`, `service_health_history`,
   `linked_state`, `recent_activity`, `list_backups`, `backup_plan`, `list_runs`, `get_run`,
-  `deploy_history`, `infra_status`, `list_nodes`, `list_guests`, `list_proxy_hosts`,
+  `deploy_history`, `list_dumps`, `infra_status`, `list_nodes`, `list_guests`, `list_proxy_hosts`,
   `portainer_stacks`, `portainer_containers`, `container_logs` (secrets redacted), `get_request`.
-* **act** (runs at once, logged, audited as `mcp:<connection>`): `run_backup`, `propose_restore`,
+* **act** (runs at once, logged, audited as `mcp:<connection>`): `run_backup`, `run_dump`, `propose_restore`,
   `deploy_service` (with its guards), `wake_service`, `node_power wake`, `switch_service`,
   `service_action`, `stack_action`, `container_action`, `guest_power start`.
 * **dangerous** (waits for a person, needs `propose`): `guest_power stop`, `node_power power_off` /

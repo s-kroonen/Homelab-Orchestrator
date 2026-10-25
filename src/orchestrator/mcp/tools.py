@@ -333,6 +333,16 @@ async def _container_logs(ctx: ToolContext, a: dict[str, Any]) -> Any:
     return out["lines"]
 
 
+async def _list_dumps(ctx: ToolContext, a: dict[str, Any]) -> Any:
+    from orchestrator.web.routers import dumps
+
+    if a.get("slug"):
+        out = await _call(dumps.get_dump(a["slug"], ctx.session, ctx.settings))
+        out.pop("restore_hint", None)
+        return out
+    return await dumps.all_dumps(ctx.session)
+
+
 async def _status(ctx: ToolContext, a: dict[str, Any]) -> Any:
     states = ctx.session.exec(select(ServiceState)).all()
     bad = [s for s in states if s.last_verdict is not HealthState.HEALTHY]
@@ -417,6 +427,14 @@ async def _run_backup(ctx: ToolContext, a: dict[str, Any]) -> Any:
         "next": "A backup takes a while (it may wake a node first). Poll get_run(run_id) or "
         f"list_runs(slug='{slug}', kind='backup').",
     }
+
+
+async def _run_dump(ctx: ToolContext, a: dict[str, Any]) -> Any:
+    from orchestrator.web.routers import dumps
+
+    out = await _call(dumps.run_dump(a["slug"], ctx.session, ctx.adapters, ctx.settings, ctx.admin))
+    out["next"] = "A dump takes seconds to minutes. Poll get_run(run_id)."
+    return {k: v for k, v in out.items() if k != "steps"}
 
 
 async def _deploy(ctx: ToolContext, a: dict[str, Any]) -> Any:
@@ -755,6 +773,15 @@ TOOLS: dict[str, Tool] = {
             ("endpoint_id", "container"),
         ),
         Tool(
+            "list_dumps",
+            "List dumps",
+            "The database dumps kept for services that are dumped on their own: how many, how "
+            "big, the newest good one, the schedule. With a slug: that service's files and last run.",
+            "read",
+            _list_dumps,
+            {"slug": SLUG},
+        ),
+        Tool(
             "get_request",
             "Check a request",
             "The state of a dangerous request you made earlier (waiting / approved / denied / "
@@ -778,6 +805,18 @@ TOOLS: dict[str, Tool] = {
                 "verify": _b("Run a PBS verify after the dump (default true)"),
                 "wake": _b("Wake prerequisites and the target first (default true)"),
             },
+            ("slug",),
+            ACT,
+        ),
+        Tool(
+            "run_dump",
+            "Dump a database",
+            "Dump one service's own database now (its dump tool runs inside its container, the "
+            "output is compressed, checked and kept). Returns a run id; poll get_run. Refused "
+            "when the service has no dump configured, its node or container is off, or one is running.",
+            "backup",
+            _run_dump,
+            {"slug": SLUG},
             ("slug",),
             ACT,
         ),
