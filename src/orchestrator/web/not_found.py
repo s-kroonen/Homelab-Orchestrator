@@ -25,6 +25,8 @@ log = get_logger(__name__)
 
 _templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
 _SERVICE_PAGE = re.compile(r"^/services/([^/]+)/?$")
+_HOST_PAGE = re.compile(r"^/proxy-hosts/(\d+)/edit/?$")
+_POLICY_PAGE = re.compile(r"^/backup-policies/([^/]+)/edit/?$")
 #: Paths whose callers are not people looking at a dashboard.
 _NOT_PAGES = ("/api/", "/static/", "/mcp", "/oauth/", "/.well-known/", "/maintenance/", "/wake/")
 
@@ -41,21 +43,30 @@ async def not_found_handler(request: Request, exc: Exception) -> Response:
     if exc.status_code != 404 or not wants_page(request):
         return await http_exception_handler(request, exc)  # type: ignore[arg-type]
     path = request.url.path
-    match = _SERVICE_PAGE.match(path)
-    slug = match.group(1) if match else ""
+    kind, ref = "page", ""
+    if m := _SERVICE_PAGE.match(path):
+        kind, ref = arch.KIND_SERVICE, m.group(1)
+    elif m := _HOST_PAGE.match(path):
+        kind, ref = arch.KIND_PROXY_HOST, m.group(1)
+    elif m := _POLICY_PAGE.match(path):
+        kind, ref = arch.KIND_POLICY, m.group(1)
     context: dict[str, object] = {
         "admin": None,
         "path": path,
-        "slug": slug,
-        "kind": "service" if slug else "page",
+        "slug": ref,
+        "kind": kind,
         "archived": None,
     }
     try:
         with session_scope() as session:
             admin = get_current_admin(request, session)
             # Only a signed-in admin learns what used to exist.
-            if admin is not None and slug:
-                row = arch.latest_for(session, slug)
+            if admin is not None and ref:
+                row = (
+                    arch.latest_ref(session, kind, ref)
+                    if kind == arch.KIND_PROXY_HOST
+                    else arch.latest_for(session, ref, kind)
+                )
                 context["archived"] = arch.describe(row) if row is not None else None
             context["admin"] = {"username": admin.username} if admin is not None else None
     except Exception as exc2:  # the not-found page must never be the thing that breaks

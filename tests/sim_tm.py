@@ -51,7 +51,9 @@ class SimTM:
         runtime_only_resolvers: tuple[str, ...] = (),
         settings_status: int = 200,
         configs_status: int = 200,
+        middleware_names: tuple[str, ...] = ("redirect-to-https@file",),
     ):
+        self.middleware_names = middleware_names
         self.multi = multi
         self.config_dir = config_dir
         self.resolvers = resolvers
@@ -167,7 +169,9 @@ class SimTM:
                 },
             )
         if path == "/api/traefik/middlewares":
-            return httpx.Response(200, json={"http": [{"name": "redirect-to-https@file"}]})
+            return httpx.Response(
+                200, json={"http": [{"name": name} for name in self.middleware_names]}
+            )
         if path == "/api/traefik/routers":
             return httpx.Response(
                 200, json={"http": self._runtime(), "tcp": [], "udp": [], "reachable": True}

@@ -29,7 +29,7 @@ from orchestrator.adapters.errors import (
 from orchestrator.adapters.portainer.base import Container, PortainerAdapter, Stack
 from orchestrator.adapters.portainer.links import container_url, env_url, stack_url
 from orchestrator.db.models import Service
-from orchestrator.web.auth import get_current_admin, require_admin
+from orchestrator.web.auth import get_current_admin, login_redirect, require_admin
 from orchestrator.web.deps import AdaptersDep, SessionDep
 
 api = APIRouter(prefix="/api/portainer", tags=["portainer"], dependencies=[Depends(require_admin)])
@@ -315,5 +315,5 @@ async def container_stats(endpoint_id: int, ref: str, adapters: AdaptersDep) -> 
 async def portainer_page(request: Request, session: SessionDep) -> HTMLResponse | RedirectResponse:
     admin = get_current_admin(request, session)
     if admin is None:
-        return RedirectResponse("/login?next=/portainer", status_code=303)
+        return login_redirect(request)
     return _templates.TemplateResponse(request, "portainer.html", {"admin": admin})

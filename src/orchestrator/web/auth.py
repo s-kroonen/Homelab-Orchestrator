@@ -18,9 +18,11 @@ from __future__ import annotations
 import secrets
 from datetime import UTC, datetime
 from typing import Annotated, Any
+from urllib.parse import quote
 
 import webauthn
 from fastapi import Depends, HTTPException, Request, status
+from fastapi.responses import RedirectResponse
 from sqlmodel import Session, select
 from webauthn.authentication.verify_authentication_response import VerifiedAuthentication
 from webauthn.helpers.structs import (
@@ -71,6 +73,14 @@ def pop_challenge(request: Request) -> bytes:
     if raw is None:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "no ceremony in progress")
     return webauthn.helpers.base64url_to_bytes(raw)
+
+
+def login_redirect(request: Request) -> RedirectResponse:
+    """Send a signed-out visitor to the login page, remembering where they were going -
+    path and query (an alert's ``?node=eve1&vmid=101``). The ``#section`` part never reaches
+    the server; browsers carry it through the redirect, and the login page puts it back."""
+    target = request.url.path + (f"?{request.url.query}" if request.url.query else "")
+    return RedirectResponse(f"/login?next={quote(target, safe='/')}", status_code=303)
 
 
 def get_current_admin(request: Request, session: Session) -> Admin | None:

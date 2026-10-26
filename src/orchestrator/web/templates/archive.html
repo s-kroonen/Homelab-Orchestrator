@@ -4,14 +4,15 @@
   <section>
     <h2>Archive</h2>
     <p class="msg">
-      A deleted service waits here for <strong>30 days</strong> (<code>ARCHIVE_RETENTION_DAYS</code>) and can be
-      restored with its sub-services, probes and proxy hosts. After that it is gone for good. Backup
-      history, runs and health state are not part of it. Restored proxy hosts are not pushed to Traefik
-      Manager until the next Save.
+      A deleted service, proxy host or backup policy waits here for <strong>30 days</strong>
+      (<code>ARCHIVE_RETENTION_DAYS</code>) and can be restored. A service comes back with its sub-services,
+      probes and proxy hosts, a policy with the services that were in it. After that it is gone for good.
+      Backup history, runs and health state are not part of it. Restored proxy hosts are not pushed to
+      Traefik Manager until the next Save.
     </p>
     <div class="table-scroll">
     <table>
-      <thead><tr><th>Service</th><th>Deleted</th><th>By</th><th>Contents</th><th>Purged in</th><th></th></tr></thead>
+      <thead><tr><th>What</th><th>Deleted</th><th>By</th><th>Contents</th><th>Purged in</th><th></th></tr></thead>
       <tbody id="arch-body"><tr><td colspan="6">Loading…</td></tr></tbody>
     </table>
     </div>
@@ -35,10 +36,7 @@
       const who = document.createElement("strong"); who.textContent = r.name || r.slug;
       const slug = document.createElement("code"); slug.textContent = r.slug;
       const when = document.createElement("time"); when.dataset.ts = r.deleted_at; when.textContent = fmtTime(r.deleted_at);
-      const parts = [];
-      if (r.sub_services.length) parts.push(r.sub_services.length + " sub-service(s): " + r.sub_services.join(", "));
-      if (r.probes) parts.push(r.probes + " probe(s)");
-      if (r.proxy_hosts.length) parts.push(r.proxy_hosts.length + " proxy host(s): " + r.proxy_hosts.join(", "));
+      const kind = document.createElement("span"); kind.className = "muted"; kind.textContent = r.kind_label;
       const restore = document.createElement("button");
       restore.textContent = "Restore";
       restore.addEventListener("click", async () => {
@@ -53,12 +51,12 @@
       const purge = document.createElement("button");
       purge.className = "danger secondary small"; purge.textContent = "Delete now";
       purge.addEventListener("click", async () => {
-        if (!confirm(`Delete ${r.slug} for good? It cannot be restored afterwards.`)) return;
+        if (!confirm(`Delete ${r.kind_label.toLowerCase()} ${r.slug} for good? It cannot be restored afterwards.`)) return;
         try { await apiFetch("DELETE", `/api/archive/${r.id}`, undefined, { suppressToast: true }); load(); }
         catch (err) { setMsg(err.message, "error"); }
       });
-      tr.append(td(who, " ", slug), td(when), td(r.deleted_by || "—"),
-        td(parts.join(" · ") || "—"), td(r.days_left + " day(s)"), td(restore, " ", purge));
+      tr.append(td(kind, " ", who, " ", slug), td(when), td(r.deleted_by || "—"),
+        td(r.summary || "—"), td(r.days_left + " day(s)"), td(restore, " ", purge));
       return tr;
     }));
   }

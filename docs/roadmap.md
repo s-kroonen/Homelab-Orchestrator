@@ -309,7 +309,8 @@ but it should be made after hitting a concrete wall, not ahead of one.
 - [ ] Proxy hosts: show/edit a route's raw YAML from the orchestrator (TM `/api/routes/{id}/raw`) for options this form doesn't cover.
 
 - [x] Data sources page (`/sources`): Proxmox, addresses, Traefik Manager, Portainer - pull / import actions moved off the other pages; **Format routes** rewrites hand-written and migrated routes into the standard shape (plan, snapshot, verify, restore); new hosts default to the same standard. See docs/sources.md.
-- [ ] Format: try it against the real Traefik Manager; offer a one-click "format everything" once it has proven itself; HSTS as an option of the standard.
+- [x] Format: one-click "Format all", HSTS as an option (keep / add / remove) and per host (`hsts` route option, `TRAEFIK_HSTS_MIDDLEWARE`).
+- [ ] Format: try it against the real Traefik Manager (only the simulated one so far).
 - [x] Dumps: a database in a Portainer container dumped on its own (exec), compressed, verified, scheduled, retained, downloadable; `orchestrator-cli dump`; MCP `list_dumps` / `run_dump`. See docs/dumps.md.
 - [ ] Dumps: offer a dump when adopting a stack with a database container; copy dump files to PBS / a share; wake a node that is off before dumping.
 - [x] MCP server (`/mcp`, OAuth like Claude's connectors): roles and permissions per connection or personal token, a history page, and human approval for dangerous requests. See docs/mcp.md.

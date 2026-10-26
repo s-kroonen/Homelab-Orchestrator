@@ -120,7 +120,7 @@ class ProxyHostSpec(BaseModel):
             return {}
         if not isinstance(value, dict):
             return value
-        unknown = set(value) - set(RouteOptions().to_dict())
+        unknown = set(value) - set(RouteOptions(hsts=True).to_dict())
         if unknown:
             raise ValueError(f"unknown route_options key(s): {', '.join(sorted(unknown))}")
         normal = RouteOptions.from_dict(value).to_dict()

@@ -47,7 +47,7 @@ from orchestrator.config import Settings
 from orchestrator.domain.enums import AuditResult
 from orchestrator.registry.editor import RegistryEditError
 from orchestrator.setup.envfile import EnvFileError, default_values, read_env
-from orchestrator.web.auth import get_current_admin
+from orchestrator.web.auth import get_current_admin, login_redirect
 from orchestrator.web.deps import SessionDep, SettingsDep
 from orchestrator.web.routers.auth import _admin_count
 
@@ -252,7 +252,7 @@ async def setup_page(
     project_dir = _setup_dir_or_404(settings)
     actor = _actor(request, session)
     if actor is None:
-        return RedirectResponse("/login?next=/setup", status_code=303)
+        return login_redirect(request)
 
     values = default_values()
     # The browser is already talking to the dashboard's real hostname; offer it.

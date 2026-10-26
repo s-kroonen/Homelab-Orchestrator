@@ -82,3 +82,6 @@ passkey origin), so set it to the https address you use on your phone.
 
 If the service in an old alert has since been deleted, the link lands on a page that says so and
 offers to restore it from the [archive](archive.md).
+
+Signed out when you tap an alert? You are sent to the login page and, after the passkey, back to the
+same page *and* spot (`?node=…&vmid=…` and `#deploys` are both kept).

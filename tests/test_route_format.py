@@ -268,3 +268,78 @@ async def test_an_owned_route_in_the_wrong_file_is_moved_and_gets_its_redirect(
     (result,) = await rf.apply_plan(session, adapters, settings, plan, actor="t")
     assert result.ok, result.message
     assert sim.file_of("orchestrator-nas-example-com") == "thing.yml"
+
+
+# -- HSTS -----------------------------------------------------------------------------------------
+
+
+def test_hsts_is_off_by_default_and_never_changes_an_old_fingerprint() -> None:
+    from orchestrator.adapters.proxy.base import RouteOptions
+
+    assert "hsts" not in RouteOptions().to_dict()  # absent = off: saved hosts keep their hash
+    assert RouteOptions.from_dict({"hsts": True}).to_dict()["hsts"] is True
+    assert RouteOptions.from_dict({}).hsts is False
+    assert standard_options(None, redirect_available=True).hsts is False
+    assert standard_options(None, redirect_available=True, hsts=True).hsts is True
+    assert standard_options({"hsts": True}, redirect_available=True).hsts is True  # kept
+
+
+async def test_asking_for_hsts_adds_the_middleware_to_the_new_route(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, session: Session, service: Service
+) -> None:
+    sim, adapters, settings = _setup(
+        monkeypatch,
+        tmp_path,
+        session,
+        service,
+        middleware_names=("redirect-to-https@file", "hsts-headers@file"),
+    )
+    _old(sim, middlewares=("redirect-to-https", "auth-basic"))
+    ph = _host(session, service)
+    plan = await _plan(session, adapters, settings, hsts=True)
+    (item,) = plan.items
+    assert item.status == rf.READY and any("adds HSTS" in c for c in item.changes)
+    assert item.target["options"]["hsts"] is True and plan.hsts_available is True
+    (result,) = await rf.apply_plan(session, adapters, settings, plan, actor="storm")
+    assert result.ok, result.message
+    new = "orchestrator-nas-example-com"
+    assert sim.files["thing.yml"][new]["mws"] == ["auth-basic", "hsts-headers"]
+    session.refresh(ph)
+    assert ph.route_options["hsts"] is True
+
+    # the route now has it: planning "keep" finds nothing to do, "off" takes it away
+    assert (await _plan(session, adapters, settings)).items[0].status == rf.STANDARD
+    off = (await _plan(session, adapters, settings, hsts=False)).items[0]
+    assert off.status == rf.READY and any("removes HSTS" in c for c in off.changes)
+
+
+async def test_hsts_that_traefik_does_not_have_is_not_added(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, session: Session, service: Service
+) -> None:
+    sim, adapters, settings = _setup(monkeypatch, tmp_path, session, service)
+    _old(sim, middlewares=("redirect-to-https",))
+    _host(session, service)
+    (item,) = (await _plan(session, adapters, settings, hsts=True)).items
+    assert item.target["options"].get("hsts") is None
+    assert any("hsts-headers" in w and "not added" in w for w in item.warnings)
+
+
+async def test_a_route_that_already_has_hsts_keeps_it_when_left_as_is(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, session: Session, service: Service
+) -> None:
+    sim, adapters, settings = _setup(monkeypatch, tmp_path, session, service)
+    _old(sim)  # redirect-to-https, hsts-headers, auth-basic
+    _host(session, service)
+    (item,) = (await _plan(session, adapters, settings)).items
+    assert item.target["middlewares"] == ["hsts-headers", "auth-basic"]  # carried like before
+    assert not any("HSTS" in c for c in item.changes)
+
+
+def test_hsts_survives_the_registry_file() -> None:
+    from orchestrator.registry.schema import ProxyHostSpec
+
+    spec = ProxyHostSpec(
+        hostname="a.example.com", upstream="http://1.2.3.4", route_options={"hsts": True}
+    )
+    assert spec.route_options["hsts"] is True
+    assert ProxyHostSpec(hostname="b.example.com", upstream="http://1.2.3.4").route_options == {}

@@ -148,6 +148,35 @@ def write_yaml_file(path: Path, registry: RegistryFile) -> str:
 # ---------------------------------------------------------------------------
 
 
+def proxy_host_spec(ph: ProxyHost) -> ProxyHostSpec:
+    return ProxyHostSpec(
+        hostname=ph.hostname,
+        upstream=ph.upstream,
+        router_provider=ph.router_provider.value,
+        extra=ph.extra,
+        wake_on_hit=ph.wake_on_hit,
+        entry_points=list(ph.entry_points or []),
+        cert_resolver=ph.cert_resolver or "",
+        route_options=dict(ph.route_options or {}),
+        enabled=ph.enabled,
+    )
+
+
+def policy_spec(p: BackupPolicy) -> BackupPolicySpec:
+    return BackupPolicySpec(
+        name=p.name,
+        schedule_cron=p.schedule_cron,
+        mode=p.mode,
+        retention=p.retention,
+        targets=p.targets,
+        requires=list(p.requires or []),
+        wake_before_backup=p.wake_before_backup,
+        wake_mode=p.wake_mode,
+        max_attempts=p.max_attempts,
+        restore_power_state=p.restore_power_state,
+    )
+
+
 def _spec_from_db(session: Session) -> RegistryFile:
     """Serialise the DB's current registry state into a :class:`RegistryFile`.
     Order is deterministic (by name/slug) so YAML diffs stay clean."""
@@ -212,20 +241,7 @@ def _spec_from_db(session: Session) -> RegistryFile:
                     )
                     for p in probes
                 ],
-                proxy_hosts=[
-                    ProxyHostSpec(
-                        hostname=ph.hostname,
-                        upstream=ph.upstream,
-                        router_provider=ph.router_provider.value,
-                        extra=ph.extra,
-                        wake_on_hit=ph.wake_on_hit,
-                        entry_points=list(ph.entry_points or []),
-                        cert_resolver=ph.cert_resolver or "",
-                        route_options=dict(ph.route_options or {}),
-                        enabled=ph.enabled,
-                    )
-                    for ph in proxy_hosts
-                ],
+                proxy_hosts=[proxy_host_spec(ph) for ph in proxy_hosts],
             )
         )
 
@@ -242,21 +258,7 @@ def _spec_from_db(session: Session) -> RegistryFile:
             )
             for n in nodes
         ],
-        backup_policies=[
-            BackupPolicySpec(
-                name=p.name,
-                schedule_cron=p.schedule_cron,
-                mode=p.mode,
-                retention=p.retention,
-                targets=p.targets,
-                requires=list(p.requires or []),
-                wake_before_backup=p.wake_before_backup,
-                wake_mode=p.wake_mode,
-                max_attempts=p.max_attempts,
-                restore_power_state=p.restore_power_state,
-            )
-            for p in policies
-        ],
+        backup_policies=[policy_spec(p) for p in policies],
         services=services_out,
     )
 
@@ -708,9 +710,20 @@ def reconcile_yaml_into_db(session: Session, path: Path) -> RegistryFile:
     # --- Deferred parent deletions -------------------------------------------
     # Safe only now: every service that referenced a removed node/policy has
     # either been deleted above or repointed during the upsert.
-    for name, pol in existing_policies.items():
-        if name not in yaml_policy_names:
-            session.delete(pol)
+    gone_policies = [
+        pol for name, pol in existing_policies.items() if name not in yaml_policy_names
+    ]
+    if gone_policies:
+        try:
+            from orchestrator.config import get_settings
+            from orchestrator.registry.archive import archive_policy
+
+            for pol in gone_policies:
+                archive_policy(session, get_settings(), pol, [], "registry-reload")
+        except Exception as exc:  # a safety net, never a reason to fail a load
+            log.warning("registry.archive_failed", error=str(exc))
+    for pol in gone_policies:
+        session.delete(pol)
     session.flush()
 
     for name, node in existing_nodes.items():

@@ -38,7 +38,7 @@ from orchestrator.registry.backup_plan import BLOCKER_NO_POWER_TARGET
 from orchestrator.registry.loader import compute_registry_diff
 from orchestrator.registry.probe_specs import PROBE_SPECS
 from orchestrator.registry.tree import TreeIndex
-from orchestrator.web.auth import get_current_admin
+from orchestrator.web.auth import get_current_admin, login_redirect
 from orchestrator.web.deps import SessionDep, SettingsDep
 from orchestrator.web.routers.activity import KINDS, build_feed, filter_options
 from orchestrator.web.routers.backup_policies import policy_to_dict
@@ -228,7 +228,7 @@ async def dashboard_page(
 ) -> HTMLResponse | RedirectResponse:
     admin = get_current_admin(request, session)
     if admin is None:
-        return RedirectResponse("/login?next=/", status_code=303)
+        return login_redirect(request)
 
     node_rows = {n.id: n for n in session.exec(select(Node)).all()}
     nodes = {nid: n.name for nid, n in node_rows.items()}
@@ -318,7 +318,7 @@ async def service_detail_page(
     state; every change goes through the ``/api/registry/*`` JSON endpoints."""
     admin = get_current_admin(request, session)
     if admin is None:
-        return RedirectResponse(f"/login?next=/services/{slug}", status_code=303)
+        return login_redirect(request)
 
     svc = session.exec(select(Service).where(Service.slug == slug)).first()
     if svc is None:
@@ -401,7 +401,7 @@ async def proxy_hosts_page(
     per-row service picker."""
     admin = get_current_admin(request, session)
     if admin is None:
-        return RedirectResponse("/login?next=/proxy-hosts", status_code=303)
+        return login_redirect(request)
 
     services = session.exec(select(Service).order_by(Service.slug)).all()
     diff = compute_registry_diff(session)
@@ -433,7 +433,7 @@ async def new_proxy_host_page(
     """
     admin = get_current_admin(request, session)
     if admin is None:
-        return RedirectResponse("/login?next=/proxy-hosts/new", status_code=303)
+        return login_redirect(request)
 
     return _templates.TemplateResponse(
         request,
@@ -458,7 +458,7 @@ async def edit_proxy_host_page(
     ``service_detail_page`` already uses), not re-fetched client-side."""
     admin = get_current_admin(request, session)
     if admin is None:
-        return RedirectResponse(f"/login?next=/proxy-hosts/{proxy_host_id}/edit", status_code=303)
+        return login_redirect(request)
 
     ph = session.get(ProxyHost, proxy_host_id)
     if ph is None:
@@ -503,7 +503,7 @@ async def backup_policies_page(
     expanders and name filter all live here."""
     admin = get_current_admin(request, session)
     if admin is None:
-        return RedirectResponse("/login?next=/backup-policies", status_code=303)
+        return login_redirect(request)
 
     scheduler = getattr(request.app.state, "scheduler", None)
     policies = session.exec(select(BackupPolicy).order_by(BackupPolicy.name)).all()
@@ -556,7 +556,7 @@ async def new_backup_policy_page(
     /api/backup-policies``."""
     admin = get_current_admin(request, session)
     if admin is None:
-        return RedirectResponse("/login?next=/backup-policies/new", status_code=303)
+        return login_redirect(request)
 
     return _templates.TemplateResponse(
         request,
@@ -582,7 +582,7 @@ async def edit_backup_policy_page(
     serialization the list page and the API already use."""
     admin = get_current_admin(request, session)
     if admin is None:
-        return RedirectResponse(f"/login?next=/backup-policies/{name}/edit", status_code=303)
+        return login_redirect(request)
 
     policy = session.exec(select(BackupPolicy).where(BackupPolicy.name == name)).one_or_none()
     if policy is None:
@@ -620,7 +620,7 @@ async def traffic_page(
     is server-rendered for the first paint. See ``docs/traffic_metrics.md``."""
     admin = get_current_admin(request, session)
     if admin is None:
-        return RedirectResponse("/login?next=/traffic", status_code=303)
+        return login_redirect(request)
 
     return _templates.TemplateResponse(
         request,
@@ -701,7 +701,7 @@ async def traffic_geo_page(
     ``/traffic``. See ``docs/geoip_traffic.md``."""
     admin = get_current_admin(request, session)
     if admin is None:
-        return RedirectResponse("/login?next=/traffic/geo", status_code=303)
+        return login_redirect(request)
 
     slug = (slug or "").strip() or None
     range_key = _range_param(range)
@@ -730,7 +730,7 @@ async def sources_page(request: Request, session: SessionDep) -> HTMLResponse | 
     refresh or import it live here (client-rendered from ``/api/sources``)."""
     admin = get_current_admin(request, session)
     if admin is None:
-        return RedirectResponse("/login?next=/sources", status_code=303)
+        return login_redirect(request)
     return _templates.TemplateResponse(request, "sources.html", {"admin": admin})
 
 
@@ -744,7 +744,7 @@ async def infra_status_page(
     other list-only pages."""
     admin = get_current_admin(request, session)
     if admin is None:
-        return RedirectResponse("/login?next=/infra", status_code=303)
+        return login_redirect(request)
 
     return _templates.TemplateResponse(request, "infra_status.html", {"admin": admin})
 
@@ -757,7 +757,7 @@ async def infra_guests_page(
     ``orchestrator-cli guests``. Client-rendered via ``/api/infra/proxmox/guests``."""
     admin = get_current_admin(request, session)
     if admin is None:
-        return RedirectResponse("/login?next=/infra/guests", status_code=303)
+        return login_redirect(request)
 
     return _templates.TemplateResponse(request, "infra_guests.html", {"admin": admin})
 
@@ -770,7 +770,7 @@ async def infra_snapshots_page(
     ``orchestrator-cli snapshots``. Client-rendered via ``/api/infra/pbs/snapshots``."""
     admin = get_current_admin(request, session)
     if admin is None:
-        return RedirectResponse("/login?next=/infra/snapshots", status_code=303)
+        return login_redirect(request)
 
     return _templates.TemplateResponse(request, "infra_snapshots.html", {"admin": admin})
 
@@ -791,7 +791,7 @@ async def activity_page(
     """History of wakes, backups, admin actions and alerts — see ``routers/activity.py``."""
     admin = get_current_admin(request, session)
     if admin is None:
-        return RedirectResponse("/login?next=/activity", status_code=303)
+        return login_redirect(request)
 
     # the filter form submits "" for "all": normalise every field
     service, group, node, guest = (

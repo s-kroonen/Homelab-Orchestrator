@@ -1,13 +1,16 @@
-"""Soft delete: a deleted service waits in the archive, then is purged.
+"""Soft delete: what is deleted waits in the archive, then is purged.
 
-Deleting a service (and the sub-services that go with it) takes a snapshot of it in the
-registry file's own shape and parks that in :class:`ArchivedService` for
-``ARCHIVE_RETENTION_DAYS``. Restoring writes the snapshot back through the same code the
-YAML load uses, so a restored service is exactly what a load of that YAML would make.
+Deleting a service (and the sub-services that go with it), a proxy host or a backup policy
+takes a snapshot of it in the registry file's own shape and parks that in
+:class:`ArchivedService` for ``ARCHIVE_RETENTION_DAYS``. Restoring writes the snapshot back
+through the same code the YAML load uses, so a restored service is exactly what a load of
+that YAML would make.
 
 What is NOT restored is history that was never tied to the registry rows: backup records,
 runs and health state keep pointing at nothing, as they do after any delete. Proxy hosts
-come back un-pushed, so they reach Traefik Manager with the next Save/Push.
+come back un-pushed, so they reach Traefik Manager with the next Save/Push. A deleted
+backup policy comes back with the services that were in it (those still without a policy);
+the backup records that pointed at it stay detached.
 """
 
 from __future__ import annotations
@@ -27,12 +30,31 @@ from orchestrator.db.models import (
     ProxyHost,
     Service,
 )
+from orchestrator.domain.enums import RouterProvider
 from orchestrator.logging_setup import get_logger
 from orchestrator.registry.backup_plan import clean_slug_list
-from orchestrator.registry.loader import _spec_from_db, apply_service_spec
-from orchestrator.registry.schema import ServiceSpec
+from orchestrator.registry.host_cascade import host_served
+from orchestrator.registry.loader import (
+    _spec_from_db,
+    apply_service_spec,
+    policy_spec,
+    proxy_host_spec,
+)
+from orchestrator.registry.proxy_push import take_pending_delete
+from orchestrator.registry.schema import BackupPolicySpec, ProxyHostSpec, ServiceSpec
+from orchestrator.registry.traefik_probes import sync_traefik_probe
 
 log = get_logger(__name__)
+
+
+KIND_SERVICE = "service"
+KIND_PROXY_HOST = "proxy_host"
+KIND_POLICY = "backup_policy"
+KIND_LABEL = {
+    KIND_SERVICE: "Service",
+    KIND_PROXY_HOST: "Proxy host",
+    KIND_POLICY: "Backup policy",
+}
 
 
 class ArchiveError(Exception):
@@ -83,6 +105,56 @@ def archive_services(
     return row
 
 
+def archive_proxy_host(
+    session: Session, settings: Settings, ph: ProxyHost, actor: str
+) -> ArchivedService:
+    """Snapshot a proxy host BEFORE it is deleted."""
+    svc = session.get(Service, ph.service_id) if ph.service_id else None
+    now = _now()
+    row = ArchivedService(
+        kind=KIND_PROXY_HOST,
+        slug=ph.hostname,
+        ref=str(ph.id),
+        name=ph.hostname,
+        parent_slug=svc.slug if svc else None,
+        snapshot={
+            "service_slug": svc.slug if svc else None,
+            "proxy_host": proxy_host_spec(ph).model_dump(mode="json"),
+        },
+        deleted_at=now,
+        deleted_by=actor,
+        purge_at=now + timedelta(days=max(1, settings.archive_retention_days)),
+    )
+    session.add(row)
+    return row
+
+
+def archive_policy(
+    session: Session,
+    settings: Settings,
+    policy: BackupPolicy,
+    members: list[str],
+    actor: str,
+) -> ArchivedService:
+    """Snapshot a backup policy and the services that were in it BEFORE it is deleted."""
+    now = _now()
+    row = ArchivedService(
+        kind=KIND_POLICY,
+        slug=policy.name,
+        ref=policy.name,
+        name=policy.name,
+        snapshot={
+            "policy": policy_spec(policy).model_dump(mode="json"),
+            "members": list(members),
+        },
+        deleted_at=now,
+        deleted_by=actor,
+        purge_at=now + timedelta(days=max(1, settings.archive_retention_days)),
+    )
+    session.add(row)
+    return row
+
+
 # -- reading -----------------------------------------------------------------------------
 
 
@@ -92,30 +164,69 @@ def list_archive(session: Session) -> list[ArchivedService]:
     )
 
 
-def latest_for(session: Session, slug: str) -> ArchivedService | None:
-    """The most recent archive entry for ``slug`` (it can have been deleted more than once),
-    covering sub-services that went down with a parent too."""
-    rows = list_archive(session)
+def latest_for(session: Session, slug: str, kind: str = KIND_SERVICE) -> ArchivedService | None:
+    """The most recent archive entry of ``kind`` for ``slug`` (it can have been deleted more
+    than once); for a service this covers sub-services that went down with a parent too."""
+    rows = [r for r in list_archive(session) if r.kind == kind]
     exact = next((r for r in rows if r.slug == slug), None)
+    if kind != KIND_SERVICE:
+        return exact
     return exact or next((r for r in rows if slug in (r.sub_slugs or [])), None)
 
 
+def latest_ref(session: Session, kind: str, ref: str) -> ArchivedService | None:
+    """By what an old link names: a proxy host's former id, a policy's name."""
+    return next((r for r in list_archive(session) if r.kind == kind and r.ref == ref), None)
+
+
 def describe(row: ArchivedService) -> dict[str, Any]:
-    specs = (row.snapshot or {}).get("services") or []
-    root = next((s for s in specs if s.get("slug") == row.slug), {})
-    return {
+    snap = row.snapshot or {}
+    out: dict[str, Any] = {
         "id": row.id,
+        "kind": row.kind,
+        "kind_label": KIND_LABEL.get(row.kind, row.kind),
         "slug": row.slug,
         "name": row.name,
         "parent": row.parent_slug,
         "sub_services": list(row.sub_slugs or []),
-        "probes": len(root.get("probes") or []),
-        "proxy_hosts": [h.get("hostname") for h in root.get("proxy_hosts") or []],
+        "probes": 0,
+        "proxy_hosts": [],
+        "page": "/archive",
         "deleted_at": _aware(row.deleted_at).isoformat(),
         "deleted_by": row.deleted_by,
         "purge_at": _aware(row.purge_at).isoformat(),
         "days_left": max(0, (_aware(row.purge_at) - _now()).days),
     }
+    parts: list[str] = []
+    if row.kind == KIND_PROXY_HOST:
+        spec = snap.get("proxy_host") or {}
+        out["page"] = "/proxy-hosts"
+        parts.append(f"-> {spec.get('upstream') or 'no upstream'}")
+        if snap.get("service_slug"):
+            parts.append(f"service {snap['service_slug']}")
+    elif row.kind == KIND_POLICY:
+        spec = snap.get("policy") or {}
+        out["page"] = "/backup-policies"
+        parts.append(spec.get("schedule_cron") or "no schedule")
+        members = snap.get("members") or []
+        if members:
+            parts.append(f"{len(members)} service(s): {', '.join(members)}")
+    else:
+        specs = snap.get("services") or []
+        root = next((s for s in specs if s.get("slug") == row.slug), {})
+        out["probes"] = len(root.get("probes") or [])
+        out["proxy_hosts"] = [h.get("hostname") for h in root.get("proxy_hosts") or []]
+        out["page"] = f"/services/{row.slug}"
+        if row.sub_slugs:
+            parts.append(f"{len(row.sub_slugs)} sub-service(s): {', '.join(row.sub_slugs)}")
+        if out["probes"]:
+            parts.append(f"{out['probes']} probe(s)")
+        if out["proxy_hosts"]:
+            parts.append(
+                f"{len(out['proxy_hosts'])} proxy host(s): {', '.join(out['proxy_hosts'])}"
+            )
+    out["summary"] = " · ".join(parts)
+    return out
 
 
 # -- restoring ---------------------------------------------------------------------------
@@ -135,11 +246,23 @@ def _depth_order(specs: list[ServiceSpec]) -> list[ServiceSpec]:
 
 
 def restore(session: Session, archive_id: int, actor: str) -> Restored:
-    """Bring an archived service (and its sub-services) back. Raises
-    :class:`ArchiveError` when it cannot, changing nothing."""
+    """Bring an archived service (and its sub-services), proxy host or backup policy back.
+    Raises :class:`ArchiveError` when it cannot, changing nothing."""
     row = session.get(ArchivedService, archive_id)
     if row is None:
         raise ArchiveError("that archive entry is gone (purged, or already restored)")
+    try:
+        if row.kind == KIND_PROXY_HOST:
+            return _restore_proxy_host(session, row, actor)
+        if row.kind == KIND_POLICY:
+            return _restore_policy(session, row, actor)
+        return _restore_service(session, row, actor)
+    except Exception:
+        session.rollback()
+        raise
+
+
+def _restore_service(session: Session, row: ArchivedService, actor: str) -> Restored:
     specs = _depth_order(
         [ServiceSpec.model_validate(s) for s in (row.snapshot or {}).get("services") or []]
     )
@@ -164,11 +287,7 @@ def restore(session: Session, archive_id: int, actor: str) -> Restored:
         if spec.parent is None and spec.node not in nodes:
             raise ArchiveError(f"node {spec.node!r} no longer exists - add it first")
 
-    try:
-        return _restore_rows(session, row, specs, live, nodes, policies, actor)
-    except Exception:
-        session.rollback()
-        raise
+    return _restore_rows(session, row, specs, live, nodes, policies, actor)
 
 
 def _restore_rows(
@@ -237,6 +356,106 @@ def _restore_rows(
     return Restored(slug=row.slug, restored=restored, warnings=warnings)
 
 
+def _restore_proxy_host(session: Session, row: ArchivedService, actor: str) -> Restored:
+    from orchestrator.config import get_settings
+
+    snap = row.snapshot or {}
+    spec = ProxyHostSpec.model_validate(snap.get("proxy_host") or {})
+    slug = snap.get("service_slug")
+    svc = session.exec(select(Service).where(Service.slug == slug)).first() if slug else None
+    if slug and svc is None:
+        raise ArchiveError(
+            f"its service {slug!r} no longer exists - restore the service first "
+            "(it may still be in the archive)"
+        )
+    if session.exec(select(ProxyHost).where(ProxyHost.hostname == spec.hostname)).first():
+        raise ArchiveError(f"{spec.hostname} is used by a proxy host again - delete that one first")
+    ph = ProxyHost(
+        service_id=svc.id if svc else None,
+        hostname=spec.hostname,
+        upstream=spec.upstream,
+        router_provider=RouterProvider(spec.router_provider),
+        extra=dict(spec.extra),
+        wake_on_hit=spec.wake_on_hit,
+        entry_points=list(spec.entry_points),
+        cert_resolver=spec.cert_resolver,
+        route_options=dict(spec.route_options),
+        enabled=spec.enabled,
+        pushed_sig="",
+    )
+    session.add(ph)
+    session.flush()
+    take_pending_delete(session, spec.hostname)  # its old route is wanted again, not removed
+    sync_traefik_probe(
+        session,
+        get_settings(),
+        hostname=ph.hostname,
+        service_id=ph.service_id,
+        enabled=host_served(session, ph),
+    )
+    audit.record(
+        session,
+        actor=actor,
+        action="proxy_host.restored",
+        target=f"proxy_host:{spec.hostname}",
+        details={"id": ph.id, "service": slug},
+    )
+    session.delete(row)
+    session.commit()
+    log.info("archive.restored", kind=row.kind, hostname=spec.hostname)
+    return Restored(slug=spec.hostname, restored=[spec.hostname])
+
+
+def _restore_policy(session: Session, row: ArchivedService, actor: str) -> Restored:
+    snap = row.snapshot or {}
+    spec = BackupPolicySpec.model_validate(snap.get("policy") or {})
+    if session.exec(select(BackupPolicy).where(BackupPolicy.name == spec.name)).first():
+        raise ArchiveError(f"a backup policy named {spec.name!r} exists again - rename it first")
+    live = {s.slug: s for s in session.exec(select(Service)).all()}
+    warnings: list[str] = []
+    requires = [r for r in spec.requires if r in live]
+    for gone in sorted(set(spec.requires) - set(requires)):
+        warnings.append(f"dropped required service {gone!r} (no longer exists)")
+    policy = BackupPolicy(
+        name=spec.name,
+        schedule_cron=spec.schedule_cron,
+        mode=spec.mode,
+        retention=dict(spec.retention),
+        targets=dict(spec.targets),
+        requires=requires,
+        wake_before_backup=spec.wake_before_backup,
+        wake_mode=spec.wake_mode,
+        max_attempts=spec.max_attempts,
+        restore_power_state=spec.restore_power_state,
+    )
+    session.add(policy)
+    session.flush()
+    back: list[str] = []
+    for member in snap.get("members") or []:
+        svc = live.get(member)
+        if svc is None:
+            warnings.append(f"{member}: no longer exists")
+        elif svc.backup_policy_id is not None:
+            warnings.append(f"{member}: is in another policy now, left there")
+        elif svc.backup_excluded:
+            warnings.append(f"{member}: is marked never back up, left out")
+        else:
+            svc.backup_policy_id = policy.id
+            session.add(svc)
+            back.append(member)
+    audit.record(
+        session,
+        actor=actor,
+        action="backup_policy.restored",
+        target=f"policy:{spec.name}",
+        details={"services": back, "warnings": warnings},
+    )
+    session.delete(row)
+    session.commit()
+    log.info("archive.restored", kind=row.kind, policy=spec.name)
+    return Restored(slug=spec.name, restored=[spec.name, *back], warnings=warnings)
+
+
 # -- purging -----------------------------------------------------------------------------
 
 
@@ -256,11 +475,9 @@ def purge_now(session: Session, archive_id: int, actor: str) -> str:
     row = session.get(ArchivedService, archive_id)
     if row is None:
         raise ArchiveError("that archive entry is gone")
-    slug = row.slug
+    slug, kind = row.slug, row.kind
     session.delete(row)
-    audit.record(
-        session, actor=actor, action="service.purged", target=f"service:{slug}", details={}
-    )
+    audit.record(session, actor=actor, action=f"{kind}.purged", target=f"{kind}:{slug}", details={})
     session.commit()
     return slug
 
@@ -298,9 +515,13 @@ def archive_removed(
 
 
 def drop_revived(session: Session) -> int:
-    """An archive entry whose service is live again (a Reset brought it back) is stale."""
-    live = set(session.exec(select(Service.slug)).all())
-    rows = [r for r in list_archive(session) if r.slug in live]
+    """An archive entry whose thing is live again (a Reset brought it back) is stale."""
+    live = {
+        KIND_SERVICE: set(session.exec(select(Service.slug)).all()),
+        KIND_PROXY_HOST: set(session.exec(select(ProxyHost.hostname)).all()),
+        KIND_POLICY: set(session.exec(select(BackupPolicy.name)).all()),
+    }
+    rows = [r for r in list_archive(session) if r.slug in live.get(r.kind, set())]
     for row in rows:
         session.delete(row)
     return len(rows)

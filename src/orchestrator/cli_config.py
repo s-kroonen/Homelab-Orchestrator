@@ -1005,8 +1005,19 @@ def proxy_push(yes: bool, hostnames: tuple[str, ...], moves: tuple[str, ...]) ->
 @click.option("--yes", is_flag=True, help="Do not ask before rewriting.")
 @click.option("--plan", "plan_only", is_flag=True, help="Only show what would change.")
 @click.option("--continue-on-error", is_flag=True, help="Go on with the next host after a failure.")
+@click.option(
+    "--hsts/--no-hsts",
+    "hsts",
+    default=None,
+    help="Put the HSTS middleware on every formatted route, or take it off (default: keep what "
+    "each route has).",
+)
 def proxy_format(
-    hostnames: tuple[str, ...], yes: bool, plan_only: bool, continue_on_error: bool
+    hostnames: tuple[str, ...],
+    yes: bool,
+    plan_only: bool,
+    continue_on_error: bool,
+    hsts: bool | None,
 ) -> None:
     """Rewrite hand-written / migrated routes into the standard shape, one host at a time.
 
@@ -1031,7 +1042,7 @@ def proxy_format(
         try:
             with Session(get_engine()) as session:
                 plan = await rf.build_plan(
-                    session, adapters, settings, hostnames=list(hostnames) or None
+                    session, adapters, settings, hostnames=list(hostnames) or None, hsts=hsts
                 )
                 if plan.problem:
                     raise click.ClickException(plan.problem)

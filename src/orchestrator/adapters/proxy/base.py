@@ -169,6 +169,9 @@ class RouteOptions:
       (e.g. ``kroon-en.nl`` + ``*.kroon-en.nl``) instead of one per host.
       Needs a cert resolver able to do it (DNS challenge for a wildcard).
     * ``http_redirect``: also answer plain HTTP and redirect it to HTTPS.
+    * ``hsts``: attach the configured HSTS headers middleware
+      (``TRAEFIK_HSTS_MIDDLEWARE``) so browsers insist on HTTPS for the host. Off
+      by default: a browser remembers it for a long time, so it is a deliberate choice.
     * ``config_file``: the proxy manager's config file this host's route should
       live in (Traefik Manager: ``media.yml``). Blank = the configured template
       (``TRAEFIK_MANAGER_CONFIG_FILE``). It decides where a NEW route is created;
@@ -182,6 +185,7 @@ class RouteOptions:
     tls_sans: tuple[str, ...] = ()
     http_redirect: bool = False
     config_file: str = ""
+    hsts: bool = False
 
     @classmethod
     def from_dict(cls, data: dict[str, Any] | None) -> RouteOptions:
@@ -196,10 +200,11 @@ class RouteOptions:
             tls_sans=tuple(s.strip() for s in sans if str(s).strip()),
             http_redirect=bool(data.get("http_redirect", False)),
             config_file=str(data.get("config_file") or "").strip(),
+            hsts=bool(data.get("hsts", False)),
         )
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        out: dict[str, Any] = {
             "pass_host_header": self.pass_host_header,
             "skip_upstream_tls_verify": self.skip_upstream_tls_verify,
             "tls_main": self.tls_main,
@@ -207,6 +212,9 @@ class RouteOptions:
             "http_redirect": self.http_redirect,
             "config_file": self.config_file,
         }
+        if self.hsts:  # absent = off, so every host saved before HSTS keeps its fingerprint
+            out["hsts"] = True
+        return out
 
     def content_dict(self) -> dict[str, Any]:
         """:meth:`to_dict` without the fields that are not part of the route's

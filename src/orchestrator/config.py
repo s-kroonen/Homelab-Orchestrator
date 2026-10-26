@@ -250,6 +250,9 @@ class Settings(BaseSettings):
     # on the plain-HTTP entry point with this middleware. Must already exist
     # in Traefik (e.g. a shared ``redirect-to-https`` defined once).
     traefik_redirect_middleware: str = "redirect-to-https"
+    # Name of the headers middleware (stsSeconds...) that a proxy host's "HSTS" option
+    # attaches to its route. Must already exist in Traefik, like the redirect one.
+    traefik_hsts_middleware: str = "hsts-headers"
     # Which Traefik Manager config file a NEW route is created in. A template:
     # ``{service}`` = the linked service's slug, ``{hostname}`` = the hostname
     # with dots turned into dashes. The default keeps one file per service

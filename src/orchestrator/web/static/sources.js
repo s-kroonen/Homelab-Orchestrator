@@ -170,11 +170,16 @@
   async function planFormat() {
     msg("fmt-msg", "Reading every route…");
     $("fmt").hidden = false;
-    try { plan = await api("POST", "/api/sources/traefik/format/plan", {}); }
+    try { plan = await api("POST", "/api/sources/traefik/format/plan", hstsChoice() === null ? {} : { hsts: hstsChoice() }); }
     catch (e) { msg("fmt-msg", err(e), "error"); return; }
     if (plan.problem) { msg("fmt-msg", plan.problem, "error"); $("fmt-items").replaceChildren(); return; }
     const c = plan.counts;
     msg("fmt-msg", `${c.ready || 0} ready, ${c.standard || 0} already standard, ${c.blocked || 0} left alone, ${c.skipped || 0} skipped.`, "");
+    $("fmt-every").disabled = !c.ready;
+    $("fmt-every").textContent = c.ready ? `Format all ${c.ready} ready route(s)` : "Format all ready routes";
+    const h = plan.hsts || {};
+    $("fmt-hsts-note").textContent = h.available === false && hstsChoice() === true
+      ? `The "${h.middleware}" middleware was not found in Traefik, so it is not added (create it, or set TRAEFIK_HSTS_MIDDLEWARE).` : "";
     $("fmt-items").replaceChildren(...plan.items.map(itemCard));
     $("fmt").scrollIntoView({ behavior: "smooth", block: "start" });
   }
@@ -206,13 +211,17 @@
     return card;
   }
   const hostBoxes = () => [...document.querySelectorAll("#fmt-items input[type=checkbox][data-host]:not([data-mw])")];
+  // null = keep what each route has
+  function hstsChoice() { const v = $("fmt-hsts").value; return v === "on" ? true : v === "off" ? false : null; }
+  $("fmt-hsts").addEventListener("change", () => busyButton($("tr-plan"), planFormat));
   $("fmt-all").addEventListener("click", () => hostBoxes().forEach((b) => { b.checked = true; }));
   $("fmt-none").addEventListener("click", () => hostBoxes().forEach((b) => { b.checked = false; }));
-  $("fmt-run").addEventListener("click", () => busyButton($("fmt-run"), async () => {
+  async function runFormat(chosen, button) {
     if (!plan) return;
-    const chosen = hostBoxes().filter((b) => b.checked).map((b) => b.dataset.host);
     if (!chosen.length) { msg("fmt-msg", "Select at least one host.", "error"); return; }
-    if (!confirm(`Rewrite ${chosen.length} route(s) now? Each is created beside the old one, checked, then the old one is removed; a failure puts it back.`)) return;
+    const hs = hstsChoice();
+    const hsNote = hs === true ? " HSTS is added to each." : hs === false ? " HSTS is taken off each." : "";
+    if (!confirm(`Rewrite ${chosen.length} route(s) now? Each is created beside the old one, checked, then the old one is removed; a failure puts it back and stops the run.${hsNote}`)) return;
     const items = chosen.map((h) => {
       const it = plan.items.find((x) => x.hostname === h);
       const mws = [...document.querySelectorAll(`#fmt-items input[data-mw][data-host="${CSS.escape(h)}"]`)];
@@ -220,9 +229,18 @@
     });
     msg("fmt-msg", "Starting…");
     try {
-      const r = await api("POST", "/api/sources/traefik/format/run", { items, stop_on_failure: $("fmt-stop").checked, allow_unverified: $("fmt-unverified").checked });
+      const r = await api("POST", "/api/sources/traefik/format/run", {
+        items, stop_on_failure: $("fmt-stop").checked, allow_unverified: $("fmt-unverified").checked,
+        ...(hs === null ? {} : { hsts: hs }),
+      });
       await follow(r.run_id);
     } catch (e) { msg("fmt-msg", err(e), "error"); }
+  }
+  $("fmt-run").addEventListener("click", () => busyButton($("fmt-run"),
+    () => runFormat(hostBoxes().filter((b) => b.checked).map((b) => b.dataset.host))));
+  $("fmt-every").addEventListener("click", () => busyButton($("fmt-every"), () => {
+    hostBoxes().forEach((b) => { b.checked = true; });
+    return runFormat(hostBoxes().map((b) => b.dataset.host));
   }));
   async function follow(runId) {
     const ol = $("fmt-steps");

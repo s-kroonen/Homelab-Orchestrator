@@ -304,3 +304,14 @@ def test_dashboard_explains_an_unhealthy_badge(app: Any, monkeypatch: pytest.Mon
     assert '<li class="failed">web-up' in r.text
     assert "HTTP 502 from upstream" in r.text
     assert 'href="/activity?service=media"' in r.text
+
+
+def test_login_redirect_keeps_the_query_of_an_alert_link(app: Any) -> None:
+    """An alert opens /infra/guests?node=eve1&vmid=101; signed out, the way back keeps all of it."""
+    from urllib.parse import parse_qs, urlsplit
+
+    with TestClient(app) as anon:
+        r = anon.get("/infra/guests?node=eve1&vmid=101", follow_redirects=False)
+        assert r.status_code == 303
+        back = parse_qs(urlsplit(r.headers["location"]).query)["next"]
+        assert back == ["/infra/guests?node=eve1&vmid=101"]

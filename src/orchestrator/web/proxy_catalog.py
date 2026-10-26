@@ -44,6 +44,9 @@ class ProxyCatalog:
     #: (``None`` = could not tell).
     redirect_middleware: str = "redirect-to-https"
     redirect_available: bool | None = None
+    #: The same for the HSTS headers middleware.
+    hsts_middleware: str = "hsts-headers"
+    hsts_available: bool | None = None
     #: Traefik Manager's config files (``None`` = could not be read) and the
     #: ``TRAEFIK_MANAGER_CONFIG_FILE`` template a new route's file comes from.
     config_files: ConfigFiles | None = None
@@ -85,6 +88,8 @@ class ProxyCatalog:
             "domains": list(self.domains),
             "redirect_middleware": self.redirect_middleware,
             "redirect_available": self.redirect_available,
+            "hsts_middleware": self.hsts_middleware,
+            "hsts_available": self.hsts_available,
             # Where a new route goes: the known files, whether an unknown name
             # would be created, the template and what it resolves to here.
             "config_files": known_names(files, self.config_files_seen),
@@ -127,6 +132,8 @@ async def get_catalog(settings: Any, proxy: ProxyAdapter, *, refresh: bool = Fal
     if config_files is None or not config_files.files:
         seen = sorted({r.config_file for r in (await proxy.list_routes() or []) if r.config_file})
     redirect_name = (settings.traefik_redirect_middleware or "redirect-to-https").strip()
+    hsts_name = (settings.traefik_hsts_middleware or "hsts-headers").strip()
+    known_mws = None if middlewares is None else {m.split("@", 1)[0] for m in middlewares}
     catalog = ProxyCatalog(
         entrypoints=entrypoints,
         cert_resolvers=resolvers,
@@ -137,11 +144,9 @@ async def get_catalog(settings: Any, proxy: ProxyAdapter, *, refresh: bool = Fal
         default_cert_resolver=configured_resolver,
         domains=list(domains or []),
         redirect_middleware=redirect_name,
-        redirect_available=(
-            None
-            if middlewares is None
-            else redirect_name in {m.split("@", 1)[0] for m in middlewares}
-        ),
+        redirect_available=None if known_mws is None else redirect_name in known_mws,
+        hsts_middleware=hsts_name,
+        hsts_available=None if known_mws is None else hsts_name in known_mws,
         config_files=config_files,
         config_file_template=getattr(settings, "traefik_manager_config_file", DEFAULT_TEMPLATE),
         config_files_seen=seen,

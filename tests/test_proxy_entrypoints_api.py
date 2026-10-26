@@ -187,6 +187,8 @@ def test_entrypoints_endpoint_shape(service: Service, monkeypatch: pytest.Monkey
         "domains": [],
         "redirect_middleware": "redirect-to-https",
         "redirect_available": None,
+        "hsts_middleware": "hsts-headers",
+        "hsts_available": None,
         "config_files": [],
         "config_files_known": True,
         "config_files_can_create": None,

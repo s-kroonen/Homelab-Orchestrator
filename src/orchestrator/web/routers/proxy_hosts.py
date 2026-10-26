@@ -50,6 +50,7 @@ from orchestrator.audit import log as audit
 from orchestrator.db.models import ProxyHost, Service
 from orchestrator.domain.enums import RouterProvider
 from orchestrator.logging_setup import get_logger
+from orchestrator.registry.archive import archive_proxy_host
 from orchestrator.registry.config_files import normalize_config_file, unknown_file_problem
 from orchestrator.registry.host_cascade import host_served
 from orchestrator.registry.proxy_push import (
@@ -686,6 +687,15 @@ async def _prepare(
             problem = unknown_file_problem(options.config_file, catalog.config_files)
             if problem:
                 errors["config_file"] = problem
+    if live_managed and options.hsts and "hsts" not in errors:
+        wanted_hsts = (settings.traefik_hsts_middleware or "hsts-headers").strip()
+        have_mws = await adapters.proxy.list_middlewares()
+        if have_mws is not None and wanted_hsts not in {bare_router_name(m) for m in have_mws}:
+            errors["hsts"] = (
+                f'The HSTS middleware "{wanted_hsts}" does not exist in Traefik. Create it once '
+                "(a headers middleware with stsSeconds, e.g. in your shared config) or set "
+                "TRAEFIK_HSTS_MIDDLEWARE to the name you use."
+            )
     if live_managed and options.http_redirect and "http_redirect" not in errors:
         wanted = (settings.traefik_redirect_middleware or "redirect-to-https").strip()
         have = await adapters.proxy.list_middlewares()
@@ -1114,6 +1124,7 @@ async def delete_proxy_host_record(
         old_service_id=ph.service_id,
     )
     _audit_probe_sync_events(session, admin, probe_events)
+    archive_proxy_host(session, settings, ph, admin.username)
     session.delete(ph)
     audit.record(
         session,

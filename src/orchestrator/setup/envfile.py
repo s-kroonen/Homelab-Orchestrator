@@ -400,6 +400,12 @@ ENV_SECTIONS: tuple[EnvSection, ...] = (
                 "(e.g. letsencrypt). Blank = none.",
             ),
             EnvKey(
+                "TRAEFIK_HSTS_MIDDLEWARE",
+                "Name of the Traefik headers middleware (stsSeconds, ...) that a proxy host's\n"
+                '"HSTS" option puts on its route. It must already exist (e.g. a shared\n'
+                "headers middleware). See docs/proxy_hosts.md.",
+            ),
+            EnvKey(
                 "TRAEFIK_REDIRECT_MIDDLEWARE",
                 "Name of the Traefik middleware that redirects plain HTTP to HTTPS. A proxy\n"
                 'host\'s "Redirect HTTP to HTTPS" option adds a router on the `web` entry\n'

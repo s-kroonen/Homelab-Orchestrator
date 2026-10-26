@@ -797,17 +797,23 @@ class NotificationRule(SQLModel, table=True):
 
 
 class ArchivedService(SQLModel, table=True):
-    """A deleted service, kept for ``ARCHIVE_RETENTION_DAYS`` so it can be brought back.
+    """Something deleted, kept for ``ARCHIVE_RETENTION_DAYS`` so it can be brought back.
 
-    ``snapshot`` holds the service and every sub-service that went with it in the registry
-    file's own shape (``{"services": [ServiceSpec, ...]}``): fields, probes and proxy hosts.
+    For a service ``snapshot`` holds it and every sub-service that went with it in the registry
+    file's own shape (``{"services": [ServiceSpec, ...]}``): fields, probes and proxy hosts. A
+    proxy host or a backup policy has its own spec in there (see ``registry/archive.py``).
     Runtime history (backups, runs, health) is not part of it - that stays where it was.
     """
 
     __tablename__ = "archived_service"
 
     id: int | None = Field(default=None, primary_key=True)
+    #: service | proxy_host | backup_policy - what the snapshot holds.
+    kind: str = Field(default="service", index=True)
+    #: The name it is known by: a service slug, a hostname, a policy name.
     slug: str = Field(index=True)
+    #: What an old link names: the proxy host's former id, the policy's name.
+    ref: str = ""
     name: str = ""
     parent_slug: str | None = None
     sub_slugs: list[str] = Field(default_factory=list, sa_column=Column(JSON))

@@ -1,6 +1,6 @@
 # Archive (soft delete)
 
-Deleting a service does not destroy it. It moves to the **Archive** page for
+Deleting a service, a proxy host or a backup policy does not destroy it. It moves to the **Archive** page for
 `ARCHIVE_RETENTION_DAYS` (30) days, can be restored in one click, and is purged after that.
 
 ## What is kept
@@ -12,6 +12,19 @@ reload (Reset to saved, an older `services.yaml` put back) drops services that w
 
 Not kept: backup records, runs and health state. They are not tied to the registry rows and
 behave as after any delete. A database dump file on disk is also untouched.
+
+## Proxy hosts and backup policies
+
+* **Proxy host** - kept with its upstream, entry points, certificate, route options and the
+  service it belonged to. Restoring needs that service to exist and the hostname to be free. It
+  comes back un-pushed and takes its old Traefik Manager route over again (a route that was queued
+  for deletion but not yet removed is kept). Hosts that went away with their service are part of
+  that service's entry.
+* **Backup policy** - kept with its schedule, retention and the list of services that were in it.
+  Restoring puts back the services that still exist and are in no other policy, drops required
+  services that are gone (noted), and tells the scheduler. The backup records that pointed at it
+  stay detached, as after any delete.
+* A registry reload that drops a policy archives it too.
 
 ## Restoring
 

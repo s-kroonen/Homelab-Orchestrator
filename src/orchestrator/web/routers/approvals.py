@@ -28,7 +28,7 @@ from orchestrator.pipelines.restore import (
     create_proposal,
     is_open,
 )
-from orchestrator.web.auth import CurrentAdmin, get_current_admin, require_admin
+from orchestrator.web.auth import CurrentAdmin, get_current_admin, login_redirect, require_admin
 from orchestrator.web.deps import AdaptersDep, SessionDep, SettingsDep
 
 api = APIRouter(prefix="/api", tags=["approvals"], dependencies=[Depends(require_admin)])
@@ -59,7 +59,7 @@ async def approval_page(
 ) -> HTMLResponse | RedirectResponse:
     admin = get_current_admin(request, session)
     if admin is None:
-        return RedirectResponse(f"/login?next=/approvals/{token}", status_code=303)
+        return login_redirect(request)
     _find(session, token)
     return _templates.TemplateResponse(request, "approval.html", {"admin": admin, "token": token})
 
