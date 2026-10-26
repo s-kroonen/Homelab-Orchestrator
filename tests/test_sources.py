@@ -305,6 +305,19 @@ def test_the_page_renders_and_the_old_pages_point_at_it(client: TestClient) -> N
     assert 'id="adopt"' not in client.get("/portainer").text
 
 
+def test_format_has_its_own_page(client: TestClient) -> None:
+    anon = TestClient(client.app)
+    r = anon.get("/sources/format", follow_redirects=False)
+    assert r.status_code == 303 and r.headers["location"] == "/login?next=/sources/format"
+    page = client.get("/sources/format")
+    assert page.status_code == 200
+    for needle in ('id="fmt-hsts"', 'id="fmt-every"', 'id="fmt-run"', "/static/format.js"):
+        assert needle in page.text
+    sources = client.get("/sources").text
+    assert 'href="/sources/format"' in sources and 'id="fmt-run"' not in sources
+    assert 'href="/sources/format"' in client.get("/").text  # in the navigation
+
+
 def test_cli_formats_routes_and_pulls(tm: Any) -> None:
     from click.testing import CliRunner
 

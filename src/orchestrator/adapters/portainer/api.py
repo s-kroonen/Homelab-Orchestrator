@@ -261,10 +261,17 @@ class LivePortainerAdapter(PortainerAdapter):
         ]
         if endpoint_id is not None:
             managed = [s for s in managed if s.endpoint_id == endpoint_id]
+        all_envs = await self.list_environments()
+        # Portainer keeps a stack's record after its environment goes away, still "active".
+        # An environment that is down is not shown, and neither are its stacks.
+        down = {e.id for e in all_envs if e.status == "down"}
+        for eid in sorted({s.endpoint_id for s in managed} & down):
+            listing.errors[eid] = "Portainer reports this environment as down"
+        managed = [s for s in managed if s.endpoint_id not in down]
         listing.stacks.extend(managed)
         known = {(s.endpoint_id, s.name.lower()) for s in managed}
 
-        envs = [e for e in await self.list_environments() if e.is_docker and e.status != "down"]
+        envs = [e for e in all_envs if e.is_docker and e.status != "down"]
         if endpoint_id is not None:
             envs = [e for e in envs if e.id == endpoint_id]
 

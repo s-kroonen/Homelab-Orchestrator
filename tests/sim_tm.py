@@ -54,6 +54,7 @@ class SimTM:
         middleware_names: tuple[str, ...] = ("redirect-to-https@file",),
     ):
         self.middleware_names = middleware_names
+        self.created_middlewares: dict[str, str] = {}
         self.multi = multi
         self.config_dir = config_dir
         self.resolvers = resolvers
@@ -205,6 +206,12 @@ class SimTM:
             form = dict(parse_qsl(request.read().decode(), keep_blank_values=True))
             self.requests.append(("delete", route_id, form.get("configFile", "")))
             return self._delete(route_id, form.get("configFile", ""))
+        if method == "POST" and path == "/save-middleware":
+            form = dict(parse_qsl(request.read().decode(), keep_blank_values=True))
+            self.requests.append(("save-middleware", form["middlewareName"], form))
+            self.created_middlewares[form["middlewareName"]] = form["middlewareContent"]
+            self.middleware_names = (*self.middleware_names, f"{form['middlewareName']}@file")
+            return httpx.Response(200, json={"ok": True})
         if method == "POST" and path == "/save":
             form = dict(parse_qsl(request.read().decode(), keep_blank_values=True))
             self.requests.append(("save", form["serviceName"], form))

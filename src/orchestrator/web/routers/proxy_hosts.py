@@ -687,15 +687,6 @@ async def _prepare(
             problem = unknown_file_problem(options.config_file, catalog.config_files)
             if problem:
                 errors["config_file"] = problem
-    if live_managed and options.hsts and "hsts" not in errors:
-        wanted_hsts = (settings.traefik_hsts_middleware or "hsts-headers").strip()
-        have_mws = await adapters.proxy.list_middlewares()
-        if have_mws is not None and wanted_hsts not in {bare_router_name(m) for m in have_mws}:
-            errors["hsts"] = (
-                f'The HSTS middleware "{wanted_hsts}" does not exist in Traefik. Create it once '
-                "(a headers middleware with stsSeconds, e.g. in your shared config) or set "
-                "TRAEFIK_HSTS_MIDDLEWARE to the name you use."
-            )
     if live_managed and options.http_redirect and "http_redirect" not in errors:
         wanted = (settings.traefik_redirect_middleware or "redirect-to-https").strip()
         have = await adapters.proxy.list_middlewares()

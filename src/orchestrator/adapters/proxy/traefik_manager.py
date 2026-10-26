@@ -373,6 +373,18 @@ def _routes_to_route_info(apps: Any, dangling: set[str] | None = None) -> list[R
     return infos
 
 
+#: The HSTS headers middleware the orchestrator creates when a route asks for HSTS and Traefik
+#: has none: one year, this host only (no includeSubDomains - that would bind every subdomain,
+#: including the ones that only speak HTTP), no preload. Edit it in Traefik Manager to taste.
+HSTS_MIDDLEWARE_YAML = (
+    "headers:\n"
+    "  stsSeconds: 31536000\n"
+    "  stsIncludeSubdomains: false\n"
+    "  stsPreload: false\n"
+    "  forceSTSHeader: false\n"
+)
+
+
 class TraefikManagerProxyAdapter(ProxyAdapter):
     """One adapter instance per process; each call still builds its own
     short-lived ``httpx.AsyncClient`` (see module docstring) — mirrors
@@ -1095,6 +1107,23 @@ class TraefikManagerProxyAdapter(ProxyAdapter):
         # hand-written setup and is never overwritten or deleted.
         return route_ref.startswith("orchestrator-")
 
+    async def ensure_hsts_middleware(self) -> SyncEvent | None:
+        """Create the HSTS headers middleware when Traefik does not have it yet, so a route
+        that asks for HSTS never points at a middleware that is not there. Returns the event
+        when it was created; ``None`` when it was there (or Traefik's list could not be read -
+        then nothing is guessed)."""
+        name = (self._settings.traefik_hsts_middleware or "hsts-headers").strip()
+        have = await self.list_middlewares()
+        if have is None or name in {m.split("@", 1)[0] for m in have}:
+            return None
+        await self._save_middleware(name, HSTS_MIDDLEWARE_YAML, protocol="http", is_edit=False)
+        after = await self.list_middlewares()
+        if after is not None and name not in {m.split("@", 1)[0] for m in after}:
+            raise TraefikManagerUnavailable(
+                f"Traefik Manager accepted the HSTS middleware {name!r} but Traefik does not list it"
+            )
+        return SyncEvent("middleware.created", name, {"kind": "hsts"})
+
     def _hsts_for(self, opts: RouteOptions, already: Sequence[str] = ()) -> list[str]:
         """The HSTS middleware to put on a route, when the option is on."""
         name = (self._settings.traefik_hsts_middleware or "hsts-headers").strip()
@@ -1114,6 +1143,8 @@ class TraefikManagerProxyAdapter(ProxyAdapter):
         opts = options or RouteOptions()
         scheme, host, port = self._target_or_raise(upstream)
         eps, resolver = await self._route_fields(entry_points, cert_resolver)
+        if opts.hsts:
+            await self.ensure_hsts_middleware()
         name = route_name_for_hostname(hostname)
         cfile = await self._checked_config_file(config_file)
         await self._save_route(
@@ -1376,6 +1407,8 @@ class TraefikManagerProxyAdapter(ProxyAdapter):
         opts = options or RouteOptions()
         scheme, host, port = self._target_or_raise(upstream)
         eps, resolver = await self._route_fields(entry_points, cert_resolver)
+        if opts.hsts:
+            await self.ensure_hsts_middleware()
         # Edit the route by the id Traefik Manager lists and in the config file
         # it lives in: with several files `/save` otherwise looks for it in the
         # DEFAULT file, does not find it there and writes a second copy.

@@ -435,8 +435,9 @@ when Traefik does not have it, and the API refuses the option (`422`,
 
 **HSTS** is an option of the same kind: tick it on the host (or set `"hsts": true` in its route
 options) and the route carries the headers middleware named by `TRAEFIK_HSTS_MIDDLEWARE` (default
-`hsts-headers`, a `headers` middleware with `stsSeconds`). It needs an HTTPS entry point and the
-middleware must exist (`422` on `hsts` otherwise). Off by default. See docs/sources.md for the YAML.
+`hsts-headers`, a `headers` middleware with `stsSeconds`). It needs an HTTPS entry point (`422` on `hsts`
+otherwise). If Traefik has no such middleware it is created when the host is pushed (one year, this host
+only; never overwritten when it exists). Off by default. See docs/sources.md.
 
 Two more things the adapter now gets right on every write:
 

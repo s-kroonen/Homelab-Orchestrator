@@ -734,6 +734,15 @@ async def sources_page(request: Request, session: SessionDep) -> HTMLResponse | 
     return _templates.TemplateResponse(request, "sources.html", {"admin": admin})
 
 
+@router.get("/sources/format", response_model=None)
+async def format_page(request: Request, session: SessionDep) -> HTMLResponse | RedirectResponse:
+    """Plan and run the rewrite of old routes into the standard shape (its own page)."""
+    admin = get_current_admin(request, session)
+    if admin is None:
+        return login_redirect(request)
+    return _templates.TemplateResponse(request, "format.html", {"admin": admin})
+
+
 @router.get("/infra", response_model=None)
 async def infra_status_page(
     request: Request, session: SessionDep

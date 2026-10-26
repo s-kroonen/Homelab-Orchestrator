@@ -399,6 +399,7 @@ class FakeTMWithOptions(FakeTM):
     def __init__(self, *, middlewares: list[str] | None = None, **kw: Any) -> None:
         super().__init__(**kw)
         self.middlewares = ["redirect-to-https@file"] if middlewares is None else middlewares
+        self.created_middlewares: dict[str, str] = {}
 
     def __call__(self, request: httpx.Request) -> httpx.Response:
         if request.url.path == "/api/traefik/middlewares":
@@ -407,6 +408,11 @@ class FakeTMWithOptions(FakeTM):
             return httpx.Response(
                 200, json={"cert_resolver": self.resolvers, "domains": ["example.com"]}
             )
+        if request.url.path == "/save-middleware":
+            form = dict(parse_qsl(request.read().decode(), keep_blank_values=True))
+            self.created_middlewares[form["middlewareName"]] = form["middlewareContent"]
+            self.middlewares.append(f"{form['middlewareName']}@file")
+            return httpx.Response(200, json={"ok": True})
         if request.url.path == "/save":
             # Blank fields matter here (the redirect router posts no target).
             form = dict(parse_qsl(request.read().decode(), keep_blank_values=True))
@@ -677,18 +683,23 @@ def test_settings_default_redirect_middleware() -> None:
     assert Settings().traefik_redirect_middleware == "redirect-to-https"
 
 
-def test_hsts_is_refused_when_traefik_lacks_the_middleware(
+def test_a_missing_hsts_middleware_is_created_when_the_host_is_pushed(
     service: Service, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    from tests.push_helpers import push
+
     fake = FakeTMWithOptions(middlewares=["redirect-to-https"])
     client = _client(monkeypatch, fake)
     r = client.post(
         "/api/proxy-hosts",
         json=_body(service, entry_points=["websecure"], route_options={"hsts": True}),
     )
-    assert r.status_code == 422
-    assert "hsts-headers" in r.json()["detail"]["errors"]["hsts"]
-    assert fake.saves == [] and _rows() == []
+    assert r.status_code == 201, r.text  # no longer refused: the push makes the middleware
+    assert fake.created_middlewares == {}
+    push(client)
+    assert list(fake.created_middlewares) == ["hsts-headers"]
+    assert "stsSeconds: 31536000" in fake.created_middlewares["hsts-headers"]
+    assert fake.saves[0]["middlewares"] == "hsts-headers"  # and the route points at it
 
 
 def test_hsts_is_sent_when_traefik_has_the_middleware(
@@ -706,6 +717,7 @@ def test_hsts_is_sent_when_traefik_has_the_middleware(
     assert _rows()[0].route_options["hsts"] is True
     push(client)
     assert fake.saves[0]["middlewares"] == "hsts-headers"
+    assert fake.created_middlewares == {}  # it was there: nothing is created
 
 
 def test_hsts_needs_an_https_entry_point(service: Service, monkeypatch: pytest.MonkeyPatch) -> None:

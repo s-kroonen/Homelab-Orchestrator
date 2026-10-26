@@ -313,15 +313,21 @@ async def test_asking_for_hsts_adds_the_middleware_to_the_new_route(
     assert off.status == rf.READY and any("removes HSTS" in c for c in off.changes)
 
 
-async def test_hsts_that_traefik_does_not_have_is_not_added(
+async def test_hsts_that_traefik_does_not_have_is_created_by_the_format(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, session: Session, service: Service
 ) -> None:
     sim, adapters, settings = _setup(monkeypatch, tmp_path, session, service)
     _old(sim, middlewares=("redirect-to-https",))
     _host(session, service)
-    (item,) = (await _plan(session, adapters, settings, hsts=True)).items
-    assert item.target["options"].get("hsts") is None
-    assert any("hsts-headers" in w and "not added" in w for w in item.warnings)
+    plan = await _plan(session, adapters, settings, hsts=True)
+    (item,) = plan.items
+    assert item.target["options"]["hsts"] is True
+    assert any("creates the hsts-headers middleware" in c for c in item.changes)
+    assert sim.created_middlewares == {}  # planning writes nothing
+    (result,) = await rf.apply_plan(session, adapters, settings, plan, actor="storm")
+    assert result.ok, result.message
+    assert "stsSeconds: 31536000" in sim.created_middlewares["hsts-headers"]
+    assert "hsts-headers" in sim.files["thing.yml"]["orchestrator-nas-example-com"]["mws"]
 
 
 async def test_a_route_that_already_has_hsts_keeps_it_when_left_as_is(

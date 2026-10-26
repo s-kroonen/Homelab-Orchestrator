@@ -28,6 +28,9 @@ page.
 
 ## Format routes
 
+Format has its own page, **Format routes** (`/sources/format`, in the navigation and linked from the
+Traefik Manager tab). It plans as soon as it opens.
+
 Old routes carry the syntax of whatever made them: hand-written files, an NPM migration (a "force
 SSL" redirect middleware on the HTTPS router, HSTS and friends), names of their own, files nobody
 manages any more. **Format** rewrites them, one by one, into the shape Traefik Manager creates for a
@@ -53,7 +56,7 @@ same.
 
 ### Plan, then run
 
-*Plan a format…* reads every route as Traefik Manager stores it and shows, per host: **ready**
+The page reads every route as Traefik Manager stores it and shows, per host: **ready**
 (with exactly what changes), **already standard**, **left alone** (and why) or **skipped**. Nothing
 is written. *Format the selected* then runs those hosts one at a time in the background (a pipeline
 run of kind `format`: Activity, audit `proxy_host.formatted` / `proxy_host.format_failed`).
@@ -103,17 +106,19 @@ The **HSTS** choice above the list is applied to every formatted route and re-pl
   (default `hsts-headers`) and stores `hsts: true` in the host's route options;
 * *take off every formatted route*.
 
-The middleware has to exist in Traefik (the plan warns and adds nothing if not), e.g. in a shared file:
+If Traefik has no such middleware the orchestrator **creates it** (through Traefik Manager, when the
+first route that uses it is written; the plan says "creates the … middleware"). What it creates:
 
 ```yaml
-http:
-  middlewares:
-    hsts-headers:
-      headers:
-        stsSeconds: 31536000
-        stsIncludeSubdomains: true
-        forceSTSHeader: true
+headers:
+  stsSeconds: 31536000        # one year
+  stsIncludeSubdomains: false # this host only
+  stsPreload: false
+  forceSTSHeader: false
 ```
+
+Edit it in Traefik Manager if you want something else (e.g. `includeSubdomains`); an existing
+middleware of that name is never touched.
 
 CLI: `orchestrator-cli proxy format --hsts` / `--no-hsts`. New hosts get it from the **HSTS** checkbox
 of the host form (off by default: browsers remember HSTS for a long time, so switch it on once

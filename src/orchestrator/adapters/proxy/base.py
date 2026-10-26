@@ -584,6 +584,11 @@ class ProxyAdapter(ABC):
         ``*.domain`` as a ready-made wildcard certificate. ``None`` = unknown."""
         return None
 
+    async def ensure_hsts_middleware(self) -> SyncEvent | None:
+        """Make sure the HSTS headers middleware exists (create it when it does not).
+        ``None`` = nothing to do, or this backend cannot."""
+        return None
+
     async def list_middlewares(self) -> list[str] | None:
         """Names of the HTTP middlewares the proxy currently has (with their
         ``@provider`` suffix, e.g. ``redirect-to-https@file``), or ``None``
