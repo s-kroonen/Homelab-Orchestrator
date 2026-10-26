@@ -28,6 +28,9 @@ page.
 
 ## Format routes
 
+Format has its own page, **Format routes** (`/sources/format`, in the navigation and linked from the
+Traefik Manager tab). It plans as soon as it opens.
+
 Old routes carry the syntax of whatever made them: hand-written files, an NPM migration (a "force
 SSL" redirect middleware on the HTTPS router, HSTS and friends), names of their own, files nobody
 manages any more. **Format** rewrites them, one by one, into the shape Traefik Manager creates for a
@@ -53,7 +56,7 @@ same.
 
 ### Plan, then run
 
-*Plan a format…* reads every route as Traefik Manager stores it and shows, per host: **ready**
+The page reads every route as Traefik Manager stores it and shows, per host: **ready**
 (with exactly what changes), **already standard**, **left alone** (and why) or **skipped**. Nothing
 is written. *Format the selected* then runs those hosts one at a time in the background (a pipeline
 run of kind `format`: Activity, audit `proxy_host.formatted` / `proxy_host.format_failed`).

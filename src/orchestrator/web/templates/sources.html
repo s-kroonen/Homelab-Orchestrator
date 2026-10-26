@@ -84,7 +84,7 @@
     <section>
       <div class="row">
         <button id="tr-import">Import from Traefik Manager</button>
-        <button class="secondary" id="tr-plan">Plan a format…</button>
+        <a class="btn" href="/sources/format">Format routes…</a>
         <a class="btn secondary" href="/proxy-hosts">Proxy hosts (edit, push)</a>
         <span class="msg" id="tr-msg">Import records routes that have no record yet and adopts upstream and on/off state for the ones that do.</span>
       </div>
@@ -102,40 +102,6 @@
       </div>
     </section>
 
-    <section id="fmt" hidden>
-      <h2>Format routes</h2>
-      <p class="msg">
-        Rewrites hand-written and migrated routes into what Traefik Manager creates for a new host and what this
-        orchestrator creates by default: a router named <code>orchestrator-&lt;host&gt;</code> in the configured config file,
-        the Host header passed through, a companion HTTP&nbsp;→&nbsp;HTTPS redirect router (the old way's redirect middleware is
-        dropped), and the certificate resolver. One host at a time: the new route is created beside the old one, Traefik has to
-        load it, then the old one is removed and read back. <strong>If a step fails the new route is removed and the old one is
-        restored</strong>; a snapshot of each old route is saved first. Routes it cannot rewrite without losing something
-        (path rules, several servers, shared services…) are left alone. Hosts that are switched off are not touched.
-      </p>
-      <div class="row">
-        <label class="inline" for="fmt-hsts">HSTS</label>
-        <select id="fmt-hsts" title="Plans again when changed">
-          <option value="keep">keep what each route has</option>
-          <option value="on">add to every formatted route</option>
-          <option value="off">take off every formatted route</option>
-        </select>
-        <span class="msg" id="fmt-hsts-note"></span>
-      </div>
-      <div class="row">
-        <label class="inline"><input type="checkbox" id="fmt-stop" checked> stop at the first host that fails</label>
-        <label class="inline" title="Only when Traefik's runtime list cannot be read at all"><input type="checkbox" id="fmt-unverified"> accept a route Traefik could not confirm</label>
-      </div>
-      <div class="row">
-        <button class="secondary" id="fmt-all">Select every ready host</button>
-        <button class="secondary" id="fmt-none">Select none</button>
-        <button id="fmt-run">Format the selected</button>
-        <button id="fmt-every" title="Selects every ready host and runs, one host at a time">Format all ready routes</button>
-        <span class="msg" id="fmt-msg"></span>
-      </div>
-      <ol class="steps" id="fmt-steps" aria-live="polite" hidden></ol>
-      <div id="fmt-items"></div>
-    </section>
   </div>
 
   <!-- Portainer -->

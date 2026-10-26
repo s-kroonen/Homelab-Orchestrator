@@ -1,0 +1,56 @@
+{% extends "base.html" %}
+{% block title %}homelab-orchestrator — format routes{% endblock %}
+{% block extra_head %}
+<style>
+  .chip { display: inline-block; padding: 0.05rem 0.45rem; margin: 0 0.15rem 0.15rem 0; border-radius: 0.6rem; background: #1d2330; font-size: 0.75rem; }
+  .chip.warn { background: #3b2e14; } .chip.ok { background: #14301f; } .chip.bad { background: #3a1a1a; }
+  .fmt-item { border: 1px solid #2a2f3a; border-radius: 0.4rem; padding: 0.6rem 0.8rem; margin-bottom: 0.6rem; }
+  .fmt-item.blocked { border-color: #5a3a3a; } .fmt-item.skipped, .fmt-item.standard { opacity: 0.65; }
+  .fmt-item h4 { margin: 0 0 0.3rem; font-size: 0.95rem; }
+  .fmt-item ul { margin: 0.2rem 0 0.4rem 1.1rem; padding: 0; font-size: 0.85rem; }
+  .fmt-item .why { color: #9aa4b2; font-size: 0.85rem; }
+  dl.kv { display: grid; grid-template-columns: max-content 1fr; gap: 0.25rem 1.25rem; font-size: 0.9rem; }
+  dl.kv > div { display: contents; } dl.kv dt { color: #9aa4b2; } dl.kv dd { margin: 0; overflow-wrap: anywhere; }
+  .checks { margin-bottom: 1rem; }
+  .checks label { display: block; margin: 0.2rem 0; }
+</style>
+{% endblock %}
+{% block content %}
+  <p class="msg"><a href="/sources#traefik">&larr; Data sources</a></p>
+    <section id="fmt">
+      <h2>Format routes</h2>
+      <p class="msg">
+        Rewrites hand-written and migrated routes into what Traefik Manager creates for a new host and what this
+        orchestrator creates by default: a router named <code>orchestrator-&lt;host&gt;</code> in the configured config file,
+        the Host header passed through, a companion HTTP&nbsp;→&nbsp;HTTPS redirect router (the old way's redirect middleware is
+        dropped), and the certificate resolver. One host at a time: the new route is created beside the old one, Traefik has to
+        load it, then the old one is removed and read back. <strong>If a step fails the new route is removed and the old one is
+        restored</strong>; a snapshot of each old route is saved first. Routes it cannot rewrite without losing something
+        (path rules, several servers, shared services…) are left alone. Hosts that are switched off are not touched.
+      </p>
+      <div class="row">
+        <label class="inline" for="fmt-hsts">HSTS</label>
+        <select id="fmt-hsts" title="Plans again when changed">
+          <option value="keep">keep what each route has</option>
+          <option value="on">add to every formatted route</option>
+          <option value="off">take off every formatted route</option>
+        </select>
+        <span class="msg" id="fmt-hsts-note"></span>
+      </div>
+      <div class="row">
+        <label class="inline"><input type="checkbox" id="fmt-stop" checked> stop at the first host that fails</label>
+        <label class="inline" title="Only when Traefik's runtime list cannot be read at all"><input type="checkbox" id="fmt-unverified"> accept a route Traefik could not confirm</label>
+      </div>
+      <div class="row">
+        <button class="secondary" id="fmt-replan">Plan again</button>
+        <button class="secondary" id="fmt-all">Select every ready host</button>
+        <button class="secondary" id="fmt-none">Select none</button>
+        <button id="fmt-run">Format the selected</button>
+        <button id="fmt-every" title="Selects every ready host and runs, one host at a time">Format all ready routes</button>
+        <span class="msg" id="fmt-msg"></span>
+      </div>
+      <ol class="steps" id="fmt-steps" aria-live="polite" hidden></ol>
+      <div id="fmt-items"></div>
+    </section>
+{% endblock %}
+{% block scripts %}<script src="/static/format.js"></script>{% endblock %}
