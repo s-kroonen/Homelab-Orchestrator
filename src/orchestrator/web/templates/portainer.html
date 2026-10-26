@@ -42,7 +42,7 @@
     </table>
     </div>
     <div class="row" id="d-actions">
-      <button class="secondary small" id="d-adopt" type="button" hidden>Adopt as a sub-service…</button>
+      <a class="btn secondary small" id="d-adopt" href="/sources#portainer" hidden>Adopt on Data sources…</a>
       <button class="secondary small" data-stack-action="start" type="button">Start</button>
       <button class="secondary small" data-stack-action="stop" type="button">Stop</button>
       <button class="secondary small" data-stack-action="restart" type="button">Restart</button>
@@ -52,45 +52,6 @@
     <details><summary>The same by hand, on the Docker host</summary><pre class="manual" id="d-cmds"></pre></details>
   </section>
 
-  <section id="adopt" hidden>
-    <h3>Adopt <span id="a-stack"></span> as a sub-service</h3>
-    <p class="msg">
-      Links the stack here. Nothing is copied from Portainer: only the stack's name and
-      environment number, plus the policies you pick. Review, then create.
-    </p>
-    <p class="msg error" id="a-notes"></p>
-    <div class="grid">
-      <label for="a-slug">Service slug</label><input id="a-slug" type="text">
-      <label for="a-parent">Lives under</label><select id="a-parent"></select>
-      <label for="a-group">Group</label><input id="a-group" type="text" placeholder="optional">
-    </div>
-    <h4>Containers</h4>
-    <div class="table-scroll"><table>
-      <thead><tr><th>Add</th><th>Container</th><th>Sub-service slug</th><th>Backup waits for it</th></tr></thead>
-      <tbody id="a-children"></tbody>
-    </table></div>
-    <h4>Proxy hosts that point at it</h4>
-    <div id="a-hosts" class="checks"></div>
-    <div class="grid">
-      <label>Probes</label>
-      <label class="inline"><input type="checkbox" id="a-probes" checked> add a Portainer probe per container and an HTTP probe through the first proxy host</label>
-      <label for="a-deploy">Deploy method</label>
-      <select id="a-deploy">
-        <option value="">none — add one later</option>
-        <option value="none">guards: none</option>
-        <option value="probes">guards: probes before and after</option>
-        <option value="probes+backup">guards: probes + a recent backup</option>
-      </select>
-      <label for="a-hook">Webhook</label>
-      <select id="a-hook"><option value="">none</option><option value="gitlab">GitLab</option><option value="github">GitHub</option><option value="generic">generic (a token)</option></select>
-    </div>
-    <div class="row">
-      <button id="a-go" type="button">Create the sub-service</button>
-      <button class="secondary" id="a-cancel" type="button">Cancel</button>
-      <span class="msg" id="a-msg"></span>
-    </div>
-    <pre class="manual" id="a-result" hidden></pre>
-  </section>
 
   <section id="create" hidden>
     <h3>New stack</h3>

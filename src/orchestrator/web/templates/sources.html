@@ -1,0 +1,188 @@
+{% extends "base.html" %}
+{% block title %}homelab-orchestrator — data sources{% endblock %}
+{% block extra_head %}
+<style>
+  .tabbar { display: flex; gap: 0.2rem; border-bottom: 1px solid #2a2f3a; margin: 1rem 0; flex-wrap: wrap; }
+  .tabbar .tab { background: transparent; color: #9aa4b2; border: 0; border-bottom: 2px solid transparent; border-radius: 0; padding: 0.5rem 0.9rem; }
+  .tabbar .tab:hover { color: #e6e9ef; }
+  .tabbar .tab[aria-selected="true"] { color: #e6e9ef; border-bottom-color: #5b8def; }
+  .src-meta { color: #9aa4b2; font-size: 0.8rem; margin-left: 0.4rem; }
+  .chip { display: inline-block; padding: 0.05rem 0.45rem; margin: 0 0.15rem 0.15rem 0; border-radius: 0.6rem; background: #1d2330; font-size: 0.75rem; }
+  .chip.warn { background: #3b2e14; } .chip.ok { background: #14301f; } .chip.bad { background: #3a1a1a; }
+  .fmt-item { border: 1px solid #2a2f3a; border-radius: 0.4rem; padding: 0.6rem 0.8rem; margin-bottom: 0.6rem; }
+  .fmt-item.blocked { border-color: #5a3a3a; } .fmt-item.skipped, .fmt-item.standard { opacity: 0.65; }
+  .fmt-item h4 { margin: 0 0 0.3rem; font-size: 0.95rem; }
+  .fmt-item ul { margin: 0.2rem 0 0.4rem 1.1rem; padding: 0; font-size: 0.85rem; }
+  .fmt-item .why { color: #9aa4b2; font-size: 0.85rem; }
+  .banner.warn { background: #3b2e14; border: 1px solid #e5a63e; padding: 0.6rem 0.8rem; border-radius: 0.4rem; margin-bottom: 0.9rem; font-size: 0.9rem; }
+  dl.kv { display: grid; grid-template-columns: max-content 1fr; gap: 0.25rem 1.25rem; font-size: 0.9rem; }
+  dl.kv > div { display: contents; } dl.kv dt { color: #9aa4b2; } dl.kv dd { margin: 0; overflow-wrap: anywhere; }
+  .grid { display: grid; grid-template-columns: 11rem minmax(0, 1fr); gap: 0.6rem 1rem; align-items: center; margin-bottom: 1rem; }
+  .grid > label { color: #9aa4b2; font-size: 0.85rem; }
+  .grid > input:not([type=checkbox]), .grid > select { width: 100%; max-width: 100%; }
+  .checks { margin-bottom: 1rem; }
+  .checks label { display: block; margin: 0.2rem 0; }
+</style>
+{% endblock %}
+{% block content %}
+  <section>
+    <h2>Data sources</h2>
+    <p class="msg">
+      Nodes and guests belong to <strong>Proxmox</strong>, routes to <strong>Traefik Manager</strong>, stacks to
+      <strong>Portainer</strong>, addresses to the guests themselves. They are not created or edited by hand here:
+      you <strong>pull</strong> them (refresh, import what is new) and, for routes, <strong>format</strong> them into
+      one standard shape. What only this orchestrator knows (probes, policies, power targets) stays on its own pages.
+    </p>
+  </section>
+
+  <div class="tabbar" role="tablist" id="src-tabs">
+    <button class="tab" type="button" role="tab" data-tab="proxmox">Proxmox <span class="src-meta" id="m-proxmox"></span></button>
+    <button class="tab" type="button" role="tab" data-tab="ips">Addresses <span class="src-meta" id="m-ips"></span></button>
+    <button class="tab" type="button" role="tab" data-tab="traefik">Traefik Manager <span class="src-meta" id="m-traefik"></span></button>
+    <button class="tab" type="button" role="tab" data-tab="portainer">Portainer <span class="src-meta" id="m-portainer"></span></button>
+  </div>
+
+  <!-- Proxmox -->
+  <div class="tabpanel" id="tab-proxmox" hidden>
+    <section>
+      <div class="row">
+        <button id="px-refresh">Pull from Proxmox</button>
+        <span class="msg" id="px-msg">Fills blank node addresses, checks every node, re-reads every guest and scans the services on them. Addresses set by hand are never overwritten.</span>
+      </div>
+      <h3>Nodes</h3>
+      <div class="table-scroll"><table>
+        <thead><tr><th>Node</th><th>State</th><th>Address</th><th>Power target</th><th>Always on</th><th></th></tr></thead>
+        <tbody id="px-nodes"><tr><td colspan="6">Loading…</td></tr></tbody>
+      </table></div>
+      <h3>Guests</h3>
+      <div class="table-scroll"><table>
+        <thead><tr><th>Node</th><th>Id</th><th>Kind</th><th>Name</th><th>Status</th><th>Service</th><th></th></tr></thead>
+        <tbody id="px-guests"><tr><td colspan="7">Loading…</td></tr></tbody>
+      </table></div>
+      <p class="msg">New nodes and guests are created in Proxmox. A node or guest this orchestrator does not know yet is offered
+        for <strong>Import</strong>; the power target and the rest are set on the <a href="/">dashboard</a> afterwards.</p>
+    </section>
+  </div>
+
+  <!-- Addresses -->
+  <div class="tabpanel" id="tab-ips" hidden>
+    <section>
+      <div class="row">
+        <button id="ip-all">Discover all</button>
+        <button class="secondary" id="ip-missing">Only those without an address</button>
+        <span class="msg" id="ip-msg">Asks the guest agent / LXC, then ARP, then DHCP. A stopped guest is skipped; an address typed in by hand is never touched.</span>
+      </div>
+      <div class="table-scroll"><table>
+        <thead><tr><th>Service</th><th>Node</th><th>Guest</th><th>Address</th><th>From</th><th>Manual</th><th>Found</th><th>Last result</th></tr></thead>
+        <tbody id="ip-rows"><tr><td colspan="8">Loading…</td></tr></tbody>
+      </table></div>
+    </section>
+  </div>
+
+  <!-- Traefik Manager -->
+  <div class="tabpanel" id="tab-traefik" hidden>
+    <section>
+      <div class="row">
+        <button id="tr-import">Import from Traefik Manager</button>
+        <button class="secondary" id="tr-plan">Plan a format…</button>
+        <a class="btn secondary" href="/proxy-hosts">Proxy hosts (edit, push)</a>
+        <span class="msg" id="tr-msg">Import records routes that have no record yet and adopts upstream and on/off state for the ones that do.</span>
+      </div>
+      <div id="tr-unreadable" class="banner warn" hidden>Traefik Manager is not configured or could not be read.</div>
+      <h3>Routes in Traefik Manager</h3>
+      <div class="table-scroll"><table>
+        <thead><tr><th>Route</th><th>Host</th><th>Upstream</th><th>File</th><th>Shape</th><th>On</th><th>Record</th><th></th></tr></thead>
+        <tbody id="tr-routes"><tr><td colspan="8">Loading…</td></tr></tbody>
+      </table></div>
+      <div id="tr-noroute-box" hidden>
+        <h3>Records with no route yet</h3>
+        <p class="msg">These hosts exist here but not in Traefik Manager. <strong>Push now</strong> on the
+          <a href="/proxy-hosts">Proxy hosts</a> page creates them (a host switched off is created parked and stays off).</p>
+        <div id="tr-noroute"></div>
+      </div>
+    </section>
+
+    <section id="fmt" hidden>
+      <h2>Format routes</h2>
+      <p class="msg">
+        Rewrites hand-written and migrated routes into what Traefik Manager creates for a new host and what this
+        orchestrator creates by default: a router named <code>orchestrator-&lt;host&gt;</code> in the configured config file,
+        the Host header passed through, a companion HTTP&nbsp;→&nbsp;HTTPS redirect router (the old way's redirect middleware is
+        dropped), and the certificate resolver. One host at a time: the new route is created beside the old one, Traefik has to
+        load it, then the old one is removed and read back. <strong>If a step fails the new route is removed and the old one is
+        restored</strong>; a snapshot of each old route is saved first. Routes it cannot rewrite without losing something
+        (path rules, several servers, shared services…) are left alone. Hosts that are switched off are not touched.
+      </p>
+      <div class="row">
+        <label class="inline"><input type="checkbox" id="fmt-stop" checked> stop at the first host that fails</label>
+        <label class="inline" title="Only when Traefik's runtime list cannot be read at all"><input type="checkbox" id="fmt-unverified"> accept a route Traefik could not confirm</label>
+      </div>
+      <div class="row">
+        <button class="secondary" id="fmt-all">Select every ready host</button>
+        <button class="secondary" id="fmt-none">Select none</button>
+        <button id="fmt-run">Format the selected</button>
+        <span class="msg" id="fmt-msg"></span>
+      </div>
+      <ol class="steps" id="fmt-steps" aria-live="polite" hidden></ol>
+      <div id="fmt-items"></div>
+    </section>
+  </div>
+
+  <!-- Portainer -->
+  <div class="tabpanel" id="tab-portainer" hidden>
+    <section>
+      <div class="banner warn" id="pt-off" hidden>
+        Portainer is not set up here. Set <code>PORTAINER_URL</code> and <code>PORTAINER_API_KEY</code> in <code>.env</code>
+        (Portainer: My account → Access tokens), restart, and its stacks show up here to adopt.
+      </div>
+      <div class="row">
+        <button id="pt-refresh">Pull stacks from Portainer</button>
+        <a class="btn secondary" href="/portainer">Browse containers &amp; logs</a>
+        <span class="msg" id="pt-msg">Adopting links a stack (and its containers) to this orchestrator as sub-services; nothing is copied out of Portainer.</span>
+      </div>
+      <div class="table-scroll"><table>
+        <thead><tr><th>Stack</th><th>Environment</th><th>Status</th><th>Containers</th><th>Linked to</th><th></th></tr></thead>
+        <tbody id="pt-rows"><tr><td colspan="6">Loading…</td></tr></tbody>
+      </table></div>
+      <p class="msg error" id="pt-errors"></p>
+    </section>
+
+    <section id="adopt" hidden>
+      <h3>Adopt <span id="a-stack"></span> as a sub-service</h3>
+      <p class="msg">Links the stack here. Nothing is copied from Portainer: only the stack's name and environment number, plus the policies you pick. Review, then create.</p>
+      <p class="msg error" id="a-notes"></p>
+      <div class="grid">
+        <label for="a-slug">Service slug</label><input id="a-slug" type="text">
+        <label for="a-parent">Lives under</label><select id="a-parent"></select>
+        <label for="a-group">Group</label><input id="a-group" type="text" placeholder="optional">
+      </div>
+      <h4>Containers</h4>
+      <div class="table-scroll"><table>
+        <thead><tr><th>Add</th><th>Container</th><th>Sub-service slug</th><th>Backup waits for it</th></tr></thead>
+        <tbody id="a-children"></tbody>
+      </table></div>
+      <h4>Proxy hosts that point at it</h4>
+      <div id="a-hosts" class="checks"></div>
+      <div class="grid">
+        <label>Probes</label>
+        <label class="inline"><input type="checkbox" id="a-probes" checked> add a Portainer probe per container and an HTTP probe through the first proxy host</label>
+        <label for="a-deploy">Deploy method</label>
+        <select id="a-deploy">
+          <option value="">none — add one later</option>
+          <option value="none">guards: none</option>
+          <option value="probes">guards: probes before and after</option>
+          <option value="probes+backup">guards: probes + a recent backup</option>
+        </select>
+        <label for="a-hook">Webhook</label>
+        <select id="a-hook"><option value="">none</option><option value="gitlab">GitLab</option><option value="github">GitHub</option><option value="generic">generic (a token)</option></select>
+      </div>
+      <div class="row">
+        <button id="a-go" type="button">Create the sub-service</button>
+        <button class="secondary" id="a-cancel" type="button">Cancel</button>
+        <span class="msg" id="a-msg"></span>
+      </div>
+      <pre class="manual" id="a-result" hidden></pre>
+    </section>
+  </div>
+{% endblock %}
+{% block scripts %}<script src="/static/sources.js"></script>{% endblock %}

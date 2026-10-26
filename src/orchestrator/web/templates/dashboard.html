@@ -93,17 +93,9 @@
       </thead>
       <tbody id="nodes-body"><tr><td colspan="9">Loading…</td></tr></tbody>
     </table>
+    <p class="msg">Nodes and guests come from Proxmox: pull them, fill their addresses and import new ones on
+      <a href="/sources#proxmox">Data sources</a>. What only this orchestrator knows (power target, always on) is edited here.</p>
     <div class="row">
-      <input id="new-node-name" placeholder="name (e.g. pve1)" size="12">
-      <label class="inline"><input id="new-node-always-on" type="checkbox"> always on</label>
-      <input id="new-node-address" placeholder="address (host[:port])" size="16">
-      <input id="new-node-target" placeholder="power target" size="14">
-      <input id="new-node-notes" placeholder="notes" size="16">
-      <label class="inline"><input id="new-node-wake-on-hit" type="checkbox" checked> wake on hit</label>
-      <button id="new-node-btn">Add node</button>
-    </div>
-    <div class="row">
-      <button class="secondary" id="fill-addresses-btn" title="Fill blank addresses: the setup's node from PROXMOX_HOST, the others from the cluster listing">Fill addresses from Proxmox</button>
       <button class="secondary" id="check-nodes-btn">Check all nodes</button>
     </div>
     <p class="msg" id="nodes-msg"></p>
@@ -366,7 +358,6 @@
       actions.append(
         button("Edit", "secondary small", () => tr.replaceWith(renderNodeRow(node, true))), " ",
         button("Check", "secondary small", () => checkNode(node.name)), " ",
-        button("Resync guests", "secondary small", () => resync({ node: node.name }, "nodes-msg")), " ",
         button("Wake", "secondary small", () => doPower("wake")), " ",
         button("Power off", "danger small", () => doPower("power_off")), " ",
         button("Restart", "danger small", () => doPower("restart")), " ",
@@ -468,16 +459,6 @@
         : "All nodes answer.",
       bad.length ? "error" : "ok");
   });
-  document.getElementById("fill-addresses-btn").addEventListener("click", async () => {
-    try {
-      const r = await apiFetch("POST", "/api/infra/nodes/fill-addresses", undefined, { suppressToast: true });
-      const names = Object.entries(r.filled).map(([n, a]) => `${n}=${a}`);
-      setMsg("nodes-msg", (names.length ? "Filled " + names.join(", ") + ". " : "Nothing to fill. ") +
-        (r.skipped.length ? "Not in the Proxmox cluster listing: " + r.skipped.join(", ") + " (set by hand)." : ""), "ok");
-      loadNodes();
-    } catch (err) { setMsg("nodes-msg", err.message, "error"); }
-  });
-
   // --- bulk actions (static/bulk.js) ----------------------------------------
   const servicesApi = Bulk.viaApi("/api/bulk/services");
   const svcTables = [...document.querySelectorAll("table.services-table")];
@@ -539,24 +520,6 @@
       { label: "Wake on hit off", action: "wake_on_hit_off", run: nodesApi },
     ],
     onDone: () => loadNodes(),
-  });
-
-  document.getElementById("new-node-btn").addEventListener("click", async () => {
-    try {
-      await apiFetch("POST", "/api/registry/nodes", {
-        name: document.getElementById("new-node-name").value.trim(),
-        always_on: document.getElementById("new-node-always-on").checked,
-        address: document.getElementById("new-node-address").value.trim(),
-        power_mgr_target: document.getElementById("new-node-target").value.trim(),
-        notes: document.getElementById("new-node-notes").value,
-        wake_on_hit_enabled: document.getElementById("new-node-wake-on-hit").checked,
-      }, { suppressToast: true });
-      // Full reload: the "new service" node picker and the unsaved-changes
-      // badge are both server-rendered.
-      location.reload();
-    } catch (err) {
-      setMsg("nodes-msg", err.message, "error");
-    }
   });
 
   loadNodes();

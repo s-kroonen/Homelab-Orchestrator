@@ -748,3 +748,21 @@ def test_proxy_hosts_show_where_they_stand_against_the_router(client: TestClient
     assert out["isError"] is False
     text = out["content"][0]["text"]
     assert "wiki.example.com" in text and "sync_state" in text and "wiki" in text
+
+
+def test_approval_tokens_can_always_be_typed_as_a_cli_argument(client: TestClient) -> None:
+    """A urlsafe token may start with '-', which click reads as an option: they never do."""
+    from orchestrator.mcp import approvals
+
+    got = connect(client, ["read", "control", "propose"])
+    for _ in range(25):
+        call(
+            client,
+            got["access_token"],
+            "guest_power",
+            {"node": "pve1", "vmid": 101, "action": "stop"},
+        )
+    with Session(get_engine()) as s:
+        tokens = [r.token for r in s.exec(select(PendingApproval)).all()]
+    assert len(tokens) == 25 and all(t[0].isalpha() for t in tokens)
+    assert approvals.request_url(config_module.get_settings(), tokens[0]).endswith(tokens[0])

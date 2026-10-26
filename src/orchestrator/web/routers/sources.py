@@ -100,6 +100,26 @@ async def proxmox(session: SessionDep, adapters: AdaptersDep) -> dict[str, Any]:
     for row in nodes.get("nodes", []):
         node = stored.get(row["name"])
         row["power_target"] = node.power_mgr_target if node else None
+        row["registered"] = node is not None
+    # Nodes the cluster lists that have no record here yet (importable).
+    try:
+        cluster = await adapters.proxmox.cluster_status()
+        known = {r["name"] for r in nodes.get("nodes", [])}
+        for entry in cluster.nodes:
+            if entry.name not in known:
+                nodes.setdefault("nodes", []).append(
+                    {
+                        "name": entry.name,
+                        "registered": False,
+                        "address": entry.ip,
+                        "proxmox_online": entry.online,
+                        "state": "on" if entry.online else "off",
+                        "power_target": None,
+                        "always_on": False,
+                    }
+                )
+    except Exception:  # the node list above already carries the error
+        pass
     return {
         "nodes": nodes.get("nodes", []),
         "proxmox_error": nodes.get("proxmox_error"),
@@ -125,6 +145,96 @@ async def proxmox_refresh(
     _stamp(session, "proxmox")
     session.commit()
     return {"addresses": filled, "nodes": checks, "guests": resync}
+
+
+class NodeImportIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str
+
+
+@router.post("/proxmox/nodes/import", status_code=status.HTTP_201_CREATED)
+async def import_node(
+    body: NodeImportIn,
+    session: SessionDep,
+    adapters: AdaptersDep,
+    settings: SettingsDep,
+    admin: CurrentAdmin,
+) -> dict[str, Any]:
+    """Record a node the cluster has. Its name and address come from Proxmox; what only this
+    orchestrator knows (power target, always on) is set on the dashboard afterwards."""
+    from orchestrator.web.routers import dashboard
+
+    try:
+        cluster = await adapters.proxmox.cluster_status()
+    except Exception as exc:
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc)) from exc
+    entry = next((n for n in cluster.nodes if n.name == body.name), None)
+    if entry is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, f"Proxmox has no node named {body.name!r}")
+    address = settings.proxmox_host if entry.local and settings.proxmox_host else entry.ip
+    out = await dashboard.create_node(
+        dashboard.NodeCreate(name=entry.name, address=address or ""), session, admin
+    )
+    _stamp(session, "proxmox")
+    session.commit()
+    return out
+
+
+class GuestImportIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    node: str
+    vmid: int
+    slug: str | None = None
+    name: str | None = None
+    group: str = ""
+
+
+@router.post("/proxmox/guests/import", status_code=status.HTTP_201_CREATED)
+async def import_guest(
+    body: GuestImportIn, session: SessionDep, adapters: AdaptersDep, admin: CurrentAdmin
+) -> dict[str, Any]:
+    """Register a Proxmox guest nobody points at yet as a (root) service: name, kind, id and
+    node come from Proxmox. Health probes and the rest are added on its own page."""
+    import re
+
+    from orchestrator.web.routers import dashboard
+
+    try:
+        guests = await adapters.proxmox.list_guests(body.node)
+    except Exception as exc:
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc)) from exc
+    guest = next((g for g in guests if g.vmid == body.vmid and g.node == body.node), None)
+    if guest is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, f"no guest {body.vmid} on {body.node!r}")
+    if session.exec(select(Service).where(Service.guest_id == body.vmid)).first() is not None:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT, f"guest {body.vmid} already belongs to a service"
+        )
+    node = session.exec(select(Node).where(Node.name == body.node)).one_or_none()
+    if node is None:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT, f"import node {body.node!r} first - a service lives on a node"
+        )
+    slug = (
+        body.slug or re.sub(r"[^a-z0-9]+", "-", guest.name.lower()).strip("-") or f"vm-{guest.vmid}"
+    )
+    out = await dashboard.create_service(
+        dashboard.ServiceCreate(
+            slug=slug,
+            name=body.name or guest.name or slug,
+            group=body.group,
+            node_id=node.id,
+            guest_kind=guest.kind.value,
+            guest_id=guest.vmid,
+        ),
+        session,
+        admin,
+    )
+    _stamp(session, "proxmox")
+    session.commit()
+    return out
 
 
 # -- addresses -----------------------------------------------------------------------------------

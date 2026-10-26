@@ -47,6 +47,7 @@ from orchestrator.cli_mcp import mcp as mcp_group
 from orchestrator.cli_notify import notify as notify_group
 from orchestrator.cli_portainer import portainer as portainer_group
 from orchestrator.cli_setup import config_group, init, scaffold
+from orchestrator.cli_sources import sources as sources_group
 from orchestrator.cli_stack import stack as stack_group
 from orchestrator.cli_system import system as system_group
 from orchestrator.config import get_settings
@@ -960,6 +961,7 @@ cli.add_command(stack_group, name="stack")
 cli.add_command(notify_group, name="notify")
 cli.add_command(admin_group, name="admin")
 cli.add_command(mcp_group, name="mcp")
+cli.add_command(sources_group, name="sources")
 
 
 if __name__ == "__main__":

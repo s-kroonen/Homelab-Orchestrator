@@ -608,7 +608,7 @@ def test_dashboard_links_to_detail_and_offers_create_forms(client: TestClient) -
     assert r.status_code == 200
     assert 'href="/services/media"' in r.text
     assert 'id="new-svc-btn"' in r.text
-    assert 'id="new-node-btn"' in r.text
+    assert 'href="/sources#proxmox"' in r.text  # nodes are imported from Proxmox, not typed in
 
 
 def test_service_group_round_trips_through_save_and_reset(client: TestClient) -> None:

@@ -236,3 +236,89 @@ def test_kept_middlewares_can_be_chosen_per_host(tm: Any) -> None:
     assert (
         sim.files["apps.yml"]["orchestrator-nas-example-com"]["mws"] == []
     )  # hsts dropped on purpose
+
+
+def test_nodes_and_guests_that_exist_only_in_proxmox_can_be_imported(client: TestClient) -> None:
+    from orchestrator.adapters.proxmox.base import ClusterNode, ClusterStatus
+
+    pve = client.app.state.adapters.proxmox  # type: ignore[attr-defined]
+    pve.simulated_cluster = ClusterStatus(
+        nodes=[
+            ClusterNode(name="pve1", online=True, local=True, ip="10.0.0.1"),
+            ClusterNode(name="pve2", online=True, ip="10.0.0.2"),
+        ]
+    )
+    pve.simulated_guests.append(
+        Guest(node="pve2", vmid=300, kind=GuestKind.CT, name="Media Box", status="running")
+    )
+    listed = client.get("/api/sources/proxmox").json()
+    new = next(n for n in listed["nodes"] if n["name"] == "pve2")
+    assert new["registered"] is False and new["address"] == "10.0.0.2"
+
+    assert (
+        client.post(
+            "/api/sources/proxmox/guests/import", json={"node": "pve2", "vmid": 300}
+        ).status_code
+        == 409
+    )
+    made = client.post("/api/sources/proxmox/nodes/import", json={"name": "pve2"})
+    assert made.status_code == 201, made.text
+    assert made.json()["address"] == "10.0.0.2"
+    assert (
+        client.post("/api/sources/proxmox/nodes/import", json={"name": "pve2"}).status_code == 409
+    )
+    assert (
+        client.post("/api/sources/proxmox/nodes/import", json={"name": "ghost"}).status_code == 404
+    )
+
+    svc = client.post("/api/sources/proxmox/guests/import", json={"node": "pve2", "vmid": 300})
+    assert svc.status_code == 201, svc.text
+    assert svc.json()["slug"] == "media-box" and svc.json()["guest_id"] == 300
+    assert (
+        client.post(
+            "/api/sources/proxmox/guests/import", json={"node": "pve2", "vmid": 300}
+        ).status_code
+        == 409
+    )
+    assert (
+        client.post(
+            "/api/sources/proxmox/guests/import", json={"node": "pve2", "vmid": 999}
+        ).status_code
+        == 404
+    )
+
+
+def test_the_page_renders_and_the_old_pages_point_at_it(client: TestClient) -> None:
+    anon = TestClient(client.app)
+    assert anon.get("/sources", follow_redirects=False).status_code == 303
+    page = client.get("/sources")
+    assert (
+        page.status_code == 200
+        and "Data sources" in page.text
+        and 'data-tab="traefik"' in page.text
+    )
+    assert 'href="/sources"' in client.get("/").text  # in the navigation
+    for old in ("/proxy-hosts", "/portainer"):
+        text = client.get(old).text
+        assert "/sources#" in text
+    assert "resync-btn" not in client.get("/proxy-hosts").text
+    assert 'id="adopt"' not in client.get("/portainer").text
+
+
+def test_cli_formats_routes_and_pulls(tm: Any) -> None:
+    from click.testing import CliRunner
+
+    from orchestrator.cli import cli
+
+    _client, sim = tm
+    runner = CliRunner()
+    shown = runner.invoke(cli, ["proxy", "format", "--plan"])
+    assert shown.exit_code == 0, shown.output
+    assert "READY" in shown.output and "nas.example.com" in shown.output
+    assert sim.file_of("nas") == "legacy.yml"  # a plan changes nothing
+    done = runner.invoke(cli, ["proxy", "format", "--yes"])
+    assert done.exit_code == 0, done.output
+    assert "formatted" in done.output and "snapshots:" in done.output
+    assert sim.file_of("orchestrator-nas-example-com") == "apps.yml" and sim.file_of("nas") is None
+    pulled = runner.invoke(cli, ["sources", "pull", "traefik"])
+    assert pulled.exit_code == 0 and "discovered" in pulled.output
