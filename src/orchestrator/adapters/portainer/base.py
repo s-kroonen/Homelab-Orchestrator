@@ -9,6 +9,7 @@ webhook ids never appear in them - only the names, and "there is one".
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -174,6 +175,16 @@ class StackCreate:
     env: tuple[tuple[str, str], ...] = ()
 
 
+@dataclass(frozen=True)
+class ExecResult:
+    """How a command run inside a container ended. The output went to the caller's sink."""
+
+    exit_code: int | None
+    #: The tail of what the command wrote to stderr (its own explanation of a failure).
+    stderr: str = ""
+    stdout_bytes: int = 0
+
+
 @dataclass
 class StackListing:
     stacks: list[Stack] = field(default_factory=list)
@@ -243,6 +254,21 @@ class PortainerAdapter(ABC):
     async def container_action(self, endpoint_id: int, ref: str, verb: str) -> str:
         """``start`` | ``stop`` | ``restart`` one container (by id or name). Returns a short
         message; raises when it is not found or Portainer refuses."""
+
+    @abstractmethod
+    async def exec_stream(
+        self,
+        endpoint_id: int,
+        ref: str,
+        cmd: list[str],
+        sink: Callable[[bytes], None],
+        *,
+        timeout_s: float = 1800.0,
+    ) -> ExecResult:
+        """Run ``cmd`` inside a running container and hand its stdout to ``sink`` as it
+        arrives (a dump can be larger than memory). The command's own environment is the
+        container's, so credentials never pass through here. Refuses when
+        ``PORTAINER_READ_ONLY=true``."""
 
     @abstractmethod
     async def stack_kind(self, stack: Stack) -> str:

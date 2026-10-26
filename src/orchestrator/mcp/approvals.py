@@ -75,7 +75,8 @@ async def create_request(
 ) -> tuple[PendingApproval, McpCall]:
     """Park the call and tell the admins. ``why`` is "dangerous" or "ask before every change"."""
     tool = TOOLS[tool_name]
-    token = secrets.token_urlsafe(32)
+    # Starts with a letter: a token beginning with "-" cannot be typed as a CLI argument.
+    token = "r" + secrets.token_urlsafe(31)
     call = store.record_call(
         session,
         grant,

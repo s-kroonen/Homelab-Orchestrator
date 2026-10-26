@@ -38,14 +38,15 @@ Pipelines add **backup_failed** and **wake_failed**; the recovery loop adds
 **recovery_attempt / recovery_succeeded / recovery_exhausted** and **restore_proposed**. Stacks
 linked to Portainer add **switch_failed**, **outside_change** (a linked thing was changed outside
 the orchestrator), and for deploys **deploy_blocked**, **deploy_failed**, **deploy_succeeded**
-and **deploy_outside** - see [portainer_deploys.md](portainer_deploys.md). A dangerous request from an
+and **deploy_outside** - see [portainer_deploys.md](portainer_deploys.md). A database dump adds **dump_failed** (default) and **dump_succeeded** - see
+[dumps.md](dumps.md). A dangerous request from an
 AI assistant adds **mcp_request** (with the approval link) - see [mcp.md](mcp.md).
 
 ## Rules
 
 With **no rules**, `failed`, `down`, `recovered`, `flapping`, `backup_failed`, `wake_failed`,
 `recovery_succeeded`, `recovery_exhausted`, `restore_proposed`, `switch_failed`, `outside_change`,
-`deploy_blocked`, `deploy_failed` and `mcp_request` go to every channel
+`deploy_blocked`, `deploy_failed`, `dump_failed` and `mcp_request` go to every channel
 (`recovery_attempt` stays in the feed unless a rule asks for it). A rule narrows or routes: levels
 (`node` / `guest` / `service` / `sub`), scope (services, groups, nodes), events, the
 least severity (`info` < `warn` < `error` < `critical`) and channels. An empty list

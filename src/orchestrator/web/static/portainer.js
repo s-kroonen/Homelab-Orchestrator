@@ -201,74 +201,11 @@
 
   // -- panels: only one of adopt / create / delete is open at a time ------------------------------
   function openPanel(id) {
-    for (const p of ["adopt", "create", "delete"]) $(p).hidden = p !== id;
+    for (const p of ["create", "delete"]) $(p).hidden = p !== id;
     $(id).scrollIntoView({ behavior: "smooth", block: "nearest" });
   }
-  const closePanels = () => { for (const p of ["adopt", "create", "delete"]) $(p).hidden = true; };
+  const closePanels = () => { for (const p of ["create", "delete"]) $(p).hidden = true; };
   const option = (value, text) => new Option(text, value);
-
-  // -- adopt ---------------------------------------------------------------------------------------
-  let suggestion = null;
-  async function openAdopt() {
-    const s = state.selected; if (!s) return;
-    $("a-msg").textContent = "Reading what is there…"; $("a-result").hidden = true;
-    openPanel("adopt");
-    try {
-      suggestion = await apiFetch("GET", `/api/stacks/suggest?endpoint=${s.endpoint_id}&name=${encodeURIComponent(s.name)}`, undefined, { suppressToast: true });
-    } catch (e) { $("a-msg").textContent = err(e); $("a-msg").className = "msg error"; return; }
-    const g = suggestion;
-    $("a-stack").textContent = g.stack;
-    $("a-notes").textContent = g.notes.join(" ");
-    $("a-slug").value = g.slug;
-    $("a-parent").replaceChildren(option("", "(choose the service Portainer runs on)"), ...g.parents.map((p) => option(p.slug, `${p.name} (${p.guest})`)));
-    $("a-parent").value = g.parent || "";
-    $("a-group").value = "";
-    $("a-children").replaceChildren(...g.children.map((c, i) => {
-      const tr = el("tr");
-      const cb = el("input"); cb.type = "checkbox"; cb.checked = true; cb.id = "a-c-" + i;
-      const slug = el("input"); slug.type = "text"; slug.value = c.slug; slug.id = "a-cs-" + i;
-      const gate = el("select"); gate.id = "a-cg-" + i;
-      gate.append(option("ignore", "no"), option("required", "yes (a database)")); gate.value = c.backup_gate;
-      const add = el("td"); add.append(cb);
-      const name = el("td"); name.append(el("strong", "", c.container), document.createTextNode(" "), el("span", "chip", c.image));
-      const slugTd = el("td"); slugTd.append(slug);
-      const gateTd = el("td"); gateTd.append(gate);
-      tr.append(add, name, slugTd, gateTd);
-      return tr;
-    }));
-    $("a-hosts").replaceChildren(...(g.hosts.length ? g.hosts.map((h, i) => {
-      const lab = el("label", "inline"); const cb = el("input"); cb.type = "checkbox"; cb.id = "a-h-" + i; cb.value = h.hostname;
-      cb.checked = !h.linked_to || h.name_matches;
-      lab.append(cb, document.createTextNode(` ${h.hostname} → ${h.upstream}` + (h.linked_to ? ` (now on ${h.linked_to}: moves)` : "")));
-      return lab;
-    }) : [el("span", "muted", "No proxy host points at a port this stack publishes.")]));
-    $("a-deploy").disabled = !g.has_git; $("a-hook").disabled = !g.has_git;
-    $("a-deploy").title = g.has_git ? "" : "Not deployed from Git in Portainer, so there is nothing to redeploy";
-    $("a-msg").textContent = g.already_linked.length ? "Already linked to " + g.already_linked.join(", ") : "";
-    $("a-msg").className = "msg" + (g.already_linked.length ? " error" : "");
-    $("a-go").disabled = g.already_linked.length > 0;
-  }
-  $("d-adopt").addEventListener("click", openAdopt);
-  $("a-cancel").addEventListener("click", closePanels);
-  $("a-go").addEventListener("click", async () => {
-    const g = suggestion; if (!g) return;
-    const children = g.children.map((c, i) => ({ c, i })).filter(({ i }) => $("a-c-" + i).checked)
-      .map(({ c, i }) => ({ container: c.container, slug: $("a-cs-" + i).value.trim(), name: c.name, backup_gate: $("a-cg-" + i).value }));
-    const hosts = g.hosts.map((h, i) => ({ h, i })).filter(({ i }) => $("a-h-" + i) && $("a-h-" + i).checked).map(({ h }) => h.hostname);
-    const body = { endpoint_id: g.endpoint_id, stack: g.stack, slug: $("a-slug").value.trim(), parent: $("a-parent").value,
-      group: $("a-group").value.trim(), children, hosts, probes: $("a-probes").checked,
-      deploy: $("a-deploy").value || null, webhook: $("a-deploy").value && $("a-hook").value ? $("a-hook").value : null };
-    $("a-msg").textContent = "Creating…"; $("a-msg").className = "msg";
-    try {
-      const r = await apiFetch("POST", "/api/stacks/adopt", body, { suppressToast: true });
-      const lines = [`Linked: ${r.services.join(", ")}`, `Proxy hosts: ${r.hosts.join(", ") || "none"} (they reach Traefik Manager on the next push)`, `Probes added: ${r.probes}`];
-      if (r.webhook_secret) lines.push("", "Webhook secret (copy it now; it is not shown again):", r.webhook_secret);
-      lines.push("", "The registry has unsaved changes: Save to YAML to keep them.");
-      $("a-result").textContent = lines.join("\n"); $("a-result").hidden = false;
-      $("a-msg").textContent = "Done."; $("a-msg").className = "msg ok"; $("a-go").disabled = true;
-      loadStacks();
-    } catch (e) { $("a-msg").textContent = err(e); $("a-msg").className = "msg error"; }
-  });
 
   // -- create ----------------------------------------------------------------------------------------
   let previewed = null;

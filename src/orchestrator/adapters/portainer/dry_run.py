@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -12,6 +13,7 @@ from orchestrator.adapters.portainer.base import (
     ContainerDetail,
     ContainerStats,
     Environment,
+    ExecResult,
     GitInfo,
     LogLine,
     Mount,
@@ -161,6 +163,10 @@ class DryRunPortainerAdapter(PortainerAdapter):
         self._containers: list[Container] = list(_CONTAINERS)
         self._read_only = bool(getattr(settings, "portainer_read_only", False))
         self.calls: list[str] = []
+        #: What the next exec writes / how it ends (tests set these).
+        self.exec_output: bytes | None = None
+        self.exec_exit: int | None = 0
+        self.exec_stderr = ""
 
     @property
     def configured(self) -> bool:
@@ -325,6 +331,37 @@ class DryRunPortainerAdapter(PortainerAdapter):
         ]
 
     # -- containers ------------------------------------------------------------------------------
+
+    async def exec_stream(
+        self,
+        endpoint_id: int,
+        ref: str,
+        cmd: list[str],
+        sink: Callable[[bytes], None],
+        *,
+        timeout_s: float = 1800.0,
+    ) -> ExecResult:
+        self._writable()
+        c = self._find(ref) if endpoint_id == 1 else None
+        if c is None:
+            raise AdapterRequestError(
+                f"no container {ref!r} on Portainer environment {endpoint_id}"
+            )
+        if c.state != "running":
+            raise AdapterRequestError(f"container {c.name} is not running")
+        self.calls.append(f"exec {c.name}: {' '.join(cmd)[:120]}")
+        data = (
+            self.exec_output
+            if self.exec_output is not None
+            else (
+                (
+                    f"-- dry-run dump of {c.name}\nSELECT 1;\nCOMMIT;\n"
+                    "-- PostgreSQL database dump complete\n-- Dump completed on 2026-10-25\n"
+                ).encode()
+            )
+        )
+        sink(data)
+        return ExecResult(self.exec_exit, self.exec_stderr, len(data))
 
     async def container_action(self, endpoint_id: int, ref: str, verb: str) -> str:
         if verb not in {"start", "stop", "restart"}:

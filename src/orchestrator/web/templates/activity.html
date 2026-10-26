@@ -5,7 +5,7 @@
     <label>Show
       <select name="kind">
         <option value="">everything</option>
-        {% for k, label in [("wake", "wakes"), ("backup", "backups"), ("restore", "restores"), ("switch", "on/off"), ("deploy", "deploys"), ("admin", "what people did"), ("alert", "alerts")] %}
+        {% for k, label in [("wake", "wakes"), ("backup", "backups"), ("restore", "restores"), ("switch", "on/off"), ("deploy", "deploys"), ("dump", "dumps"), ("format", "route formats"), ("admin", "what people did"), ("alert", "alerts")] %}
         <option value="{{ k }}" {% if f.kind == k %}selected{% endif %}>{{ label }}</option>
         {% endfor %}
       </select>

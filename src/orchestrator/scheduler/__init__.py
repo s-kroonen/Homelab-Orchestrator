@@ -52,6 +52,8 @@ from orchestrator.scheduler.retention import RetentionError, enforce_retention
 log = get_logger(__name__)
 
 _JOB_PREFIX = "policy:"
+_DUMP_PREFIX = "dump:"
+_DUMP_SYNC_JOB = "dump-sync"
 
 
 def job_id(policy_name: str) -> str:
@@ -126,6 +128,8 @@ class BackupScheduler:
         self._lock = asyncio.Lock()
         #: policy name -> why it has no job (bad cron). Shown on the dashboard.
         self.errors: dict[str, str] = {}
+        #: service slug -> why its dump has no job (bad cron).
+        self.dump_errors: dict[str, str] = {}
 
     # -- lifecycle -----------------------------------------------------------
 
@@ -133,6 +137,16 @@ class BackupScheduler:
         """Start APScheduler and register jobs. Needs a running event loop."""
         self._scheduler.start()
         self.sync_jobs()
+        # Dump schedules live on services, which change without telling the scheduler: look again.
+        self._scheduler.add_job(
+            self.sync_dump_jobs,
+            "interval",
+            minutes=5,
+            id=_DUMP_SYNC_JOB,
+            replace_existing=True,
+            max_instances=1,
+            coalesce=True,
+        )
         log.info("scheduler.started", jobs=len(self._scheduler.get_jobs()))
 
     async def shutdown(self) -> None:
@@ -196,7 +210,57 @@ class BackupScheduler:
                 # nightly backup when it comes back within the hour.
                 misfire_grace_time=3600,
             )
+        self.sync_dump_jobs()
         log.info("scheduler.synced", policies=len(wanted), errors=len(self.errors))
+
+    def sync_dump_jobs(self) -> None:
+        """One job per service whose ``dump:`` block has a schedule. Idempotent."""
+        with session_scope() as session:
+            wanted = {
+                s.slug: str((s.dump or {}).get("schedule") or "").strip()
+                for s in session.exec(select(Service)).all()
+                if s.dump and (s.dump or {}).get("enabled", True)
+            }
+            self.timezone = get_timezone(session, self._settings)
+        for job in self._scheduler.get_jobs():
+            if job.id.startswith(_DUMP_PREFIX) and job.id[len(_DUMP_PREFIX) :] not in {
+                slug for slug, cron in wanted.items() if cron
+            }:
+                job.remove()
+        self.dump_errors = {}
+        for slug, cron in wanted.items():
+            if not cron:
+                continue
+            try:
+                trigger = parse_cron(cron, self.timezone)
+            except ValueError as exc:
+                self.dump_errors[slug] = str(exc)
+                log.error("scheduler.dump.invalid_cron", service=slug, cron=cron, error=str(exc))
+                continue
+            self._scheduler.add_job(
+                self.run_dump,
+                trigger,
+                args=[slug],
+                id=f"{_DUMP_PREFIX}{slug}",
+                name=f"dump {slug}",
+                replace_existing=True,
+                max_instances=1,
+                coalesce=True,
+                misfire_grace_time=3600,
+            )
+
+    async def run_dump(self, slug: str) -> None:
+        """One firing of a service's dump schedule. Never raises (see run_policy)."""
+        from orchestrator.dumps.pipeline import DumpPipeline, DumpRefused
+
+        pipeline = DumpPipeline(self._adapters, self._settings)
+        try:
+            with session_scope() as session:
+                await pipeline.run_for_service(session, slug, "scheduler")
+        except DumpRefused as exc:
+            log.info("scheduler.dump.skipped", service=slug, reason=str(exc))
+        except Exception:
+            log.exception("scheduler.dump.crashed", service=slug)
 
     def _remove(self, name: str) -> None:
         if self._scheduler.get_job(job_id(name)) is not None:

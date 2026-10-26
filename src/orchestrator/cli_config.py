@@ -1000,6 +1000,81 @@ def proxy_push(yes: bool, hostnames: tuple[str, ...], moves: tuple[str, ...]) ->
         sys.exit(1)
 
 
+@proxy.command("format")
+@click.option("--hostname", "hostnames", multiple=True, help="Only these hostnames (repeatable).")
+@click.option("--yes", is_flag=True, help="Do not ask before rewriting.")
+@click.option("--plan", "plan_only", is_flag=True, help="Only show what would change.")
+@click.option("--continue-on-error", is_flag=True, help="Go on with the next host after a failure.")
+def proxy_format(
+    hostnames: tuple[str, ...], yes: bool, plan_only: bool, continue_on_error: bool
+) -> None:
+    """Rewrite hand-written / migrated routes into the standard shape, one host at a time.
+
+    The route Traefik Manager (and this orchestrator) create for a new host: named
+    orchestrator-<host>, in the configured config file, Host header passed, with the HTTP -> HTTPS
+    redirect router. The new route is created beside the old one and verified by Traefik before the
+    old one is removed; a failure removes the new one and restores the old. Snapshots of the old
+    routes are kept under STATE_DIR/route-snapshots. Hosts that are switched off are not touched.
+    See docs/sources.md.
+    """
+    from datetime import UTC, datetime
+
+    from orchestrator.registry import route_format as rf
+
+    configure_logging()
+    build_engine()
+    settings = get_settings()
+
+    async def _go() -> int:
+        adapters = build_adapters(settings)
+        await adapters.proxy.start()
+        try:
+            with Session(get_engine()) as session:
+                plan = await rf.build_plan(
+                    session, adapters, settings, hostnames=list(hostnames) or None
+                )
+                if plan.problem:
+                    raise click.ClickException(plan.problem)
+                for item in plan.items:
+                    tag = {"ready": "green", "blocked": "red"}.get(item.status)
+                    click.secho(f"{item.status.upper():<9} {item.hostname}", fg=tag, bold=True)
+                    for line in [*item.changes, *item.reasons, *item.warnings]:
+                        click.echo(f"          {line}")
+                ready = [i for i in plan.items if i.status == rf.READY]
+                if plan_only or not ready:
+                    click.echo(f"\n{len(ready)} ready.")
+                    return 0
+                if not yes and not click.confirm(f"\nRewrite {len(ready)} route(s) now?"):
+                    raise click.Abort()
+                folder = rf.snapshot_dir(settings, datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ"))
+                failed = 0
+                for item in ready:
+                    result = await rf.apply_item(
+                        session, adapters, settings, item, actor="cli", folder=folder
+                    )
+                    mark = (
+                        click.style("ok  ", fg="green")
+                        if result.ok
+                        else click.style("FAIL", fg="red")
+                    )
+                    click.echo(
+                        f"{mark} {result.hostname:<32} {result.outcome:<10} {result.message}"
+                    )
+                    if not result.ok:
+                        failed += 1
+                        if not continue_on_error:
+                            break
+                click.echo(f"\nsnapshots: {folder}")
+                return failed
+        finally:
+            await adapters.proxy.stop()
+
+    if settings.dry_run:
+        click.secho("DRY_RUN is on - the dry-run proxy adapter is used.", fg="yellow")
+    if asyncio.run(_go()):
+        sys.exit(1)
+
+
 # ---------------------------------------------------------------------------
 # service group
 # ---------------------------------------------------------------------------

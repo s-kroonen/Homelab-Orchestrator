@@ -322,6 +322,41 @@ def parse_log_stream(data: bytes, *, tty: bool, timestamps: bool = True) -> list
     return out
 
 
+class FrameDemux:
+    """Incremental decoder for Docker's multiplexed stream (exec output without a TTY): feed it
+    chunks as they arrive, get ``(stream, payload)`` pairs back. A body that does not start with
+    a valid frame header is passed through as stdout, so a surprise never loses the output."""
+
+    def __init__(self) -> None:
+        self._buf = bytearray()
+        self._plain = False
+
+    def feed(self, data: bytes) -> list[tuple[str, bytes]]:
+        if self._plain:
+            return [("stdout", data)] if data else []
+        self._buf += data
+        out: list[tuple[str, bytes]] = []
+        while len(self._buf) >= 8:
+            kind = self._buf[0]
+            if kind not in (0, 1, 2) or self._buf[1:4] != b"\x00\x00\x00":
+                self._plain = True
+                out.append(("stdout", bytes(self._buf)))
+                self._buf.clear()
+                return out
+            size = int.from_bytes(self._buf[4:8], "big")
+            if len(self._buf) < 8 + size:
+                break
+            payload = bytes(self._buf[8 : 8 + size])
+            del self._buf[: 8 + size]
+            out.append(("stderr" if kind == 2 else "stdout", payload))
+        return out
+
+    def finish(self) -> list[tuple[str, bytes]]:
+        """Whatever is left when the stream ends (an incomplete frame is kept as text)."""
+        rest, self._buf = bytes(self._buf), bytearray()
+        return [("stdout", rest)] if rest else []
+
+
 # -- stats --------------------------------------------------------------------------------
 
 

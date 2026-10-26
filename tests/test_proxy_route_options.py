@@ -458,20 +458,36 @@ def test_create_stores_the_options_and_sends_them(
     assert fake.saves[1]["serviceName"].endswith("-redirect")
 
 
-def test_create_defaults_pass_the_host_header_and_store_nothing(
+def test_a_new_host_is_made_the_standard_way(
     service: Service, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """Host header passed and, because Traefik has the middleware, the HTTP -> HTTPS redirect
+    router - the same as the new-host form and what "Format routes" rewrites old routes into."""
     from tests.push_helpers import push
 
     fake = FakeTMWithOptions()
     client = _client(monkeypatch, fake)
     r = client.post("/api/proxy-hosts", json=_body(service, entry_points=["websecure"]))
     assert r.status_code == 201, r.text
-    assert _rows()[0].route_options == {}  # all-defaults stays empty
+    assert _rows()[0].route_options["http_redirect"] is True
     assert r.json()["route_options"]["pass_host_header"] is True
     push(client)
     assert fake.saves[0]["passHostHeader"] == "true"
-    assert len(fake.saves) == 1  # no redirect router unless asked
+    assert len(fake.saves) == 2  # the main router and its redirect router
+
+
+def test_without_the_redirect_middleware_a_new_host_has_no_redirect_and_stores_nothing(
+    service: Service, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from tests.push_helpers import push
+
+    fake = FakeTMWithOptions(middlewares=[])
+    client = _client(monkeypatch, fake)
+    r = client.post("/api/proxy-hosts", json=_body(service, entry_points=["websecure"]))
+    assert r.status_code == 201, r.text
+    assert _rows()[0].route_options == {}  # all-defaults stays empty
+    push(client)
+    assert len(fake.saves) == 1
 
 
 def test_redirect_with_a_missing_middleware_is_refused_before_anything_is_written(

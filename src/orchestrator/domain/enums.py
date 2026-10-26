@@ -99,6 +99,10 @@ class PipelineKind(StrEnum):
     #: enable/disable of a service and everything linked to it (docs/portainer_deploys.md)
     SWITCH = "switch"
     DEPLOY = "deploy"
+    #: a database / application dumped on its own (docs/dumps.md)
+    DUMP = "dump"
+    #: proxy routes rewritten into the standard shape (docs/sources.md)
+    FORMAT = "format"
 
 
 class PipelineStatus(StrEnum):

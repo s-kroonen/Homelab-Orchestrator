@@ -332,7 +332,7 @@ def test_page_renders_for_logged_in_admin(client: TestClient, service: Service) 
     assert "storm" in r.text
     assert "working copy" in r.text and "Push now" in r.text
     assert 'href="/proxy-hosts/new"' in r.text  # dedicated add page, not an inline form
-    assert "Resync from Traefik" in r.text
+    assert "/sources#traefik" in r.text  # importing moved to Data sources
     assert (
         "Thing" in r.text and '"slug": "thing"' in r.text
     )  # services passed to JS for the discovery section's per-row picker

@@ -125,8 +125,9 @@ def test_create_posts_the_default_template_file(
     client = _client(monkeypatch, sim)
     _create(client, service)
     assert actions(push(client)) == [("app.example.com", "create")]
-    (save,) = _saves(sim)
-    assert save["configFile"] == "thing.yml" and save["isEdit"] == "false"
+    main, redirect = _saves(sim)  # a new host also gets its redirect router, in the same file
+    assert main["configFile"] == "thing.yml" and main["isEdit"] == "false"
+    assert redirect["configFile"] == "thing.yml"
     assert sim.file_of(REF) == "thing.yml"  # TM created the file
 
 
@@ -613,7 +614,11 @@ def test_config_file_round_trips_through_save_to_yaml(
     doc = yaml.safe_load((tmp_path / "services.yaml").read_text(encoding="utf-8"))
     by_host = {h["hostname"]: h for h in doc["services"][0]["proxy_hosts"]}
     assert by_host["app.example.com"]["route_options"]["config_file"] == "special.yml"
-    assert by_host["plain.example.com"]["route_options"] == {}  # all defaults stay {}
+    assert by_host["plain.example.com"]["route_options"]["http_redirect"] is True  # the standard
+    assert (
+        "config_file" not in by_host["plain.example.com"]["route_options"]
+        or not by_host["plain.example.com"]["route_options"]["config_file"]
+    )
     parsed, _ = read_yaml_file(tmp_path / "services.yaml")
     assert parsed.services[0].proxy_hosts[0].route_options.get("config_file") in (
         "special.yml",

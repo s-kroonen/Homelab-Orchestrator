@@ -66,6 +66,10 @@ class SimTM:
         self.requests: list[tuple[str, str, Any]] = []
         self.ignore_toggle = False
         self.toggle_requests: list[httpx.Request] = []
+        #: router names Traefik reports as errored at runtime (a rewrite it refused)
+        self.runtime_errors: set[str] = set()
+        #: route ids whose delete answers 500
+        self.fail_delete: set[str] = set()
 
     # -- helpers -------------------------------------------------------------
 
@@ -77,11 +81,18 @@ class SimTM:
         *,
         eps: tuple[str, ...] = ("websecure",),
         upstream: str = "http://10.0.0.9:8080",
+        middlewares: tuple[str, ...] = (),
+        raw: str | None = None,
+        resolver: str = "",
+        rule: str | None = None,
     ) -> str:
         self.files[file][name] = {
-            "rule": f"Host(`{hostname}`)",
+            "rule": rule or f"Host(`{hostname}`)",
             "eps": list(eps),
             "upstream": upstream,
+            "mws": list(middlewares),
+            "resolver": resolver,
+            **({"raw": raw} if raw is not None else {}),
         }
         return self.app_id(file, name)
 
@@ -169,8 +180,24 @@ class SimTM:
             if not self.ignore_toggle:
                 self._toggle(route_id, bool(enable))
             return httpx.Response(200, json={"ok": True})
+        if path.startswith("/api/routes/") and path.endswith("/raw"):
+            route_id = path.removeprefix("/api/routes/").removesuffix("/raw")
+            plain = route_id.split("::", 1)[-1]
+            file = self.locate(plain, route_id.split("::", 1)[0] if "::" in route_id else "")
+            if file is None:
+                return httpx.Response(404, json={"error": "not found"})
+            route = self.files[file][plain]
+            if method == "POST":
+                route["raw"] = json.loads(request.read())["content"]
+                self.requests.append(("raw", route_id, route["raw"]))
+                return httpx.Response(200, json={"ok": True})
+            return httpx.Response(
+                200, json={"raw": self.raw_of(plain, route), "configFile": file, "proto": "http"}
+            )
         if method == "POST" and path.startswith("/delete/"):
             route_id = path.removeprefix("/delete/")
+            if route_id in self.fail_delete or route_id.split("::", 1)[-1] in self.fail_delete:
+                return httpx.Response(500, json={"error": "boom"})
             form = dict(parse_qsl(request.read().decode(), keep_blank_values=True))
             self.requests.append(("delete", route_id, form.get("configFile", "")))
             return self._delete(route_id, form.get("configFile", ""))
@@ -180,6 +207,24 @@ class SimTM:
             self._save(form)
             return httpx.Response(200, json={"ok": True})
         return httpx.Response(200, json={"ok": True})
+
+    def raw_of(self, name: str, route: dict[str, Any]) -> str:
+        if "raw" in route:
+            return str(route["raw"])
+        mws = "".join(f"\n        - {m}" for m in route.get("mws", []))
+        tls = (
+            f"\n      tls:\n        certResolver: {route['resolver']}"
+            if route.get("resolver")
+            else ""
+        )
+        return (
+            "http:\n  routers:\n"
+            f"    {name}:\n      rule: {route['rule']}\n      entryPoints: {json.dumps(route['eps'])}\n"
+            f"      service: {name}{tls}"
+            + (f"\n      middlewares:{mws}" if mws else "")
+            + f"\n  services:\n    {name}:\n      loadBalancer:\n        servers:\n"
+            f"          - url: {route['upstream']}\n        passHostHeader: true\n"
+        )
 
     def _routes(self) -> dict[str, Any]:
         apps: list[dict[str, Any]] = []
@@ -220,6 +265,11 @@ class SimTM:
                 "service": f"{name}-service@file",
                 "entryPoints": r["eps"],
                 "status": "enabled",
+                **(
+                    {"error": ["router refused"], "status": "disabled"}
+                    if name in self.runtime_errors
+                    else {}
+                ),
                 **({"tls": {"certResolver": r["resolver"]}} if r.get("resolver") else {}),
             }
             for routes in self.files.values()
@@ -300,6 +350,7 @@ class SimTM:
                 else "http://shared:80"
             ),
             "resolver": "" if resolver.startswith("__") else resolver,
+            "mws": [m for m in form.get("middlewares", "").split(",") if m],
         }
         original = form.get("originalId", "")
         # An existing disabled record under this id stays parked (edited in place).

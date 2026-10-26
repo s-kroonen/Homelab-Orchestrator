@@ -627,6 +627,18 @@ async def _prepare(
     # Route options: what the body says, else what is stored, else defaults.
     if body.route_options is not None:
         raw_options: dict[str, Any] = dict(body.route_options)
+    elif existing is None and catalog is not None and not body.adopt:
+        # A NEW route is made the standard way (what "Format routes" rewrites old ones into):
+        # Host header passed, HTTP -> HTTPS redirect router when Traefik has the middleware.
+        from orchestrator.registry.route_standard import standard_options
+
+        addresses = {e.name: e.address for e in catalog.entrypoints or []}
+        serves_https = any(
+            not is_plain_http_entrypoint(n, addresses.get(n, "")) for n in entry_points
+        )
+        raw_options = standard_options(
+            None, redirect_available=catalog.redirect_available and serves_https
+        ).to_dict()
     else:
         raw_options = dict((existing.route_options if existing else None) or {})
     options = RouteOptions.from_dict(raw_options)

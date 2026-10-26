@@ -36,7 +36,7 @@ services:
 * **Backups** run per guest, on the root. Each sub-service has a `backup_gate`:
   `ignore` (default) or `required` - the backup starts the sub-service through its
   controller if it is stopped, waits until it is healthy, and the plan lists it as
-  `sub_start:<slug>` / `sub_gate:<slug>`. Backups of a sub-service on its own are refused.
+  `sub_start:<slug>` / `sub_gate:<slug>`. Backups of a sub-service on its own are refused (a database can be *dumped* on its own instead: [dumps.md](dumps.md)).
 * Notifications, controllers and recovery work at every level; see
   [notifications.md](notifications.md), [controllers.md](controllers.md) and
   [recovery.md](recovery.md).

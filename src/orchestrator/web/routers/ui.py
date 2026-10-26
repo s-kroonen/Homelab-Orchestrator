@@ -724,6 +724,16 @@ async def traffic_geo_page(
     )
 
 
+@router.get("/sources", response_model=None)
+async def sources_page(request: Request, session: SessionDep) -> HTMLResponse | RedirectResponse:
+    """What is pulled from Proxmox, Traefik Manager, Portainer and the guests - the actions that
+    refresh or import it live here (client-rendered from ``/api/sources``)."""
+    admin = get_current_admin(request, session)
+    if admin is None:
+        return RedirectResponse("/login?next=/sources", status_code=303)
+    return _templates.TemplateResponse(request, "sources.html", {"admin": admin})
+
+
 @router.get("/infra", response_model=None)
 async def infra_status_page(
     request: Request, session: SessionDep

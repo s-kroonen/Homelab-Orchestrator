@@ -188,6 +188,8 @@ class ServiceSpec(BaseModel):
     recovery: dict[str, Any] = Field(default_factory=dict)
     #: How the linked Portainer stack is redeployed and guarded; {} = no deploy method.
     deploy: dict[str, Any] = Field(default_factory=dict)
+    #: How this service's own data (a database in a container) is dumped; {} = not dumped.
+    dump: dict[str, Any] = Field(default_factory=dict)
     #: Sub-services only: does the root's backup wait for it? See Service.backup_gate.
     backup_gate: BackupGate = BackupGate.IGNORE
     #: The operator's manual address. See Service.ip_address — discovered

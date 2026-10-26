@@ -579,3 +579,109 @@ def test_a_node_that_is_off_is_not_reported_as_changed_outside(client: TestClien
         for _ in range(CONFIRM_CYCLES + 1):
             reported = asyncio.run(watcher.observe(s, adapters, get_settings()))
         assert reported == 0
+
+
+def test_a_restart_does_not_announce_the_same_standing_change_again(client: TestClient) -> None:
+    import asyncio
+
+    from orchestrator.config import get_settings
+    from orchestrator.registry.linked_watch import CONFIRM_CYCLES, LinkedWatcher
+
+    _host(client, "dev-xymbols")
+    adapters = client.app.state.adapters  # type: ignore[attr-defined]
+    p = adapters.portainer
+    asyncio.run(_stop_stack(p))
+
+    async def observe(watcher: LinkedWatcher) -> int:
+        with Session(get_engine()) as s:
+            return await watcher.observe(s, adapters, get_settings())
+
+    first = LinkedWatcher()
+    reported = sum(asyncio.run(observe(first)) for _ in range(CONFIRM_CYCLES + 1))
+    assert reported == 2  # the stack and the container below it
+
+    restarted = LinkedWatcher()  # a new process: nothing in memory
+    assert sum(asyncio.run(observe(restarted)) for _ in range(CONFIRM_CYCLES + 2)) == 0
+
+    asyncio.run(_start_stack(p))  # it agrees again: cleared once, and a new change is news again
+    assert asyncio.run(observe(restarted)) == 0
+    asyncio.run(_stop_stack(p))
+    assert sum(asyncio.run(observe(restarted)) for _ in range(CONFIRM_CYCLES + 1)) == 2
+
+
+async def _stop_stack(p: Any) -> None:
+    await p.stop_stack(await p.get_stack(1, "dev-xymbols"))
+
+
+async def _start_stack(p: Any) -> None:
+    await p.start_stack(await p.get_stack(1, "dev-xymbols"))
+
+
+# -- a host that was never pushed is waiting, not changed outside ----------------------------------
+
+
+def _unpushed_host(client: TestClient, hostname: str, slug: str = "dev-xymbols") -> int:
+    with Session(get_engine()) as s:
+        sid = s.exec(select(Service).where(Service.slug == slug)).one().id
+    r = client.post(
+        "/api/proxy-hosts",
+        json={"hostname": hostname, "upstream": "http://10.0.0.9:8081", "service_id": sid},
+    )
+    assert r.status_code == 201, r.text
+    return int(r.json()["id"])
+
+
+def test_a_host_that_was_never_pushed_is_pending_and_not_an_outside_change(
+    client: TestClient,
+) -> None:
+    _unpushed_host(client, "new.example.com")
+    st = _state(client, "dev-xymbols")
+    part = next(p for p in st["parts"] if p["kind"] == "proxy")
+    assert part["pending"] is True and "not pushed" in part["detail"]
+    assert st["disagreeing"] == [] and st["drift"] == ""  # it was not changed by anyone
+    assert st["state"] == "on"  # judged by what exists (the stack)
+
+
+def test_pushing_it_makes_it_a_normal_part_and_a_removed_route_is_a_real_change(
+    client: TestClient,
+) -> None:
+    _unpushed_host(client, "new.example.com")
+    assert client.post("/api/push", json={}).status_code == 200
+    part = next(p for p in _state(client, "dev-xymbols")["parts"] if p["kind"] == "proxy")
+    assert part["pending"] is False and part["on"] is True
+    # someone removes the route in Traefik Manager afterwards
+    proxy = client.app.state.adapters.proxy  # type: ignore[attr-defined]
+    asyncio_run(proxy.delete_route(part_ref(client)))
+    st = _state(client, "dev-xymbols")
+    gone = next(p for p in st["parts"] if p["kind"] == "proxy")
+    assert gone["on"] is False and gone["pending"] is False and "gone" in gone["detail"]
+    assert st["state"] == "mixed"
+
+
+def test_a_disabled_host_stays_disabled_through_a_push(client: TestClient) -> None:
+    host_id = _unpushed_host(client, "off.example.com")
+    assert (
+        client.post(f"/api/proxy-hosts/{host_id}/enabled", json={"enabled": False}).status_code
+        == 200
+    )
+    part = next(p for p in _state(client, "dev-xymbols")["parts"] if p["kind"] == "proxy")
+    assert part["deliberate"] is True and part["pending"] is False  # its own switch, not pending
+    assert client.post("/api/push", json={}).status_code == 200
+    shown = client.get(f"/api/proxy-hosts/{host_id}").json()
+    assert shown["enabled"] is False
+    part = next(p for p in _state(client, "dev-xymbols")["parts"] if p["kind"] == "proxy")
+    assert part["on"] is False and part["deliberate"] is True  # parked, still its own switch
+
+
+def asyncio_run(coro: Any) -> Any:
+    import asyncio
+
+    return asyncio.run(coro)
+
+
+def part_ref(client: TestClient) -> str:
+    with Session(get_engine()) as s:
+        from orchestrator.db.models import ProxyHost
+        from orchestrator.registry.proxy_push import ref_of
+
+        return str(ref_of(s.exec(select(ProxyHost)).one()))

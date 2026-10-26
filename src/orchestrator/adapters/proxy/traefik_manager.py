@@ -78,6 +78,7 @@ from orchestrator.adapters.proxy.base import (
     ProxyRouteNotFound,
     RouteInfo,
     RouteOptions,
+    RouteRaw,
     SyncEvent,
     find_route,
 )
@@ -1103,6 +1104,7 @@ class TraefikManagerProxyAdapter(ProxyAdapter):
         cert_resolver: str = "",
         options: RouteOptions | None = None,
         config_file: str = "",
+        middlewares: Sequence[str] = (),
     ) -> str:
         opts = options or RouteOptions()
         scheme, host, port = self._target_or_raise(upstream)
@@ -1117,6 +1119,7 @@ class TraefikManagerProxyAdapter(ProxyAdapter):
             http_rule=f"Host(`{hostname}`)",
             entry_points=eps,
             cert_resolver=resolver,
+            middlewares=",".join(m for m in middlewares if m),
             is_edit=False,
             config_file=cfile,
             scheme=scheme,
@@ -1142,6 +1145,64 @@ class TraefikManagerProxyAdapter(ProxyAdapter):
                 log.warning("traefik_manager.create_rollback_failed", error=str(exc))
             raise
         return name
+
+    async def read_route_raw(
+        self, route_ref: str, *, hostname: str | None = None
+    ) -> RouteRaw | None:
+        routes = await self._read_routes()
+        route = find_route(routes, route_ref, hostname)
+        if route is None:
+            return None
+        try:
+            got = await self._get_route_raw(route.ref)
+        except TraefikManagerNotFound:
+            return None
+        raw = got.get("raw", "") if isinstance(got, dict) else ""
+        if not isinstance(raw, str) or not raw.strip():
+            return None
+        return RouteRaw(ref=route.ref, config_file=route.config_file, raw=raw)
+
+    async def restore_route_raw(
+        self,
+        snapshot: RouteRaw,
+        *,
+        name: str,
+        hostname: str,
+        upstream: str,
+        entry_points: Sequence[str],
+        cert_resolver: str = "",
+        options: RouteOptions | None = None,
+    ) -> None:
+        """Bring a route back: make sure a plain route of that name exists in the file it was
+        in, then replace its YAML with the snapshot and read it back."""
+        opts = options or RouteOptions()
+        routes = await self._read_routes()
+        existing = find_route(routes, name, hostname)
+        if existing is None:
+            scheme, host, port = self._target_or_raise(upstream)
+            eps, resolver = await self._route_fields(entry_points, cert_resolver)
+            await self._save_route(
+                service_name=name,
+                protocol="http",
+                target_ip=host,
+                target_port=port,
+                http_rule=f"Host(`{hostname}`)",
+                entry_points=eps,
+                cert_resolver=resolver,
+                is_edit=False,
+                config_file=snapshot.config_file,
+                scheme=scheme,
+                pass_host_header=opts.pass_host_header,
+                skip_verify=opts.skip_upstream_tls_verify,
+            )
+            routes = await self._read_routes()
+            existing = find_route(routes, name, hostname)
+            if existing is None:
+                raise TraefikManagerUnavailable(f"could not re-create {name} to restore it")
+        await self._save_route_raw(existing.ref, snapshot.raw)
+        back = await self._get_route_raw(existing.ref)
+        if not isinstance(back, dict) or not str(back.get("raw", "")).strip():
+            raise TraefikManagerUnavailable(f"{name} could not be read back after the restore")
 
     async def _checked_config_file(self, config_file: str) -> str:
         """The config file name to post, or ``ValueError`` when Traefik Manager

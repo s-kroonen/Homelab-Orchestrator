@@ -103,6 +103,16 @@ def find_route(
 
 
 @dataclass(frozen=True)
+class RouteRaw:
+    """One route's configuration exactly as the manager stores it (Traefik Manager: the YAML
+    ``GET /api/routes/{id}/raw`` returns). Kept as a snapshot before a route is rewritten."""
+
+    ref: str
+    config_file: str
+    raw: str
+
+
+@dataclass(frozen=True)
 class EntryPointInfo:
     """One entry point the reverse proxy listens on (Traefik: ``web`` ->
     ``:80``). ``address`` is whatever the proxy reports (``":443"``)."""
@@ -365,11 +375,13 @@ class ProxyAdapter(ABC):
         cert_resolver: str = "",
         options: RouteOptions | None = None,
         config_file: str = "",
+        middlewares: Sequence[str] = (),
     ) -> str:
         """Create a real route on this backend for ``hostname`` -> ``upstream``,
         bound to exactly ``entry_points`` (never empty - an implementation
         raises ``ValueError`` rather than let the backend pick a default
         that may not exist) with TLS from ``cert_resolver`` (empty = none).
+        ``middlewares`` are attached to the new router (names as the manager lists them).
         ``config_file`` names the backend's config file to create it in (blank =
         the backend's default); an implementation that cannot write to that file
         raises ``ValueError`` naming the files it can, rather than put the route
@@ -436,6 +448,28 @@ class ProxyAdapter(ABC):
         that is not where it was expected afterwards. Default: the backend has
         no config files to move between."""
         raise NotImplementedError(f"{type(self).__name__} cannot move a route between config files")
+
+    async def read_route_raw(
+        self, route_ref: str, *, hostname: str | None = None
+    ) -> RouteRaw | None:
+        """The route's stored configuration as text, or ``None`` when the backend cannot say
+        (default: it cannot)."""
+        return None
+
+    async def restore_route_raw(
+        self,
+        snapshot: RouteRaw,
+        *,
+        name: str,
+        hostname: str,
+        upstream: str,
+        entry_points: Sequence[str],
+        cert_resolver: str = "",
+        options: RouteOptions | None = None,
+    ) -> None:
+        """Put a route back exactly as ``snapshot`` recorded it, creating it when it is gone.
+        Used to undo a rewrite that failed half way. Default: not possible."""
+        raise NotImplementedError(f"{type(self).__name__} cannot restore a route from a snapshot")
 
     async def list_config_files(self) -> ConfigFiles | None:
         """The config files routes can be written into, or ``None`` when this
