@@ -33,6 +33,7 @@ from sqlmodel import Session, col, desc, select
 
 from orchestrator.db.models import AuditEntry, Node, NotificationEvent, PipelineRun, Service
 from orchestrator.domain.enums import AuditResult, GuestKind, PipelineKind, PipelineStatus
+from orchestrator.notify.links import link_for
 from orchestrator.registry.tree import TreeIndex
 from orchestrator.web.auth import require_admin
 from orchestrator.web.deps import SessionDep
@@ -93,6 +94,7 @@ def _alert_to_dict(row: NotificationEvent) -> dict[str, Any]:
         "suppressed_reason": row.suppressed_reason,
         "delivered": row.delivered or {},
         "service": row.target if row.level in ("service", "sub") else None,
+        "link": link_for(row.level, row.target, row.event),
     }
 
 

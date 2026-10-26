@@ -76,8 +76,11 @@
       return;
     }
     guestsById = {};
+    let linked = null;
     for (const g of rows) {
       const tr = document.createElement("tr");
+      tr.dataset.vmid = g.vmid;
+      tr.dataset.node = g.node;
       const id = `${g.node}/${g.vmid}`;
       guestsById[id] = g;
       tr.dataset.bulkId = id;
@@ -99,6 +102,12 @@
     }
     guestBulk.decorate();
     setMsg(`${rows.length} guest(s).`, "ok");
+    // Arrived from an alert (?node=pve1&vmid=101): mark the guest it is about.
+    const want = new URLSearchParams(location.search).get("vmid");
+    if (want) {
+      linked = [...body.rows].find((r) => r.dataset.vmid === want && (!node || r.dataset.node === node));
+      if (linked) { linked.classList.add("linked-row"); linked.scrollIntoView({ block: "center" }); }
+    }
   }
 
   // --- bulk Start / Stop (static/bulk.js) ------------------------------------
@@ -132,6 +141,11 @@
   document.getElementById("node-filter").addEventListener("keydown", (ev) => {
     if (ev.key === "Enter") loadGuests();
   });
+  {
+    // An alert links here as ?node=pve1[&vmid=101]; show that node's guests.
+    const node = new URLSearchParams(location.search).get("node");
+    if (node) document.getElementById("node-filter").value = node;
+  }
   loadGuests();
 </script>
 {% endblock %}

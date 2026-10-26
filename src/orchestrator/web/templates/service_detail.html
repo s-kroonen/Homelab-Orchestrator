@@ -1887,6 +1887,10 @@
   {
     const initial = tabForHash(location.hash);
     selectTab(initial, { updateHash: false });
+    // A link to a part of a tab (an alert's #deploys): bring that part into view now that
+    // its tab is open, since the browser could not scroll to it while it was hidden.
+    const spot = location.hash && document.getElementById(decodeURIComponent(location.hash.slice(1)));
+    if (spot && !TAB_NAMES.includes(spot.id) && !spot.hidden) spot.scrollIntoView({ block: "start" });
   }
 
   fillServiceForm(SERVICE);

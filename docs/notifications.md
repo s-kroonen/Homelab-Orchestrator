@@ -58,3 +58,24 @@ the rest stay in the feed marked "no rule wants this". Rules live in the databas
 
 Everything the engine decided, sent or not, kept `NOTIFY_RETENTION_DAYS` (30) days.
 `orchestrator-cli notify feed` prints it; `notify rules` lists the rules.
+
+## Where an alert takes you
+
+Every alert opens the thing it is about, from every channel: tapping a push
+notification, the ntfy "Open" action, the link in an e-mail, the `approve_url` field of
+the webhook, and the target in the Notifications feed and on the Activity page.
+
+| Alert about | Opens |
+| --- | --- |
+| service / sub-service health (failed, down, recovered, flapping, recovery) | `/services/<slug>#health` |
+| backup or restore | `/services/<slug>#backups` |
+| deploy | `/services/<slug>#deploys` |
+| database dump | `/services/<slug>#dumps` |
+| switch failed, outside change | `/services/<slug>#stack` |
+| node | `/infra/guests?node=<node>` (that node's guests) |
+| guest | `/infra/guests?node=<node>&vmid=<id>` (the guest's row is highlighted) |
+| self-update | `/system` |
+| a request waiting for approval | its approval page (always wins over the above) |
+
+The address comes from `EXTERNAL_URL` (falling back to `ORCHESTRATOR_PUBLIC_URL`, then the
+passkey origin), so set it to the https address you use on your phone.

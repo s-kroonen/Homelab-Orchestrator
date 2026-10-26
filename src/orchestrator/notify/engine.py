@@ -31,6 +31,7 @@ from orchestrator.adapters.notifier.base import Notifier, NotifySeverity
 from orchestrator.config import Settings
 from orchestrator.db.models import NotificationEvent, NotificationRule, TargetState
 from orchestrator.logging_setup import get_logger
+from orchestrator.notify.links import absolute, link_for
 
 log = get_logger(__name__)
 
@@ -301,7 +302,7 @@ class NotificationEngine:
             title=event.title,
             body=event.body,
             tags=event.tags,
-            approve_url=event.approve_url,
+            approve_url=self._open_url(event),
         )
         if not self._notifier.channels():
             row.suppressed, row.suppressed_reason = True, "no channel is active"
@@ -311,6 +312,13 @@ class NotificationEngine:
         return row
 
     # -- delivery ----------------------------------------------------------------
+
+    def _open_url(self, event: Event) -> str | None:
+        """What tapping the alert opens: the approval page when there is one, else the
+        page of the thing it is about."""
+        return event.approve_url or absolute(
+            self._settings, link_for(event.level, event.key, event.event)
+        )
 
     def _rules(self, session: Session) -> list[NotificationRule]:
         return list(session.exec(select(NotificationRule).order_by(NotificationRule.id)).all())
@@ -379,7 +387,7 @@ class NotificationEngine:
                     title=event.title,
                     body=event.body,
                     tags=event.tags,
-                    approve_url=event.approve_url,
+                    approve_url=self._open_url(event),
                 )
         session.add(row)
         session.flush()
@@ -421,4 +429,5 @@ def summarize_delivery(row: NotificationEvent) -> dict[str, Any]:
         "suppressed": row.suppressed,
         "suppressed_reason": row.suppressed_reason,
         "delivered": row.delivered or {},
+        "link": link_for(row.level, row.target, row.event),
     }
