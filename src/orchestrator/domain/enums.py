@@ -101,6 +101,8 @@ class PipelineKind(StrEnum):
     DEPLOY = "deploy"
     #: a database / application dumped on its own (docs/dumps.md)
     DUMP = "dump"
+    #: proxy routes rewritten into the standard shape (docs/sources.md)
+    FORMAT = "format"
 
 
 class PipelineStatus(StrEnum):
