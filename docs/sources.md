@@ -87,6 +87,38 @@ Left alone, never touched:
 An already-owned route (`orchestrator-…`) in the wrong file is *moved*, and one without its redirect
 router gets it (an *update*); one that matches the standard is reported as *already standard*.
 
+### Format all
+
+*Format all N ready route(s)* selects every ready host and runs them, one at a time, with the same
+safety as above (snapshot, verify, restore, stop at the first failure unless told otherwise). It asks
+once, naming the count. The same from a shell: `orchestrator-cli proxy format --yes` (add `--plan` to
+only look, `--hostname` to pick, `--continue-on-error`).
+
+### HSTS
+
+The **HSTS** choice above the list is applied to every formatted route and re-plans when changed:
+
+* *keep what each route has* (default): a route that already carries the HSTS middleware keeps it;
+* *add to every formatted route*: attaches the middleware named by `TRAEFIK_HSTS_MIDDLEWARE`
+  (default `hsts-headers`) and stores `hsts: true` in the host's route options;
+* *take off every formatted route*.
+
+The middleware has to exist in Traefik (the plan warns and adds nothing if not), e.g. in a shared file:
+
+```yaml
+http:
+  middlewares:
+    hsts-headers:
+      headers:
+        stsSeconds: 31536000
+        stsIncludeSubdomains: true
+        forceSTSHeader: true
+```
+
+CLI: `orchestrator-cli proxy format --hsts` / `--no-hsts`. New hosts get it from the **HSTS** checkbox
+of the host form (off by default: browsers remember HSTS for a long time, so switch it on once
+HTTPS works for sure).
+
 ### Not verified against a real Traefik Manager yet
 
 The whole flow runs against a simulated Traefik Manager in the tests (create, runtime errors, failed

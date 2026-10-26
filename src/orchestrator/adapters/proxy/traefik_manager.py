@@ -1095,6 +1095,11 @@ class TraefikManagerProxyAdapter(ProxyAdapter):
         # hand-written setup and is never overwritten or deleted.
         return route_ref.startswith("orchestrator-")
 
+    def _hsts_for(self, opts: RouteOptions, already: Sequence[str] = ()) -> list[str]:
+        """The HSTS middleware to put on a route, when the option is on."""
+        name = (self._settings.traefik_hsts_middleware or "hsts-headers").strip()
+        return [name] if opts.hsts and name and name not in already else []
+
     async def create_route(
         self,
         *,
@@ -1119,7 +1124,9 @@ class TraefikManagerProxyAdapter(ProxyAdapter):
             http_rule=f"Host(`{hostname}`)",
             entry_points=eps,
             cert_resolver=resolver,
-            middlewares=",".join(m for m in middlewares if m),
+            middlewares=",".join(
+                m for m in [*middlewares, *self._hsts_for(opts, middlewares)] if m
+            ),
             is_edit=False,
             config_file=cfile,
             scheme=scheme,
@@ -1385,6 +1392,7 @@ class TraefikManagerProxyAdapter(ProxyAdapter):
                 http_rule=f"Host(`{hostname}`)",
                 entry_points=eps,
                 cert_resolver=resolver,
+                middlewares=",".join(self._hsts_for(opts)),
                 is_edit=True,
                 original_id=main.ref,
                 config_file=main.config_file,

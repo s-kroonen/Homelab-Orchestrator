@@ -40,6 +40,7 @@ def standard_options(
     skip_verify: bool | None = None,
     tls_main: str | None = None,
     tls_sans: tuple[str, ...] | None = None,
+    hsts: bool | None = None,
 ) -> RouteOptions:
     """The options a route is rewritten with: what the host already says about its certificate
     and backend TLS, with the Host header passed through and the HTTP -> HTTPS redirect on when
@@ -54,6 +55,7 @@ def standard_options(
         tls_sans=base.tls_sans if tls_sans is None else tls_sans,
         http_redirect=redirect_available is True,
         config_file=base.config_file,
+        hsts=base.hsts if hsts is None else hsts,
     )
 
 

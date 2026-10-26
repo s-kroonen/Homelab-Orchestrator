@@ -675,3 +675,44 @@ def test_migration_adds_route_options_with_a_safe_default() -> None:
 
 def test_settings_default_redirect_middleware() -> None:
     assert Settings().traefik_redirect_middleware == "redirect-to-https"
+
+
+def test_hsts_is_refused_when_traefik_lacks_the_middleware(
+    service: Service, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake = FakeTMWithOptions(middlewares=["redirect-to-https"])
+    client = _client(monkeypatch, fake)
+    r = client.post(
+        "/api/proxy-hosts",
+        json=_body(service, entry_points=["websecure"], route_options={"hsts": True}),
+    )
+    assert r.status_code == 422
+    assert "hsts-headers" in r.json()["detail"]["errors"]["hsts"]
+    assert fake.saves == [] and _rows() == []
+
+
+def test_hsts_is_sent_when_traefik_has_the_middleware(
+    service: Service, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from tests.push_helpers import push
+
+    fake = FakeTMWithOptions(middlewares=["redirect-to-https", "hsts-headers"])
+    client = _client(monkeypatch, fake)
+    r = client.post(
+        "/api/proxy-hosts",
+        json=_body(service, entry_points=["websecure"], route_options={"hsts": True}),
+    )
+    assert r.status_code == 201, r.text
+    assert _rows()[0].route_options["hsts"] is True
+    push(client)
+    assert fake.saves[0]["middlewares"] == "hsts-headers"
+
+
+def test_hsts_needs_an_https_entry_point(service: Service, monkeypatch: pytest.MonkeyPatch) -> None:
+    fake = FakeTMWithOptions(middlewares=["redirect-to-https", "hsts-headers"])
+    client = _client(monkeypatch, fake)
+    r = client.post(
+        "/api/proxy-hosts",
+        json=_body(service, entry_points=["web"], route_options={"hsts": True}),
+    )
+    assert r.status_code == 422 and "hsts" in r.json()["detail"]["errors"]

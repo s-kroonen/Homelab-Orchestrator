@@ -87,7 +87,9 @@ def archive_restore(ref: str) -> None:
             raise click.ClickException(str(exc)) from exc
     click.echo(f"Restored {', '.join(result.restored)}.")
     if kind == arch.KIND_POLICY:
-        click.echo("  note: restart the orchestrator (or save the policy on its page) so its schedule runs.")
+        click.echo(
+            "  note: restart the orchestrator (or save the policy on its page) so its schedule runs."
+        )
     for warning in result.warnings:
         click.echo(f"  note: {warning}")
     click.echo("Save the registry from the dashboard (Save to YAML) to keep it.")

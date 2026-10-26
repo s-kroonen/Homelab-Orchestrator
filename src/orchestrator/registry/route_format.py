@@ -97,6 +97,9 @@ class FormatItem:
 class FormatPlan:
     items: list[FormatItem] = field(default_factory=list)
     problem: str = ""
+    #: The HSTS middleware the option attaches, and whether Traefik has it (None = unknown).
+    hsts_middleware: str = ""
+    hsts_available: bool | None = None
 
     def as_dict(self) -> dict[str, Any]:
         counts: dict[str, int] = {}
@@ -104,6 +107,7 @@ class FormatPlan:
             counts[i.status] = counts.get(i.status, 0) + 1
         return {
             "problem": self.problem,
+            "hsts": {"middleware": self.hsts_middleware, "available": self.hsts_available},
             "counts": counts,
             "items": [i.as_dict() for i in self.items],
         }
@@ -134,8 +138,10 @@ async def build_plan(
     settings: Settings,
     *,
     hostnames: list[str] | None = None,
+    hsts: bool | None = None,
 ) -> FormatPlan:
-    """What formatting would do to each proxy host. Reads only."""
+    """What formatting would do to each proxy host. Reads only. ``hsts``: True puts the HSTS
+    middleware on every formatted route, False takes it off, None keeps what each route has."""
     from orchestrator.web.proxy_catalog import get_catalog
 
     proxy = adapters.proxy
@@ -145,6 +151,7 @@ async def build_plan(
         plan.problem = "Traefik Manager is not configured or could not be read."
         return plan
     catalog = await get_catalog(settings, proxy, refresh=True)
+    plan.hsts_middleware, plan.hsts_available = catalog.hsts_middleware, catalog.hsts_available
     known = await proxy.list_config_files()
     services = services_by_id(session)
     wanted = {h.strip().lower() for h in hostnames or []}
@@ -154,7 +161,9 @@ async def build_plan(
             if wanted and ph.hostname.lower() not in wanted:
                 continue
             plan.items.append(
-                await _plan_one(session, proxy, settings, catalog, known, routes, services, ph)
+                await _plan_one(
+                    session, proxy, settings, catalog, known, routes, services, ph, hsts
+                )
             )
     return plan
 
@@ -168,6 +177,7 @@ async def _plan_one(
     routes: list[RouteInfo],
     services: dict[int, Any],
     ph: ProxyHost,
+    hsts: bool | None = None,
 ) -> FormatItem:
     slug = slug_of(ph, services)
     item = FormatItem(ph.hostname, ph.id, slug)
@@ -219,9 +229,23 @@ async def _plan_one(
         item.reasons.append(problem)
         return item
 
+    # HSTS: asked for (True/False) it is the route's option, attached by the adapter; left
+    # alone (None) a route that has the middleware keeps it like any other it carries.
+    hsts_name = catalog.hsts_middleware
+    had_hsts = hsts_name in info.middlewares
+    stored_hsts = RouteOptions.from_dict(ph.route_options).hsts
+    # An owned route is rewritten in place (its middlewares are the adapter's to set), so the
+    # HSTS it has must travel as the option; a recreated one carries it in the kept list.
+    want_hsts = (stored_hsts or (owned and had_hsts)) if hsts is None else hsts
+    if hsts and not had_hsts and catalog.hsts_available is False:
+        item.warnings.append(
+            f"the {hsts_name} middleware does not exist in Traefik, so HSTS is not added"
+        )
+        want_hsts = False
     options = standard_options(
         ph.route_options,
         redirect_available=catalog.redirect_available,
+        hsts=want_hsts,
         skip_verify=info.skip_verify
         or RouteOptions.from_dict(ph.route_options).skip_upstream_tls_verify,
         tls_main=info.tls_main or None,
@@ -241,7 +265,11 @@ async def _plan_one(
     ).strip()
     legacy = info.legacy_middlewares if options.http_redirect else []
     maintenance = [m for m in info.middlewares if m.startswith("maintenance-")]
-    kept = [m for m in info.middlewares if m not in legacy and m not in maintenance]
+    kept = [
+        m
+        for m in info.middlewares
+        if m not in legacy and m not in maintenance and not (hsts is not None and m == hsts_name)
+    ]
     new_name = proxy.route_ref_for(ph.hostname)
 
     item.current = {
@@ -269,8 +297,10 @@ async def _plan_one(
         item.changes.append(f"rewritten as {new_name} in Traefik Manager's own syntax")
     elif target_file and not same_file(route.config_file, target_file):
         item.action = MOVE
-    elif (options.http_redirect and companion is None) or (
-        not options.http_redirect and companion is not None
+    elif (
+        (options.http_redirect and companion is None)
+        or (not options.http_redirect and companion is not None)
+        or (hsts is not None and options.hsts != had_hsts)
     ):
         item.action = UPDATE
     else:
@@ -285,6 +315,10 @@ async def _plan_one(
         item.warnings.append(
             f"the {catalog.redirect_middleware} middleware does not exist in Traefik, so no "
             "redirect router is added"
+        )
+    if hsts is not None and options.hsts != had_hsts:
+        item.changes.append(
+            f"adds HSTS ({hsts_name})" if options.hsts else f"removes HSTS ({hsts_name})"
         )
     if legacy:
         item.changes.append(f"drops {', '.join(legacy)} (replaced by the redirect router)")

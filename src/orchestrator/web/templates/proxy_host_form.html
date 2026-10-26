@@ -118,6 +118,14 @@
         </label>
         <div class="msg" id="redirect-note"></div>
         <div class="field-error" data-error-for="http_redirect" role="alert"></div>
+        <label class="check">
+          <input type="checkbox" id="opt-hsts">
+          <span><strong>HSTS</strong> — tells browsers to use only HTTPS for this site, using the
+            <code id="hsts-mw">hsts-headers</code> middleware. Off by default: browsers remember it
+            for a long time, so turn it on once HTTPS works for sure.</span>
+        </label>
+        <div class="msg" id="hsts-note"></div>
+        <div class="field-error" data-error-for="hsts" role="alert"></div>
       </div>
 
       <label for="ph-config-file" class="ep-row">Config file</label>
@@ -415,6 +423,7 @@
       pass_host_header: document.getElementById("opt-pass-host").checked,
       skip_upstream_tls_verify: document.getElementById("opt-skip-verify").checked,
       http_redirect: document.getElementById("opt-redirect").checked,
+      ...(document.getElementById("opt-hsts").checked ? { hsts: true } : {}),
       config_file: document.getElementById("ph-config-file").value.trim(),
       ...currentTls(),
     };
@@ -483,6 +492,12 @@
     document.getElementById("opt-redirect").checked = stored
       ? !!o.http_redirect
       : cat.redirect_available === true;
+    document.getElementById("opt-hsts").checked = stored ? !!o.hsts : false;
+    document.getElementById("hsts-mw").textContent = cat.hsts_middleware || "hsts-headers";
+    document.getElementById("hsts-note").textContent = cat.hsts_available === false
+      ? `The "${cat.hsts_middleware}" middleware was not found in Traefik — create it once ` +
+        "(a headers middleware with stsSeconds), or set TRAEFIK_HSTS_MIDDLEWARE, before enabling this."
+      : "";
     document.getElementById("ph-config-file").value = (stored && o.config_file) || "";
     renderConfigFile();
     document.getElementById("redirect-mw").textContent = cat.redirect_middleware || "redirect-to-https";
@@ -509,6 +524,7 @@
       state.catalog = { source: "unavailable", entrypoints: [], cert_resolvers: [],
                         cert_resolvers_known: false, default_entrypoints: [], default_cert_resolver: "",
                         domains: [], redirect_middleware: "redirect-to-https", redirect_available: null,
+                        hsts_middleware: "hsts-headers", hsts_available: null,
                         cert_resolver_sources: {}, cert_resolver_source_labels: {},
                         config_files: [], config_files_known: false, config_files_can_create: null,
                         config_file_template: "{service}.yml" };

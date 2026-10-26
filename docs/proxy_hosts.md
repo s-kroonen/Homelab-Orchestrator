@@ -433,6 +433,11 @@ or set `TRAEFIK_REDIRECT_MIDDLEWARE` to the name you already use. The form warns
 when Traefik does not have it, and the API refuses the option (`422`,
 `http_redirect`).
 
+**HSTS** is an option of the same kind: tick it on the host (or set `"hsts": true` in its route
+options) and the route carries the headers middleware named by `TRAEFIK_HSTS_MIDDLEWARE` (default
+`hsts-headers`, a `headers` middleware with `stsSeconds`). It needs an HTTPS entry point and the
+middleware must exist (`422` on `hsts` otherwise). Off by default. See docs/sources.md for the YAML.
+
 Two more things the adapter now gets right on every write:
 
 * **The upstream scheme is sent.** An `https://` upstream used to reach Traefik

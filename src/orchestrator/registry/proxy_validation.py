@@ -215,7 +215,7 @@ def validate_route_options(
     from orchestrator.adapters.proxy.traefik_manager import is_plain_http_entrypoint
 
     errors: dict[str, str] = {}
-    unknown = set(options or {}) - set(RouteOptions().to_dict())
+    unknown = set(options or {}) - set(RouteOptions(hsts=True).to_dict())
     if unknown:
         errors["route_options"] = f"unknown option(s): {', '.join(sorted(unknown))}"
     opts = RouteOptions.from_dict(options)
@@ -252,6 +252,8 @@ def validate_route_options(
             normalize_config_file(opts.config_file)
         except ValueError as exc:
             errors["config_file"] = str(exc)
+    if opts.hsts and not secure:
+        errors["hsts"] = "HSTS only means something over HTTPS: select an HTTPS entry point too."
     if opts.http_redirect and not secure:
         errors["http_redirect"] = (
             "There is nothing to redirect to: select an HTTPS entry point (websecure) as well."

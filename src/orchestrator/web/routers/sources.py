@@ -403,6 +403,9 @@ class PlanIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     hostnames: list[str] | None = None
+    #: True = put the HSTS middleware on every formatted route, False = take it off,
+    #: None (default) = keep what each route has.
+    hsts: bool | None = None
 
 
 @router.post("/traefik/format/plan")
@@ -410,7 +413,9 @@ async def format_plan(
     body: PlanIn, session: SessionDep, adapters: AdaptersDep, settings: SettingsDep
 ) -> dict[str, Any]:
     """What formatting would do to each host. Changes nothing."""
-    plan = await rf.build_plan(session, adapters, settings, hostnames=body.hostnames)
+    plan = await rf.build_plan(
+        session, adapters, settings, hostnames=body.hostnames, hsts=body.hsts
+    )
     return plan.as_dict()
 
 
@@ -431,6 +436,8 @@ class FormatRunIn(BaseModel):
     stop_on_failure: bool = True
     #: Accept a route Traefik's runtime list could not confirm (no Traefik API reachable).
     allow_unverified: bool = False
+    #: As in the plan the person looked at (the run plans again with the same choice).
+    hsts: bool | None = None
 
 
 @router.post("/traefik/format/run", status_code=status.HTTP_202_ACCEPTED)
@@ -494,7 +501,9 @@ async def _execute(
     ok = True
     try:
         wanted = {i.hostname.lower(): i for i in body.items}
-        plan = await rf.build_plan(session, adapters, settings, hostnames=list(wanted))
+        plan = await rf.build_plan(
+            session, adapters, settings, hostnames=list(wanted), hsts=body.hsts
+        )
         if plan.problem:
             raise rf.FormatFailed(plan.problem)
         keep: list[rf.FormatItem] = []
