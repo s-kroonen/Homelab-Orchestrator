@@ -24,7 +24,7 @@ from orchestrator.notify.engine import (
     NotificationEngine,
     summarize_delivery,
 )
-from orchestrator.web.auth import CurrentAdmin, get_current_admin, require_admin
+from orchestrator.web.auth import CurrentAdmin, get_current_admin, login_redirect, require_admin
 from orchestrator.web.deps import AdaptersDep, SessionDep, SettingsDep
 
 CHANNEL_NAMES = ("ntfy", "email", "webhook")
@@ -53,7 +53,7 @@ async def notifications_page(
 ) -> HTMLResponse | RedirectResponse:
     admin = get_current_admin(request, session)
     if admin is None:
-        return RedirectResponse("/login?next=/notifications", status_code=303)
+        return login_redirect(request)
     return _templates.TemplateResponse(
         request,
         "notifications.html",

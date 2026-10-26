@@ -14,7 +14,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
 from orchestrator.registry import archive as arch
-from orchestrator.web.auth import CurrentAdmin, get_current_admin, require_admin
+from orchestrator.web.auth import CurrentAdmin, get_current_admin, login_redirect, require_admin
 from orchestrator.web.deps import SessionDep
 
 api = APIRouter(prefix="/api/archive", tags=["archive"], dependencies=[Depends(require_admin)])
@@ -30,7 +30,7 @@ _templates = Jinja2Templates(directory=str(Path(__file__).parent.parent / "templ
 async def archive_page(request: Request, session: SessionDep) -> HTMLResponse | RedirectResponse:
     admin = get_current_admin(request, session)
     if admin is None:
-        return RedirectResponse("/login?next=/archive", status_code=303)
+        return login_redirect(request)
     return _templates.TemplateResponse(request, "archive.html", {"admin": admin})
 
 

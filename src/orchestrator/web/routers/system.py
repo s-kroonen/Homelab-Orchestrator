@@ -22,7 +22,7 @@ from orchestrator.system import backups as bk
 from orchestrator.system import info as sysinfo
 from orchestrator.system import selfupdate as updater
 from orchestrator.system import update as upd
-from orchestrator.web.auth import CurrentAdmin, get_current_admin, require_admin
+from orchestrator.web.auth import CurrentAdmin, get_current_admin, login_redirect, require_admin
 from orchestrator.web.deps import SessionDep, SettingsDep
 
 api = APIRouter(prefix="/api/system", tags=["system"], dependencies=[Depends(require_admin)])
@@ -47,7 +47,7 @@ def _fail(exc: Exception, code: int = status.HTTP_400_BAD_REQUEST) -> HTTPExcept
 async def system_page(request: Request, session: SessionDep) -> HTMLResponse | RedirectResponse:
     admin = get_current_admin(request, session)
     if admin is None:
-        return RedirectResponse("/login?next=/system", status_code=303)
+        return login_redirect(request)
     return _templates.TemplateResponse(request, "system.html", {"admin": admin})
 
 

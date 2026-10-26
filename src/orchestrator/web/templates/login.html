@@ -49,7 +49,9 @@
   const inviteToken = {{ invite_token | tojson }};
   // Only a path on this site: "?next=https://elsewhere" or "//elsewhere" must not carry a login away.
   const wanted = new URLSearchParams(location.search).get("next") || "/";
-  const nextUrl = wanted.startsWith("/") && !wanted.startsWith("//") && !wanted.startsWith("/\\") ? wanted : "/";
+  const nextPath = wanted.startsWith("/") && !wanted.startsWith("//") && !wanted.startsWith("/\\") ? wanted : "/";
+  // The browser keeps the "#deploys" of the link it was sent through the redirect to here.
+  const nextUrl = nextPath.includes("#") ? nextPath : nextPath + location.hash;
 
   function setMsg(id, text, kind) {
     const el = document.getElementById(id);

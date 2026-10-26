@@ -21,7 +21,7 @@ from orchestrator.db.models import McpGrant
 from orchestrator.mcp import approvals, store
 from orchestrator.mcp.scopes import ROLE_BLURBS, ROLES, SCOPES, parse_scope, role_of
 from orchestrator.mcp.tools import TOOLS, ToolError
-from orchestrator.web.auth import CurrentAdmin, get_current_admin, require_admin
+from orchestrator.web.auth import CurrentAdmin, get_current_admin, login_redirect, require_admin
 from orchestrator.web.deps import AdaptersDep, SessionDep, SettingsDep
 
 api = APIRouter(
@@ -263,7 +263,7 @@ async def deny_request(
 async def assistants_page(request: Request, session: SessionDep) -> HTMLResponse | RedirectResponse:
     admin = get_current_admin(request, session)
     if admin is None:
-        return RedirectResponse("/login?next=/assistants", status_code=303)
+        return login_redirect(request)
     return _templates.TemplateResponse(request, "assistants.html", {"admin": admin})
 
 
@@ -273,7 +273,7 @@ async def request_page(
 ) -> HTMLResponse | RedirectResponse:
     admin = get_current_admin(request, session)
     if admin is None:
-        return RedirectResponse(f"/login?next=/assistants/requests/{token}", status_code=303)
+        return login_redirect(request)
     _request(session, token)
     return _templates.TemplateResponse(
         request, "assistant_request.html", {"admin": admin, "token": token}
