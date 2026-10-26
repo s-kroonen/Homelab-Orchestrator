@@ -50,6 +50,7 @@ from orchestrator.audit import log as audit
 from orchestrator.db.models import ProxyHost, Service
 from orchestrator.domain.enums import RouterProvider
 from orchestrator.logging_setup import get_logger
+from orchestrator.registry.archive import archive_proxy_host
 from orchestrator.registry.config_files import normalize_config_file, unknown_file_problem
 from orchestrator.registry.host_cascade import host_served
 from orchestrator.registry.proxy_push import (
@@ -1114,6 +1115,7 @@ async def delete_proxy_host_record(
         old_service_id=ph.service_id,
     )
     _audit_probe_sync_events(session, admin, probe_events)
+    archive_proxy_host(session, settings, ph, admin.username)
     session.delete(ph)
     audit.record(
         session,

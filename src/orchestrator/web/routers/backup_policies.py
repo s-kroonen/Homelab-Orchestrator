@@ -20,8 +20,10 @@ from pydantic import BaseModel, ConfigDict
 from sqlmodel import Session, col, select
 
 from orchestrator.audit import log as audit
+from orchestrator.config import get_settings
 from orchestrator.db.models import BackupPolicy, BackupRecord, Service
 from orchestrator.domain.enums import BackupMode, BackupWakeMode
+from orchestrator.registry.archive import archive_policy
 from orchestrator.registry.backup_plan import (
     clean_slug_list,
     requires_problems_from_db,
@@ -467,6 +469,7 @@ async def delete_policy(
         target=f"policy:{name}",
         details={**_snapshot(policy), "detached_services": [s.slug for s in detached]},
     )
+    archive_policy(session, get_settings(), policy, [s.slug for s in detached], admin.username)
     session.delete(policy)
     session.commit()
     _resync(request)
