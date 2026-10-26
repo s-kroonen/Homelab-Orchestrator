@@ -100,7 +100,7 @@
         <span class="when"><time data-ts="{{ ev.at }}">{{ ev.at }}</time></span>
         <span class="what">{{ ev.title }}</span>
         <span class="badge {{ 'failed' if ev.severity in ('error', 'critical') else 'warn' if ev.severity == 'warn' else 'unknown' }}">{{ ev.event }}</span>
-        <span class="msg">{{ ev.level }} <code>{{ ev.target }}</code>
+        <span class="msg">{{ ev.level }} {% if ev.link %}<a href="{{ ev.link }}" title="Open {{ ev.target }}"><code>{{ ev.target }}</code></a>{% else %}<code>{{ ev.target }}</code>{% endif %}
           {% if ev.suppressed %}· folded: {{ ev.suppressed_reason }}
           {% elif ev.delivered %}· sent: {% for ch, res in ev.delivered.items() %}{{ ch }} {{ "✓" if res == "ok" else "–" if res.startswith("skipped") else "✗" }}{% if not loop.last %}, {% endif %}{% endfor %}
           {% else %}· not sent{% endif %}</span>

@@ -482,3 +482,6 @@ th.num, td.num { text-align: right; font-variant-numeric: tabular-nums; white-sp
      wrapping .table-scroll already does that here. */
   .host-table { display: table; }
 }
+
+/* The row an alert linked to (infra guests, ?vmid=). */
+tr.linked-row td { background: rgba(91, 141, 239, 0.16); }

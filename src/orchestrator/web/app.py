@@ -23,6 +23,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI
+from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.middleware.sessions import SessionMiddleware
 
 from orchestrator import __version__
@@ -41,10 +42,12 @@ from orchestrator.scheduler.ip_discovery import IpDiscoveryScheduler
 from orchestrator.scheduler.self_backup import SelfBackupScheduler
 from orchestrator.scheduler.traffic_collector import TrafficCollector
 from orchestrator.system.selfupdate import announce_last_result as announce_last_update
+from orchestrator.web.not_found import not_found_handler
 from orchestrator.web.routers import (
     actions,
     activity,
     approvals,
+    archive,
     assistants,
     auth,
     backup,
@@ -341,6 +344,7 @@ def create_app() -> FastAPI:
         same_site="lax",
         https_only=False,
     )
+    app.add_exception_handler(StarletteHTTPException, not_found_handler)
     app.mount(
         "/static",
         RevalidatingStaticFiles(directory=str(Path(__file__).parent / "static")),
@@ -363,6 +367,7 @@ def create_app() -> FastAPI:
     app.include_router(deploys.router)
     app.include_router(dumps.router)
     app.include_router(sources.router)
+    app.include_router(archive.router)
     app.include_router(hooks.router)
     app.include_router(events.router)
     app.include_router(stacks.router)

@@ -147,6 +147,16 @@ class BackupScheduler:
             max_instances=1,
             coalesce=True,
         )
+        # Deleted services leave the archive when their time is up.
+        self._scheduler.add_job(
+            self.purge_archive,
+            "interval",
+            hours=6,
+            id="archive.purge",
+            replace_existing=True,
+            max_instances=1,
+            coalesce=True,
+        )
         log.info("scheduler.started", jobs=len(self._scheduler.get_jobs()))
 
     async def shutdown(self) -> None:
@@ -212,6 +222,15 @@ class BackupScheduler:
             )
         self.sync_dump_jobs()
         log.info("scheduler.synced", policies=len(wanted), errors=len(self.errors))
+
+    def purge_archive(self) -> None:
+        from orchestrator.registry.archive import purge_expired
+
+        try:
+            with session_scope() as session:
+                purge_expired(session)
+        except Exception as exc:  # housekeeping must not take the scheduler down
+            log.warning("archive.purge_failed", error=str(exc))
 
     def sync_dump_jobs(self) -> None:
         """One job per service whose ``dump:`` block has a schedule. Idempotent."""

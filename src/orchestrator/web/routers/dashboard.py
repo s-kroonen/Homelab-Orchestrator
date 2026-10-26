@@ -53,6 +53,7 @@ from orchestrator.domain.schemas import HttpProbeConfig, PingProbeConfig, TcpPro
 from orchestrator.health.engine import HealthEngine
 from orchestrator.ipdiscovery.discovery import IpDiscoverer, effective_ip, ip_view
 from orchestrator.pipelines.wake import wake_is_unsupported
+from orchestrator.registry.archive import archive_services
 from orchestrator.registry.backup_plan import clean_slug_list, requires_problems_from_db
 from orchestrator.registry.ip_address import validate_ip_address
 from orchestrator.registry.loader import (
@@ -1167,6 +1168,7 @@ async def delete_service(
             f"cannot delete {slug!r}: {', '.join(required_by)} require(s) it for backups — "
             "remove it from their backup requirements first"
         )
+    archived = archive_services(session, get_settings(), svc, below, admin.username)
     probe_names = [p.name for p in _service_probes(session, svc)]
     for child in reversed(below):  # deepest first, so no row ever loses its parent under us
         probe_names += [p.name for p in _service_probes(session, child)]
@@ -1182,10 +1184,16 @@ async def delete_service(
             "name": svc.name,
             "probes_removed": probe_names,
             "sub_services_removed": [c.slug for c in below],
+            "archived_until": archived.purge_at.isoformat(),
         },
     )
     session.commit()
-    return {"status": "deleted", "slug": slug, "probes_removed": len(probe_names)}
+    return {
+        "status": "deleted",
+        "slug": slug,
+        "probes_removed": len(probe_names),
+        "archived_until": archived.purge_at.isoformat(),
+    }
 
 
 # ---------------------------------------------------------------------------

@@ -300,7 +300,10 @@
       else if (!parts.length) sent.textContent = "-";
       else for (const [k, v] of parts) { const s = document.createElement("span"); const skipped = v.startsWith("skipped"); s.className = v === "ok" ? "sent-ok" : skipped ? "muted" : "sent-bad"; s.textContent = k + (v === "ok" ? " ✓ " : skipped ? " – " : " ✗ "); s.title = v; sent.append(s); }
       const what = td(e.title); what.title = e.body;
-      tr.append(td(when(e.at)), td(e.level), td(e.target), td(e.event + (e.severity ? " (" + e.severity + ")" : "")), what, sent);
+      const target = td("");
+      if (e.link) { const a = document.createElement("a"); a.href = e.link; a.textContent = e.target; a.title = "Open " + e.target; target.append(a); }
+      else target.textContent = e.target;
+      tr.append(td(when(e.at)), td(e.level), target, td(e.event + (e.severity ? " (" + e.severity + ")" : "")), what, sent);
       body.append(tr);
     }
   }

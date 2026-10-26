@@ -1,0 +1,51 @@
+{% extends "base.html" %}
+{% block title %}homelab-orchestrator — not found{% endblock %}
+{% block content %}
+  <section class="not-found">
+    {% if archived %}
+    <h2>{{ archived.name or archived.slug }} was deleted</h2>
+    <p class="msg">
+      <code>{{ archived.slug }}</code> was deleted{% if archived.deleted_by %} by {{ archived.deleted_by }}{% endif %}
+      <time data-ts="{{ archived.deleted_at }}">{{ archived.deleted_at }}</time>.
+      It is kept in the archive for another {{ archived.days_left }} day(s), then purged.
+      {% if archived.parent %}It was a sub-service of <code>{{ archived.parent }}</code>.{% endif %}
+    </p>
+    <div class="row">
+      {% if admin %}<button id="restore-btn">Restore {{ archived.slug }}</button>{% endif %}
+      <a class="btn secondary" href="/archive">Open the archive</a>
+      <a class="btn secondary" href="/">Back to the dashboard</a>
+      <span class="msg" id="nf-msg" aria-live="polite"></span>
+    </div>
+    {% else %}
+    <h2>{% if kind == "service" %}No service called <code>{{ slug }}</code>{% else %}Page not found{% endif %}</h2>
+    <p class="msg">
+      {% if kind == "service" %}
+      It does not exist, and it is not in the archive (deleted services are kept 30 days). The link may be
+      from an alert about a service that was removed long ago, or have a typo.
+      {% else %}
+      Nothing lives at <code>{{ path }}</code>.
+      {% endif %}
+    </p>
+    <div class="row">
+      <a class="btn" href="/">Back to the dashboard</a>
+      {% if admin %}<a class="btn secondary" href="/archive">Archive</a>
+      <a class="btn secondary" href="/activity">Activity</a>{% endif %}
+    </div>
+    {% endif %}
+  </section>
+{% endblock %}
+{% block scripts %}
+{% if archived and admin %}
+<script>
+  document.getElementById("restore-btn").addEventListener("click", async (ev) => {
+    ev.target.disabled = true;
+    const msg = document.getElementById("nf-msg");
+    try {
+      const out = await apiFetch("POST", "/api/archive/{{ archived.id }}/restore", undefined, { suppressToast: true });
+      msg.textContent = "Restored." + (out.warnings.length ? " Note: " + out.warnings.join("; ") : "");
+      location.href = "/services/{{ archived.slug }}";
+    } catch (err) { ev.target.disabled = false; msg.textContent = err.message; msg.className = "msg error"; }
+  });
+</script>
+{% endif %}
+{% endblock %}

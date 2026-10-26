@@ -39,6 +39,7 @@ class Recorder(Notifier):
         self.names = list(names)
         self.fail = set(fail)
         self.sent: list[tuple[list[str] | None, str, str]] = []
+        self.urls: list[str | None] = []
 
     def channels(self) -> list[str]:
         return self.names
@@ -51,6 +52,7 @@ class Recorder(Notifier):
     ) -> dict[str, str]:
         wanted = list(channels) if channels else self.names
         self.sent.append((list(channels) if channels else None, severity.value, title))
+        self.urls.append(kw.get("approve_url"))
         return {c: ("error: boom" if c in self.fail else "ok") for c in wanted}
 
 
@@ -493,3 +495,67 @@ async def test_hooks_announce_is_fail_open_and_uses_the_installed_engine(session
     (row,) = session.exec(select(NotificationEvent)).all()
     assert row.event == "backup_failed" and not row.suppressed, row.suppressed_reason
     assert [t for _, _, t in rec.sent] == ["Backup of A FAILED"]
+
+
+# -- where an alert takes you -------------------------------------------------------------
+
+
+def test_links_name_the_page_and_the_spot() -> None:
+    from orchestrator.notify.links import link_for
+
+    assert link_for("service", "web", "failed") == "/services/web#health"
+    assert link_for("sub", "web-db", "dump_failed") == "/services/web-db#dumps"
+    assert link_for("service", "web", "backup_failed") == "/services/web#backups"
+    assert link_for("service", "web", "deploy_failed") == "/services/web#deploys"
+    assert link_for("service", "web", "outside_change") == "/services/web#stack"
+    assert link_for("node", "eve2", "down") == "/infra/guests?node=eve2"
+    assert link_for("guest", "eve1/101", "down") == "/infra/guests?node=eve1&vmid=101"
+    assert link_for("service", "orchestrator", "update_failed") == "/system"
+    assert link_for("service", "x", "test") == "/notifications"
+    assert link_for("service", "a b/c", "failed") == "/services/a%20b%2Fc#health"
+    assert link_for("service", "", "failed") is None
+
+
+async def test_channels_get_the_link_to_the_thing(session: Session) -> None:
+    rec = Recorder()
+    engine = engine_with(rec, external_url="https://orch.example/")
+    await feed(
+        engine,
+        session,
+        [obs("web", "healthy"), obs("pve2", "healthy", level="node")],
+        [obs("web", "failed"), obs("pve2", "down", level="node")],
+        [obs("web", "failed"), obs("pve2", "down", level="node")],
+    )
+    assert rec.urls == [
+        "https://orch.example/services/web#health",
+        "https://orch.example/infra/guests?node=pve2",
+    ]
+
+
+async def test_an_approval_link_wins_over_the_page_link(session: Session) -> None:
+    from orchestrator.notify.engine import Event
+
+    rec = Recorder()
+    engine = engine_with(rec, external_url="https://orch.example")
+    await engine.emit(
+        session,
+        Event(
+            "service", "web", "web", "restore_proposed", "warn", "t", "b", approve_url="https://x/y"
+        ),
+    )
+    assert rec.urls == ["https://x/y"]
+
+
+def test_the_feed_carries_the_link(session: Session) -> None:
+    from orchestrator.notify.engine import summarize_delivery
+
+    row = NotificationEvent(
+        level="sub",
+        target="web-db",
+        name="db",
+        event="dump_failed",
+        severity="error",
+        title="t",
+        body="b",
+    )
+    assert summarize_delivery(row)["link"] == "/services/web-db#dumps"
