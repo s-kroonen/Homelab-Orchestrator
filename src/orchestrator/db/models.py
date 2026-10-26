@@ -796,6 +796,27 @@ class NotificationRule(SQLModel, table=True):
     updated_at: datetime = Field(default_factory=_utcnow)
 
 
+class ArchivedService(SQLModel, table=True):
+    """A deleted service, kept for ``ARCHIVE_RETENTION_DAYS`` so it can be brought back.
+
+    ``snapshot`` holds the service and every sub-service that went with it in the registry
+    file's own shape (``{"services": [ServiceSpec, ...]}``): fields, probes and proxy hosts.
+    Runtime history (backups, runs, health) is not part of it - that stays where it was.
+    """
+
+    __tablename__ = "archived_service"
+
+    id: int | None = Field(default=None, primary_key=True)
+    slug: str = Field(index=True)
+    name: str = ""
+    parent_slug: str | None = None
+    sub_slugs: list[str] = Field(default_factory=list, sa_column=Column(JSON))
+    snapshot: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))
+    deleted_at: datetime = Field(default_factory=_utcnow, index=True)
+    deleted_by: str = ""
+    purge_at: datetime = Field(index=True)
+
+
 class NotificationEvent(SQLModel, table=True):
     """Every event the engine decided on, sent or not - the feed on /notifications."""
 

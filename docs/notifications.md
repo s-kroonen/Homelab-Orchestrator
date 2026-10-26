@@ -79,3 +79,6 @@ the webhook, and the target in the Notifications feed and on the Activity page.
 
 The address comes from `EXTERNAL_URL` (falling back to `ORCHESTRATOR_PUBLIC_URL`, then the
 passkey origin), so set it to the https address you use on your phone.
+
+If the service in an old alert has since been deleted, the link lands on a page that says so and
+offers to restore it from the [archive](archive.md).

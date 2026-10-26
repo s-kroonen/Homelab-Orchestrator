@@ -1101,10 +1101,10 @@
 
   $("svc-delete-btn").addEventListener("click", async () => {
     const n = SERVICE.probes.length;
-    if (!confirm(`Delete ${SERVICE.slug} and its ${n} probe(s)? Backup history is kept.`)) return;
+    if (!confirm(`Delete ${SERVICE.slug} and its ${n} probe(s)? Backup history is kept, and the service waits 30 days in the archive, where you can restore it.`)) return;
     try {
       await apiFetch("DELETE", svcPath, undefined, { suppressToast: true });
-      location.href = "/";
+      location.href = "/archive";
     } catch (err) {
       setMsg("svc-msg", err.message, "error");
     }

@@ -36,6 +36,7 @@ from sqlmodel import Session, select
 from orchestrator import cli_linked  # noqa: F401  (adds service state|enable|disable)
 from orchestrator.adapters.errors import AdapterError, AdapterTlsError, AdapterUnreachable
 from orchestrator.adapters.factory import build_adapters
+from orchestrator.cli_archive import archive as archive_group
 from orchestrator.cli_bulk import bulk
 from orchestrator.cli_config import policy as policy_group
 from orchestrator.cli_config import probe, proxy
@@ -957,6 +958,7 @@ cli.add_command(system_group, name="system")
 cli.add_command(portainer_group, name="portainer")
 cli.add_command(deploy_group, name="deploy")
 cli.add_command(dump_group, name="dump")
+cli.add_command(archive_group, name="archive")
 cli.add_command(stack_group, name="stack")
 cli.add_command(notify_group, name="notify")
 cli.add_command(admin_group, name="admin")

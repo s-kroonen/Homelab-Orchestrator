@@ -481,6 +481,85 @@ def validate_references(parsed: RegistryFile, *, strict: bool = False) -> None:
             )
 
 
+def apply_service_spec(
+    session: Session,
+    svc: Service,
+    spec: ServiceSpec,
+    *,
+    node: Node,
+    policy: BackupPolicy | None,
+    pushed_sigs: dict[str, str],
+) -> None:
+    """Write one service spec onto its row: fields, probes and proxy hosts (the last two
+    are wiped and replaced - they carry no runtime state). The row must be in the session.
+    Used by the YAML reconcile and by restoring an archived service."""
+    svc.name = spec.name
+    svc.description = spec.description
+    svc.group = spec.group
+    svc.guest_kind = spec.guest_kind
+    svc.guest_id = spec.guest_id
+    svc.controller = dict(spec.controller)
+    svc.recovery = dict(spec.recovery)
+    svc.deploy = dict(spec.deploy)
+    svc.dump = dict(spec.dump)
+    svc.backup_gate = spec.backup_gate
+    svc.enabled = spec.enabled
+    svc.backup_excluded = spec.backup_excluded
+    svc.backup_excluded_reason = spec.backup_excluded_reason
+    svc.wake_on_hit_enabled = spec.wake_on_hit_enabled
+    svc.wake_trigger = spec.wake_trigger
+    svc.depends_on = list(spec.depends_on)
+    svc.backup_requires = clean_slug_list(spec.backup_requires)
+    svc.ip_address = spec.ip_address
+    svc.node_id = node.id
+    # backup_excluded wins over a policy that (against the rules) still names the service
+    svc.backup_policy_id = policy.id if policy and not spec.backup_excluded else None
+    svc.updated_at = datetime.now(UTC)
+    session.flush()  # need svc.id for children
+
+    # Wipe & replace probes / proxy hosts — cheaper than diffing and safe
+    # because they carry no runtime state.
+    for old_probe in session.exec(select(Probe).where(Probe.service_id == svc.id)).all():
+        session.delete(old_probe)
+    for old_ph in session.exec(select(ProxyHost).where(ProxyHost.service_id == svc.id)).all():
+        session.delete(old_ph)
+    session.flush()
+
+    # A registry saved before probes had ``enabled`` still lists the
+    # ``traefik:<hostname>`` probe of a disabled host as on: the host is not
+    # served, so the probe follows it (the same rule the proxy-host sync applies).
+    parked = {probe_name_for_hostname(h.hostname) for h in spec.proxy_hosts if not h.enabled}
+    for pspec in spec.probes:
+        session.add(
+            Probe(
+                service_id=svc.id,  # type: ignore[arg-type]
+                name=pspec.name,
+                kind=pspec.kind,
+                required=pspec.required,
+                timeout_s=pspec.timeout_s,
+                order=pspec.order,
+                config=pspec.config,
+                enabled=pspec.enabled and pspec.name not in parked,
+            )
+        )
+    for phspec in spec.proxy_hosts:
+        session.add(
+            ProxyHost(
+                service_id=svc.id,
+                hostname=phspec.hostname,
+                upstream=phspec.upstream,
+                router_provider=RouterProvider(phspec.router_provider),
+                extra=phspec.extra,
+                wake_on_hit=phspec.wake_on_hit,
+                entry_points=list(phspec.entry_points),
+                cert_resolver=phspec.cert_resolver,
+                route_options=dict(phspec.route_options),
+                enabled=phspec.enabled,
+                pushed_sig=pushed_sigs.get(phspec.hostname, ""),
+            )
+        )
+
+
 def reconcile_yaml_into_db(session: Session, path: Path) -> RegistryFile:
     """Read ``path`` and overwrite the DB's registry tables to match.
 
@@ -564,6 +643,20 @@ def reconcile_yaml_into_db(session: Session, path: Path) -> RegistryFile:
     if stale_deletes is not None:
         session.delete(stale_deletes)
 
+    # A reload that drops services leaves them restorable (dashboard Archive page).
+    try:
+        from orchestrator.config import get_settings
+        from orchestrator.registry.archive import archive_removed
+
+        archive_removed(
+            session,
+            get_settings(),
+            [slug for slug in existing_services if slug not in yaml_service_slugs],
+            "registry-reload",
+        )
+    except Exception as exc:  # the archive is a safety net, never a reason to fail a load
+        log.warning("registry.archive_failed", error=str(exc))
+
     spec_by_slug = {s.slug: s for s in parsed.services}
 
     def root_spec(spec: ServiceSpec) -> ServiceSpec:
@@ -589,71 +682,7 @@ def reconcile_yaml_into_db(session: Session, path: Path) -> RegistryFile:
         if svc is None:
             svc = Service(slug=spec.slug, name=spec.name)
             session.add(svc)
-        svc.name = spec.name
-        svc.description = spec.description
-        svc.group = spec.group
-        svc.guest_kind = spec.guest_kind
-        svc.guest_id = spec.guest_id
-        svc.controller = dict(spec.controller)
-        svc.recovery = dict(spec.recovery)
-        svc.deploy = dict(spec.deploy)
-        svc.dump = dict(spec.dump)
-        svc.backup_gate = spec.backup_gate
-        svc.enabled = spec.enabled
-        svc.backup_excluded = spec.backup_excluded
-        svc.backup_excluded_reason = spec.backup_excluded_reason
-        svc.wake_on_hit_enabled = spec.wake_on_hit_enabled
-        svc.wake_trigger = spec.wake_trigger
-        svc.depends_on = list(spec.depends_on)
-        svc.backup_requires = clean_slug_list(spec.backup_requires)
-        svc.ip_address = spec.ip_address
-        svc.node_id = node.id
-        # backup_excluded wins over a policy that (against the rules) still names the service
-        svc.backup_policy_id = policy.id if policy and not spec.backup_excluded else None
-        svc.updated_at = datetime.now(UTC)
-        session.flush()  # need svc.id for children
-
-        # Wipe & replace probes / proxy hosts — cheaper than diffing and safe
-        # because they carry no runtime state.
-        for old_probe in session.exec(select(Probe).where(Probe.service_id == svc.id)).all():
-            session.delete(old_probe)
-        for old_ph in session.exec(select(ProxyHost).where(ProxyHost.service_id == svc.id)).all():
-            session.delete(old_ph)
-        session.flush()
-
-        # A registry saved before probes had ``enabled`` still lists the
-        # ``traefik:<hostname>`` probe of a disabled host as on: the host is not
-        # served, so the probe follows it (the same rule the proxy-host sync applies).
-        parked = {probe_name_for_hostname(h.hostname) for h in spec.proxy_hosts if not h.enabled}
-        for pspec in spec.probes:
-            session.add(
-                Probe(
-                    service_id=svc.id,  # type: ignore[arg-type]
-                    name=pspec.name,
-                    kind=pspec.kind,
-                    required=pspec.required,
-                    timeout_s=pspec.timeout_s,
-                    order=pspec.order,
-                    config=pspec.config,
-                    enabled=pspec.enabled and pspec.name not in parked,
-                )
-            )
-        for phspec in spec.proxy_hosts:
-            session.add(
-                ProxyHost(
-                    service_id=svc.id,
-                    hostname=phspec.hostname,
-                    upstream=phspec.upstream,
-                    router_provider=RouterProvider(phspec.router_provider),
-                    extra=phspec.extra,
-                    wake_on_hit=phspec.wake_on_hit,
-                    entry_points=list(phspec.entry_points),
-                    cert_resolver=phspec.cert_resolver,
-                    route_options=dict(phspec.route_options),
-                    enabled=phspec.enabled,
-                    pushed_sig=pushed_sigs.get(phspec.hostname, ""),
-                )
-            )
+        apply_service_spec(session, svc, spec, node=node, policy=policy, pushed_sigs=pushed_sigs)
 
     # Parent links, now that every service row exists (and has an id).
     rows_by_slug = {s.slug: s for s in session.exec(select(Service)).all()}
@@ -671,6 +700,10 @@ def reconcile_yaml_into_db(session: Session, path: Path) -> RegistryFile:
             session.delete(svc)
 
     session.flush()
+
+    from orchestrator.registry.archive import drop_revived
+
+    drop_revived(session)
 
     # --- Deferred parent deletions -------------------------------------------
     # Safe only now: every service that referenced a removed node/policy has

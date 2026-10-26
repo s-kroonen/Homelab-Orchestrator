@@ -444,6 +444,8 @@ class Settings(BaseSettings):
     notify_flap_threshold: int = 4
     notify_flap_window_s: int = 1800
     notify_retention_days: int = 30
+    #: A deleted service stays in the archive (restorable) this many days, then is purged.
+    archive_retention_days: int = 30
 
     # ---- Derived helpers --------------------------------------------------
     @field_validator("state_dir", "services_yaml_path", "setup_project_dir", mode="before")

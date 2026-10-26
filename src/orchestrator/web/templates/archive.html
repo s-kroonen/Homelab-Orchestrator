@@ -1,0 +1,67 @@
+{% extends "base.html" %}
+{% block title %}homelab-orchestrator — archive{% endblock %}
+{% block content %}
+  <section>
+    <h2>Archive</h2>
+    <p class="msg">
+      A deleted service waits here for <strong>30 days</strong> (<code>ARCHIVE_RETENTION_DAYS</code>) and can be
+      restored with its sub-services, probes and proxy hosts. After that it is gone for good. Backup
+      history, runs and health state are not part of it. Restored proxy hosts are not pushed to Traefik
+      Manager until the next Save.
+    </p>
+    <div class="table-scroll">
+    <table>
+      <thead><tr><th>Service</th><th>Deleted</th><th>By</th><th>Contents</th><th>Purged in</th><th></th></tr></thead>
+      <tbody id="arch-body"><tr><td colspan="6">Loading…</td></tr></tbody>
+    </table>
+    </div>
+    <p class="msg" id="arch-msg" aria-live="polite"></p>
+  </section>
+{% endblock %}
+{% block scripts %}
+<script>
+  const $ = (id) => document.getElementById(id);
+  function setMsg(text, kind) { const e = $("arch-msg"); e.textContent = text; e.className = "msg" + (kind ? " " + kind : ""); }
+  function td(...kids) { const e = document.createElement("td"); e.append(...kids); return e; }
+
+  async function load() {
+    const body = $("arch-body");
+    let rows;
+    try { rows = await apiFetch("GET", "/api/archive", undefined, { suppressToast: true }); }
+    catch (err) { body.replaceChildren(); setMsg(err.message, "error"); return; }
+    if (!rows.length) { body.innerHTML = '<tr><td colspan="6" class="muted">Nothing deleted lately.</td></tr>'; return; }
+    body.replaceChildren(...rows.map((r) => {
+      const tr = document.createElement("tr");
+      const who = document.createElement("strong"); who.textContent = r.name || r.slug;
+      const slug = document.createElement("code"); slug.textContent = r.slug;
+      const when = document.createElement("time"); when.dataset.ts = r.deleted_at; when.textContent = fmtTime(r.deleted_at);
+      const parts = [];
+      if (r.sub_services.length) parts.push(r.sub_services.length + " sub-service(s): " + r.sub_services.join(", "));
+      if (r.probes) parts.push(r.probes + " probe(s)");
+      if (r.proxy_hosts.length) parts.push(r.proxy_hosts.length + " proxy host(s): " + r.proxy_hosts.join(", "));
+      const restore = document.createElement("button");
+      restore.textContent = "Restore";
+      restore.addEventListener("click", async () => {
+        restore.disabled = true;
+        try {
+          const out = await apiFetch("POST", `/api/archive/${r.id}/restore`, undefined, { suppressToast: true });
+          const note = out.warnings.length ? " Note: " + out.warnings.join("; ") : "";
+          setMsg(`Restored ${out.restored.join(", ")}.${note}`, out.warnings.length ? "" : "ok");
+          load();
+        } catch (err) { restore.disabled = false; setMsg(err.message, "error"); }
+      });
+      const purge = document.createElement("button");
+      purge.className = "danger secondary small"; purge.textContent = "Delete now";
+      purge.addEventListener("click", async () => {
+        if (!confirm(`Delete ${r.slug} for good? It cannot be restored afterwards.`)) return;
+        try { await apiFetch("DELETE", `/api/archive/${r.id}`, undefined, { suppressToast: true }); load(); }
+        catch (err) { setMsg(err.message, "error"); }
+      });
+      tr.append(td(who, " ", slug), td(when), td(r.deleted_by || "—"),
+        td(parts.join(" · ") || "—"), td(r.days_left + " day(s)"), td(restore, " ", purge));
+      return tr;
+    }));
+  }
+  load();
+</script>
+{% endblock %}

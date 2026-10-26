@@ -601,6 +601,10 @@ ENV_SECTIONS: tuple[EnvSection, ...] = (
             EnvKey("NOTIFY_FLAP_WINDOW_S"),
             EnvKey("NOTIFY_RETENTION_DAYS", "How long the feed on /notifications is kept."),
             EnvKey(
+                "ARCHIVE_RETENTION_DAYS",
+                "A deleted service stays in the archive (restorable from /archive) this many days.",
+            ),
+            EnvKey(
                 "EXTERNAL_URL",
                 "How you reach this dashboard (https://orchestrator.example.com), used for\n"
                 "the links in alerts. Falls back to ORCHESTRATOR_PUBLIC_URL.",
