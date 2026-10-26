@@ -88,3 +88,12 @@ object 404.
   are listed as environments but have no stacks here.
 * The "Open in Portainer" link shapes follow Portainer 2.x; the Connectivity check reports
   the version, and the shapes are the first thing to check if a link lands on the wrong page.
+* **One environment failing does not fail the page.** If Portainer cannot read an
+  environment's containers (an agent that is down, a 5xx from it), its stacks stay listed
+  without container counts and the reason is shown above the list. An environment Portainer
+  itself reports as down is not even asked.
+* **Point `PORTAINER_URL` at Portainer itself** (`https://<host>:9443`), not at the public
+  address behind Traefik. Behind Traefik, a 5xx from Portainer can be replaced by the
+  orchestrator's own "not available" page, which hides Portainer's real message; the error
+  then reads "an HTML page came back instead of Portainer's reply". `PORTAINER_PUBLIC_URL` is
+  only for the "Open in Portainer" links.

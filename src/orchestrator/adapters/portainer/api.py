@@ -8,6 +8,7 @@ environment Portainer manages.
 from __future__ import annotations
 
 import asyncio
+import re
 import ssl
 import time
 from collections.abc import Callable
@@ -60,12 +61,31 @@ def _is_tls_failure(exc: BaseException) -> bool:
     return False
 
 
+_TITLE = re.compile(r"<title[^>]*>(.*?)</title>", re.I | re.S)
+
+
+def _html_reply(text: str) -> str | None:
+    """A web page where JSON was expected means something in front of Portainer (a reverse
+    proxy's error page) answered, not Portainer. Describe it instead of dumping its markup."""
+    head = text.lstrip()[:200].lower()
+    if not (head.startswith("<!doctype html") or head.startswith("<html")):
+        return None
+    found = _TITLE.search(text)
+    title = " ".join(found.group(1).split())[:80] if found else "no title"
+    return (
+        f"an HTML page ({title!r}) came back instead of Portainer's reply: a reverse proxy in "
+        "front of Portainer answered. That is usually Traefik replacing a 5xx from Portainer "
+        "(often an environment that is down) with its 'not available' page. Point PORTAINER_URL "
+        "at Portainer itself (https://<host>:9443) to see its own message"
+    )
+
+
 def _error_text(response: httpx.Response) -> str:
     """Portainer's own explanation (``{"message", "details"}``) when it gave one."""
     try:
         body = response.json()
     except ValueError:
-        return response.text
+        return _html_reply(response.text) or response.text
     if isinstance(body, dict):
         message = " - ".join(str(body[k]) for k in ("message", "details") if body.get(k))
         if message:
@@ -155,7 +175,7 @@ class LivePortainerAdapter(PortainerAdapter):
         if response.status_code >= 400:
             raise AdapterRequestError(
                 f"Portainer answered {response.status_code} on {method} {path}: "
-                f"{_error_text(response)[:200]}",
+                f"{_error_text(response)[:450]}",
                 status_code=response.status_code,
                 body=_error_text(response)[:300],
             )

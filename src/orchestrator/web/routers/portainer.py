@@ -146,11 +146,32 @@ async def stacks(
     links = _links(session)
     try:
         listing = await adapter.list_stacks(endpoint)
-        env_ids = sorted({s.endpoint_id for s in listing.stacks})
-        per_env = await asyncio.gather(*(adapter.list_containers(e) for e in env_ids))
     except AdapterError as exc:
         raise _fail(exc) from exc
-    containers = dict(zip(env_ids, per_env, strict=True))
+    # One environment that cannot be read (an agent that is down, a 502 from it) must not
+    # take the others with it: its stacks stay listed, without container counts, and the
+    # reason is shown next to the list.
+    env_ids = sorted({s.endpoint_id for s in listing.stacks})
+    try:
+        down = {e.id for e in await adapter.list_environments() if e.status == "down"}
+    except AdapterError:
+        down = set()
+    for eid in down & set(env_ids):  # Portainer already knows: no point asking it for containers
+        listing.errors.setdefault(eid, "Portainer reports this environment as down")
+    env_ids = [e for e in env_ids if e not in down]
+    per_env = await asyncio.gather(
+        *(adapter.list_containers(e) for e in env_ids), return_exceptions=True
+    )
+    containers: dict[int, list[Container]] = {}
+    unreadable: set[int] = set(down)
+    for eid, result in zip(env_ids, per_env, strict=True):
+        if isinstance(result, AdapterError):
+            unreadable.add(eid)
+            listing.errors.setdefault(eid, str(result))
+        elif isinstance(result, BaseException):
+            raise result
+        else:
+            containers[eid] = result
     gate = asyncio.Semaphore(_KIND_CONCURRENCY)
 
     async def kind_of(s: Stack) -> str:
@@ -166,7 +187,9 @@ async def stacks(
             for c in containers.get(s.endpoint_id, [])
             if (c.stack or "").lower() == s.name.lower()
         ]
-        rows.append(_stack_view(s, base, links, mine, kind))
+        rows.append(
+            _stack_view(s, base, links, None if s.endpoint_id in unreadable else mine, kind)
+        )
     return {"stacks": rows, "errors": {str(k): v for k, v in listing.errors.items()}}
 
 
