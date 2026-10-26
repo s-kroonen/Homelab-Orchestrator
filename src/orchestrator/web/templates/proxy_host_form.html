@@ -495,8 +495,8 @@
     document.getElementById("opt-hsts").checked = stored ? !!o.hsts : false;
     document.getElementById("hsts-mw").textContent = cat.hsts_middleware || "hsts-headers";
     document.getElementById("hsts-note").textContent = cat.hsts_available === false
-      ? `The "${cat.hsts_middleware}" middleware was not found in Traefik — create it once ` +
-        "(a headers middleware with stsSeconds), or set TRAEFIK_HSTS_MIDDLEWARE, before enabling this."
+      ? `Traefik has no "${cat.hsts_middleware}" middleware yet - it is created for you when this host is pushed ` +
+        "(one year, this host only; change it in Traefik Manager if you want something else)."
       : "";
     document.getElementById("ph-config-file").value = (stored && o.config_file) || "";
     renderConfigFile();

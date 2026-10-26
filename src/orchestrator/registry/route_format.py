@@ -237,11 +237,10 @@ async def _plan_one(
     # An owned route is rewritten in place (its middlewares are the adapter's to set), so the
     # HSTS it has must travel as the option; a recreated one carries it in the kept list.
     want_hsts = (stored_hsts or (owned and had_hsts)) if hsts is None else hsts
-    if hsts and not had_hsts and catalog.hsts_available is False:
-        item.warnings.append(
-            f"the {hsts_name} middleware does not exist in Traefik, so HSTS is not added"
+    if want_hsts and not had_hsts and catalog.hsts_available is False:
+        item.changes.append(
+            f"creates the {hsts_name} middleware in Traefik (it does not exist yet)"
         )
-        want_hsts = False
     options = standard_options(
         ph.route_options,
         redirect_available=catalog.redirect_available,

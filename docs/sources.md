@@ -103,17 +103,19 @@ The **HSTS** choice above the list is applied to every formatted route and re-pl
   (default `hsts-headers`) and stores `hsts: true` in the host's route options;
 * *take off every formatted route*.
 
-The middleware has to exist in Traefik (the plan warns and adds nothing if not), e.g. in a shared file:
+If Traefik has no such middleware the orchestrator **creates it** (through Traefik Manager, when the
+first route that uses it is written; the plan says "creates the … middleware"). What it creates:
 
 ```yaml
-http:
-  middlewares:
-    hsts-headers:
-      headers:
-        stsSeconds: 31536000
-        stsIncludeSubdomains: true
-        forceSTSHeader: true
+headers:
+  stsSeconds: 31536000        # one year
+  stsIncludeSubdomains: false # this host only
+  stsPreload: false
+  forceSTSHeader: false
 ```
+
+Edit it in Traefik Manager if you want something else (e.g. `includeSubdomains`); an existing
+middleware of that name is never touched.
 
 CLI: `orchestrator-cli proxy format --hsts` / `--no-hsts`. New hosts get it from the **HSTS** checkbox
 of the host form (off by default: browsers remember HSTS for a long time, so switch it on once
