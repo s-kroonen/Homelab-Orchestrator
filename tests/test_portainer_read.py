@@ -143,6 +143,7 @@ class FakePortainer:
     def __init__(self) -> None:
         self.calls: list[tuple[str, str]] = []
         self.compose = {11: COMPOSE_BUILD}
+        self.extra_stacks: list[dict[str, Any]] = []
         self.fail: dict[str, httpx.Response | Exception] = {}
 
     def __call__(self, request: httpx.Request) -> httpx.Response:
@@ -181,7 +182,7 @@ class FakePortainer:
                 ],
             )
         if path == "/api/stacks":
-            return httpx.Response(200, json=[STACK_RAW])
+            return httpx.Response(200, json=[STACK_RAW, *self.extra_stacks])
         if path.startswith("/api/stacks/") and path.endswith("/file"):
             sid = int(path.split("/")[3])
             return httpx.Response(200, json={"StackFileContent": self.compose.get(sid, "")})
@@ -712,7 +713,20 @@ def test_an_unreadable_environment_does_not_fail_the_stack_list(
     r = client.get("/api/portainer/stacks")
     assert r.status_code == 200, r.text
     body = r.json()
-    assert "unreachable, skipped (Portainer answered 502)" in body["errors"]["1"]
-    assert 1 in body["skipped"] and "<" not in body["errors"]["1"]
-    on_env_1 = [s for s in body["stacks"] if s["endpoint_id"] == 1]
-    assert on_env_1 and all("containers_total" not in s for s in on_env_1)
+    assert "unreachable, hidden (Portainer answered 502)" in body["errors"]["1"]
+    assert "1" in body["errors"] and 1 in body["skipped"] and "<" not in body["errors"]["1"]
+    # its stacks are not listed at all: "active" next to an environment nobody can reach misleads
+    assert all(s["endpoint_id"] != 1 for s in body["stacks"])
+
+
+async def test_stacks_of_a_down_environment_are_not_listed(
+    live: LivePortainerAdapter, fake: FakePortainer
+) -> None:
+    """Portainer keeps a managed stack's record, still 'active', after its environment is down."""
+    listing = await live.list_stacks()
+    assert all(s.endpoint_id != 3 for s in listing.stacks)
+    fake.extra_stacks.append({**STACK_RAW, "Id": 77, "Name": "ghost", "EndpointId": 3})  # 3 is down
+    live.invalidate()
+    listing = await live.list_stacks()
+    assert "ghost" not in {s.name for s in listing.stacks}
+    assert "down" in listing.errors[3]

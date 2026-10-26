@@ -88,10 +88,12 @@ object 404.
   are listed as environments but have no stacks here.
 * The "Open in Portainer" link shapes follow Portainer 2.x; the Connectivity check reports
   the version, and the shapes are the first thing to check if a link lands on the wrong page.
-* **One environment failing does not fail the page.** If Portainer cannot read an
-  environment's containers (an agent that is down, a 5xx from it), its stacks stay listed
-  without container counts and the reason is shown above the list. An environment Portainer
-  itself reports as down is not even asked.
+* **Unreachable environments are not shown.** Portainer keeps a stack's record, still "active",
+  after its environment goes away (an agent that is down, a guest that is off), so listing it
+  would claim a stack is running that nobody can reach. An environment Portainer reports as down,
+  or whose containers cannot be read (a 5xx, a timeout), is left out of the page, the environment
+  list and the stack lists (page, Data sources, CLI), and one line names what was hidden. The other
+  environments load normally. It comes back by itself once it answers again.
 * **Point `PORTAINER_URL` at Portainer itself** (`https://<host>:9443`), not at the public
   address behind Traefik. Behind Traefik, a 5xx from Portainer can be replaced by the
   orchestrator's own "not available" page, which hides Portainer's real message; the error

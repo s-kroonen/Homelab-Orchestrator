@@ -65,7 +65,7 @@
       renderStacks();
       const problems = Object.entries(r.errors || {}).map(([k, v]) => `environment ${k} (${v})`);
       $("p-errors").textContent = problems.length
-        ? `${problems.length} environment(s) could not be read; their stacks are listed without container counts: ${problems.join("; ")}`
+        ? `${problems.length} environment(s) are unreachable, so they and their stacks are not shown: ${problems.join("; ")}`
         : "";
     } catch (e) {
       state.stacks = []; renderStacks();
@@ -81,7 +81,8 @@
       if (!s.ok) return false;
       const envs = await apiFetch("GET", "/api/portainer/environments", undefined, { suppressToast: true });
       const sel = $("p-env");
-      sel.replaceChildren(new Option("all", ""), ...envs.map((e) => new Option(`${e.name} (${e.type}, ${e.status})`, String(e.id))));
+      // a down environment is not offered: its stacks are not shown, so there is nothing to pick
+      sel.replaceChildren(new Option("all", ""), ...envs.filter((e) => e.status !== "down").map((e) => new Option(`${e.name} (${e.type}, ${e.status})`, String(e.id))));
       return true;
     } catch (e) { $("p-status").textContent = err(e); return false; }
   }

@@ -270,7 +270,7 @@
     $("pt-off").hidden = d.configured;
     if (!d.configured) { $("pt-rows").replaceChildren(emptyRow(6, "Portainer is not set up.")); return; }
     const bad = Object.entries(d.errors || {}).map(([k, v]) => `environment ${k} (${v})`);
-    $("pt-errors").textContent = bad.length ? `${bad.length} environment(s) could not be read, their stacks show no container counts: ${bad.join("; ")}` : "";
+    $("pt-errors").textContent = bad.length ? `${bad.length} environment(s) are unreachable, so they and their stacks are not shown: ${bad.join("; ")}` : "";
     $("pt-rows").replaceChildren(...(d.stacks.length ? d.stacks.map((s) => {
       const linkedTo = (s.linked_services || []);
       const adopt = el("button", { className: "secondary small" }, "Adopt…");
