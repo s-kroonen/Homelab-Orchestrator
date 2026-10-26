@@ -466,6 +466,21 @@ async def test_one_failing_environment_does_not_hide_the_others(
     assert "500" in listing.errors[1]
 
 
+async def test_a_proxy_error_page_is_described_not_dumped(
+    live: LivePortainerAdapter, fake: FakePortainer
+) -> None:
+    page = (
+        "<!DOCTYPE html><html><head><title>portainer \u2014 portainer is not available</title>"
+        "<style>body{}</style></head><body>x</body></html>"
+    )
+    fake.fail["/api/endpoints/1/docker/containers/json"] = httpx.Response(502, text=page)
+    with pytest.raises(AdapterRequestError) as caught:
+        await live.list_containers(1)
+    text = str(caught.value)
+    assert "502" in text and "reverse proxy" in text and "PORTAINER_URL" in text
+    assert "<style>" not in text and "portainer is not available" in text
+
+
 # -- the API, the page, the CLI -------------------------------------------------------------------------
 
 
@@ -680,3 +695,24 @@ def test_the_cli_reads_the_same_things() -> None:
     assert as_json[0]["name"] == "local"
     missing = runner.invoke(cli, ["portainer", "logs", "ghost", "-e", "1"])
     assert missing.exit_code != 0 and "no container" in missing.output
+
+
+def test_an_unreadable_environment_does_not_fail_the_stack_list(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    adapter = client.app.state.adapters.portainer  # type: ignore[attr-defined]
+    real = adapter.list_containers
+
+    async def flaky(endpoint_id: int, **kw: Any) -> Any:
+        if endpoint_id == 1:
+            raise AdapterRequestError("Portainer answered 502 on GET /x: proxy page")
+        return await real(endpoint_id, **kw)
+
+    monkeypatch.setattr(adapter, "list_containers", flaky)
+    r = client.get("/api/portainer/stacks")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert "unreachable, skipped (Portainer answered 502)" in body["errors"]["1"]
+    assert 1 in body["skipped"] and "<" not in body["errors"]["1"]
+    on_env_1 = [s for s in body["stacks"] if s["endpoint_id"] == 1]
+    assert on_env_1 and all("containers_total" not in s for s in on_env_1)

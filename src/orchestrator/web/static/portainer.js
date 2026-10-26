@@ -63,8 +63,10 @@
       const r = await apiFetch("GET", "/api/portainer/stacks" + (env ? "?endpoint=" + env : ""), undefined, { suppressToast: true });
       state.stacks = r.stacks;
       renderStacks();
-      const problems = Object.entries(r.errors || {}).map(([k, v]) => `environment ${k}: ${v}`);
-      $("p-errors").textContent = problems.join("; ");
+      const problems = Object.entries(r.errors || {}).map(([k, v]) => `environment ${k} (${v})`);
+      $("p-errors").textContent = problems.length
+        ? `${problems.length} environment(s) could not be read; their stacks are listed without container counts: ${problems.join("; ")}`
+        : "";
     } catch (e) {
       state.stacks = []; renderStacks();
       $("p-errors").textContent = err(e);
