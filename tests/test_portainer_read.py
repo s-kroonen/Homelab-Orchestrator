@@ -712,6 +712,7 @@ def test_an_unreadable_environment_does_not_fail_the_stack_list(
     r = client.get("/api/portainer/stacks")
     assert r.status_code == 200, r.text
     body = r.json()
-    assert "502" in body["errors"]["1"]
+    assert "unreachable, skipped (Portainer answered 502)" in body["errors"]["1"]
+    assert 1 in body["skipped"] and "<" not in body["errors"]["1"]
     on_env_1 = [s for s in body["stacks"] if s["endpoint_id"] == 1]
     assert on_env_1 and all("containers_total" not in s for s in on_env_1)

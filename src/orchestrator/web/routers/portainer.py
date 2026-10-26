@@ -9,6 +9,7 @@ by hand - the orchestrator is one control point among several, not the only one.
 from __future__ import annotations
 
 import asyncio
+import re
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any
@@ -59,6 +60,23 @@ def _fail(exc: AdapterError) -> HTTPException:
     if isinstance(exc, AdapterUnreachable):
         return HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc))
     return HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc))
+
+
+_ANSWERED = re.compile(r"Portainer answered (\d{3})")
+
+
+def _why(name: str | None, detail: str) -> str:
+    """One line for the page: which environment, and that it was skipped. The full text (an
+    error page's markup, a stack trace) stays in the logs and the CLI."""
+    answered = _ANSWERED.search(detail)
+    if answered:
+        reason = f"Portainer answered {answered.group(1)}"
+    elif "unreachable" in detail or "timed out" in detail:
+        reason = "did not answer"
+    else:
+        reason = detail.split("\n")[0][:80]
+    label = f"{name} - " if name else ""
+    return f"{label}unreachable, skipped ({reason})"
 
 
 # -- links the orchestrator keeps (and nothing else about a stack) ------------------------
@@ -153,11 +171,13 @@ async def stacks(
     # reason is shown next to the list.
     env_ids = sorted({s.endpoint_id for s in listing.stacks})
     try:
-        down = {e.id for e in await adapter.list_environments() if e.status == "down"}
+        envs = await adapter.list_environments()
     except AdapterError:
-        down = set()
+        envs = []
+    names = {e.id: e.name for e in envs}
+    down = {e.id for e in envs if e.status == "down"}
     for eid in down & set(env_ids):  # Portainer already knows: no point asking it for containers
-        listing.errors.setdefault(eid, "Portainer reports this environment as down")
+        listing.errors.setdefault(eid, "Portainer reports it as down")
     env_ids = [e for e in env_ids if e not in down]
     per_env = await asyncio.gather(
         *(adapter.list_containers(e) for e in env_ids), return_exceptions=True
@@ -190,7 +210,11 @@ async def stacks(
         rows.append(
             _stack_view(s, base, links, None if s.endpoint_id in unreadable else mine, kind)
         )
-    return {"stacks": rows, "errors": {str(k): v for k, v in listing.errors.items()}}
+    return {
+        "stacks": rows,
+        "errors": {str(k): _why(names.get(k), v) for k, v in listing.errors.items()},
+        "skipped": sorted(listing.errors),
+    }
 
 
 @api.get("/endpoints/{endpoint_id}/stacks/{name}")

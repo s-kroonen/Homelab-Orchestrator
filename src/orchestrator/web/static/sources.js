@@ -251,7 +251,8 @@
     catch (e) { msg("pt-msg", err(e), "error"); return; }
     $("pt-off").hidden = d.configured;
     if (!d.configured) { $("pt-rows").replaceChildren(emptyRow(6, "Portainer is not set up.")); return; }
-    $("pt-errors").textContent = Object.entries(d.errors || {}).map(([k, v]) => `Environment ${k}: ${v}`).join(" ");
+    const bad = Object.entries(d.errors || {}).map(([k, v]) => `environment ${k} (${v})`);
+    $("pt-errors").textContent = bad.length ? `${bad.length} environment(s) could not be read, their stacks show no container counts: ${bad.join("; ")}` : "";
     $("pt-rows").replaceChildren(...(d.stacks.length ? d.stacks.map((s) => {
       const linkedTo = (s.linked_services || []);
       const adopt = el("button", { className: "secondary small" }, "Adopt…");
