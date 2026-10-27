@@ -273,5 +273,5 @@ See [design/README.md](design/README.md) for the approved wireframes and the rul
 | 5. Lists | Services, Nodes & guests (guests tab of Connectivity folded in), Proxy hosts (drawer replaces the form pages), Backups (policies, snapshots, dumps, the orchestrator's own backup; the policy drawer replaces the form pages) | Containers (needs a wireframe); Import/Format as real tabs (they link to Data sources for now) |
 | 6. Settings | Connections (one list, the connection page keeps its detail) | Notifications, AI assistants, System, Archive (need wireframes) |
 | 7. Dashboard and phone | Phone card layout of the data table; the dashboard (needs attention, tiles, nodes, recent activity, services at a glance) | |
-| 8. Activity | Traffic is one page with the countries included (`/traffic/geo` redirects) | Map; Activity (needs a wireframe) |
+| 8. Activity and Map | Traffic is one page with the countries included (`/traffic/geo` redirects); the Map (one row per node, shared backups, selection sidebar, lines for the selection) | Activity (needs a wireframe) |
 

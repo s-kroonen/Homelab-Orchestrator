@@ -241,9 +241,9 @@
     msg("a-msg", "Creating…");
     try {
       const r = await api("POST", "/api/stacks/adopt", body);
-      const lines = [`Linked: ${r.services.join(", ")}`, `Proxy hosts: ${r.hosts.join(", ") || "none"} (they reach Traefik Manager on the next push)`, `Probes added: ${r.probes}`];
+      const lines = [`Linked: ${r.services.join(", ")}`, `Proxy hosts: ${r.hosts.join(", ") || "none"} (pushed to Traefik Manager by themselves)`, `Probes added: ${r.probes}`];
       if (r.webhook_secret) lines.push("", "Webhook secret (copy it now; it is not shown again):", r.webhook_secret);
-      lines.push("", "The registry has unsaved changes: Save to YAML to keep them.");
+      lines.push("", "Saved: services.yaml is written by itself.");
       $("a-result").textContent = lines.join("\n"); $("a-result").hidden = false;
       msg("a-msg", "Done.", "ok"); $("a-go").disabled = true;
       loaders.portainer(); loadOverview();

@@ -30,6 +30,7 @@ from orchestrator.db.models import (
 )
 from orchestrator.domain.enums import BackupMode, GuestKind, PipelineKind, PipelineStatus
 from orchestrator.registry.probe_specs import PROBE_SPECS
+from orchestrator.registry.topology import build_map
 from orchestrator.registry.tree import TreeIndex
 from orchestrator.web.auth import get_current_admin, login_redirect, require_admin
 from orchestrator.web.deps import SessionDep, SettingsDep
@@ -192,6 +193,7 @@ def service_rows(session: Session) -> list[dict[str, Any]]:
             )
         rows.append(
             {
+                "id": svc.id,
                 "slug": svc.slug,
                 "name": svc.name or svc.slug,
                 "group": svc.group,
@@ -633,5 +635,56 @@ async def dashboard_page(request: Request, session: SessionDep) -> HTMLResponse 
         {
             "admin": admin,
             "initial": dashboard_view(session, getattr(request.app.state, "scheduler", None)),
+        },
+    )
+
+
+# --- map --------------------------------------------------------------------------------------
+
+
+def map_view(session: Session, settings: Any, scheduler: Any) -> dict[str, Any]:
+    """The Map wireframe: :func:`build_map` (nodes, guests, hosts, the backup server and the
+    lines between them) plus what the selection sidebar and its actions need: every service's
+    row as on the Services page, the nodes as on Nodes & guests, the policies with their next run.
+    """
+    view = services_view(session)
+    return {
+        "map": build_map(session, settings),
+        "view": view,
+        "nodes": nodes_view(session)["nodes"],
+        "policies": [
+            {
+                "name": p["name"],
+                "next_run": p["next_run"],
+                "restore_power_state": p["restore_power_state"],
+            }
+            for p in (
+                policy_to_dict(session, pol, scheduler)
+                for pol in session.exec(select(BackupPolicy).order_by(BackupPolicy.name)).all()
+            )
+        ],
+    }
+
+
+@api.get("/map")
+async def map_api(request: Request, session: SessionDep, settings: SettingsDep) -> dict[str, Any]:
+    return map_view(session, settings, getattr(request.app.state, "scheduler", None))
+
+
+@pages.get("/map", response_model=None)
+async def map_page(
+    request: Request, session: SessionDep, settings: SettingsDep
+) -> HTMLResponse | RedirectResponse:
+    """Every node in a row with the hosts that lead to it and the backup server they share;
+    click anything to trace it in the selection sidebar (the Map wireframe)."""
+    admin = get_current_admin(request, session)
+    if admin is None:
+        return login_redirect(request)
+    return templates.TemplateResponse(
+        request,
+        "map.html",
+        {
+            "admin": admin,
+            "initial": map_view(session, settings, getattr(request.app.state, "scheduler", None)),
         },
     )

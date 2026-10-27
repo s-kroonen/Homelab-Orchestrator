@@ -40,7 +40,7 @@
   {%- for m in match -%}{%- if path == m or (m.endswith("/") and path.startswith(m)) or path.startswith(m + "/") -%}{%- set ns.cur = true -%}{%- endif -%}{%- endfor -%}
   {{- "1" if ns.cur else "" -}}
 {%- endmacro %}
-<body{% if admin %} class="has-sidebar"{% endif %}>
+<body{% if admin %} class="has-sidebar{% block body_class %}{% endblock %}"{% endif %}>
   {% block header %}
   <aside class="sidebar">
     <div class="brand">
