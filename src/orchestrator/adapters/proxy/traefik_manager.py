@@ -284,6 +284,28 @@ def redirect_route_id(route_ref: str) -> str:
     return f"{route_ref}-redirect"
 
 
+def router_service_of(raw: str, route_name: str) -> str:
+    """The service key the router ``route_name`` points at, from the route's own YAML (what
+    ``GET /api/routes/{id}/raw`` returns). ``""`` when it cannot be told, or when the router uses
+    a service from another provider (``api@internal``), which a companion cannot share."""
+    try:
+        doc = YAML(typ="safe").load(raw)
+    except Exception:
+        return ""
+    http = doc.get("http") if isinstance(doc, dict) else None
+    routers = http.get("routers") if isinstance(http, dict) else None
+    if not isinstance(routers, dict):
+        return ""
+    router = routers.get(route_name)
+    if router is None and len(routers) == 1:
+        router = next(iter(routers.values()))
+    service = router.get("service") if isinstance(router, dict) else None
+    if not isinstance(service, str) or not service.strip():
+        return ""
+    base, _, provider = service.strip().partition("@")
+    return base if provider in ("", "file") else ""
+
+
 def _dangling_middlewares(response: Any) -> set[str]:
     """Names of ``errors`` middlewares whose ``service`` is not a service Traefik
     Manager lists (``/api/routes`` -> ``services.http``, plus ``@provider``
@@ -993,6 +1015,17 @@ class TraefikManagerProxyAdapter(ProxyAdapter):
         apps = response.get("apps") if isinstance(response, dict) else None
         return _routes_to_route_info(apps)
 
+    async def _main_service_ref(self, name: str, hostname: str) -> str:
+        """The service the main route's router points at. Traefik Manager normally names it
+        ``<name>-service``, but it may share one that already serves the same backend, so it is
+        read from the route itself; the usual name is the fallback when it cannot be read."""
+        try:
+            raw = await self.read_route_raw(name, hostname=hostname)
+        except Exception as exc:
+            log.info("traefik_manager.service_ref_unread", route=name, error=str(exc))
+            raw = None
+        return (router_service_of(raw.raw, name) if raw is not None else "") or f"{name}-service"
+
     async def _save_redirect_route(
         self,
         route_ref: str,
@@ -1010,9 +1043,11 @@ class TraefikManagerProxyAdapter(ProxyAdapter):
         ``config_file``). ``move_to`` re-saves ``existing`` into that file
         (Traefik Manager removes it from the file named in the ``<file>::``
         prefix of ``originalId``)."""
-        rid = redirect_route_id(route_ref)
+        bare = route_ref.split("::", 1)[-1]
+        rid = redirect_route_id(bare)
         original_id = existing.ref if existing is not None else ""
         target_file = existing.config_file if existing is not None else config_file
+        service_ref = await self._main_service_ref(bare, hostname)
         if existing is not None and move_to:
             original_id = (
                 f"{existing.config_file}::{existing.name}" if existing.config_file else existing.ref
@@ -1025,7 +1060,7 @@ class TraefikManagerProxyAdapter(ProxyAdapter):
             entry_points=",".join(await self._plain_http_entrypoints()),
             cert_resolver=CERT_RESOLVER_DISABLED,
             middlewares=self._settings.traefik_redirect_middleware.strip() or "redirect-to-https",
-            service_ref=f"{route_ref}-service",
+            service_ref=service_ref,
             is_edit=existing is not None,
             original_id=original_id,
             config_file=target_file,
@@ -1167,20 +1202,19 @@ class TraefikManagerProxyAdapter(ProxyAdapter):
             tls_sans=opts.tls_sans,
         )
         try:
+            if cfile:
+                # Before the companion refers to the new route's service: a route that landed
+                # in another file would make that reference fail with a baffling message.
+                await self._confirm_created_in(name, hostname, cfile)
             if opts.http_redirect:
                 # The companion goes into the SAME file as its main route.
                 await self._save_redirect_route(
                     name, hostname=hostname, existing=None, config_file=cfile
                 )
-            if cfile:
-                await self._confirm_created_in(name, hostname, cfile)
         except Exception:
             # Never leave a half-made pair (or a route in the wrong file) behind:
             # the caller treats this create as failed and keeps no record of it.
-            try:
-                await self._delete_route(name, cfile)
-            except Exception as exc:  # pragma: no cover - best effort
-                log.warning("traefik_manager.create_rollback_failed", error=str(exc))
+            await self._remove_created(name, hostname, cfile)
             raise
         return name
 
@@ -1241,6 +1275,27 @@ class TraefikManagerProxyAdapter(ProxyAdapter):
         back = await self._get_route_raw(existing.ref)
         if not isinstance(back, dict) or not str(back.get("raw", "")).strip():
             raise TraefikManagerUnavailable(f"{name} could not be read back after the restore")
+
+    async def _remove_created(self, name: str, hostname: str, cfile: str) -> None:
+        """Take a just-created route (and its companion) away again, from the file(s) they are
+        really in - not only the one that was asked for."""
+        rid = redirect_route_id(name)
+        try:
+            routes = await self._read_routes()
+        except Exception as exc:  # pragma: no cover - best effort
+            log.warning("traefik_manager.create_rollback_failed", error=str(exc))
+            routes = []
+        mine = [r for r in routes if r.name == rid or (r.name == name and hostname in r.hostnames)]
+        targets = [(r.ref, r.config_file) for r in mine]
+        if not any(r.name == name for r in mine):
+            targets.append((name, cfile))  # not listed (yet): the file that was asked for
+        for ref, file in targets:
+            try:
+                await self._delete_route(ref, file)
+            except TraefikManagerNotFound:
+                pass
+            except Exception as exc:  # pragma: no cover - best effort
+                log.warning("traefik_manager.create_rollback_failed", error=str(exc))
 
     async def _checked_config_file(self, config_file: str) -> str:
         """The config file name to post, or ``ValueError`` when Traefik Manager

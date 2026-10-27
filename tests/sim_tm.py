@@ -52,7 +52,15 @@ class SimTM:
         settings_status: int = 200,
         configs_status: int = 200,
         middleware_names: tuple[str, ...] = ("redirect-to-https@file",),
+        strict_service_ref: bool = False,
+        share_services: bool = False,
     ):
+        #: ``/save`` with a ``serviceRef`` answers 400 when no router of the target file owns
+        #: that service key (the real app's "Service '...' does not exist for HTTP routes")
+        self.strict_service_ref = strict_service_ref
+        #: a new route whose backend an existing route of the file already serves reuses that
+        #: route's service instead of getting its own ``<name>-service``
+        self.share_services = share_services
         self.middleware_names = middleware_names
         self.created_middlewares: dict[str, str] = {}
         self.multi = multi
@@ -215,9 +223,17 @@ class SimTM:
         if method == "POST" and path == "/save":
             form = dict(parse_qsl(request.read().decode(), keep_blank_values=True))
             self.requests.append(("save", form["serviceName"], form))
-            self._save(form)
+            error = self._save(form)
+            if error:
+                return httpx.Response(400, json={"error": error})
             return httpx.Response(200, json={"ok": True})
         return httpx.Response(200, json={"ok": True})
+
+    @staticmethod
+    def service_key(name: str, route: dict[str, Any]) -> str:
+        """The service a router points at: TM names it ``<name>-service`` unless the route
+        shares one that already serves the same backend (``route["service"]``)."""
+        return str(route.get("service") or f"{name}-service")
 
     def raw_of(self, name: str, route: dict[str, Any]) -> str:
         if "raw" in route:
@@ -231,9 +247,9 @@ class SimTM:
         return (
             "http:\n  routers:\n"
             f"    {name}:\n      rule: {route['rule']}\n      entryPoints: {json.dumps(route['eps'])}\n"
-            f"      service: {name}{tls}"
+            f"      service: {self.service_key(name, route)}{tls}"
             + (f"\n      middlewares:{mws}" if mws else "")
-            + f"\n  services:\n    {name}:\n      loadBalancer:\n        servers:\n"
+            + f"\n  services:\n    {self.service_key(name, route)}:\n      loadBalancer:\n        servers:\n"
             f"          - url: {route['upstream']}\n        passHostHeader: true\n"
         )
 
@@ -347,7 +363,8 @@ class SimTM:
             return name
         return DEFAULT_FILE  # silently: the route lands in the DEFAULT file
 
-    def _save(self, form: dict[str, str]) -> None:
+    def _save(self, form: dict[str, str]) -> str:
+        """Apply a ``/save``; returns the error text TM would answer with (``""`` = fine)."""
         name = form["serviceName"]
         file = self._resolve_file(form.get("configFile", ""))
         cfg_filename = form.get("configFile") or DEFAULT_FILE
@@ -363,14 +380,34 @@ class SimTM:
             "resolver": "" if resolver.startswith("__") else resolver,
             "mws": [m for m in form.get("middlewares", "").split(",") if m],
         }
+        ref = form.get("serviceRef", "")
+        if ref and self.strict_service_ref:
+            owned = {
+                self.service_key(n, r)
+                for n, r in self.files.get(file, {}).items()
+                if not r.get("service")
+            }
+            if ref not in owned:
+                return f"Service '{ref}' does not exist for HTTP routes."
+        if (
+            self.share_services
+            and not ref
+            and form.get("isEdit") != "true"
+            and form.get("targetIp")
+        ):
+            for other_name, other in self.files.get(file, {}).items():
+                if other["upstream"] == route["upstream"] and not other.get("service"):
+                    route["service"] = self.service_key(other_name, other)
+                    break
         original = form.get("originalId", "")
         # An existing disabled record under this id stays parked (edited in place).
         if form.get("isEdit") == "true" and original in self.disabled:
             self.disabled[original]["route"] = route
-            return
+            return ""
         if form.get("isEdit") == "true" and "::" in original:
             old_file, plain = original.split("::", 1)
             if old_file != cfg_filename and old_file in self.files and not self.leak_on_move:
                 # TM's move: the router leaves the file named in the id prefix.
                 self.files[old_file].pop(plain, None)
         self.files.setdefault(file, {})[name] = route
+        return ""
