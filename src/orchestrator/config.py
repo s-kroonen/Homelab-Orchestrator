@@ -116,6 +116,11 @@ class Settings(BaseSettings):
 
     # ---- Service registry -------------------------------------------------
     services_yaml_path: Path = Path("./config/services.yaml")
+    #: Where the connections live (blank: ``connections.yaml`` in STATE_DIR). See docs/connections.md.
+    connections_path: Path | None = None
+    #: This orchestrator's own site name ("home", "offsite"), for telling its connections from
+    #: another orchestrator's once two of them run side by side.
+    orchestrator_site: str = ""
 
     # ---- Health scanning (periodic) ----------------------------------------
     # Without this, ServiceState is only ever updated as a SIDE EFFECT of a
@@ -451,7 +456,9 @@ class Settings(BaseSettings):
     archive_retention_days: int = 30
 
     # ---- Derived helpers --------------------------------------------------
-    @field_validator("state_dir", "services_yaml_path", "setup_project_dir", mode="before")
+    @field_validator(
+        "state_dir", "services_yaml_path", "setup_project_dir", "connections_path", mode="before"
+    )
     @classmethod
     def _expand_path(cls, v: str | Path | None) -> Path | None:
         if v is None or v == "":
@@ -501,12 +508,37 @@ class Settings(BaseSettings):
 _settings: Settings | None = None
 
 
+def _load_settings() -> Settings:
+    """The environment's settings, with the connections file (``connections.yaml``) applied on
+    top: everything the dashboard manages about adapters comes from there."""
+    settings = Settings()
+    try:
+        from orchestrator.connections.runtime import apply_to
+
+        apply_to(settings)
+    except Exception as exc:  # a bad connections file must never keep the app from starting
+        import logging
+
+        logging.getLogger(__name__).error("connections could not be applied: %s", exc)
+    return settings
+
+
 def get_settings() -> Settings:
     """Return the process-wide settings singleton (lazy, cached)."""
     global _settings
     if _settings is None:
-        _settings = Settings()
+        _settings = _load_settings()
     return _settings
+
+
+def reload_settings() -> Settings:
+    """Read the environment and the connections file again and update the singleton IN PLACE, so
+    everything holding it (schedulers, collectors, adapters) sees the new values at once."""
+    current = get_settings()
+    fresh = _load_settings()
+    for name in Settings.model_fields:
+        setattr(current, name, getattr(fresh, name))
+    return current
 
 
 def reset_settings_cache() -> None:

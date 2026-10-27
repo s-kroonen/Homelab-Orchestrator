@@ -157,6 +157,17 @@ ENV_SECTIONS: tuple[EnvSection, ...] = (
                 "The SAVED registry. Boot reconciles it into the DB; the dashboard edits\n"
                 "the DB live and can Save back here or Reset from here.",
             ),
+            EnvKey(
+                "CONNECTIONS_PATH",
+                "Where the connections live (Proxmox, PBS, Traefik Manager, Portainer, MQTT,\n"
+                "notifier channels, SSH): edited from the dashboard, applied without a restart.\n"
+                "Blank = connections.yaml in STATE_DIR. See docs/connections.md.",
+            ),
+            EnvKey(
+                "ORCHESTRATOR_SITE",
+                "This orchestrator's own site name (home, offsite...). Connections carry one too;\n"
+                "it is how two orchestrators tell their own from each other's.",
+            ),
         ),
     ),
     EnvSection(
