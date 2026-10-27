@@ -508,31 +508,25 @@ async def format_page(request: Request, session: SessionDep) -> HTMLResponse | R
 
 
 @router.get("/infra", response_model=None)
-async def infra_status_page(
-    request: Request, session: SessionDep
-) -> HTMLResponse | RedirectResponse:
-    """Connectivity check across Proxmox/PBS — the dashboard equivalent of
-    ``orchestrator-cli check``. Entirely client-rendered: the page just calls
-    the existing ``/api/infra/status`` via ``apiFetch``, same pattern as the
-    other list-only pages."""
-    admin = get_current_admin(request, session)
-    if admin is None:
+async def infra_status_page(request: Request, session: SessionDep) -> RedirectResponse:
+    """Connectivity's overview is Settings > Connections now: every connection says there
+    whether it answers."""
+    if get_current_admin(request, session) is None:
         return login_redirect(request)
-
-    return _templates.TemplateResponse(request, "infra_status.html", {"admin": admin})
+    return RedirectResponse("/infra/connections", status_code=303)
 
 
 @router.get("/infra/guests", response_model=None)
 async def infra_guests_page(
-    request: Request, session: SessionDep
-) -> HTMLResponse | RedirectResponse:
-    """Proxmox guests across the cluster — the dashboard equivalent of
-    ``orchestrator-cli guests``. Client-rendered via ``/api/infra/proxmox/guests``."""
-    admin = get_current_admin(request, session)
-    if admin is None:
+    request: Request, session: SessionDep, node: str | None = None, vmid: str | None = None
+) -> RedirectResponse:
+    """The guests are on Nodes & guests now; an old link (an alert's) lands on the guest."""
+    if get_current_admin(request, session) is None:
         return login_redirect(request)
+    from urllib.parse import urlencode
 
-    return _templates.TemplateResponse(request, "infra_guests.html", {"admin": admin})
+    q = (vmid or node or "").strip()
+    return RedirectResponse("/nodes" + (f"?{urlencode({'q': q})}" if q else ""), status_code=303)
 
 
 @router.get("/activity", response_model=None)

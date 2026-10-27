@@ -347,8 +347,8 @@ def test_pages_render_the_selection_column_and_bar(client: TestClient) -> None:
     ph = client.get("/static/proxy_hosts.js").text
     assert 'bulk("proxy-hosts"' in ph and "bulk: (rows)" in ph  # the shared table's bulk bar
     assert '"/api/bulk/" + resource' in client.get("/static/objects.js").text
-    guests = client.get("/infra/guests").text
-    assert "/static/bulk.js" in guests and "/api/infra/guests/" in guests
+    nodes = client.get("/static/nodes.js").text  # guests: Start / Stop on Nodes & guests
+    assert '"/api/infra/guests/"' in nodes
     js = client.get("/static/bulk.js")
     assert js.status_code == 200 and "Select all visible" in js.text
     assert client.get("/static/bulk.css").status_code == 200

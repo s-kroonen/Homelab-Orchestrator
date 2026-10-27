@@ -296,12 +296,9 @@ is gated behind a `confirm()`, `start` is not.
 `GET /api/infra/proxmox/guests`, `GET /api/infra/pbs/snapshots` — predate the
 manual power actions above and map directly to `orchestrator-cli`'s
 `check`/`guests`/`snapshots` commands, but had no dashboard page of their
-own until the left-sidebar nav added one each: `/infra` (Connectivity, with Overview / Connections / Guests tabs),
-`/infra/guests`, `/infra/snapshots` (`web/routers/ui.py`,
-`infra_status.html`/`infra_guests.html`/`infra_snapshots.html`). Same
-pattern as every other list-only page: the server renders the shell only,
-the table is filled client-side by `apiFetch` against the existing
-endpoints — no new API surface, no mutation.
+own until the dashboard read them: Settings → Connections checks every connection,
+the guests are on Nodes & guests and the snapshots on the Snapshots tab of Backups
+(the old `/infra`, `/infra/guests` and `/infra/snapshots` addresses redirect there).
 
 ## Deferred push (DB = working copy, outside services written on Save / Push)
 

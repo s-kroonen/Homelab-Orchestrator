@@ -72,8 +72,8 @@ the webhook, and the target in the Notifications feed and on the Activity page.
 | deploy | `/services/<slug>#deploys` |
 | database dump | `/services/<slug>#dumps` |
 | switch failed, outside change | `/services/<slug>#stack` |
-| node | `/infra/guests?node=<node>` (that node's guests) |
-| guest | `/infra/guests?node=<node>&vmid=<id>` (the guest's row is highlighted) |
+| node | `/nodes?q=<node>` (Nodes & guests, its guests listed) |
+| guest | `/nodes?q=<vmid>` (Nodes & guests, filtered to that guest) |
 | self-update | `/system` |
 | a request waiting for approval | its approval page (always wins over the above) |
 

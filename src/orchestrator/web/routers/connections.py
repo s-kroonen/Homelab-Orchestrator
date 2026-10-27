@@ -133,18 +133,20 @@ def _view(settings: Settings) -> dict[str, Any]:
 
 @pages.get("/connections", response_model=None)
 async def connections_page_moved() -> RedirectResponse:
-    """The Connections page is a tab of Connectivity now."""
+    """The Connections page lives under Settings, at /infra/connections."""
     return RedirectResponse("/infra/connections", status.HTTP_307_TEMPORARY_REDIRECT)
 
 
 @pages.get("/infra/connections", response_model=None)
 async def connections_page(
-    request: Request, session: SessionDep
+    request: Request, session: SessionDep, settings: SettingsDep
 ) -> HTMLResponse | RedirectResponse:
     admin = get_current_admin(request, session)
     if admin is None:
         return login_redirect(request)
-    return _templates.TemplateResponse(request, "connections.html", {"admin": admin})
+    return _templates.TemplateResponse(
+        request, "connections.html", {"admin": admin, "initial": _view(settings)}
+    )
 
 
 @pages.get("/infra/connections/{ident}", response_model=None)

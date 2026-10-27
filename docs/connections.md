@@ -44,28 +44,26 @@ the previous settings stay in force.
 
 ## Where it lives in the dashboard
 
-**Connectivity** (Monitoring menu) has three tabs:
-
-* **Overview** - is each connection reachable? One card per *connection* (a Proxmox, each
-  Portainer, PBS, Traefik Manager...), never the guests, stacks or containers inside it, with a
-  state (reachable / unreachable / switched off / incomplete / not checked in dry-run), the
-  latency, and buttons to **Open** it, jump to its **Web UI**, or **Manage** it. The flat command
-  line equivalent is still `orchestrator-cli check`.
-* **Connections** - add, edit, test, delete (below).
-* **Guests** - the Proxmox guests list (it used to be a menu entry of its own).
+**Settings → Connections** (`/infra/connections`) lists every connection grouped by what it is
+for (machines and backups, containers, proxy, alerts), one row per *connection* (a Proxmox, each
+Portainer, PBS, Traefik Manager...), never the guests, stacks or containers inside it. Each row
+says whether it answers (reachable / unreachable / off / not filled in / not checked in dry-run),
+with **Open**, **Edit** (a drawer built from the kind's fields, with **Test**) and a menu (test,
+make default, delete). **Test all** checks them side by side; the flat command line equivalent
+is still `orchestrator-cli check`. The old `/infra` overview redirects here, and the guests list
+is on **Nodes & guests** (`/infra/guests` redirects there).
 
 **Open** on a card is the connection's own page (`/infra/connections/<id>`): what is up inside it.
 For Portainer its environments (up or down, running and stopped containers, stacks) with a button
 into the Portainer page already set to that instance; for Proxmox its nodes (in the cluster? own
-API answering? version, latency) and how many guests run, with a button to the Guests tab; for PBS
-the datastore usage and a button to Snapshots; for Traefik Manager how many routes it knows; for
-the power manager its targets. `/connections` redirects to the Connections tab.
+API answering? version, latency) and how many guests run, with a button to Nodes & guests; for
+PBS the datastore usage and a button to the Snapshots tab of Backups; for Traefik Manager how many routes it knows; for
+the power manager its targets. `/connections` redirects to the Connections page.
 
-## The Connections tab
+## Editing
 
-It lists every kind with its connections, a **Test** button each (read-only: it
-logs in, lists something, changes nothing; in dry-run mode nothing is contacted), and **Add** /
-**Edit** forms built from the kind's fields. Saving applies at once: the adapters are rebuilt and
+**Test** is read-only: it logs in, lists something, changes nothing; in dry-run mode nothing is
+contacted. **Add** and **Edit** open a drawer built from the kind's fields. Saving applies at once: the adapters are rebuilt and
 swapped in behind the same handles, so running schedulers and collectors pick up the new values.
 
 * **Secrets are never shown again.** A saved secret reads "set — leave blank to keep"; typing in

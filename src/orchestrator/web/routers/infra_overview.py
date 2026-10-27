@@ -181,8 +181,8 @@ async def _proxy(adapters: Any) -> dict[str, Any]:
 
 
 _LINKS: dict[str, list[tuple[str, str]]] = {
-    "proxmox": [("Guests", "/infra/guests")],
-    "pbs": [("Snapshots", "/infra/snapshots")],
+    "proxmox": [("Nodes & guests", "/nodes")],
+    "pbs": [("Snapshots", "/backup-policies?tab=snapshots")],
     "proxy": [("Proxy hosts", "/proxy-hosts")],
 }
 
