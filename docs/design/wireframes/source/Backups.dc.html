@@ -1,0 +1,146 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Backups</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#0d1015}
+a{color:#8fb3ff;text-decoration:none}a:hover{color:#b8d0ff}
+*{box-sizing:border-box}
+.pill{display:inline-flex;align-items:center;gap:6px;padding:3px 9px;border-radius:999px;font-size:12px;font-weight:600;white-space:nowrap}
+.ok{background:#11331f;color:#5fe08b}.warn{background:#3a2c10;color:#f0b44c}.fail{background:#3d1717;color:#ff8a82}.off{background:#232834;color:#b3bccb}.pending{background:#162a45;color:#8fb3ff}
+.btn{display:inline-flex;align-items:center;gap:6px;height:32px;padding:0 12px;border-radius:8px;border:1px solid #2c3340;background:#1a1f29;color:#e6e9ef;font:600 13px Inter,system-ui,sans-serif;cursor:pointer;white-space:nowrap}
+.btn.primary{background:#4f7fe0;border-color:#4f7fe0;color:#fff}.btn.ghost{background:transparent;border-color:transparent;color:#b3bccb}
+.mono{font-family:'JetBrains Mono',ui-monospace,monospace;font-size:12.5px}
+th{font-size:12px;font-weight:600;color:#9aa4b2;text-align:left;padding:10px 14px;border-bottom:1px solid #232a36;white-space:nowrap}
+td{padding:10px 14px;border-bottom:1px solid #1d232e;vertical-align:middle}
+</style>
+</helmet>
+<div style="display: flex; flex-wrap: wrap; min-height: 1020px; background: #0d1015; color: #e6e9ef; font-family: Inter, system-ui, sans-serif; font-size: 14px; line-height: 1.45">
+  <nav aria-label="Main" style="flex: 0 0 232px; background: #11151c; border-right: 1px solid #222833; padding: 20px 14px; display: flex; flex-direction: column; gap: 18px">
+    <div style="font-weight: 700; font-size: 15px; padding: 0 10px">homelab-orchestrator</div>
+    <sc-for list="{{nav}}" as="g" hint-placeholder-count="5">
+      <div style="display: flex; flex-direction: column; gap: 2px">
+        <div style="font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: #8a94a5; padding: 0 10px 4px">{{g.heading}}</div>
+        <sc-for list="{{g.items}}" as="it" hint-placeholder-count="3">
+          <a href="#" style="{{it.style}}">{{it.label}}</a>
+        </sc-for>
+      </div>
+    </sc-for>
+  </nav>
+  <div style="flex: 999 1 560px; min-width: 0; display: flex; flex-direction: column">
+    <header style="display: flex; flex-wrap: wrap; align-items: center; gap: 12px; padding: 12px 32px; border-bottom: 1px solid #222833">
+      <div style="font-size: 13px; color: #8a94a5">Infrastructure / <span style="color: #e6e9ef">Backups</span></div>
+      <span class="pill ok" style="margin-left: auto">● Live</span>
+      <button class="btn ghost" type="button">admin ▾</button>
+    </header>
+
+    <main style="padding: 28px 32px 48px; max-width: 1280px; width: 100%; display: flex; flex-direction: column; gap: 18px">
+      <div style="display: flex; flex-wrap: wrap; align-items: flex-end; gap: 12px">
+        <div style="flex: 1 1 400px">
+          <h1 style="margin: 0; font-size: 24px; font-weight: 700">Backups</h1>
+          <div style="color: #9aa4b2; margin-top: 4px">What is backed up, when, and whether it worked.</div>
+        </div>
+        <button class="btn primary" type="button">+ New policy</button>
+      </div>
+
+      <div style="display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px">
+        <div style="background: #141922; border: 1px solid #232a36; border-radius: 12px; padding: 14px 16px">
+          <div style="font-size: 12px; color: #9aa4b2">Last night</div>
+          <div style="font-size: 24px; font-weight: 700">18 of 19 ok</div>
+          <div style="font-size: 12px; color: #f0b44c">mailcow failed · <a href="#">see why</a></div>
+        </div>
+        <div style="background: #141922; border: 1px solid #232a36; border-radius: 12px; padding: 14px 16px">
+          <div style="font-size: 12px; color: #9aa4b2">Datastore [main] on PBS</div>
+          <div style="font-size: 24px; font-weight: 700">91% full</div>
+          <div style="height: 8px; background: #232834; border-radius: 4px; margin-top: 6px"><div style="width: 91%; height: 8px; background: #d9952c; border-radius: 4px"></div></div>
+        </div>
+        <div style="background: #141922; border: 1px solid #232a36; border-radius: 12px; padding: 14px 16px">
+          <div style="font-size: 12px; color: #9aa4b2">Next run</div>
+          <div style="font-size: 24px; font-weight: 700">03:00</div>
+          <div style="font-size: 12px; color: #9aa4b2">daily-frequent · 12 services</div>
+        </div>
+      </div>
+
+      <div role="tablist" aria-label="Backup views" style="display: flex; gap: 4px; border-bottom: 1px solid #232a36">
+        <a role="tab" aria-selected="true" href="#" style="padding: 10px 14px; color: #ffffff; font-weight: 600; box-shadow: inset 0 -2px 0 #4f7fe0">Policies</a>
+        <a role="tab" aria-selected="false" href="#" style="padding: 10px 14px; color: #b3bccb">Snapshots</a>
+        <a role="tab" aria-selected="false" href="#" style="padding: 10px 14px; color: #b3bccb">Dumps</a>
+        <a role="tab" aria-selected="false" href="#" style="padding: 10px 14px; color: #b3bccb">Orchestrator backups</a>
+      </div>
+
+      <div style="background: #141922; border: 1px solid #232a36; border-radius: 12px; overflow-x: auto">
+        <table style="width: 100%; border-collapse: collapse; min-width: 860px">
+          <thead><tr><th>Policy</th><th>When</th><th>Keeps</th><th>Services</th><th>Last run</th><th></th></tr></thead>
+          <tbody>
+            <sc-for list="{{policies}}" as="p" hint-placeholder-count="3">
+              <tr>
+                <td><a href="#" style="font-weight: 600; color: #e6e9ef">{{p.name}}</a><div style="font-size: 12px; color: #9aa4b2">{{p.note}}</div></td>
+                <td>{{p.when}}</td>
+                <td>{{p.keep}}</td>
+                <td>{{p.services}}</td>
+                <td><span class="pill {{p.cls}}">{{p.last}}</span></td>
+                <td style="text-align: right; white-space: nowrap"><button class="btn" type="button">{{p.action}}</button> <button class="btn ghost" type="button">Edit</button> <button class="btn ghost" type="button" aria-label="More for {{p.name}}">⋯</button></td>
+              </tr>
+            </sc-for>
+          </tbody>
+        </table>
+      </div>
+
+      <section aria-labelledby="ln" style="background: #141922; border: 1px solid #232a36; border-radius: 12px">
+        <div style="display: flex; align-items: center; padding: 12px 16px; border-bottom: 1px solid #232a36">
+          <h2 id="ln" style="margin: 0; font-size: 15px">Last night, per service</h2>
+          <a href="#" style="margin-left: auto; font-size: 13px">Open the run →</a>
+        </div>
+        <sc-for list="{{runs}}" as="r" hint-placeholder-count="4">
+          <div style="display: flex; flex-wrap: wrap; align-items: center; gap: 12px; padding: 10px 16px; border-bottom: 1px solid #1d232e">
+            <span class="pill {{r.cls}}" style="min-width: 64px; justify-content: center">{{r.state}}</span>
+            <a href="#" style="font-weight: 600; flex: 0 0 140px">{{r.svc}}</a>
+            <span style="flex: 1 1 300px; color: #b3bccb; font-size: 13px">{{r.detail}}</span>
+            <button class="btn {{r.btnCls}}" type="button">{{r.action}}</button>
+          </div>
+        </sc-for>
+      </section>
+    </main>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":1020}}'>
+class Component extends DCLogic {
+  renderVals() {
+    const cur = 'Backups';
+    const base = 'display:block;padding:6px 10px;border-radius:7px;font-size:14px;color:#c9d1dc';
+    const on = base + ';background:#1d2430;color:#ffffff;font-weight:600;box-shadow:inset 3px 0 0 #4f7fe0';
+    const groups = [
+      ['Overview', ['Dashboard', 'Map']],
+      ['Services', ['Services']],
+      ['Infrastructure', ['Nodes & guests', 'Proxy hosts', 'Containers', 'Backups']],
+      ['Activity', ['Activity', 'Traffic']],
+      ['Settings', ['Connections', 'Notifications', 'AI assistants', 'Admins & devices', 'System', 'Archive']],
+    ];
+    return {
+      nav: groups.map(([heading, items]) => ({ heading, items: items.map((label) => ({ label, style: label === cur ? on : base })) })),
+      policies: [
+        { name: 'daily-frequent', note: 'wakes nodes that are off, puts them back after', when: 'every day 03:00', keep: '7 daily · 4 weekly', services: '12', cls: 'warn', last: '11/12 · today', action: 'Run now' },
+        { name: 'weekly', note: '', when: 'Sundays 04:00', keep: '8 weekly', services: '6', cls: 'ok', last: '6/6 · Sun', action: 'Run now' },
+        { name: 'never backed up', note: 'services left out on purpose', when: '—', keep: '—', services: '3', cls: 'off', last: '—', action: 'Show' },
+      ],
+      runs: [
+        { cls: 'fail', state: 'failed', svc: 'mailcow', detail: 'PBS refused the upload: datastore [main] is full. Prune or add space, then retry.', action: 'Retry', btnCls: 'primary' },
+        { cls: 'ok', state: 'ok', svc: 'nextcloud', detail: '41.2 GB · verified · 6 min', action: 'Open', btnCls: 'ghost' },
+        { cls: 'ok', state: 'ok', svc: 'haos', detail: '12.8 GB · verified · 2 min', action: 'Open', btnCls: 'ghost' },
+        { cls: 'ok', state: 'ok', svc: 'jellyfin', detail: 'woke node-b, 3.1 GB, put it back off · 4 min', action: 'Open', btnCls: 'ghost' },
+      ],
+    };
+  }
+}
+</script>
+</body>
+</html>

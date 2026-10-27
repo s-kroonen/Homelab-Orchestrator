@@ -1,0 +1,285 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Map</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#0d1015}
+a{color:#8fb3ff;text-decoration:none}a:hover{color:#b8d0ff}
+*{box-sizing:border-box}
+.pill{display:inline-flex;align-items:center;gap:6px;padding:3px 9px;border-radius:999px;font-size:12px;font-weight:600;white-space:nowrap}
+.ok{background:#11331f;color:#5fe08b}.warn{background:#3a2c10;color:#f0b44c}.fail{background:#3d1717;color:#ff8a82}.off{background:#232834;color:#b3bccb}.pending{background:#162a45;color:#8fb3ff}
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;height:32px;padding:0 12px;border-radius:8px;border:1px solid #2c3340;background:#1a1f29;color:#e6e9ef;font:600 13px Inter,system-ui,sans-serif;cursor:pointer;white-space:nowrap}
+.btn.primary{background:#4f7fe0;border-color:#4f7fe0;color:#fff}.btn.ghost{background:transparent;border-color:transparent;color:#b3bccb}
+.mono{font-family:'JetBrains Mono',ui-monospace,monospace;font-size:12.5px}
+.seg{display:inline-flex;border:1px solid #2a3140;border-radius:8px;overflow:hidden}
+.lane-h{font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:#8a94a5;margin:0}
+.sb-h{font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:#8a94a5;margin:0 0 6px}
+.sw{display:inline-block;width:18px;height:0;border-top:2px solid;vertical-align:middle;margin-right:5px}
+dt{color:#9aa4b2;font-size:12px}dd{margin:0 0 6px}
+</style>
+</helmet>
+<div style="display: flex; flex-wrap: wrap; min-height: 1600px; background: #0d1015; color: #e6e9ef; font-family: Inter, system-ui, sans-serif; font-size: 14px; line-height: 1.45">
+  <nav aria-label="Main" style="flex: 0 0 232px; background: #11151c; border-right: 1px solid #222833; padding: 20px 14px; display: flex; flex-direction: column; gap: 18px">
+    <div style="font-weight: 700; font-size: 15px; padding: 0 10px">homelab-orchestrator</div>
+    <sc-for list="{{nav}}" as="g" hint-placeholder-count="5">
+      <div style="display: flex; flex-direction: column; gap: 2px">
+        <div style="font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: #8a94a5; padding: 0 10px 4px">{{g.heading}}</div>
+        <sc-for list="{{g.items}}" as="it" hint-placeholder-count="3">
+          <a href="#" style="{{it.style}}">{{it.label}}</a>
+        </sc-for>
+      </div>
+    </sc-for>
+  </nav>
+  <div style="flex: 999 1 560px; min-width: 0; display: flex; flex-direction: column">
+    <header style="display: flex; flex-wrap: wrap; align-items: center; gap: 12px; padding: 12px 32px; border-bottom: 1px solid #222833">
+      <div style="font-size: 13px; color: #8a94a5">Overview / <span style="color: #e6e9ef">Map</span></div>
+      <span class="pill ok" style="margin-left: auto">● Live</span>
+      <button class="btn ghost" type="button">admin ▾</button>
+    </header>
+
+    <div style="flex: 1; display: flex; flex-wrap: wrap; align-items: stretch">
+      <main style="flex: 999 1 600px; min-width: 0; padding: 24px 28px 40px 32px; display: flex; flex-direction: column; gap: 16px">
+        <div>
+          <h1 style="margin: 0; font-size: 24px; font-weight: 700">Map</h1>
+          <div style="color: #9aa4b2; margin-top: 4px">Every node with the hosts that lead to it and the backup server they share. Click a node, service or host to trace it.</div>
+        </div>
+
+        <div style="display: flex; flex-wrap: wrap; align-items: center; gap: 10px">
+          <label style="flex: 0 1 280px; display: flex; align-items: center; height: 32px; padding: 0 12px; background: #141922; border: 1px solid #2a3140; border-radius: 8px">
+            <input aria-label="Find on the map" placeholder="Find a node, service, host or IP" style="flex: 1; min-width: 0; background: transparent; border: 0; color: #e6e9ef; font: inherit; outline: none">
+          </label>
+          <button type="button" style="height: 32px; padding: 0 12px; border-radius: 999px; border: 1px solid #2a3140; background: #141922; color: #c9d1dc; font: 600 13px Inter, sans-serif">Problems only</button>
+          <span style="flex: 1"></span>
+          <span style="font-size: 13px; color: #9aa4b2">Lines</span>
+          <div class="seg" role="group" aria-label="Lines">
+            <button type="button" style="height: 32px; padding: 0 12px; border: 0; background: #1d2c47; color: #ffffff; font: 600 13px Inter, sans-serif">For what I select</button>
+            <button type="button" style="height: 32px; padding: 0 12px; border: 0; background: #141922; color: #b3bccb; font: 600 13px Inter, sans-serif">All</button>
+          </div>
+        </div>
+        <div style="display: flex; flex-wrap: wrap; gap: 6px 18px; font-size: 12px; color: #9aa4b2">
+          <span><i class="sw" style="border-color: #5b8def"></i>traffic</span>
+          <span><i class="sw" style="border-color: #9aa4b2; border-top-style: dashed"></i>depends on</span>
+          <span><i class="sw" style="border-color: #3ecf6d"></i>backs up to</span>
+          <span><i class="sw" style="border-color: #b48cf0; border-top-style: dashed"></i>needs awake</span>
+        </div>
+
+        <div style="display: flex; gap: 20px; align-items: flex-start">
+          <div style="flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 28px">
+            <div style="display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.1fr); gap: 20px">
+              <h2 class="lane-h">Way in</h2><h2 class="lane-h">Node</h2>
+            </div>
+            <sc-for list="{{rows}}" as="b" hint-placeholder-count="3">
+              <div style="display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.1fr); gap: 20px; align-items: start">
+                <div style="display: flex; flex-direction: column; gap: 8px; padding-top: 4px">
+                  <sc-for list="{{b.hostGroups}}" as="hg" hint-placeholder-count="3">
+                    <div style="{{hg.style}}">
+                      <div style="display: flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600; margin-bottom: 4px">
+                        <span style="{{hg.dot}}"></span>
+                        <span style="color: #e6e9ef">{{hg.service}}</span>
+                        <span style="margin-left: auto; color: #8a94a5; font-weight: 500">{{hg.count}}</span>
+                      </div>
+                      <div style="display: flex; flex-direction: column; gap: 3px">
+                        <sc-for list="{{hg.hosts}}" as="h" hint-placeholder-count="2">
+                          <div class="mono" style="{{h.style}}">{{h.name}}</div>
+                        </sc-for>
+                      </div>
+                    </div>
+                  </sc-for>
+                  <sc-if value="{{b.noHosts}}" hint-placeholder-val="{{ false }}">
+                    <div style="font-size: 12px; color: #8a94a5">No proxy hosts lead here.</div>
+                  </sc-if>
+                </div>
+                <div style="{{b.nodeStyle}}">
+                  <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 4px">
+                    <strong style="font-size: 16px">{{b.name}}</strong>
+                    <span class="pill {{b.cls}}">{{b.state}}</span>
+                    <button class="btn {{b.btnCls}}" type="button" style="margin-left: auto; height: 28px">{{b.action}}</button>
+                  </div>
+                  <div style="font-size: 12px; color: #9aa4b2; margin-bottom: 8px">{{b.detail}}</div>
+                  <div style="display: flex; flex-direction: column; gap: 6px">
+                    <sc-for list="{{b.guests}}" as="g" hint-placeholder-count="4">
+                      <div style="{{g.style}}">
+                        <span style="font-size: 11.5px; color: #8a94a5; flex: 0 0 64px">{{g.guest}}</span>
+                        <strong style="flex: 1; min-width: 0">{{g.name}}</strong>
+                        <span class="pill {{g.cls}}">{{g.state}}</span>
+                      </div>
+                    </sc-for>
+                    <sc-if value="{{b.noHosts}}" hint-placeholder-val="{{ false }}">
+                      <div style="font-size: 12px; color: #8a94a5">No services on this node yet. <a href="#">Import its guests</a></div>
+                    </sc-if>
+                  </div>
+                </div>
+              </div>
+            </sc-for>
+          </div>
+
+          <div style="flex: 0 0 200px; display: flex; flex-direction: column; gap: 14px">
+            <h2 class="lane-h">Backups</h2>
+            <section aria-label="Backup server" style="background: #141922; border: 1px solid #3d64b3; box-shadow: 0 0 0 1px #3d64b3; border-radius: 12px; padding: 12px; display: flex; flex-direction: column; gap: 8px">
+              <strong>PBS · [datastore]</strong>
+              <div style="height: 6px; background: #232834; border-radius: 3px"><div style="width: 62%; height: 6px; background: #3e8f63; border-radius: 3px"></div></div>
+              <div style="font-size: 12px; color: #9aa4b2">shared by every node · [usage]</div>
+              <sc-for list="{{backupRows}}" as="r" hint-placeholder-count="3">
+                <div style="{{r.style}}">
+                  <div style="display: flex; align-items: center; gap: 6px"><strong>{{r.node}}</strong><span style="margin-left: auto; font-size: 12px; color: #9aa4b2">{{r.count}}</span></div>
+                  <div style="font-size: 12px; color: #9aa4b2">{{r.note}}</div>
+                </div>
+              </sc-for>
+            </section>
+          </div>
+        </div>
+      </main>
+
+      <aside aria-labelledby="sb-title" style="flex: 0 0 340px; max-width: 100%; background: #12161e; border-left: 1px solid #232a36; padding: 20px 20px 32px; display: flex; flex-direction: column; gap: 18px">
+        <div style="display: flex; align-items: flex-start; gap: 8px">
+          <div style="flex: 1; min-width: 0">
+            <div style="display: flex; align-items: center; gap: 8px">
+              <h2 id="sb-title" style="margin: 0; font-size: 19px">NextCloud</h2>
+              <span class="pill off">asleep</span>
+            </div>
+            <div style="font-size: 12.5px; color: #9aa4b2; margin-top: 2px"><span class="mono">nextcloud</span> · VM 107 on node-b</div>
+          </div>
+          <button class="btn ghost" type="button" aria-label="Close" style="width: 32px; padding: 0">✕</button>
+        </div>
+
+        <div style="padding: 10px 12px; background: #2a2211; border: 1px solid #5a4416; border-radius: 10px; font-size: 13.5px">Not broken: its node <strong>node-b</strong> is off. Wake it and NextCloud comes back.</div>
+
+        <div style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px">
+          <button class="btn primary" type="button" style="grid-column: span 2; height: 38px">Wake node-b</button>
+          <button class="btn" type="button">Check now</button>
+          <button class="btn" type="button">Back up now</button>
+          <a class="btn" href="#">Open service</a>
+          <button class="btn" type="button">Edit…</button>
+        </div>
+
+        <section>
+          <h3 class="sb-h">Details</h3>
+          <dl style="margin: 0; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 12px">
+            <div><dt>Node</dt><dd><a href="#">node-b</a> <span class="pill off" style="padding: 1px 7px">off</span></dd></div>
+            <div><dt>Guest</dt><dd>VM 107 · stopped</dd></div>
+            <div><dt>Address</dt><dd class="mono">[10.0.1.11]</dd></div>
+            <div><dt>Wake on hit</dt><dd>[off]</dd></div>
+          </dl>
+        </section>
+
+        <section>
+          <h3 class="sb-h">Proxy hosts</h3>
+          <div style="display: flex; align-items: center; gap: 8px"><a href="#" class="mono">cloud.example.lan</a><span class="pill ok" style="padding: 1px 7px">in sync</span></div>
+        </section>
+
+        <section>
+          <h3 class="sb-h">The path</h3>
+          <ol style="margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 5px; font-size: 13.5px">
+            <li><span style="color: #8fb3ff">traffic</span> cloud.example.lan via Traefik on gateway-vm</li>
+            <li>runs as VM 107 on <strong>node-b</strong> (off)</li>
+            <li><span style="color: #c4a6f5">needs awake</span> node-b, woken by the power manager</li>
+            <li><span style="color: #5fe08b">backs up to</span> PBS · [datastore]</li>
+          </ol>
+        </section>
+
+        <section>
+          <h3 class="sb-h">Backups</h3>
+          <dl style="margin: 0">
+            <dt>Policy</dt><dd>[policy] · next [time]</dd>
+            <dt>Last</dt><dd>[date] · [result]</dd>
+          </dl>
+          <a href="#" style="font-size: 13px">All backups of NextCloud →</a>
+        </section>
+
+        <section>
+          <h3 class="sb-h">Recent</h3>
+          <div style="display: flex; flex-direction: column; gap: 6px; font-size: 13px">
+            <div style="display: flex; gap: 8px"><span style="color: #8a94a5; flex: 0 0 64px">[time]</span><span>went to sleep with node-b</span></div>
+            <div style="display: flex; gap: 8px"><span style="color: #8a94a5; flex: 0 0 64px">[time]</span><span>backup [result]</span></div>
+          </div>
+        </section>
+      </aside>
+    </div>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":1600}}'>
+class Component extends DCLogic {
+  renderVals() {
+    const cur = 'Map';
+    const base = 'display:block;padding:6px 10px;border-radius:7px;font-size:14px;color:#c9d1dc';
+    const on = base + ';background:#1d2430;color:#ffffff;font-weight:600;box-shadow:inset 3px 0 0 #4f7fe0';
+    const groups = [
+      ['Overview', ['Dashboard', 'Map']],
+      ['Services', ['Services']],
+      ['Infrastructure', ['Nodes & guests', 'Proxy hosts', 'Containers', 'Backups']],
+      ['Activity', ['Activity', 'Traffic']],
+      ['Settings', ['Connections', 'Notifications', 'AI assistants', 'Admins & devices', 'System', 'Archive']],
+    ];
+    const selected = 'nextcloud';
+    const dim = ';opacity:.45';
+    const host = 'padding:4px 8px;border-radius:6px;background:#0f131a;border:1px solid #232a36;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
+    const hostOn = host + ';border-color:#5b8def;box-shadow:0 0 0 1px #5b8def;color:#ffffff';
+    const hostOff = host + ';color:#8a94a5;border-style:dashed';
+    const tile = 'display:flex;align-items:center;gap:8px;padding:7px 10px;border-radius:9px;background:#0f131a;border:1px solid #232a36';
+    const tileSel = tile + ';border-color:#4f7fe0;box-shadow:0 0 0 2px #4f7fe0;background:#16233a';
+    const offHosts = new Set(['bingo.example.lan', 'bingoapp.example.lan', 'devbingo.example.lan', 'devbingoapp.example.lan', 'vkm.example.lan']);
+    const linked = {
+      adblock: ['adblock.example.lan'],
+      'gateway-vm': ['proxmox.example.lan', 'traefik-manager.example.lan', 'traefik.example.lan', 'vault.example.lan', 'vpncontrol.example.lan'],
+      haos: ['example.lan', 'home.example.net'],
+      jellyfin: ['jellyfin.example.lan', 'wizarr.example.lan'],
+      mailcow: ['mail.example.lan'],
+      'minecraft-debian': ['mainwings.example.lan', 'minecraftpanel.example.lan', 'mods.example.lan'],
+      nextcloud: ['cloud.example.lan'],
+      portainer: ['bingo.example.lan', 'bingoapp.example.lan', 'dev.example.com', 'devbingo.example.lan', 'devbingoapp.example.lan', 'port.example.lan', 'site-main.example.lan', 'site.example.lan', 'vkm.example.lan'],
+      'pt-wings-1': ['wings2.example.lan'],
+      truenas: ['nas.example.lan', 'pbs.example.lan'],
+    };
+    const nodeServices = {
+      'node-a': [['ciscocontroller', 'CiscoController', 'VM 9800', 'off', 'unknown'], ['gateway-vm', 'gateway-vm', 'VM 103', 'ok', 'healthy'], ['haos', 'Haos', 'VM 111', 'ok', 'healthy'], ['pfsense-1', 'Pfsense-1', 'VM 113', 'ok', 'healthy'], ['portainer', 'portainer', 'VM 102', 'ok', 'healthy']],
+      'node-b': [['adblock', 'ADBlock', 'VM 106', 'off', 'asleep'], ['jellyfin', 'jellyfin', 'VM 110', 'off', 'asleep'], ['mailcow', 'mailcow', 'VM 108', 'off', 'asleep'], ['minecraft-debian', 'minecraft-debian', 'VM 104', 'off', 'asleep'], ['nextcloud', 'NextCloud', 'VM 107', 'off', 'asleep'], ['pfsense', 'Pfsense', 'VM 109', 'off', 'asleep'], ['pt-wings-1', 'pt-wings-1', 'VM 114', 'off', 'asleep'], ['truenas', 'truenas', 'VM 100', 'off', 'asleep']],
+      'node-c': [],
+    };
+    const dotFor = (cls) => 'display:inline-block;width:8px;height:8px;border-radius:50%;background:' + ({ ok: '#5fe08b', off: '#8a94a5', fail: '#ff8a82', warn: '#f0b44c' }[cls] || '#8a94a5');
+    const row = (name, cls, state, detail, action, btnCls, isOn) => {
+      const svcs = nodeServices[name];
+      return {
+        name, cls, state, detail, action, btnCls,
+        noHosts: svcs.length === 0,
+        hostGroups: svcs.filter((s) => linked[s[0]]).map((s) => {
+          const isSel = s[0] === selected;
+          return {
+            service: s[1],
+            count: String(linked[s[0]].length),
+            dot: dotFor(s[3]),
+            style: 'padding:6px;border-radius:8px' + (isSel ? ';background:#16233a' : dim),
+            hosts: linked[s[0]].slice().sort().map((h) => ({ name: offHosts.has(h) ? h + '  · off' : h, style: isSel ? hostOn : (offHosts.has(h) ? hostOff : host) })),
+          };
+        }),
+        guests: svcs.map((s) => ({ guest: s[2], name: s[1], cls: s[3], state: s[4], style: s[0] === selected ? tileSel : tile + dim })),
+        nodeStyle: 'background:#141922;border:1px solid #232a36;border-radius:12px;padding:12px' + (isOn ? '' : ';border-style:dashed'),
+      };
+    };
+    const brow = 'padding:8px 10px;border-radius:9px;background:#0f131a;border:1px solid #232a36';
+    return {
+      nav: groups.map(([heading, items]) => ({ heading, items: items.map((label) => ({ label, style: label === cur ? on : base })) })),
+      rows: [
+        row('node-a', 'ok', 'on', 'always on · 10.0.0.18 · Proxmox 8.4', 'Check', '', true),
+        row('node-b', 'off', 'off', 'wakes on demand · 10.0.0.16', 'Wake', 'primary', false),
+        row('node-c', 'off', 'off', 'wakes on demand · 10.0.0.17', 'Wake', '', false),
+      ],
+      backupRows: [
+        { node: 'node-a', count: '5', note: '[policy] · [time]', style: brow + dim },
+        { node: 'node-b', count: '8', note: '[policy] · wakes it, puts it back off', style: brow + ';border-color:#3d64b3;background:#16233a' },
+        { node: 'node-c', count: '—', note: 'nothing yet', style: brow + dim },
+      ],
+    };
+  }
+}
+</script>
+</body>
+</html>

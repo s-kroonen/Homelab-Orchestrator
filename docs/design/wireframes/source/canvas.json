@@ -1,0 +1,42 @@
+{
+  "v": 3,
+  "createdOnFiles": {"v": 1, "at": "2026-10-27T15:10:00Z"},
+  "title": "Orchestrator UI wireframes",
+  "launch": {"view": "canvas"},
+  "pages": [],
+  "boards": {
+    "Main.dc.html": {"x": 0, "y": 0, "w": 1440, "h": 1120, "title": "Dashboard — what needs attention", "expand": "fill"},
+    "Services.dc.html": {"x": 1520, "y": 0, "w": 1440, "h": 1000, "title": "Services — list", "expand": "fill"},
+    "Nodes.dc.html": {"x": 3040, "y": 0, "w": 1440, "h": 1060, "title": "Nodes & guests", "expand": "fill"},
+    "ServiceOverview.dc.html": {"x": 0, "y": 1463, "w": 1440, "h": 1240, "title": "Service — Overview tab", "expand": "fill"},
+    "ServiceConfig.dc.html": {"x": 1520, "y": 1463, "w": 1440, "h": 1180, "title": "Service — Configuration tab, editing in the drawer", "expand": "fill"},
+    "ServiceRelated.dc.html": {"x": 3040, "y": 1463, "w": 1440, "h": 1180, "title": "Service — Related tab (proxy, stack, guest, backups)", "expand": "fill"},
+    "ProxyHosts.dc.html": {"x": 0, "y": 3046, "w": 1440, "h": 980, "title": "Proxy hosts — list, row menu, bulk bar", "expand": "fill"},
+    "ProxyEdit.dc.html": {"x": 1520, "y": 3046, "w": 1440, "h": 980, "title": "Proxy host — create / edit drawer", "expand": "fill"},
+    "ConfirmPowerOff.dc.html": {"x": 3040, "y": 3046, "w": 1440, "h": 980, "title": "Confirm a destructive action", "expand": "fill"},
+    "Connections.dc.html": {"x": 0, "y": 4369, "w": 1440, "h": 1060, "title": "Settings — Connections", "expand": "fill"},
+    "Backups.dc.html": {"x": 1520, "y": 4369, "w": 1440, "h": 1020, "title": "Backups — one place, four tabs", "expand": "fill"},
+    "PhoneDashboard.dc.html": {"x": 0, "y": 5772, "w": 390, "h": 1300, "title": "Phone — dashboard"},
+    "PhoneService.dc.html": {"x": 470, "y": 5772, "w": 390, "h": 1300, "title": "Phone — service"},
+    "Map.dc.html": {"x": 0, "y": 7415, "w": 1440, "h": 1640, "title": "Map — one row per node: its hosts, its guests, its backups", "expand": "fill"},
+    "Traffic.dc.html": {"x": 1520, "y": 7415, "w": 1440, "h": 1140, "title": "Traffic — one page, countries included", "expand": "fill"}
+  },
+  "order": [
+    "Main.dc.html", "Services.dc.html", "Nodes.dc.html",
+    "ServiceOverview.dc.html", "ServiceConfig.dc.html", "ServiceRelated.dc.html",
+    "ProxyHosts.dc.html", "ProxyEdit.dc.html", "ConfirmPowerOff.dc.html",
+    "Connections.dc.html", "Backups.dc.html",
+    "PhoneDashboard.dc.html", "PhoneService.dc.html",
+    "Map.dc.html", "Traffic.dc.html"
+  ],
+  "notes": {
+    "t1": {"x": 0, "y": -260, "text": "Overview: start from what needs attention", "kind": "title1", "maxW": 4480},
+    "t2": {"x": 0, "y": 1203, "text": "One service: header actions, four tabs, edit in a drawer", "kind": "title1", "maxW": 4480},
+    "t3": {"x": 0, "y": 2786, "text": "Every list and every edit works the same way", "kind": "title1", "maxW": 4480},
+    "t4": {"x": 0, "y": 4109, "text": "Configuration in one place", "kind": "title1", "maxW": 2960},
+    "t5": {"x": 0, "y": 5512, "text": "On a phone: status and actions first", "kind": "title1", "maxW": 2000},
+    "t6": {"x": 0, "y": 7155, "text": "Map and traffic: calm by default, detail on focus", "kind": "title1", "maxW": 2960},
+    "rules": {"x": 4600, "y": 0, "w": 420, "size": "m", "fill": "blue", "text": "The five rules these screens follow\n\n1. Navigate by what you manage. Every object has one home.\n2. One way to edit: read-only by default, Edit opens the same drawer everywhere.\n3. One save model: Save applies it. Writing services.yaml and pushing to Traefik Manager happen after it; anything pending shows in the header only.\n4. Update in place: sections refresh live, never the whole page. Each says how old it is.\n5. Fast first paint: last known state at once, live data swaps in behind it.\n\nAll data is example data (the repository is public)."}
+  },
+  "designSystems": []
+}

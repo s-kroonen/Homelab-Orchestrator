@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Phone service</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#0d1015}
+a{color:#8fb3ff;text-decoration:none}a:hover{color:#b8d0ff}
+*{box-sizing:border-box}
+.pill{display:inline-flex;align-items:center;gap:6px;padding:3px 9px;border-radius:999px;font-size:12px;font-weight:600;white-space:nowrap}
+.ok{background:#11331f;color:#5fe08b}.warn{background:#3a2c10;color:#f0b44c}.fail{background:#3d1717;color:#ff8a82}.off{background:#232834;color:#b3bccb}
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;height:44px;padding:0 14px;border-radius:10px;border:1px solid #2c3340;background:#1a1f29;color:#e6e9ef;font:600 14px Inter,system-ui,sans-serif;cursor:pointer;white-space:nowrap}
+.btn.primary{background:#4f7fe0;border-color:#4f7fe0;color:#fff}
+.mono{font-family:'JetBrains Mono',ui-monospace,monospace;font-size:12.5px}
+dt{color:#9aa4b2;font-size:12px}dd{margin:0 0 8px}
+</style>
+</helmet>
+<div style="width: 390px; height: 1300px; background: #0d1015; color: #e6e9ef; font-family: Inter, system-ui, sans-serif; font-size: 15px; line-height: 1.45; display: flex; flex-direction: column">
+  <header style="display: flex; align-items: center; gap: 8px; padding: 10px 12px; border-bottom: 1px solid #222833">
+    <a class="btn" href="#" aria-label="Back to services" style="width: 44px; padding: 0; border-color: transparent; background: transparent">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M15 6l-6 6 6 6"></path></svg>
+    </a>
+    <div style="flex: 1; min-width: 0">
+      <div style="font-size: 12px; color: #8a94a5">Services</div>
+      <h1 style="margin: 0; font-size: 18px">NextCloud</h1>
+    </div>
+    <span class="pill fail">failed</span>
+  </header>
+
+  <main style="flex: 1; overflow: hidden; padding: 16px; display: flex; flex-direction: column; gap: 14px">
+    <div style="padding: 12px 14px; background: #2a1414; border: 1px solid #5a2323; border-radius: 12px; font-size: 14px">https answered <strong>502</strong> twice in a row. The guest is running, so it is the app, not the machine.</div>
+
+    <div style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px">
+      <button class="btn primary" type="button">Check now</button>
+      <button class="btn" type="button">Restart</button>
+      <button class="btn" type="button">Back up now</button>
+      <button class="btn" type="button">More…</button>
+    </div>
+
+    <div role="tablist" aria-label="Service sections" style="display: flex; gap: 2px; border-bottom: 1px solid #232a36; overflow-x: auto">
+      <a role="tab" aria-selected="true" href="#" style="padding: 10px 12px; color: #ffffff; font-weight: 600; box-shadow: inset 0 -2px 0 #4f7fe0; white-space: nowrap">Overview</a>
+      <a role="tab" aria-selected="false" href="#" style="padding: 10px 12px; color: #b3bccb; white-space: nowrap">Configuration</a>
+      <a role="tab" aria-selected="false" href="#" style="padding: 10px 12px; color: #b3bccb; white-space: nowrap">Related</a>
+      <a role="tab" aria-selected="false" href="#" style="padding: 10px 12px; color: #b3bccb; white-space: nowrap">History</a>
+    </div>
+
+    <section style="background: #141922; border: 1px solid #232a36; border-radius: 14px; padding: 4px 14px">
+      <sc-for list="{{probes}}" as="p" hint-placeholder-count="3">
+        <div style="display: flex; align-items: center; gap: 10px; padding: 10px 0; border-bottom: 1px solid #1d232e">
+          <div style="flex: 1; min-width: 0"><div style="font-weight: 600">{{p.name}}</div><div class="mono" style="color: #9aa4b2; overflow: hidden; text-overflow: ellipsis; white-space: nowrap">{{p.target}}</div></div>
+          <span class="pill {{p.cls}}">{{p.result}}</span>
+        </div>
+      </sc-for>
+      <div style="font-size: 12px; color: #8a94a5; padding: 8px 0">checked 40 s ago</div>
+    </section>
+
+    <section style="background: #141922; border: 1px solid #232a36; border-radius: 14px; padding: 12px 14px">
+      <dl style="margin: 0">
+        <dt>Runs on</dt><dd><a href="#">node-a</a> › VM 101 <span class="pill ok" style="padding: 1px 7px">running</span></dd>
+        <dt>Proxy host</dt><dd><a href="#">cloud.example.lan</a></dd>
+        <dt>Backup</dt><dd>last ok 03:01 · next 03:00</dd>
+        <dt>Address</dt><dd class="mono">10.0.1.11</dd>
+      </dl>
+    </section>
+  </main>
+
+  <nav aria-label="Main" style="display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); border-top: 1px solid #222833; background: #11151c; padding: 6px 4px 18px">
+    <sc-for list="{{tabs}}" as="t" hint-placeholder-count="4">
+      <a href="#" style="{{t.style}}">{{t.label}}</a>
+    </sc-for>
+  </nav>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":390,"height":1300}}'>
+class Component extends DCLogic {
+  renderVals() {
+    const tab = 'display:flex;align-items:center;justify-content:center;height:48px;border-radius:10px;font-size:13px;font-weight:600;color:#b3bccb';
+    return {
+      probes: [
+        { name: 'guest gate', target: 'node on, VM 101 running', cls: 'ok', result: 'ok' },
+        { name: 'https', target: 'https://cloud.example.lan/status.php', cls: 'fail', result: '502' },
+        { name: 'tcp', target: '10.0.1.11:443', cls: 'ok', result: 'open' },
+      ],
+      tabs: [
+        { label: 'Dashboard', style: tab },
+        { label: 'Services', style: tab + ';background:#1d2430;color:#ffffff' },
+        { label: 'Activity', style: tab },
+        { label: 'More', style: tab },
+      ],
+    };
+  }
+}
+</script>
+</body>
+</html>

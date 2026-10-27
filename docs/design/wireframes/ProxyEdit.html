@@ -1,0 +1,180 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Add proxy host (wireframe)</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#0d1015}
+a{color:#8fb3ff;text-decoration:none}a:hover{color:#b8d0ff}
+*{box-sizing:border-box}
+.pill{display:inline-flex;align-items:center;gap:6px;padding:3px 9px;border-radius:999px;font-size:12px;font-weight:600;white-space:nowrap}
+.ok{background:#11331f;color:#5fe08b}.pending{background:#162a45;color:#8fb3ff}.off{background:#232834;color:#b3bccb}
+.btn{display:inline-flex;align-items:center;gap:6px;height:32px;padding:0 12px;border-radius:8px;border:1px solid #2c3340;background:#1a1f29;color:#e6e9ef;font:600 13px Inter,system-ui,sans-serif;cursor:pointer;white-space:nowrap}
+.btn.primary{background:#4f7fe0;border-color:#4f7fe0;color:#fff}.btn.ghost{background:transparent;border-color:transparent;color:#b3bccb}
+.mono{font-family:'JetBrains Mono',ui-monospace,monospace;font-size:12.5px}
+.field{display:flex;flex-direction:column;gap:6px}
+.field>label,.lbl{font-size:13px;font-weight:600}
+.input{height:36px;padding:0 12px;background:#0f131a;border:1px solid #2f3747;border-radius:8px;color:#e6e9ef;font:14px Inter,system-ui,sans-serif;min-width:0}
+.hint{font-size:12px;color:#9aa4b2}
+.bar{height:12px;border-radius:6px;background:#1d232e}
+</style>
+</head>
+<body>
+
+
+<div style="position: relative; display: flex; flex-wrap: wrap; min-height: 980px; background: #0d1015; color: #e6e9ef; font-family: Inter, system-ui, sans-serif; font-size: 14px; line-height: 1.45">
+  <nav aria-label="Main" style="flex: 0 0 232px; background: #11151c; border-right: 1px solid #222833; padding: 20px 14px; display: flex; flex-direction: column; gap: 18px">
+    <div style="font-weight: 700; font-size: 15px; padding: 0 10px">homelab-orchestrator</div>
+    
+      <div style="display: flex; flex-direction: column; gap: 2px">
+        <div style="font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: #8a94a5; padding: 0 10px 4px">Overview</div>
+        
+          <a href="#" style="display:block;padding:6px 10px;border-radius:7px;font-size:14px;color:#c9d1dc">Dashboard</a>
+        
+          <a href="#" style="display:block;padding:6px 10px;border-radius:7px;font-size:14px;color:#c9d1dc">Map</a>
+        
+      </div>
+    
+      <div style="display: flex; flex-direction: column; gap: 2px">
+        <div style="font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: #8a94a5; padding: 0 10px 4px">Services</div>
+        
+          <a href="#" style="display:block;padding:6px 10px;border-radius:7px;font-size:14px;color:#c9d1dc">Services</a>
+        
+      </div>
+    
+      <div style="display: flex; flex-direction: column; gap: 2px">
+        <div style="font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: #8a94a5; padding: 0 10px 4px">Infrastructure</div>
+        
+          <a href="#" style="display:block;padding:6px 10px;border-radius:7px;font-size:14px;color:#c9d1dc">Nodes &amp; guests</a>
+        
+          <a href="#" style="display:block;padding:6px 10px;border-radius:7px;font-size:14px;color:#c9d1dc;background:#1d2430;color:#ffffff;font-weight:600;box-shadow:inset 3px 0 0 #4f7fe0">Proxy hosts</a>
+        
+          <a href="#" style="display:block;padding:6px 10px;border-radius:7px;font-size:14px;color:#c9d1dc">Containers</a>
+        
+          <a href="#" style="display:block;padding:6px 10px;border-radius:7px;font-size:14px;color:#c9d1dc">Backups</a>
+        
+      </div>
+    
+      <div style="display: flex; flex-direction: column; gap: 2px">
+        <div style="font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: #8a94a5; padding: 0 10px 4px">Activity</div>
+        
+          <a href="#" style="display:block;padding:6px 10px;border-radius:7px;font-size:14px;color:#c9d1dc">Activity</a>
+        
+          <a href="#" style="display:block;padding:6px 10px;border-radius:7px;font-size:14px;color:#c9d1dc">Traffic</a>
+        
+      </div>
+    
+      <div style="display: flex; flex-direction: column; gap: 2px">
+        <div style="font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: #8a94a5; padding: 0 10px 4px">Settings</div>
+        
+          <a href="#" style="display:block;padding:6px 10px;border-radius:7px;font-size:14px;color:#c9d1dc">Connections</a>
+        
+          <a href="#" style="display:block;padding:6px 10px;border-radius:7px;font-size:14px;color:#c9d1dc">Notifications</a>
+        
+          <a href="#" style="display:block;padding:6px 10px;border-radius:7px;font-size:14px;color:#c9d1dc">AI assistants</a>
+        
+          <a href="#" style="display:block;padding:6px 10px;border-radius:7px;font-size:14px;color:#c9d1dc">Admins &amp; devices</a>
+        
+          <a href="#" style="display:block;padding:6px 10px;border-radius:7px;font-size:14px;color:#c9d1dc">System</a>
+        
+          <a href="#" style="display:block;padding:6px 10px;border-radius:7px;font-size:14px;color:#c9d1dc">Archive</a>
+        
+      </div>
+    
+  </nav>
+  <div style="flex: 999 1 560px; min-width: 0; display: flex; flex-direction: column">
+    <header style="display: flex; align-items: center; gap: 12px; padding: 12px 32px; border-bottom: 1px solid #222833">
+      <div style="font-size: 13px; color: #8a94a5">Infrastructure / <span style="color: #e6e9ef">Proxy hosts</span></div>
+    </header>
+    <main style="padding: 28px 32px; display: flex; flex-direction: column; gap: 16px">
+      <h1 style="margin: 0; font-size: 24px">Proxy hosts</h1>
+      
+        <div style="display: flex; gap: 24px; padding: 10px 0; border-bottom: 1px solid #1d232e">
+          <div class="bar" style="width: 200px"></div><div class="bar" style="width: 120px"></div><div class="bar" style="width: 220px"></div><div class="bar" style="width: 90px"></div>
+        </div>
+      
+        <div style="display: flex; gap: 24px; padding: 10px 0; border-bottom: 1px solid #1d232e">
+          <div class="bar" style="width: 200px"></div><div class="bar" style="width: 120px"></div><div class="bar" style="width: 220px"></div><div class="bar" style="width: 90px"></div>
+        </div>
+      
+        <div style="display: flex; gap: 24px; padding: 10px 0; border-bottom: 1px solid #1d232e">
+          <div class="bar" style="width: 200px"></div><div class="bar" style="width: 120px"></div><div class="bar" style="width: 220px"></div><div class="bar" style="width: 90px"></div>
+        </div>
+      
+        <div style="display: flex; gap: 24px; padding: 10px 0; border-bottom: 1px solid #1d232e">
+          <div class="bar" style="width: 200px"></div><div class="bar" style="width: 120px"></div><div class="bar" style="width: 220px"></div><div class="bar" style="width: 90px"></div>
+        </div>
+      
+        <div style="display: flex; gap: 24px; padding: 10px 0; border-bottom: 1px solid #1d232e">
+          <div class="bar" style="width: 200px"></div><div class="bar" style="width: 120px"></div><div class="bar" style="width: 220px"></div><div class="bar" style="width: 90px"></div>
+        </div>
+      
+        <div style="display: flex; gap: 24px; padding: 10px 0; border-bottom: 1px solid #1d232e">
+          <div class="bar" style="width: 200px"></div><div class="bar" style="width: 120px"></div><div class="bar" style="width: 220px"></div><div class="bar" style="width: 90px"></div>
+        </div>
+      
+        <div style="display: flex; gap: 24px; padding: 10px 0; border-bottom: 1px solid #1d232e">
+          <div class="bar" style="width: 200px"></div><div class="bar" style="width: 120px"></div><div class="bar" style="width: 220px"></div><div class="bar" style="width: 90px"></div>
+        </div>
+      
+        <div style="display: flex; gap: 24px; padding: 10px 0; border-bottom: 1px solid #1d232e">
+          <div class="bar" style="width: 200px"></div><div class="bar" style="width: 120px"></div><div class="bar" style="width: 220px"></div><div class="bar" style="width: 90px"></div>
+        </div>
+      
+    </main>
+  </div>
+
+  <div aria-hidden="true" style="position: absolute; inset: 0; background: rgba(5, 7, 10, 0.55)"></div>
+  <aside role="dialog" aria-modal="true" aria-labelledby="dt" style="position: absolute; top: 0; right: 0; bottom: 0; width: 520px; max-width: 100%; background: #141922; border-left: 1px solid #2f3747; box-shadow: -16px 0 40px rgba(0,0,0,.4); display: flex; flex-direction: column">
+    <div style="display: flex; align-items: center; gap: 10px; padding: 18px 22px; border-bottom: 1px solid #232a36">
+      <h2 id="dt" style="margin: 0; font-size: 18px">Add proxy host</h2>
+      <button class="btn ghost" type="button" aria-label="Close" style="margin-left: auto">✕</button>
+    </div>
+    <form style="flex: 1; overflow: auto; padding: 18px 22px; display: flex; flex-direction: column; gap: 16px">
+      <div class="field"><label for="h">Hostname</label><input id="h" class="input mono" value="photos.example.lan"></div>
+      <div class="field"><label for="s">For service</label>
+        <select id="s" class="input"><option>[immich]</option><option>nextcloud</option></select>
+        <span class="hint">Its state, wake-on-hit and maintenance page follow the service.</span></div>
+      <div class="field"><span class="lbl">Points to</span>
+        <div style="display: flex; gap: 8px">
+          <select aria-label="Scheme" class="input" style="flex: 0 0 96px"><option>http</option><option>https</option></select>
+          <input aria-label="Address" class="input mono" style="flex: 1 1 auto" value="[10.0.1.20]">
+          <input aria-label="Port" class="input mono" style="flex: 0 0 90px" value="2283">
+        </div>
+        <span class="hint">Filled from the service’s discovered address. <a href="#">Use another</a></span></div>
+      <fieldset style="border: 1px solid #232a36; border-radius: 10px; padding: 12px 14px; display: flex; flex-direction: column; gap: 10px; margin: 0">
+        <legend class="lbl" style="padding: 0 6px">Serving</legend>
+        <div style="display: flex; flex-wrap: wrap; gap: 8px; align-items: center">
+          <span class="hint" style="flex: 0 0 110px">Entry points</span>
+          <span class="pill pending">websecure ✓</span><span class="pill off">web</span>
+        </div>
+        <div style="display: flex; gap: 8px; align-items: center">
+          <label for="c" class="hint" style="flex: 0 0 110px">Certificate</label>
+          <select id="c" class="input" style="flex: 1"><option>letsencrypt (wildcard *.example.lan)</option></select>
+        </div>
+        <label style="display: flex; gap: 8px"><input type="checkbox" checked=""> Redirect http:// to https://</label>
+        <label style="display: flex; gap: 8px"><input type="checkbox" checked=""> Send the visitor’s hostname (Host header)</label>
+        <label style="display: flex; gap: 8px"><input type="checkbox"> HSTS (browsers only use https afterwards)</label>
+      </fieldset>
+      <details style="border: 1px solid #232a36; border-radius: 10px; padding: 10px 14px">
+        <summary class="lbl" style="cursor: pointer">Advanced: config file, TLS domains, extra middlewares</summary>
+      </details>
+      <div style="padding: 12px 14px; background: #0f131a; border: 1px solid #232a36; border-radius: 10px; display: flex; flex-direction: column; gap: 4px">
+        <span class="lbl">What Traefik Manager will get</span>
+        <span class="mono" style="color: #b3bccb">router orchestrator-photos-example-lan + redirect · in [immich].yml</span>
+        <span class="hint">Checked after saving: the route must be loaded and answer.</span>
+      </div>
+    </form>
+    <div style="display: flex; flex-wrap: wrap; align-items: center; gap: 10px; padding: 14px 22px; border-top: 1px solid #232a36">
+      <span class="hint" style="flex: 1 1 200px">Save adds it and pushes it to Traefik Manager.</span>
+      <button class="btn ghost" type="button">Cancel</button>
+      <button class="btn primary" type="button">Save</button>
+    </div>
+  </aside>
+</div>
+
+</body>
+</html>

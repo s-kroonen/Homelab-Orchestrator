@@ -1,0 +1,224 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Proxy hosts (wireframe)</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#0d1015}
+a{color:#8fb3ff;text-decoration:none}a:hover{color:#b8d0ff}
+*{box-sizing:border-box}
+.pill{display:inline-flex;align-items:center;gap:6px;padding:3px 9px;border-radius:999px;font-size:12px;font-weight:600;white-space:nowrap}
+.ok{background:#11331f;color:#5fe08b}.warn{background:#3a2c10;color:#f0b44c}.fail{background:#3d1717;color:#ff8a82}.off{background:#232834;color:#b3bccb}.pending{background:#162a45;color:#8fb3ff}
+.btn{display:inline-flex;align-items:center;gap:6px;height:32px;padding:0 12px;border-radius:8px;border:1px solid #2c3340;background:#1a1f29;color:#e6e9ef;font:600 13px Inter,system-ui,sans-serif;cursor:pointer;white-space:nowrap}
+.btn.primary{background:#4f7fe0;border-color:#4f7fe0;color:#fff}.btn.ghost{background:transparent;border-color:transparent;color:#b3bccb}
+.mono{font-family:'JetBrains Mono',ui-monospace,monospace;font-size:12.5px}
+th{font-size:12px;font-weight:600;color:#9aa4b2;text-align:left;padding:10px 12px;border-bottom:1px solid #232a36;white-space:nowrap}
+td{padding:10px 12px;border-bottom:1px solid #1d232e;vertical-align:middle}
+.tag{display:inline-block;padding:1px 6px;border:1px solid #2f3747;border-radius:5px;font-size:11px;color:#b3bccb;margin-right:4px}
+</style>
+</head>
+<body>
+
+
+<div style="display: flex; flex-wrap: wrap; min-height: 980px; background: #0d1015; color: #e6e9ef; font-family: Inter, system-ui, sans-serif; font-size: 14px; line-height: 1.45">
+  <nav aria-label="Main" style="flex: 0 0 232px; background: #11151c; border-right: 1px solid #222833; padding: 20px 14px; display: flex; flex-direction: column; gap: 18px">
+    <div style="font-weight: 700; font-size: 15px; padding: 0 10px">homelab-orchestrator</div>
+    
+      <div style="display: flex; flex-direction: column; gap: 2px">
+        <div style="font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: #8a94a5; padding: 0 10px 4px">Overview</div>
+        
+          <a href="#" style="display:block;padding:6px 10px;border-radius:7px;font-size:14px;color:#c9d1dc">Dashboard</a>
+        
+          <a href="#" style="display:block;padding:6px 10px;border-radius:7px;font-size:14px;color:#c9d1dc">Map</a>
+        
+      </div>
+    
+      <div style="display: flex; flex-direction: column; gap: 2px">
+        <div style="font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: #8a94a5; padding: 0 10px 4px">Services</div>
+        
+          <a href="#" style="display:block;padding:6px 10px;border-radius:7px;font-size:14px;color:#c9d1dc">Services</a>
+        
+      </div>
+    
+      <div style="display: flex; flex-direction: column; gap: 2px">
+        <div style="font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: #8a94a5; padding: 0 10px 4px">Infrastructure</div>
+        
+          <a href="#" style="display:block;padding:6px 10px;border-radius:7px;font-size:14px;color:#c9d1dc">Nodes &amp; guests</a>
+        
+          <a href="#" style="display:block;padding:6px 10px;border-radius:7px;font-size:14px;color:#c9d1dc;background:#1d2430;color:#ffffff;font-weight:600;box-shadow:inset 3px 0 0 #4f7fe0">Proxy hosts</a>
+        
+          <a href="#" style="display:block;padding:6px 10px;border-radius:7px;font-size:14px;color:#c9d1dc">Containers</a>
+        
+          <a href="#" style="display:block;padding:6px 10px;border-radius:7px;font-size:14px;color:#c9d1dc">Backups</a>
+        
+      </div>
+    
+      <div style="display: flex; flex-direction: column; gap: 2px">
+        <div style="font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: #8a94a5; padding: 0 10px 4px">Activity</div>
+        
+          <a href="#" style="display:block;padding:6px 10px;border-radius:7px;font-size:14px;color:#c9d1dc">Activity</a>
+        
+          <a href="#" style="display:block;padding:6px 10px;border-radius:7px;font-size:14px;color:#c9d1dc">Traffic</a>
+        
+      </div>
+    
+      <div style="display: flex; flex-direction: column; gap: 2px">
+        <div style="font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: #8a94a5; padding: 0 10px 4px">Settings</div>
+        
+          <a href="#" style="display:block;padding:6px 10px;border-radius:7px;font-size:14px;color:#c9d1dc">Connections</a>
+        
+          <a href="#" style="display:block;padding:6px 10px;border-radius:7px;font-size:14px;color:#c9d1dc">Notifications</a>
+        
+          <a href="#" style="display:block;padding:6px 10px;border-radius:7px;font-size:14px;color:#c9d1dc">AI assistants</a>
+        
+          <a href="#" style="display:block;padding:6px 10px;border-radius:7px;font-size:14px;color:#c9d1dc">Admins &amp; devices</a>
+        
+          <a href="#" style="display:block;padding:6px 10px;border-radius:7px;font-size:14px;color:#c9d1dc">System</a>
+        
+          <a href="#" style="display:block;padding:6px 10px;border-radius:7px;font-size:14px;color:#c9d1dc">Archive</a>
+        
+      </div>
+    
+  </nav>
+  <div style="flex: 999 1 560px; min-width: 0; display: flex; flex-direction: column">
+    <header style="display: flex; flex-wrap: wrap; align-items: center; gap: 12px; padding: 12px 32px; border-bottom: 1px solid #222833">
+      <div style="font-size: 13px; color: #8a94a5">Infrastructure / <span style="color: #e6e9ef">Proxy hosts</span></div>
+      <a href="#" class="pill pending" style="margin-left: auto">1 proxy change not pushed · Retry</a>
+      <span class="pill ok">● Live</span>
+      <button class="btn ghost" type="button">admin ▾</button>
+    </header>
+
+    <main style="padding: 28px 32px 48px; max-width: 1280px; width: 100%; display: flex; flex-direction: column; gap: 16px">
+      <div style="display: flex; flex-wrap: wrap; align-items: flex-end; gap: 12px">
+        <div style="flex: 1 1 400px">
+          <h1 style="margin: 0; font-size: 24px; font-weight: 700">Proxy hosts <span style="color: #8a94a5; font-weight: 500">27</span></h1>
+          <div style="color: #9aa4b2; margin-top: 4px">Hostnames Traefik serves for your services. Changes are pushed to Traefik Manager when you save.</div>
+        </div>
+        <button class="btn primary" type="button">+ Add proxy host</button>
+      </div>
+      <div role="tablist" aria-label="Proxy host views" style="display: flex; gap: 4px; border-bottom: 1px solid #232a36">
+        <a role="tab" aria-selected="true" href="#" style="padding: 10px 14px; color: #ffffff; font-weight: 600; box-shadow: inset 0 -2px 0 #4f7fe0">Hosts</a>
+        <a role="tab" aria-selected="false" href="#" style="padding: 10px 14px; color: #b3bccb">Import from Traefik <span class="pill pending" style="padding: 1px 7px">3</span></a>
+        <a role="tab" aria-selected="false" href="#" style="padding: 10px 14px; color: #b3bccb">Format routes <span class="pill warn" style="padding: 1px 7px">15</span></a>
+      </div>
+
+      <div style="display: flex; flex-wrap: wrap; align-items: center; gap: 8px">
+        <label style="flex: 0 1 300px; display: flex; align-items: center; height: 34px; padding: 0 12px; background: #141922; border: 1px solid #2a3140; border-radius: 8px">
+          <input aria-label="Filter proxy hosts" placeholder="Filter by hostname or service" style="flex: 1; min-width: 0; background: transparent; border: 0; color: #e6e9ef; font: inherit; outline: none">
+        </label>
+        
+          <button type="button" style="height:32px;padding:0 12px;border-radius:999px;border:1px solid #2a3140;background:#141922;color:#c9d1dc;font:600 13px Inter,system-ui,sans-serif;background:#1d2c47;border-color:#3d64b3;color:#ffffff">All <span style="opacity: .7">27</span></button>
+        
+          <button type="button" style="height:32px;padding:0 12px;border-radius:999px;border:1px solid #2a3140;background:#141922;color:#c9d1dc;font:600 13px Inter,system-ui,sans-serif">Not pushed <span style="opacity: .7">1</span></button>
+        
+          <button type="button" style="height:32px;padding:0 12px;border-radius:999px;border:1px solid #2a3140;background:#141922;color:#c9d1dc;font:600 13px Inter,system-ui,sans-serif">Changed in Traefik <span style="opacity: .7">1</span></button>
+        
+          <button type="button" style="height:32px;padding:0 12px;border-radius:999px;border:1px solid #2a3140;background:#141922;color:#c9d1dc;font:600 13px Inter,system-ui,sans-serif">Off <span style="opacity: .7">5</span></button>
+        
+          <button type="button" style="height:32px;padding:0 12px;border-radius:999px;border:1px solid #2a3140;background:#141922;color:#c9d1dc;font:600 13px Inter,system-ui,sans-serif">Old format <span style="opacity: .7">15</span></button>
+        
+      </div>
+
+      <div style="background: #141922; border: 1px solid #232a36; border-radius: 12px; overflow-x: auto; position: relative">
+        <table style="width: 100%; border-collapse: collapse; min-width: 980px">
+          <thead><tr><th style="width: 36px"><input type="checkbox" aria-label="Select all"></th><th>Hostname ▲</th><th>Service</th><th>Points to</th><th>Options</th><th>Traefik</th><th>On</th><th style="width: 52px"></th></tr></thead>
+          <tbody>
+            
+              <tr>
+                <td><input type="checkbox" aria-label="Select adblock.example.lan"></td>
+                <td><a href="#" class="mono" style="color: #e6e9ef; font-size: 13.5px; font-weight: 500">adblock.example.lan</a></td>
+                <td><a href="#">adblock</a></td>
+                <td class="mono" style="color: #b3bccb">http://10.0.0.14:80</td>
+                <td><span class="tag">HTTPS</span><span class="tag">redirect</span></td>
+                <td><span class="pill ok">serving</span><div style="font-size: 12px; color: #9aa4b2; margin-top: 2px"></div></td>
+                <td><span role="switch" aria-checked="true" aria-label="Serve adblock.example.lan" style="display:inline-flex;align-items:center;width:36px;height:20px;border-radius:999px;background:#2f8f55;padding:2px;justify-content:flex-end"><span style="display:block;width:16px;height:16px;border-radius:50%;background:#ffffff"></span></span></td>
+                <td><button class="btn ghost" type="button" aria-label="Actions for adblock.example.lan">⋯</button></td>
+              </tr>
+            
+              <tr>
+                <td><input type="checkbox" aria-label="Select cloud.example.lan"></td>
+                <td><a href="#" class="mono" style="color: #e6e9ef; font-size: 13.5px; font-weight: 500">cloud.example.lan</a></td>
+                <td><a href="#">nextcloud</a></td>
+                <td class="mono" style="color: #b3bccb">http://10.0.1.11:80</td>
+                <td><span class="tag">HTTPS</span><span class="tag">HSTS</span></td>
+                <td><span class="pill ok">serving</span><div style="font-size: 12px; color: #9aa4b2; margin-top: 2px"></div></td>
+                <td><span role="switch" aria-checked="true" aria-label="Serve cloud.example.lan" style="display:inline-flex;align-items:center;width:36px;height:20px;border-radius:999px;background:#2f8f55;padding:2px;justify-content:flex-end"><span style="display:block;width:16px;height:16px;border-radius:50%;background:#ffffff"></span></span></td>
+                <td><button class="btn ghost" type="button" aria-label="Actions for cloud.example.lan">⋯</button></td>
+              </tr>
+            
+              <tr>
+                <td><input type="checkbox" aria-label="Select example.lan"></td>
+                <td><a href="#" class="mono" style="color: #e6e9ef; font-size: 13.5px; font-weight: 500">example.lan</a></td>
+                <td><a href="#">haos</a></td>
+                <td class="mono" style="color: #b3bccb">http://10.0.0.95:8123</td>
+                <td><span class="tag">HTTPS</span><span class="tag">redirect</span></td>
+                <td><span class="pill pending">not pushed</span><div style="font-size: 12px; color: #9aa4b2; margin-top: 2px">push failed 14:03 · retry from the header</div></td>
+                <td><span role="switch" aria-checked="true" aria-label="Serve example.lan" style="display:inline-flex;align-items:center;width:36px;height:20px;border-radius:999px;background:#2f8f55;padding:2px;justify-content:flex-end"><span style="display:block;width:16px;height:16px;border-radius:50%;background:#ffffff"></span></span></td>
+                <td><button class="btn ghost" type="button" aria-label="Actions for example.lan">⋯</button></td>
+              </tr>
+            
+              <tr>
+                <td><input type="checkbox" aria-label="Select nas.example.lan"></td>
+                <td><a href="#" class="mono" style="color: #e6e9ef; font-size: 13.5px; font-weight: 500">nas.example.lan</a></td>
+                <td><a href="#">truenas</a></td>
+                <td class="mono" style="color: #b3bccb">http://10.0.1.15:80</td>
+                <td><span class="tag">HTTPS</span><span class="tag">old format</span></td>
+                <td><span class="pill warn">changed in Traefik</span><div style="font-size: 12px; color: #9aa4b2; margin-top: 2px">off in Traefik Manager, on here</div></td>
+                <td><span role="switch" aria-checked="true" aria-label="Serve nas.example.lan" style="display:inline-flex;align-items:center;width:36px;height:20px;border-radius:999px;background:#2f8f55;padding:2px;justify-content:flex-end"><span style="display:block;width:16px;height:16px;border-radius:50%;background:#ffffff"></span></span></td>
+                <td><button class="btn ghost" type="button" aria-label="Actions for nas.example.lan">⋯</button></td>
+              </tr>
+            
+              <tr>
+                <td><input type="checkbox" aria-label="Select jellyfin.example.lan"></td>
+                <td><a href="#" class="mono" style="color: #e6e9ef; font-size: 13.5px; font-weight: 500">jellyfin.example.lan</a></td>
+                <td><a href="#">jellyfin</a></td>
+                <td class="mono" style="color: #b3bccb">http://10.0.1.16:8096</td>
+                <td><span class="tag">HTTPS</span><span class="tag">wake on hit</span></td>
+                <td><span class="pill ok">serving</span><div style="font-size: 12px; color: #9aa4b2; margin-top: 2px"></div></td>
+                <td><span role="switch" aria-checked="true" aria-label="Serve jellyfin.example.lan" style="display:inline-flex;align-items:center;width:36px;height:20px;border-radius:999px;background:#2f8f55;padding:2px;justify-content:flex-end"><span style="display:block;width:16px;height:16px;border-radius:50%;background:#ffffff"></span></span></td>
+                <td><button class="btn ghost" type="button" aria-label="Actions for jellyfin.example.lan">⋯</button></td>
+              </tr>
+            
+              <tr>
+                <td><input type="checkbox" aria-label="Select port.example.lan"></td>
+                <td><a href="#" class="mono" style="color: #e6e9ef; font-size: 13.5px; font-weight: 500">port.example.lan</a></td>
+                <td><a href="#">portainer</a></td>
+                <td class="mono" style="color: #b3bccb">https://10.0.1.12:9443</td>
+                <td><span class="tag">HTTPS</span><span class="tag">old format</span></td>
+                <td><span class="pill ok">serving</span><div style="font-size: 12px; color: #9aa4b2; margin-top: 2px"></div></td>
+                <td><span role="switch" aria-checked="true" aria-label="Serve port.example.lan" style="display:inline-flex;align-items:center;width:36px;height:20px;border-radius:999px;background:#2f8f55;padding:2px;justify-content:flex-end"><span style="display:block;width:16px;height:16px;border-radius:50%;background:#ffffff"></span></span></td>
+                <td><button class="btn ghost" type="button" aria-label="Actions for port.example.lan">⋯</button></td>
+              </tr>
+            
+              <tr>
+                <td><input type="checkbox" aria-label="Select bingo.example.lan"></td>
+                <td><a href="#" class="mono" style="color: #e6e9ef; font-size: 13.5px; font-weight: 500">bingo.example.lan</a></td>
+                <td><a href="#">portainer</a></td>
+                <td class="mono" style="color: #b3bccb">http://10.0.1.12:8085</td>
+                <td><span class="tag">HTTPS</span><span class="tag">old format</span></td>
+                <td><span class="pill off">off</span><div style="font-size: 12px; color: #9aa4b2; margin-top: 2px"></div></td>
+                <td><span role="switch" aria-checked="false" aria-label="Serve bingo.example.lan" style="display:inline-flex;align-items:center;width:36px;height:20px;border-radius:999px;background:#2f3747;padding:2px;justify-content:flex-start"><span style="display:block;width:16px;height:16px;border-radius:50%;background:#ffffff"></span></span></td>
+                <td><button class="btn ghost" type="button" aria-label="Actions for bingo.example.lan">⋯</button></td>
+              </tr>
+            
+          </tbody>
+        </table>
+        <div role="menu" aria-label="Actions for nas.example.lan" style="position: absolute; right: 18px; top: 196px; width: 230px; background: #1a1f29; border: 1px solid #2f3747; border-radius: 10px; padding: 6px; box-shadow: 0 12px 32px rgba(0,0,0,.45); display: flex; flex-direction: column">
+          <button type="button" role="menuitem" style="text-align: left; background: transparent; border: 0; color: #e6e9ef; padding: 8px 10px; font: inherit">Edit…</button>
+          <button type="button" role="menuitem" style="text-align: left; background: transparent; border: 0; color: #e6e9ef; padding: 8px 10px; font: inherit">Put back as configured here</button>
+          <button type="button" role="menuitem" style="text-align: left; background: transparent; border: 0; color: #e6e9ef; padding: 8px 10px; font: inherit">Accept the change from Traefik</button>
+          <button type="button" role="menuitem" style="text-align: left; background: transparent; border: 0; color: #e6e9ef; padding: 8px 10px; font: inherit">Open in Traefik Manager ↗</button>
+          <div style="height: 1px; background: #2a3140; margin: 4px 0"></div>
+          <button type="button" role="menuitem" style="text-align: left; background: transparent; border: 0; color: #ff8a82; padding: 8px 10px; font: inherit">Delete…</button>
+        </div>
+        <div style="display: flex; padding: 10px 14px; font-size: 13px; color: #9aa4b2"><span>7 of 27 shown</span><span style="margin-left: auto">Traefik read 6 s ago</span></div>
+      </div>
+    </main>
+  </div>
+</div>
+
+</body>
+</html>

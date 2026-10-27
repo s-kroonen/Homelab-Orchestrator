@@ -1,0 +1,252 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Service overview (wireframe)</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#0d1015}
+a{color:#8fb3ff;text-decoration:none}a:hover{color:#b8d0ff}
+*{box-sizing:border-box}
+.pill{display:inline-flex;align-items:center;gap:6px;padding:3px 9px;border-radius:999px;font-size:12px;font-weight:600;white-space:nowrap}
+.ok{background:#11331f;color:#5fe08b}.warn{background:#3a2c10;color:#f0b44c}.fail{background:#3d1717;color:#ff8a82}.off{background:#232834;color:#b3bccb}.pending{background:#162a45;color:#8fb3ff}
+.btn{display:inline-flex;align-items:center;gap:6px;height:32px;padding:0 12px;border-radius:8px;border:1px solid #2c3340;background:#1a1f29;color:#e6e9ef;font:600 13px Inter,system-ui,sans-serif;cursor:pointer;white-space:nowrap}
+.btn.primary{background:#4f7fe0;border-color:#4f7fe0;color:#fff}.btn.ghost{background:transparent;border-color:transparent;color:#b3bccb}
+.mono{font-family:'JetBrains Mono',ui-monospace,monospace;font-size:12.5px}
+th{font-size:12px;font-weight:600;color:#9aa4b2;text-align:left;padding:9px 14px;border-bottom:1px solid #232a36;white-space:nowrap}
+td{padding:10px 14px;border-bottom:1px solid #1d232e;vertical-align:middle}
+dt{color:#9aa4b2;font-size:12px;margin-top:10px}dd{margin:2px 0 0}
+</style>
+</head>
+<body>
+
+
+<div style="display: flex; flex-wrap: wrap; min-height: 1240px; background: #0d1015; color: #e6e9ef; font-family: Inter, system-ui, sans-serif; font-size: 14px; line-height: 1.45">
+  <nav aria-label="Main" style="flex: 0 0 232px; background: #11151c; border-right: 1px solid #222833; padding: 20px 14px; display: flex; flex-direction: column; gap: 18px">
+    <div style="font-weight: 700; font-size: 15px; padding: 0 10px">homelab-orchestrator</div>
+    
+      <div style="display: flex; flex-direction: column; gap: 2px">
+        <div style="font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: #8a94a5; padding: 0 10px 4px">Overview</div>
+        
+          <a href="#" style="display:block;padding:6px 10px;border-radius:7px;font-size:14px;color:#c9d1dc">Dashboard</a>
+        
+          <a href="#" style="display:block;padding:6px 10px;border-radius:7px;font-size:14px;color:#c9d1dc">Map</a>
+        
+      </div>
+    
+      <div style="display: flex; flex-direction: column; gap: 2px">
+        <div style="font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: #8a94a5; padding: 0 10px 4px">Services</div>
+        
+          <a href="#" style="display:block;padding:6px 10px;border-radius:7px;font-size:14px;color:#c9d1dc;background:#1d2430;color:#ffffff;font-weight:600;box-shadow:inset 3px 0 0 #4f7fe0">Services</a>
+        
+      </div>
+    
+      <div style="display: flex; flex-direction: column; gap: 2px">
+        <div style="font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: #8a94a5; padding: 0 10px 4px">Infrastructure</div>
+        
+          <a href="#" style="display:block;padding:6px 10px;border-radius:7px;font-size:14px;color:#c9d1dc">Nodes &amp; guests</a>
+        
+          <a href="#" style="display:block;padding:6px 10px;border-radius:7px;font-size:14px;color:#c9d1dc">Proxy hosts</a>
+        
+          <a href="#" style="display:block;padding:6px 10px;border-radius:7px;font-size:14px;color:#c9d1dc">Containers</a>
+        
+          <a href="#" style="display:block;padding:6px 10px;border-radius:7px;font-size:14px;color:#c9d1dc">Backups</a>
+        
+      </div>
+    
+      <div style="display: flex; flex-direction: column; gap: 2px">
+        <div style="font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: #8a94a5; padding: 0 10px 4px">Activity</div>
+        
+          <a href="#" style="display:block;padding:6px 10px;border-radius:7px;font-size:14px;color:#c9d1dc">Activity</a>
+        
+          <a href="#" style="display:block;padding:6px 10px;border-radius:7px;font-size:14px;color:#c9d1dc">Traffic</a>
+        
+      </div>
+    
+      <div style="display: flex; flex-direction: column; gap: 2px">
+        <div style="font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: #8a94a5; padding: 0 10px 4px">Settings</div>
+        
+          <a href="#" style="display:block;padding:6px 10px;border-radius:7px;font-size:14px;color:#c9d1dc">Connections</a>
+        
+          <a href="#" style="display:block;padding:6px 10px;border-radius:7px;font-size:14px;color:#c9d1dc">Notifications</a>
+        
+          <a href="#" style="display:block;padding:6px 10px;border-radius:7px;font-size:14px;color:#c9d1dc">AI assistants</a>
+        
+          <a href="#" style="display:block;padding:6px 10px;border-radius:7px;font-size:14px;color:#c9d1dc">Admins &amp; devices</a>
+        
+          <a href="#" style="display:block;padding:6px 10px;border-radius:7px;font-size:14px;color:#c9d1dc">System</a>
+        
+          <a href="#" style="display:block;padding:6px 10px;border-radius:7px;font-size:14px;color:#c9d1dc">Archive</a>
+        
+      </div>
+    
+  </nav>
+  <div style="flex: 999 1 560px; min-width: 0; display: flex; flex-direction: column">
+    <header style="display: flex; flex-wrap: wrap; align-items: center; gap: 12px; padding: 12px 32px; border-bottom: 1px solid #222833">
+      <div style="font-size: 13px; color: #8a94a5"><a href="#" style="color: #8a94a5">Services</a> / <span style="color: #e6e9ef">NextCloud</span></div>
+      <label style="flex: 1 1 260px; max-width: 460px; margin-left: auto; display: flex; align-items: center; gap: 8px; height: 34px; padding: 0 12px; background: #141922; border: 1px solid #2a3140; border-radius: 8px; color: #8a94a5; font-size: 13px">
+        <svg width="14" height="14" viewbox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="11" cy="11" r="7"></circle><path d="M20 20l-3.5-3.5"></path></svg>
+        <input aria-label="Search" placeholder="Search services, hosts, nodes" style="flex: 1; min-width: 0; background: transparent; border: 0; color: #e6e9ef; font: inherit; outline: none">
+      </label>
+      <span class="pill ok">● Live</span>
+      <button class="btn ghost" type="button">admin ▾</button>
+    </header>
+
+    <main style="padding: 24px 32px 48px; max-width: 1280px; width: 100%; display: flex; flex-direction: column; gap: 18px">
+      <div style="display: flex; flex-wrap: wrap; align-items: center; gap: 12px">
+        <div style="flex: 1 1 420px; min-width: 0">
+          <div style="display: flex; flex-wrap: wrap; align-items: center; gap: 10px">
+            <h1 style="margin: 0; font-size: 26px; font-weight: 700">NextCloud</h1>
+            <span class="pill fail">failed</span>
+            <span class="mono" style="color: #8a94a5">nextcloud</span>
+          </div>
+          <div style="color: #9aa4b2; margin-top: 4px">VM 101 on node-a · Media &amp; cloud · <a href="#">cloud.example.lan ↗</a></div>
+        </div>
+        <button class="btn primary" type="button">Check now</button>
+        <button class="btn" type="button">Restart</button>
+        <button class="btn" type="button">Back up now</button>
+        <button class="btn ghost" type="button" aria-label="More actions">⋯</button>
+      </div>
+
+      <div role="tablist" aria-label="Service sections" style="display: flex; gap: 4px; border-bottom: 1px solid #232a36">
+        <a role="tab" aria-selected="true" href="#" style="padding: 10px 14px; color: #ffffff; font-weight: 600; box-shadow: inset 0 -2px 0 #4f7fe0">Overview</a>
+        <a role="tab" aria-selected="false" href="#" style="padding: 10px 14px; color: #b3bccb">Configuration</a>
+        <a role="tab" aria-selected="false" href="#" style="padding: 10px 14px; color: #b3bccb">Related <span class="pill off" style="padding: 1px 7px">4</span></a>
+        <a role="tab" aria-selected="false" href="#" style="padding: 10px 14px; color: #b3bccb">History</a>
+      </div>
+
+      <div style="display: flex; flex-wrap: wrap; gap: 20px; align-items: flex-start">
+        <div style="flex: 999 1 560px; min-width: 0; display: flex; flex-direction: column; gap: 18px">
+          <section aria-labelledby="h" style="background: #141922; border: 1px solid #232a36; border-radius: 12px">
+            <div style="display: flex; align-items: center; gap: 10px; padding: 14px 16px; border-bottom: 1px solid #232a36">
+              <h2 id="h" style="margin: 0; font-size: 15px">Health</h2>
+              <span style="margin-left: auto; font-size: 12px; color: #8a94a5">checked 40 s ago · next in 9 min</span>
+            </div>
+            <div style="padding: 14px 16px; display: flex; flex-direction: column; gap: 12px">
+              <div style="display: flex; gap: 10px; align-items: flex-start; padding: 12px 14px; background: #2a1414; border: 1px solid #5a2323; border-radius: 10px">
+                <span class="pill fail">failed</span>
+                <div>1 of 2 required probes failed: <strong>https</strong> answered 502 twice in a row. The guest is running, so this is the app, not the machine.</div>
+              </div>
+              <div style="overflow-x: auto">
+                <table style="width: 100%; border-collapse: collapse; min-width: 560px">
+                  <thead><tr><th>Probe</th><th>Checks</th><th>Result</th><th>Took</th><th></th></tr></thead>
+                  <tbody>
+                    <tr><td style="font-weight: 600">guest gate</td><td>node on, VM 101 running</td><td><span class="pill ok">ok</span></td><td class="mono">4 ms</td><td></td></tr>
+                    <tr><td style="font-weight: 600">https</td><td class="mono">https://cloud.example.lan/status.php</td><td><span class="pill fail">502</span></td><td class="mono">1.2 s</td><td style="text-align: right"><a href="#">Edit</a></td></tr>
+                    <tr><td style="font-weight: 600">tcp</td><td class="mono">10.0.1.11:443</td><td><span class="pill ok">open</span></td><td class="mono">2 ms</td><td style="text-align: right"><a href="#">Edit</a></td></tr>
+                  </tbody>
+                </table>
+              </div>
+              <div>
+                <div style="font-size: 12px; color: #9aa4b2; margin-bottom: 6px">Last 20 checks</div>
+                <div style="display: flex; gap: 4px" aria-label="16 healthy, then 4 failed">
+                  
+                    <span style="display:block;width:14px;height:22px;border-radius:3px;background:#2f8f55"></span>
+                  
+                    <span style="display:block;width:14px;height:22px;border-radius:3px;background:#2f8f55"></span>
+                  
+                    <span style="display:block;width:14px;height:22px;border-radius:3px;background:#2f8f55"></span>
+                  
+                    <span style="display:block;width:14px;height:22px;border-radius:3px;background:#2f8f55"></span>
+                  
+                    <span style="display:block;width:14px;height:22px;border-radius:3px;background:#2f8f55"></span>
+                  
+                    <span style="display:block;width:14px;height:22px;border-radius:3px;background:#2f8f55"></span>
+                  
+                    <span style="display:block;width:14px;height:22px;border-radius:3px;background:#2f8f55"></span>
+                  
+                    <span style="display:block;width:14px;height:22px;border-radius:3px;background:#2f8f55"></span>
+                  
+                    <span style="display:block;width:14px;height:22px;border-radius:3px;background:#2f8f55"></span>
+                  
+                    <span style="display:block;width:14px;height:22px;border-radius:3px;background:#2f8f55"></span>
+                  
+                    <span style="display:block;width:14px;height:22px;border-radius:3px;background:#2f8f55"></span>
+                  
+                    <span style="display:block;width:14px;height:22px;border-radius:3px;background:#2f8f55"></span>
+                  
+                    <span style="display:block;width:14px;height:22px;border-radius:3px;background:#2f8f55"></span>
+                  
+                    <span style="display:block;width:14px;height:22px;border-radius:3px;background:#2f8f55"></span>
+                  
+                    <span style="display:block;width:14px;height:22px;border-radius:3px;background:#2f8f55"></span>
+                  
+                    <span style="display:block;width:14px;height:22px;border-radius:3px;background:#2f8f55"></span>
+                  
+                    <span style="display:block;width:14px;height:22px;border-radius:3px;background:#c4473f"></span>
+                  
+                    <span style="display:block;width:14px;height:22px;border-radius:3px;background:#c4473f"></span>
+                  
+                    <span style="display:block;width:14px;height:22px;border-radius:3px;background:#c4473f"></span>
+                  
+                    <span style="display:block;width:14px;height:22px;border-radius:3px;background:#c4473f"></span>
+                  
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <section aria-labelledby="sub" style="background: #141922; border: 1px solid #232a36; border-radius: 12px">
+            <div style="display: flex; align-items: center; padding: 14px 16px; border-bottom: 1px solid #232a36">
+              <h2 id="sub" style="margin: 0; font-size: 15px">Sub-services</h2>
+              <button class="btn ghost" type="button" style="margin-left: auto">+ Add</button>
+            </div>
+            <div style="display: flex; flex-wrap: wrap; align-items: center; gap: 12px; padding: 12px 16px">
+              <span class="pill ok">healthy</span><a href="#" style="font-weight: 600">[Collabora]</a><span style="color: #9aa4b2; font-size: 13px">stack [collabora] on Portainer (home)</span>
+            </div>
+          </section>
+
+          <section aria-labelledby="act" style="background: #141922; border: 1px solid #232a36; border-radius: 12px">
+            <div style="display: flex; align-items: center; padding: 14px 16px; border-bottom: 1px solid #232a36">
+              <h2 id="act" style="margin: 0; font-size: 15px">Recent activity</h2>
+              <a href="#" style="margin-left: auto; font-size: 13px">History tab →</a>
+            </div>
+            
+              <div style="display: flex; gap: 12px; padding: 10px 16px; border-bottom: 1px solid #1d232e; font-size: 13px">
+                <span class="mono" style="color: #8a94a5; flex: 0 0 76px">today 14:31</span>
+                <span class="pill fail">alert</span>
+                <span>Failed: https answered 502</span>
+              </div>
+            
+              <div style="display: flex; gap: 12px; padding: 10px 16px; border-bottom: 1px solid #1d232e; font-size: 13px">
+                <span class="mono" style="color: #8a94a5; flex: 0 0 76px">today 03:01</span>
+                <span class="pill ok">backup</span>
+                <span>Backup ok · 41 GB · verified</span>
+              </div>
+            
+              <div style="display: flex; gap: 12px; padding: 10px 16px; border-bottom: 1px solid #1d232e; font-size: 13px">
+                <span class="mono" style="color: #8a94a5; flex: 0 0 76px">yesterday</span>
+                <span class="pill pending">change</span>
+                <span>admin changed the https probe path</span>
+              </div>
+            
+              <div style="display: flex; gap: 12px; padding: 10px 16px; border-bottom: 1px solid #1d232e; font-size: 13px">
+                <span class="mono" style="color: #8a94a5; flex: 0 0 76px">Mon 09:12</span>
+                <span class="pill ok">restore</span>
+                <span>Test restore of Sunday’s backup passed</span>
+              </div>
+            
+          </section>
+        </div>
+
+        <aside aria-label="Facts" style="flex: 1 1 280px; background: #141922; border: 1px solid #232a36; border-radius: 12px; padding: 6px 16px 16px">
+          <dl style="margin: 0">
+            <dt>Runs on</dt><dd><a href="#">node-a</a> › <a href="#">VM 101</a> <span class="pill ok" style="padding: 1px 7px">running</span></dd>
+            <dt>Address</dt><dd class="mono">10.0.1.11 <span style="color: #8a94a5; font-family: Inter">· found 2 h ago</span></dd>
+            <dt>Proxy hosts</dt><dd><a href="#">cloud.example.lan</a> <span class="pill ok" style="padding: 1px 7px">in sync</span></dd>
+            <dt>Backup</dt><dd>daily-frequent · last ok 03:01 · next 03:00</dd>
+            <dt>Wake on hit</dt><dd>no</dd>
+            <dt>Depends on</dt><dd><a href="#">gateway-vm</a></dd>
+            <dt>Group</dt><dd>Media &amp; cloud</dd>
+          </dl>
+          <a href="#" style="display: inline-block; margin-top: 14px; font-size: 13px">Edit in Configuration →</a>
+        </aside>
+      </div>
+    </main>
+  </div>
+</div>
+
+</body>
+</html>

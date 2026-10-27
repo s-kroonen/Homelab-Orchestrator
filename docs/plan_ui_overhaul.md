@@ -1,6 +1,7 @@
 # UI overhaul: analysis and plan
 
-**Status: analysis.** Nothing here is built yet. The functions are all there; what is missing is
+**Status: approved, not built yet.** The target design and its wireframes are in
+[design/README.md](design/README.md); build to those. The functions are all there; what is missing is
 one way of doing each thing. This document measures where the dashboard is today, names what
 makes it feel like chaos, and proposes a target design and an order to build it in.
 
@@ -248,11 +249,14 @@ Tests: each phase keeps the existing API tests green (the API does not change) a
 Playwright checks per page: renders without script errors, no horizontal scroll at 390px, live
 event updates a region without a reload, drawer save and cancel.
 
-### Decisions needed before phase 3
+### Decisions (taken with the wireframes)
 
-1. **Auto-save to `services.yaml`**: write the YAML (with a backup copy) after every applied
-   change, instead of a Save to YAML step. Recommended: yes; Reset becomes "restore a previous
-   version" from the backups list.
-2. **Auto-push proxy hosts** to Traefik Manager after Save, instead of a separate Push.
-   Recommended: yes, with the pending indicator as the fallback when the push fails.
-3. **The navigation in 2.1**, in particular removing Data sources as a page.
+1. **Auto-save to `services.yaml`**: yes. The YAML (with a backup copy) is written after every
+   applied change; Reset becomes "restore a previous version" from the backups list.
+2. **Auto-push proxy hosts** to Traefik Manager after Save: yes, with the header pending pill as
+   the fallback when the push fails.
+3. **The navigation in 2.1**: yes, Data sources goes away as a page; its parts move to the object
+   they fill (import on Nodes & guests and Proxy hosts, format on Proxy hosts). Traffic is one
+   page with countries included.
+
+See [design/README.md](design/README.md) for the approved wireframes and the rules they follow.

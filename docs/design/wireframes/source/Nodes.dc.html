@@ -1,0 +1,151 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Nodes and guests</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#0d1015}
+a{color:#8fb3ff;text-decoration:none}a:hover{color:#b8d0ff}
+*{box-sizing:border-box}
+.pill{display:inline-flex;align-items:center;gap:6px;padding:3px 9px;border-radius:999px;font-size:12px;font-weight:600;white-space:nowrap}
+.ok{background:#11331f;color:#5fe08b}.warn{background:#3a2c10;color:#f0b44c}.fail{background:#3d1717;color:#ff8a82}.off{background:#232834;color:#b3bccb}.pending{background:#162a45;color:#8fb3ff}
+.btn{display:inline-flex;align-items:center;gap:6px;height:32px;padding:0 12px;border-radius:8px;border:1px solid #2c3340;background:#1a1f29;color:#e6e9ef;font:600 13px Inter,system-ui,sans-serif;cursor:pointer;white-space:nowrap}
+.btn.primary{background:#4f7fe0;border-color:#4f7fe0;color:#fff}.btn.ghost{background:transparent;border-color:transparent;color:#b3bccb}
+.mono{font-family:'JetBrains Mono',ui-monospace,monospace;font-size:12.5px}
+th{font-size:12px;font-weight:600;color:#9aa4b2;text-align:left;padding:10px 12px;border-bottom:1px solid #232a36;white-space:nowrap}
+td{padding:10px 12px;border-bottom:1px solid #1d232e;vertical-align:middle}
+dt{color:#9aa4b2;font-size:12px}dd{margin:0 0 6px}
+</style>
+</helmet>
+<div style="display: flex; flex-wrap: wrap; min-height: 1060px; background: #0d1015; color: #e6e9ef; font-family: Inter, system-ui, sans-serif; font-size: 14px; line-height: 1.45">
+  <nav aria-label="Main" style="flex: 0 0 232px; background: #11151c; border-right: 1px solid #222833; padding: 20px 14px; display: flex; flex-direction: column; gap: 18px">
+    <div style="font-weight: 700; font-size: 15px; padding: 0 10px">homelab-orchestrator</div>
+    <sc-for list="{{nav}}" as="g" hint-placeholder-count="5">
+      <div style="display: flex; flex-direction: column; gap: 2px">
+        <div style="font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: #8a94a5; padding: 0 10px 4px">{{g.heading}}</div>
+        <sc-for list="{{g.items}}" as="it" hint-placeholder-count="3">
+          <a href="#" style="{{it.style}}">{{it.label}}</a>
+        </sc-for>
+      </div>
+    </sc-for>
+  </nav>
+  <div style="flex: 999 1 560px; min-width: 0; display: flex; flex-direction: column">
+    <header style="display: flex; flex-wrap: wrap; align-items: center; gap: 12px; padding: 12px 32px; border-bottom: 1px solid #222833">
+      <div style="font-size: 13px; color: #8a94a5">Infrastructure / <span style="color: #e6e9ef">Nodes &amp; guests</span></div>
+      <label style="flex: 1 1 260px; max-width: 460px; margin-left: auto; display: flex; align-items: center; gap: 8px; height: 34px; padding: 0 12px; background: #141922; border: 1px solid #2a3140; border-radius: 8px; color: #8a94a5; font-size: 13px">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="11" cy="11" r="7"></circle><path d="M20 20l-3.5-3.5"></path></svg>
+        <input aria-label="Search" placeholder="Search services, hosts, nodes" style="flex: 1; min-width: 0; background: transparent; border: 0; color: #e6e9ef; font: inherit; outline: none">
+      </label>
+      <span class="pill ok">● Live</span>
+      <button class="btn ghost" type="button">admin ▾</button>
+    </header>
+
+    <main style="padding: 28px 32px 48px; max-width: 1280px; width: 100%; display: flex; flex-direction: column; gap: 22px">
+      <div style="display: flex; flex-wrap: wrap; align-items: flex-end; gap: 12px">
+        <div style="flex: 1 1 400px">
+          <h1 style="margin: 0; font-size: 24px; font-weight: 700">Nodes &amp; guests</h1>
+          <div style="color: #9aa4b2; margin-top: 4px">The Proxmox machines, how they are powered, and every guest on them. New ones are created in Proxmox and imported here.</div>
+        </div>
+        <button class="btn" type="button">Import from Proxmox <span class="pill pending" style="padding: 1px 7px">2 new</span></button>
+      </div>
+
+      <div style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px">
+        <sc-for list="{{nodes}}" as="n" hint-placeholder-count="2">
+          <article style="background: #141922; border: 1px solid #232a36; border-radius: 12px; padding: 16px 18px; display: flex; flex-direction: column; gap: 12px">
+            <div style="display: flex; flex-wrap: wrap; align-items: center; gap: 10px">
+              <h2 style="margin: 0; font-size: 17px">{{n.name}}</h2>
+              <span class="pill {{n.kind}}">{{n.state}}</span>
+              <span style="font-size: 12px; color: #9aa4b2">{{n.tag}}</span>
+              <span style="flex: 1"></span>
+              <button class="btn {{n.primaryClass}}" type="button">{{n.primary}}</button>
+              <button class="btn ghost" type="button" aria-label="More actions for {{n.name}}">⋯</button>
+            </div>
+            <dl style="display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 4px 16px; margin: 0">
+              <div><dt>Address</dt><dd class="mono">{{n.address}}</dd></div>
+              <div><dt>Proxmox</dt><dd>{{n.pve}}</dd></div>
+              <div><dt>Power target</dt><dd class="mono">{{n.power}}</dd></div>
+              <div><dt>Guests</dt><dd>{{n.guests}}</dd></div>
+              <div><dt>Services</dt><dd>{{n.services}}</dd></div>
+              <div><dt>Wake on hit</dt><dd>{{n.wake}}</dd></div>
+            </dl>
+          </article>
+        </sc-for>
+      </div>
+
+      <section aria-labelledby="g" style="display: flex; flex-direction: column; gap: 10px">
+        <div style="display: flex; flex-wrap: wrap; align-items: center; gap: 8px">
+          <h2 id="g" style="margin: 0 12px 0 0; font-size: 17px">Guests <span style="color: #8a94a5; font-weight: 500">31</span></h2>
+          <label style="flex: 0 1 260px; display: flex; align-items: center; height: 32px; padding: 0 12px; background: #141922; border: 1px solid #2a3140; border-radius: 8px">
+            <input aria-label="Filter guests" placeholder="Filter by name or VMID" style="flex: 1; min-width: 0; background: transparent; border: 0; color: #e6e9ef; font: inherit; outline: none">
+          </label>
+          <sc-for list="{{chips}}" as="c" hint-placeholder-count="4">
+            <button type="button" style="{{c.style}}">{{c.label}}</button>
+          </sc-for>
+        </div>
+        <div style="background: #141922; border: 1px solid #232a36; border-radius: 12px; overflow-x: auto">
+          <table style="width: 100%; border-collapse: collapse; min-width: 820px">
+            <thead><tr><th>VMID ▲</th><th>Name</th><th>Kind</th><th>Node</th><th>Status</th><th>Service</th><th></th></tr></thead>
+            <tbody>
+              <sc-for list="{{guests}}" as="r" hint-placeholder-count="6">
+                <tr>
+                  <td class="mono">{{r.id}}</td>
+                  <td style="font-weight: 600">{{r.name}}</td>
+                  <td>{{r.kindLabel}}</td>
+                  <td>{{r.node}}</td>
+                  <td><span class="pill {{r.kind}}">{{r.status}}</span></td>
+                  <td><a href="#">{{r.service}}</a></td>
+                  <td style="text-align: right; white-space: nowrap"><button class="btn" type="button">{{r.action}}</button> <button class="btn ghost" type="button" aria-label="More for {{r.name}}">⋯</button></td>
+                </tr>
+              </sc-for>
+            </tbody>
+          </table>
+          <div style="padding: 10px 14px; font-size: 13px; color: #9aa4b2">Showing 6 of 31 · <a href="#">Show all</a></div>
+        </div>
+      </section>
+    </main>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":1060}}'>
+class Component extends DCLogic {
+  renderVals() {
+    const cur = 'Nodes & guests';
+    const base = 'display:block;padding:6px 10px;border-radius:7px;font-size:14px;color:#c9d1dc';
+    const on = base + ';background:#1d2430;color:#ffffff;font-weight:600;box-shadow:inset 3px 0 0 #4f7fe0';
+    const groups = [
+      ['Overview', ['Dashboard', 'Map']],
+      ['Services', ['Services']],
+      ['Infrastructure', ['Nodes & guests', 'Proxy hosts', 'Containers', 'Backups']],
+      ['Activity', ['Activity', 'Traffic']],
+      ['Settings', ['Connections', 'Notifications', 'AI assistants', 'Admins & devices', 'System', 'Archive']],
+    ];
+    const chip = 'height:32px;padding:0 12px;border-radius:999px;border:1px solid #2a3140;background:#141922;color:#c9d1dc;font:600 13px Inter,system-ui,sans-serif';
+    const chipOn = chip + ';background:#1d2c47;border-color:#3d64b3;color:#ffffff';
+    return {
+      nav: groups.map(([heading, items]) => ({ heading, items: items.map((label) => ({ label, style: label === cur ? on : base })) })),
+      nodes: [
+        { name: 'node-a', kind: 'ok', state: 'on', tag: 'always on', primary: 'Check', primaryClass: '', address: '10.0.0.18', pve: '8.2 · up 41 d · 3 ms', power: 'gateway', guests: '22 (19 running)', services: '14', wake: 'no' },
+        { name: 'node-b', kind: 'off', state: 'off', tag: 'wakes on demand', primary: 'Wake', primaryClass: 'primary', address: '[10.0.0.19]', pve: 'not answering (off)', power: '[node-b]', guests: '9 (0 running)', services: '6', wake: 'yes' },
+      ],
+      chips: [ { label: 'All', style: chipOn }, { label: 'Running', style: chip }, { label: 'Stopped', style: chip }, { label: 'Not a service', style: chip } ],
+      guests: [
+        { id: '100', name: 'truenas', kindLabel: 'VM', node: 'node-a', kind: 'off', status: 'stopped', service: 'truenas', action: 'Start' },
+        { id: '101', name: 'nextcloud', kindLabel: 'VM', node: 'node-a', kind: 'ok', status: 'running', service: 'nextcloud', action: 'Stop' },
+        { id: '102', name: 'haos', kindLabel: 'VM', node: 'node-a', kind: 'ok', status: 'running', service: 'haos', action: 'Stop' },
+        { id: '104', name: 'jellyfin', kindLabel: 'VM', node: 'node-b', kind: 'off', status: 'stopped', service: 'jellyfin', action: 'Start' },
+        { id: '110', name: 'gateway', kindLabel: 'LXC', node: 'node-a', kind: 'ok', status: 'running', service: 'gateway-vm', action: 'Stop' },
+        { id: '[120]', name: '[test-lxc]', kindLabel: 'LXC', node: 'node-a', kind: 'ok', status: 'running', service: 'Make a service…', action: 'Stop' },
+      ],
+    };
+  }
+}
+</script>
+</body>
+</html>
