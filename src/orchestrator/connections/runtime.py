@@ -48,6 +48,8 @@ class Snapshot:
     error: str = ""
     #: The Settings object these were applied to.
     owner: Any = None
+    #: What the file looked like when it was read (see :func:`file_stamp`).
+    stamp: tuple[int, int] | None = None
 
     @property
     def all(self) -> list[Connection]:
@@ -70,6 +72,16 @@ def current() -> Snapshot:
     return _snapshot
 
 
+def file_stamp(path: Path | None) -> tuple[int, int] | None:
+    """(mtime, size) of the connections file; None if there is none. A change in it means the
+    file was edited since it was applied."""
+    try:
+        st = path.stat() if path is not None else None
+    except OSError:
+        return None
+    return (st.st_mtime_ns, st.st_size) if st is not None else None
+
+
 def _setting_value(spec_field: Any, conn: Connection | None) -> Any:
     value = spec_field.default if conn is None else conn.value(spec_field)
     return SecretStr(str(value)) if spec_field.is_secret else value
@@ -90,7 +102,7 @@ def apply_to(settings: Settings, *, path: Path | None = None) -> Snapshot:
     global _snapshot
     with _lock:
         path = path or path_for(settings)
-        snap = Snapshot(path=path, owner=settings)
+        snap = Snapshot(path=path, owner=settings, stamp=file_stamp(path))
         try:
             snap.file = read_file(path)
         except ConnectionsFileError as exc:

@@ -29,6 +29,7 @@ from starlette.middleware.sessions import SessionMiddleware
 from orchestrator import __version__
 from orchestrator.adapters.factory import build_adapters
 from orchestrator.config import get_settings
+from orchestrator.connections.watch import ConnectionsWatcher
 from orchestrator.db.session import build_engine, session_scope
 from orchestrator.events import install_db_hooks
 from orchestrator.logging_setup import configure_logging, get_logger
@@ -53,6 +54,7 @@ from orchestrator.web.routers import (
     backup,
     backup_policies,
     bulk,
+    connections,
     dashboard,
     deploys,
     display,
@@ -306,11 +308,17 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         self_backup = None
     app.state.self_backup = self_backup
 
+    # Edits to connections.yaml made outside the dashboard (the CLI, an editor) apply by themselves.
+    conn_watcher = ConnectionsWatcher(adapters)
+    conn_watcher.start()
+    app.state.connections_watcher = conn_watcher
+
     try:
         yield
     finally:
         log.info("orchestrator.stop")
         notify_hooks.install(None)
+        await conn_watcher.shutdown()
         if self_backup is not None:
             await self_backup.shutdown()
         if ip_discovery is not None:
@@ -368,6 +376,7 @@ def create_app() -> FastAPI:
     app.include_router(dumps.router)
     app.include_router(sources.router)
     app.include_router(archive.router)
+    app.include_router(connections.router)
     app.include_router(hooks.router)
     app.include_router(events.router)
     app.include_router(stacks.router)

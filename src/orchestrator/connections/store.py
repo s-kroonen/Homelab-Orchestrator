@@ -76,7 +76,7 @@ def read_file(path: Path) -> list[Connection]:
     return out
 
 
-def _dump(conns: list[Connection]) -> str:
+def dump_connections(conns: list[Connection]) -> str:
     import io
 
     y = YAML()
@@ -119,7 +119,7 @@ def write_file(path: Path, conns: list[Connection], *, keep: int = KEEP_BACKUPS)
         tmp = path.with_name(path.name + ".tmp")
         fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
         with os.fdopen(fd, "w", encoding="utf-8") as fh:
-            fh.write(_dump(conns))
+            fh.write(dump_connections(conns))
         os.replace(tmp, path)
         with contextlib.suppress(OSError):
             path.chmod(0o600)
