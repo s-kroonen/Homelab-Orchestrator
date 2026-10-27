@@ -139,13 +139,14 @@ def test_policy_dict_exposes_id_for_the_history_filter(
     assert r.json()["id"] == ids["policy_id"]
 
 
-def test_backup_policies_page_renders_a_history_control_per_policy(
+def test_backup_policies_page_shows_each_policys_recent_runs(
     app: Any, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     ids = _seed()
     with TestClient(app) as client:
         _login(client, monkeypatch)
         page = client.get("/backup-policies")
+        js = client.get("/static/backups.js").text
     assert page.status_code == 200
-    assert f'data-history="{ids["policy_id"]}"' in page.text
-    assert f'data-history-for="{ids["policy_id"]}"' in page.text
+    assert f'"id": {ids["policy_id"]}' in page.text
+    assert '"/api/runs?policy_id=" + p.id' in js

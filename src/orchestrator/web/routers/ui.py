@@ -28,7 +28,7 @@ from orchestrator.db.models import (
     Service,
     ServiceState,
 )
-from orchestrator.domain.enums import BackupMode, GuestKind
+from orchestrator.domain.enums import GuestKind
 from orchestrator.ipdiscovery.discovery import SOURCE_LABELS, effective_ip, transport_block
 from orchestrator.pipelines.wake import wake_is_unsupported
 from orchestrator.registry.backup_plan import BLOCKER_NO_POWER_TARGET
@@ -37,7 +37,6 @@ from orchestrator.registry.tree import TreeIndex
 from orchestrator.web.auth import get_current_admin, login_redirect
 from orchestrator.web.deps import SessionDep, SettingsDep
 from orchestrator.web.routers.activity import KINDS, build_feed, filter_options
-from orchestrator.web.routers.backup_policies import policy_to_dict
 from orchestrator.web.routers.geo_traffic import build_geo_view
 from orchestrator.web.routers.traffic import (
     DEFAULT_RANGE,
@@ -366,116 +365,6 @@ async def edit_proxy_host_page(
     return RedirectResponse(f"/proxy-hosts?edit={proxy_host_id}", status_code=303)
 
 
-@router.get("/backup-policies", response_model=None)
-async def backup_policies_page(
-    request: Request, session: SessionDep, settings: SettingsDep
-) -> HTMLResponse | RedirectResponse:
-    """List-only backup-policy page, same "dedicated add/edit pages" pattern
-    as ``/proxy-hosts`` (:func:`new_backup_policy_page`/
-    :func:`edit_backup_policy_page`) — see ``docs/proxy_hosts.md``'s
-    "Dedicated add/edit pages" note and ``docs/roadmap.md``. Driven by
-    ``/api/backup-policies`` for mutations; the table, per-policy run-history
-    expanders and name filter all live here."""
-    admin = get_current_admin(request, session)
-    if admin is None:
-        return login_redirect(request)
-
-    scheduler = getattr(request.app.state, "scheduler", None)
-    policies = session.exec(select(BackupPolicy).order_by(BackupPolicy.name)).all()
-    diff = compute_registry_diff(session)
-
-    return _templates.TemplateResponse(
-        request,
-        "backup_policies.html",
-        {
-            "admin": admin,
-            "policies": [policy_to_dict(session, p, scheduler) for p in policies],
-            "scheduler_enabled": settings.scheduler_enabled,
-            "scheduler_running": bool(scheduler and scheduler.running),
-            "dry_run": settings.dry_run,
-            "registry_dirty": diff.dirty,
-            "yaml_path": diff.yaml_path,
-        },
-    )
-
-
-def _policy_form_context(session: Session) -> dict[str, Any]:
-    """Shared context for both dedicated backup-policy form pages: the
-    service picker (with each service's group, for the group-select-all
-    buttons — see ``docs/adding_a_service.md``'s Groups section) and the
-    list of modes."""
-    services = session.exec(select(Service).order_by(Service.slug)).all()
-    return {
-        "services": [
-            {
-                "slug": s.slug,
-                "group": s.group,
-                # never backed up (e.g. the VM hosting the PBS datastore): not selectable
-                "excluded": s.backup_excluded,
-                "reason": s.backup_excluded_reason,
-            }
-            for s in services
-        ],
-        "requirable": _requirable_services(session),
-        "groups": sorted({s.group for s in services if s.group}),
-        "modes": [m.value for m in BackupMode],
-    }
-
-
-@router.get("/backup-policies/new", response_model=None)
-async def new_backup_policy_page(
-    request: Request, session: SessionDep
-) -> HTMLResponse | RedirectResponse:
-    """Dedicated add page — see :func:`new_proxy_host_page` for the
-    precedent this follows. Submits to the existing ``POST
-    /api/backup-policies``."""
-    admin = get_current_admin(request, session)
-    if admin is None:
-        return login_redirect(request)
-
-    return _templates.TemplateResponse(
-        request,
-        "backup_policy_form.html",
-        {
-            "admin": admin,
-            "mode": "new",
-            "policy": None,
-            **_policy_form_context(session),
-        },
-    )
-
-
-@router.get("/backup-policies/{name}/edit", response_model=None)
-async def edit_backup_policy_page(
-    name: str, request: Request, session: SessionDep
-) -> HTMLResponse | RedirectResponse:
-    """Dedicated edit page — see :func:`edit_proxy_host_page` for the
-    precedent this follows. Policies are keyed by ``name`` (unique, no
-    surrogate id exposed here), so this takes the name directly rather than
-    an id, matching ``PUT /api/backup-policies/{name}``. Prefilled from
-    :func:`orchestrator.web.routers.backup_policies.policy_to_dict`, the same
-    serialization the list page and the API already use."""
-    admin = get_current_admin(request, session)
-    if admin is None:
-        return login_redirect(request)
-
-    policy = session.exec(select(BackupPolicy).where(BackupPolicy.name == name)).one_or_none()
-    if policy is None:
-        raise HTTPException(status_code=404, detail=f"no backup policy named {name!r}")
-
-    scheduler = getattr(request.app.state, "scheduler", None)
-    return _templates.TemplateResponse(
-        request,
-        "backup_policy_form.html",
-        {
-            "admin": admin,
-            "mode": "edit",
-            "policy": policy_to_dict(session, policy, scheduler),
-            **_policy_form_context(session),
-        },
-    )
-
-
 def _range_param(value: str | None) -> str:
     return value if value in RANGES else DEFAULT_RANGE
 
@@ -644,19 +533,6 @@ async def infra_guests_page(
         return login_redirect(request)
 
     return _templates.TemplateResponse(request, "infra_guests.html", {"admin": admin})
-
-
-@router.get("/infra/snapshots", response_model=None)
-async def infra_snapshots_page(
-    request: Request, session: SessionDep
-) -> HTMLResponse | RedirectResponse:
-    """PBS snapshots in the configured datastore — the dashboard equivalent of
-    ``orchestrator-cli snapshots``. Client-rendered via ``/api/infra/pbs/snapshots``."""
-    admin = get_current_admin(request, session)
-    if admin is None:
-        return login_redirect(request)
-
-    return _templates.TemplateResponse(request, "infra_snapshots.html", {"admin": admin})
 
 
 @router.get("/activity", response_model=None)

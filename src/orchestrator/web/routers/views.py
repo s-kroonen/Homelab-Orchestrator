@@ -11,12 +11,13 @@ endpoints.
 
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from sqlalchemy import func
-from sqlmodel import Session, select
+from sqlmodel import Session, col, select
 
 from orchestrator.db.models import (
     BackupPolicy,
@@ -26,11 +27,12 @@ from orchestrator.db.models import (
     Service,
     ServiceState,
 )
-from orchestrator.domain.enums import GuestKind, PipelineKind, PipelineStatus
+from orchestrator.domain.enums import BackupMode, GuestKind, PipelineKind, PipelineStatus
 from orchestrator.registry.probe_specs import PROBE_SPECS
 from orchestrator.registry.tree import TreeIndex
 from orchestrator.web.auth import get_current_admin, login_redirect, require_admin
 from orchestrator.web.deps import SessionDep, SettingsDep
+from orchestrator.web.routers.backup_policies import policy_to_dict
 from orchestrator.web.routers.dashboard import service_detail
 from orchestrator.web.routers.ui import (
     _down_label,
@@ -388,3 +390,136 @@ async def service_page(
         "service_detail.html",
         {"admin": admin, "service": svc, "initial": service_view(session, settings, svc)},
     )
+
+
+# --- backups ----------------------------------------------------------------------------------
+
+
+def _last_runs(session: Session, hours: int = 24) -> list[dict[str, Any]]:
+    """The newest backup run of each service in the last ``hours``, with what it produced."""
+    since = datetime.now(UTC) - timedelta(hours=hours)
+    runs = session.exec(
+        select(PipelineRun)
+        .where(PipelineRun.kind == PipelineKind.BACKUP, col(PipelineRun.started_at) >= since)
+        .order_by(col(PipelineRun.started_at).desc())
+    ).all()
+    slugs = {s.id: s.slug for s in session.exec(select(Service)).all()}
+    out: list[dict[str, Any]] = []
+    seen: set[int] = set()
+    for run in runs:
+        if run.service_id is None or run.service_id in seen or run.service_id not in slugs:
+            continue
+        seen.add(run.service_id)
+        rec = session.exec(
+            select(BackupRecord).where(BackupRecord.pipeline_run_id == run.id)
+        ).first()
+        took = (
+            (run.finished_at - run.started_at).total_seconds()
+            if run.finished_at and run.started_at
+            else None
+        )
+        woke = [
+            str((st.get("detail") or {}).get("node") or st.get("name"))
+            for st in run.steps or []
+            if (st.get("detail") or {}).get("woke")
+        ]
+        out.append(
+            {
+                "run_id": run.id,
+                "service": slugs[run.service_id],
+                "status": run.status.value,
+                "error": run.error,
+                "started_at": run.started_at.isoformat(),
+                "took_s": took,
+                "size_bytes": rec.size_bytes if rec else None,
+                "verified": rec.verified if rec else None,
+                "woke": woke,
+            }
+        )
+    return out
+
+
+def backups_view(session: Session, scheduler: Any) -> dict[str, Any]:
+    policies = [
+        policy_to_dict(session, p, scheduler)
+        for p in session.exec(select(BackupPolicy).order_by(BackupPolicy.name)).all()
+    ]
+    services = list(session.exec(select(Service).order_by(Service.slug)).all())
+    tree = TreeIndex(services)
+    return {
+        "policies": policies,
+        "last_runs": _last_runs(session),
+        "excluded": [
+            {"slug": s.slug, "reason": s.backup_excluded_reason}
+            for s in services
+            if s.backup_excluded
+        ],
+        "unprotected": [
+            s.slug
+            for s in services
+            if tree.parent(s) is None and not s.backup_excluded and s.backup_policy_id is None
+        ],
+        "services": [
+            {
+                "slug": s.slug,
+                "group": s.group,
+                "excluded": s.backup_excluded,
+                "reason": s.backup_excluded_reason,
+            }
+            for s in services
+        ],
+        "requirable": _requirable_services(session),
+        "groups": sorted({s.group for s in services if s.group}),
+        "modes": [m.value for m in BackupMode],
+        "scheduler_running": bool(scheduler and scheduler.running),
+    }
+
+
+@api.get("/backups")
+async def backups_api(request: Request, session: SessionDep) -> dict[str, Any]:
+    return backups_view(session, getattr(request.app.state, "scheduler", None))
+
+
+@pages.get("/backup-policies", response_model=None)
+async def backups_page(request: Request, session: SessionDep) -> HTMLResponse | RedirectResponse:
+    admin = get_current_admin(request, session)
+    if admin is None:
+        return login_redirect(request)
+    return templates.TemplateResponse(
+        request,
+        "backups.html",
+        {
+            "admin": admin,
+            "initial": backups_view(session, getattr(request.app.state, "scheduler", None)),
+        },
+    )
+
+
+@pages.get("/backup-policies/new", response_model=None)
+async def new_policy_page(request: Request, session: SessionDep) -> HTMLResponse | RedirectResponse:
+    """Old address of the add form: opens the drawer on the Backups page."""
+    if get_current_admin(request, session) is None:
+        return login_redirect(request)
+    return RedirectResponse("/backup-policies?new=1", status_code=303)
+
+
+@pages.get("/backup-policies/{name}/edit", response_model=None)
+async def edit_policy_page(
+    name: str, request: Request, session: SessionDep
+) -> HTMLResponse | RedirectResponse:
+    """Old address of the edit form: opens the drawer on the Backups page."""
+    if get_current_admin(request, session) is None:
+        return login_redirect(request)
+    if session.exec(select(BackupPolicy).where(BackupPolicy.name == name)).first() is None:
+        raise HTTPException(status_code=404, detail=f"backup policy {name!r} not found")
+    from urllib.parse import quote
+
+    return RedirectResponse(f"/backup-policies?edit={quote(name)}", status_code=303)
+
+
+@pages.get("/infra/snapshots", response_model=None)
+async def snapshots_page(request: Request, session: SessionDep) -> HTMLResponse | RedirectResponse:
+    """PBS snapshots are a tab of Backups now."""
+    if get_current_admin(request, session) is None:
+        return login_redirect(request)
+    return RedirectResponse("/backup-policies?tab=snapshots", status_code=303)

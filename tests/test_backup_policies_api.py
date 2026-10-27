@@ -220,7 +220,9 @@ def test_scheduler_disabled_still_shows_would_be_next_run(
         assert body["next_run"]  # computed from the cron, not from a job
 
         page = client.get("/backup-policies")
-    assert "SCHEDULER_ENABLED=false" in page.text
+        js = client.get("/static/backups.js").text
+    assert '"scheduler_running": false' in page.text
+    assert "SCHEDULER_ENABLED is false" in js  # the Next run tile says so
 
 
 def test_policies_page_redirects_when_not_logged_in(app: Any) -> None:
@@ -238,22 +240,19 @@ def test_policies_page_renders_policies_and_is_linked_from_dashboard(
         client.post("/api/backup-policies", json=NIGHTLY)
         page = client.get("/backup-policies")
         dashboard = client.get("/")
+        js = client.get("/static/backups.js").text
     assert page.status_code == 200
-    assert "nightly" in page.text
-    assert "0 3 * * *" in page.text
-    assert "keep_daily=7" in page.text
-    assert "pins latest verified" in page.text
+    assert '"name": "nightly"' in page.text and '"schedule_cron": "0 3 * * *"' in page.text
+    assert '"keep_daily": 7' in page.text
+    assert "newest verified kept" in js  # how the Keeps column says it
     assert 'href="/backup-policies"' in dashboard.text
 
 
 def test_new_policy_page_offers_select_group_buttons(
     app: Any, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The target-services checklist (on the dedicated add page — see
-    docs/adding_a_service.md's Groups section) gets a "select group" button
-    per group, and each checkbox carries its service's group as a data
-    attribute — the bulk-select JS reads that, the submitted form still
-    posts a flat services: [...] list to the existing API."""
+    """The drawer's services checklist has a "select a group" button per group; every service,
+    grouped or not, is listed. The drawer still posts a flat services: [...] list."""
     with Session(get_engine()) as s:
         alpha = s.exec(select(Service).where(Service.slug == "alpha")).one()
         alpha.group = "streaming"
@@ -262,13 +261,14 @@ def test_new_policy_page_offers_select_group_buttons(
 
     with TestClient(app) as client:
         _login(client, monkeypatch)
-        page = client.get("/backup-policies/new")
+        r = client.get("/backup-policies/new", follow_redirects=False)
+        assert r.headers["location"] == "/backup-policies?new=1"
+        page = client.get("/backup-policies?new=1")
+        js = client.get("/static/backups.js").text
 
-    assert page.status_code == 200
-    assert 'data-select-group="streaming"' in page.text
-    assert 'data-group="streaming"' in page.text
-    # beta has no group — still listed, with an empty data-group, never hidden.
-    assert 'value="beta" data-group=""' in page.text
+    assert '"groups": ["streaming"]' in page.text
+    assert '"group": "", "reason": "", "slug": "beta"' in page.text  # listed without a group
+    assert '"Select a group:"' in js and '"ungrouped"' in js
 
 
 # ---------------------------------------------------------------------------
@@ -298,15 +298,15 @@ def test_edit_policy_page_renders_prefilled(app: Any, monkeypatch: pytest.Monkey
         created = client.post("/api/backup-policies", json=NIGHTLY).json()
         assert created["name"] == "nightly"
 
-        r = client.get("/backup-policies/nightly/edit")
-    assert r.status_code == 200
-    assert "Edit nightly" in r.text
-    assert "0 3 * * *" in r.text
-    # name field locked on edit (rename = delete + create)
-    assert 'id="f-name"' in r.text
-    assert "disabled" in r.text
-    # the attached service's checkbox is pre-checked
-    assert 'value="alpha"' in r.text and "checked" in r.text
+        r = client.get("/backup-policies/nightly/edit", follow_redirects=False)
+        assert r.status_code == 303 and r.headers["location"] == "/backup-policies?edit=nightly"
+        page = client.get(r.headers["location"]).text
+        js = client.get("/static/backups.js").text
+        assert client.get("/backup-policies/nope/edit").status_code == 404
+    # the drawer opens from the page's data: the policy and its attached service
+    assert '"name": "nightly"' in page and '"services": ["alpha"' in page
+    # name locked on edit (rename = delete + create)
+    assert 'key: "name", label: "Name", required: true, mono: true, readonly: editing' in js
 
 
 def test_edit_policy_page_404s_for_unknown_name(app: Any, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -323,34 +323,30 @@ def test_edit_policy_page_redirects_when_not_logged_in(app: Any) -> None:
     assert r.headers["location"] == "/login?next=/backup-policies/nightly/edit"
 
 
-def test_policies_list_page_is_list_only_and_links_to_dedicated_pages(
-    app: Any, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """``/backup-policies`` no longer carries the bottom-of-page add/edit
-    form — it links out to the dedicated pages instead, same split as
-    ``/proxy-hosts``. The per-policy History expander (a different, already
-    lazily-loaded feature) is untouched."""
+def test_policies_page_edits_in_a_drawer(app: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Adding and editing a policy happen in the drawer on /backup-policies; each row keeps
+    its recent runs (in the row menu)."""
     with TestClient(app) as client:
         _login(client, monkeypatch)
         client.post("/api/backup-policies", json=NIGHTLY)
         page = client.get("/backup-policies")
+        js = client.get("/static/backups.js").text
     assert page.status_code == 200
-    assert 'href="/backup-policies/new"' in page.text
-    assert 'href="/backup-policies/nightly/edit"' in page.text
-    assert 'data-history="' in page.text  # History expander still present
-    assert 'id="policy-form"' not in page.text  # inline form is gone
-    assert 'id="bp-filter"' in page.text  # name filter box
+    assert 'id="new-policy"' in page.text and 'id="policy-form"' not in page.text
+    assert "function policyDrawer" in js and '"Recent runs…"' in js
 
 
-def test_policies_list_page_filter_box_present_and_filters_by_name(
+def test_run_now_needs_the_scheduler_and_services(
     app: Any, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    monkeypatch.setenv("SCHEDULER_ENABLED", "false")
+    config_module.reset_settings_cache()
     with TestClient(app) as client:
         _login(client, monkeypatch)
         client.post("/api/backup-policies", json=NIGHTLY)
-        page = client.get("/backup-policies")
-    assert page.status_code == 200
-    assert 'data-name="nightly"' in page.text
+        r = client.post("/api/backup-policies/nightly/run")
+        assert r.status_code == 409 and "scheduler" in r.json()["detail"]
+        assert client.post("/api/backup-policies/nope/run").status_code == 404
 
 
 def test_new_policy_page_create_flow(app: Any, monkeypatch: pytest.MonkeyPatch) -> None:

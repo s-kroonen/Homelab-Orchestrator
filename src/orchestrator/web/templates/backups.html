@@ -1,0 +1,53 @@
+{% extends "base.html" %}
+{% block title %}homelab-orchestrator — backups{% endblock %}
+{% block crumbs %}Infrastructure / <span class="here">Backups</span>{% endblock %}
+{% block content %}
+<div class="page-header">
+  <h1>Backups</h1>
+  <div class="actions"><button type="button" id="new-policy">+ New policy</button></div>
+</div>
+<p class="page-sub">What is backed up, when, and whether it worked.</p>
+
+<div class="stat-row" id="tiles"></div>
+
+<div class="tabs" role="tablist" aria-label="Backups">
+  <button role="tab" data-tab="policies">Policies</button>
+  <button role="tab" data-tab="snapshots">Snapshots</button>
+  <button role="tab" data-tab="dumps">Dumps</button>
+  <button role="tab" data-tab="orchestrator">Orchestrator backups</button>
+</div>
+
+<div role="tabpanel" data-tab="policies" hidden>
+  <div class="card flush" id="policies"></div>
+  <section class="card flush" aria-labelledby="h-last" id="last-card" style="margin-top: 18px">
+    <div class="card-head" style="padding-bottom: 10px"><h2 id="h-last">Last 24 hours, per service</h2><span style="flex:1"></span><a href="/activity?kind=backup">All backup runs →</a></div>
+    <div id="last" style="padding: 0 18px 8px"></div>
+  </section>
+  <section class="card" aria-labelledby="h-left" id="left-card">
+    <div class="card-head"><h2 id="h-left">Not backed up</h2></div>
+    <div id="left"></div>
+  </section>
+</div>
+
+<div role="tabpanel" data-tab="snapshots" hidden>
+  <p class="page-sub">Every snapshot in the PBS datastore, whichever policy made it.</p>
+  <div id="snapshots"></div>
+</div>
+
+<div role="tabpanel" data-tab="dumps" hidden>
+  <p class="page-sub">Databases dumped on their own, apart from the guest backups. Set one up on a service's Related tab.</p>
+  <div id="dumps"></div>
+</div>
+
+<div role="tabpanel" data-tab="orchestrator" hidden>
+  <div class="banner" id="restore-banner" hidden></div>
+  <div class="page-header" style="margin-bottom: 4px"><span class="faint" style="font-size: 13.5px">This orchestrator's own database and services.yaml, as one file. Taken by itself before an upgrade, an update or a restore, and on a schedule; the .env file is not in it (it holds secrets and lives on the host).</span>
+    <div class="actions"><button type="button" class="secondary" id="self-backup">Back up now</button></div></div>
+  <div id="self"></div>
+</div>
+<script type="application/json" id="initial">{{ initial | tojson }}</script>
+{% endblock %}
+{% block scripts %}
+<script src="{{ asset('objects.js') }}"></script>
+<script src="{{ asset('backups.js') }}"></script>
+{% endblock %}

@@ -41,12 +41,10 @@ def test_service_page_edits_in_drawers(client: TestClient) -> None:
     assert "PrevPage" not in js
 
 
-@pytest.mark.parametrize("path", ["/backup-policies/new", "/backup-policies/nightly/edit"])
-def test_form_pages_have_save_and_apply(client: TestClient, path: str) -> None:
-    html = client.get(path).text
-    assert 'id="submit-btn"' in html and 'id="apply-btn"' in html
-    assert 'type="submit" id="apply-btn"' in html
-    assert "PrevPage.go(" in html and 'id="cancel-link"' in html
+@pytest.mark.parametrize("path", ["/backup-policies/new", "/proxy-hosts/new"])
+def test_old_form_pages_open_the_drawer(client: TestClient, path: str) -> None:
+    r = client.get(path, follow_redirects=False)
+    assert r.status_code == 303 and r.headers["location"].endswith("?new=1")
 
 
 def test_prev_page_helper_only_accepts_same_origin_paths(client: TestClient) -> None:

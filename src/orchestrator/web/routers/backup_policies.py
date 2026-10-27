@@ -11,6 +11,7 @@ takes effect immediately rather than at the next restart.
 
 from __future__ import annotations
 
+import asyncio
 import re
 from datetime import UTC, datetime
 from typing import Any
@@ -474,3 +475,35 @@ async def delete_policy(
     session.commit()
     _resync(request)
     return {"status": "deleted", "name": name, "detached_services": [s.slug for s in detached]}
+
+
+#: Policy runs started from the dashboard, kept so they are not garbage collected mid-run.
+_RUNS: set[asyncio.Task[Any]] = set()
+
+
+@router.post("/{name}/run", status_code=202)
+async def run_policy_now(
+    name: str, request: Request, session: SessionDep, admin: CurrentAdmin
+) -> dict[str, Any]:
+    """Run a policy now, the same way its schedule does (one run per service, the policy's
+    prerequisites woken once for the batch, retries, putting things back). Answers at once; the
+    runs show up in Activity and on the Backups page as they happen."""
+    policy = _get_or_404(session, name)
+    scheduler = _scheduler(request)
+    if scheduler is None:
+        raise HTTPException(409, "the backup scheduler is not running (SCHEDULER_ENABLED=false?)")
+    services = _attached_services(session, policy)
+    if not services:
+        raise HTTPException(409, f"policy {name!r} backs up no service")
+    audit.record(
+        session,
+        actor=admin.username,
+        action="backup_policy.run_now",
+        target=f"policy:{name}",
+        details={"services": services},
+    )
+    session.commit()
+    task = asyncio.create_task(scheduler.run_policy(name), name=f"policy-run-{name}")
+    _RUNS.add(task)
+    task.add_done_callback(_RUNS.discard)
+    return {"started": True, "policy": name, "services": services}

@@ -95,15 +95,12 @@ def test_guests_page_fetches_infra_guests(client: TestClient) -> None:
     assert "orchestrator-cli guests" in r.text
 
 
-def test_snapshots_page_fetches_infra_snapshots(client: TestClient) -> None:
-    r = client.get("/infra/snapshots")
-    assert r.status_code == 200, r.text
-    assert "/api/infra/pbs/snapshots" in r.text
-    assert "orchestrator-cli snapshots" in r.text
-
-
-# --- real data through a mocked adapter, same monkeypatch pattern as
-# tests/test_guest_power_api.py --------------------------------------------
+def test_snapshots_page_is_a_tab_of_backups(client: TestClient) -> None:
+    r = client.get("/infra/snapshots", follow_redirects=False)
+    assert r.status_code == 303 and r.headers["location"] == "/backup-policies?tab=snapshots"
+    assert '"/api/infra/pbs/snapshots"' in client.get("/static/backups.js").text
+    ds = client.get("/api/infra/pbs/datastore").json()
+    assert set(ds) >= {"name", "reachable"}
 
 
 def test_infra_status_api_shows_real_adapter_data(client: TestClient) -> None:
