@@ -309,7 +309,7 @@ class Settings(BaseSettings):
     # audit trail.
     geoip_traffic_retention_days: int = 14
 
-    # ---- Access-log ingestion (powers /traffic and /traffic/geo) -----------
+    # ---- Access-log ingestion (powers /traffic and its countries) ----------
     # Traefik's access log, tailed through Traefik Manager (GET
     # /api/traefik/logs). Runs whenever the proxy adapter is a live Traefik
     # Manager; TRAEFIK_API_URL is NOT needed. GeoIP samples are additionally

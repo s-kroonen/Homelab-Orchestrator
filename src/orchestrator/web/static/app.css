@@ -267,10 +267,11 @@ input.switch:checked::after { left: 18px; background: #fff; }
 .ticks > span.fail { background: #c4453e; }
 .ticks > span.warn { background: #b8862e; }
 
-/* summary tiles (Backups, Dashboard) */
+/* summary tiles (Backups, Dashboard, Traffic) */
 .stat-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 240px), 1fr)); gap: 14px; margin-bottom: 20px; }
-.stat-row .stat-tile { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-card); padding: 14px 16px; }
-.stat-row .stat-value { font-size: 24px; margin: 2px 0 4px; }
+.stat-row .stat-tile { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-card); padding: 14px 16px; min-width: 0; }
+.stat-row .stat-label { font-size: 12.5px; color: var(--muted); }
+.stat-row .stat-value { font-size: 24px; font-weight: 600; color: var(--text); margin: 2px 0 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .stat-row .stat-sub { font-size: 12.5px; color: var(--muted); }
 .bar { height: 8px; border-radius: 999px; background: var(--inset); overflow: hidden; margin: 6px 0; }
 .bar > span { display: block; height: 100%; border-radius: 999px; background: var(--ok); }
@@ -587,7 +588,7 @@ table.dt tbody tr.group-row:hover td { background: var(--inset); }
   .phonebar a.current { color: #fff; background: var(--selected); }
 }
 
-/* --- traffic dashboards (/traffic, /traffic/geo) ------------------------
+/* --- traffic dashboard (/traffic) ---------------------------------------
    Chart colours: one validated categorical set for the status-class stack
    (2xx blue, 3xx aqua, 4xx yellow, 5xx magenta — adjacent pairs clear the
    CVD/normal-vision floors on the #12161f card surface) and a blue/orange
@@ -634,8 +635,6 @@ table.dt tbody tr.group-row:hover td { background: var(--inset); }
 .status-meta { font-size: 0.75rem; color: var(--faint); }
 
 /* time controls toolbar */
-.toolbar-row { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem 1rem; margin-bottom: 1rem; }
-.toolbar-row .timecontrols { margin-bottom: 0; }
 .timecontrols { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem 0.75rem; margin-bottom: 1rem; }
 .tc-field { display: inline-flex; align-items: center; gap: 0.4rem; font-size: 0.8rem; color: var(--muted); }
 .tc-label { white-space: nowrap; }
@@ -643,24 +642,20 @@ table.dt tbody tr.group-row:hover td { background: var(--inset); }
 .tc-reload { font-size: 0.95rem; line-height: 1; padding: 0.3rem 0.55rem; }
 .tc-updated { font-size: 0.75rem; color: var(--faint); font-variant-numeric: tabular-nums; }
 .timecontrols.tc-error .tc-updated { color: var(--fail); }
-.geo-filter { display: inline-flex; margin: 0; }
-body.tc-loading .chart, body.tc-loading .host-table, body.tc-loading #geo-body { opacity: 0.6; transition: opacity 0.15s; }
+body.tc-loading .chart, body.tc-loading .host-table, body.tc-loading #geo-side { opacity: 0.6; transition: opacity 0.15s; }
+.traffic-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem 0.75rem; }
+.traffic-controls .timecontrols { margin-bottom: 0; }
+.stat-value .stat-sub { font-size: 12.5px; font-weight: 400; }
 
-.filter-chip-row { margin: 0 0 0.75rem; }
-.filter-chip {
-  display: inline-flex; align-items: center; gap: 0.4rem; font-size: 0.8rem; color: var(--muted);
-  background: var(--inset); border: 1px solid var(--line-strong); border-radius: 1rem; padding: 0.15rem 0.3rem 0.15rem 0.7rem;
-}
-.filter-chip strong { color: var(--text); font-weight: 600; }
-.chip-clear { background: transparent; color: var(--muted); padding: 0 0.35rem; font-size: 1rem; line-height: 1; }
-.chip-clear:hover { color: var(--text); }
-
-/* stat tiles */
-.stat-tiles { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 0.75rem; margin-bottom: 1rem; }
-.stat-tile { background: var(--viz-surface); border: 1px solid var(--line); border-radius: 0.5rem; padding: 0.7rem 0.9rem; min-width: 0; }
-.stat-label { font-size: 0.75rem; color: var(--muted); margin-bottom: 0.25rem; }
-.stat-value { font-size: 1.35rem; font-weight: 600; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.stat-sub { font-size: 0.75rem; font-weight: 400; color: var(--muted); }
+/* countries and client addresses: flag/address, name, share bar, hits */
+.geo-row { display: grid; grid-template-columns: 1.4em minmax(0, 1fr) 22% 3.2em; align-items: center; gap: 4px 10px; padding: 5px 0; font-size: 13px; border-top: 1px solid var(--line); }
+.geo-row:first-child { border-top: 0; }
+.geo-row .flag { width: 1.3em; text-align: center; }
+.geo-row .name, .geo-row .faint { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.geo-row .bar { margin: 0; height: 6px; }
+.geo-row.ip { grid-template-columns: auto minmax(0, 1fr) 3.2em; }
+.geo-row .num { text-align: right; }
+.geo-row code { font-size: 12px; }
 
 /* chart cards */
 .chart-card { background: var(--viz-surface); border: 1px solid var(--line); border-radius: 0.5rem; padding: 0.8rem 0.9rem 0.6rem; margin-bottom: 1rem; }
@@ -718,7 +713,7 @@ body.tc-loading .chart, body.tc-loading .host-table, body.tc-loading #geo-body {
 th.num, td.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .table-hint { margin: -0.4rem 0 0.5rem; font-size: 0.75rem; }
 .host-table td { vertical-align: middle; }
-.host-table td.host-cell code { overflow-wrap: anywhere; }
+.host-table td.host-cell code { white-space: nowrap; }
 .host-row.is-clickable { cursor: pointer; }
 .host-row.is-clickable:hover { background: #12161f; }
 .host-row.is-clickable:focus-visible { outline: 1px solid var(--accent); outline-offset: -1px; }
@@ -730,8 +725,6 @@ th.num, td.num { text-align: right; font-variant-numeric: tabular-nums; white-sp
 .spark-flat { stroke: var(--viz-axis); stroke-width: 1; }
 
 @media (max-width: 40rem) {
-  .stat-tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.5rem; }
-  .stat-value { font-size: 1.1rem; }
   .chart-card { padding: 0.7rem 0.6rem 0.5rem; }
   /* The phone table rule above turns every table into a scroller; the
      wrapping .table-scroll already does that here. */

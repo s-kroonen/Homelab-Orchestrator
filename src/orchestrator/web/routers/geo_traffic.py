@@ -1,7 +1,7 @@
 """Read-only JSON hook for the GeoIP traffic-visibility feature.
 
 One endpoint plus :func:`build_geo_view`, the aggregation it shares with the
-``/traffic/geo`` dashboard page (``ui.py`` / ``templates/traffic_geo.html``).
+countries panel on the ``/traffic`` page (``ui.py`` / ``templates/traffic.html``).
 See docs/geoip_traffic.md.
 """
 
@@ -62,7 +62,7 @@ def build_geo_view(
     now: datetime | None = None,
 ) -> dict[str, Any]:
     """The aggregation behind both ``GET /api/traffic/geo`` and the
-    ``/traffic/geo`` page — one implementation so they never disagree.
+    countries on the ``/traffic`` page — one implementation so they never disagree.
     Aggregated in SQL so a 14-day range stays cheap."""
     if range_key not in RANGES:
         range_key = DEFAULT_RANGE

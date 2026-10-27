@@ -6,17 +6,18 @@ against which service — an opt-in companion to
 sourced from a different place: Traefik's own **access log**, not its
 aggregate Prometheus counters.
 
-**Dashboard page: `/traffic/geo`** ("Traffic by country", linked from
-`/traffic`) — server-rendered over the same aggregation as the read endpoint
-below (`build_geo_view` in `web/routers/geo_traffic.py`): a summary line
-(total hits, samples, countries, local vs external share), a countries table
-with flag + percentage bar (private/LAN addresses shown as "Local network"),
-the top client IPs, a service filter (`?slug=`) and the same time controls
-as `/traffic` (range `?range=15m…14d`, default 24h; auto-refresh re-fetches
-`GET /api/traffic/geo` and redraws the tables in place). The access-log
-collector status strip sits on top (see
-[traffic_metrics.md](traffic_metrics.md#reading-the-collector-status)). With
-`GEOIP_ENABLED` off it shows a notice pointing here instead of empty tables.
+**On the dashboard: the Countries side of `/traffic`.** Next to the "By
+service" table the Traffic page shows a **Countries** card (a summary line
+with total hits and the local vs external share, then each country with its
+flag, a share bar and its hits; private/LAN addresses are "Local network")
+and a **Top client addresses** card. The "Visitors" tile counts the distinct
+client addresses (up to 50, shown as "50+"). Both follow the page's service
+select (`?slug=`) and time controls (`?range=15m…14d`): the first paint is
+server-rendered over the same aggregation as the read endpoint below
+(`build_geo_view` in `web/routers/geo_traffic.py`), and every refresh
+re-fetches `GET /api/traffic/geo` and redraws them in place. With
+`GEOIP_ENABLED` off the card says so and points here. The old
+`/traffic/geo` page redirects to `/traffic`, keeping `slug` and `range`.
 
 > **Since the access-log pipeline was unified**, GeoIP samples come from the
 > same `AccessLogCollector` that feeds `/traffic` — one tail, one cursor —
@@ -272,8 +273,8 @@ in the range (default `24h`):
 
 `?slug=` narrows to one service's proxy hosts; omitted, every proxy host's
 samples are summed. `{"enabled": false, ...empty...}` when `GEOIP_ENABLED`
-is off. The `/traffic/geo` dashboard page renders this same aggregation
-server-side (`build_geo_view`), so the page and the endpoint never disagree.
+is off. The Countries card on `/traffic` renders this same aggregation
+(`build_geo_view`), so the page and the endpoint never disagree.
 
 ## Failure handling
 

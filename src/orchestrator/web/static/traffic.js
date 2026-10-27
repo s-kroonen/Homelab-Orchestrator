@@ -400,11 +400,67 @@
     });
   }
 
+  // -- countries and client addresses (GET /api/traffic/geo) ---------------
+
+  function flag(code) {
+    code = (code || "").toUpperCase();
+    if (!/^[A-Z]{2}$/.test(code)) return "";
+    return String.fromCodePoint(0x1f1e6 + code.charCodeAt(0) - 65, 0x1f1e6 + code.charCodeAt(1) - 65);
+  }
+  function geoLabel(bucket, name, code) { return bucket === "local" ? "Local network" : name || code || "Unknown"; }
+  function geoRow(parent, first, second, share, hits) {
+    var row = h("div", share == null ? "geo-row ip" : "geo-row", null, parent);
+    row.appendChild(first);
+    row.appendChild(second);
+    if (share != null) h("span", "ok", null, h("span", "bar", null, row)).style.width = share + "%";
+    h("span", "num mono", fmtInt(hits), row);
+  }
+
+  function drawGeo(g) {
+    var side = geoSide;
+    var total = g.countries.reduce(function (a, c) { return a + c.hits; }, 0);
+    var local = g.countries.filter(function (c) { return c.bucket === "local"; }).reduce(function (a, c) { return a + c.hits; }, 0);
+    var names = {};
+    g.countries.forEach(function (c) { if (c.country_code) names[c.country_code] = c.country_name; });
+    var nCountries = g.countries.filter(function (c) { return c.bucket === "country"; }).length;
+    side.querySelector("[data-geo-count]").textContent = String(nCountries);
+    var sum = side.querySelector("[data-geo-summary]");
+    sum.replaceChildren();
+    if (g.sample_count) {
+      h("strong", null, fmtInt(total), sum);
+      var share = function (n) { return Math.round((n / total) * 1000) / 10 + "%"; };
+      sum.appendChild(document.createTextNode(" hits · local " + share(local) + " / external " + share(total - local)));
+    } else {
+      sum.textContent = "No GeoIP samples in this range" + (slug ? " for " + slug : "") + ".";
+    }
+    var box = side.querySelector("[data-geo-countries]");
+    box.replaceChildren();
+    g.countries.slice(0, 12).forEach(function (c) {
+      var f = h("span", "flag", c.bucket === "local" ? "" : flag(c.country_code));
+      f.setAttribute("aria-hidden", "true");
+      geoRow(box, f, h("span", "name", geoLabel(c.bucket, c.country_name, c.country_code)), total ? Math.round((c.hits / total) * 1000) / 10 : 0, c.hits);
+    });
+    var ips = side.querySelector("[data-geo-ips]");
+    ips.replaceChildren();
+    g.top_ips.slice(0, 10).forEach(function (i) {
+      var where = (i.bucket === "local" ? "" : flag(i.country_code) + " ") + geoLabel(i.bucket, names[i.country_code] || "", i.country_code);
+      geoRow(ips, h("code", null, i.client_ip), h("span", "faint", where), null, i.hits);
+    });
+    if (!g.top_ips.length) h("p", "faint", "No client addresses in this range.", ips);
+    var v = root.querySelector('[data-stat="visitors"]');
+    v.replaceChildren();
+    v.appendChild(document.createTextNode(g.top_ips.length >= 50 ? "50+" : String(g.top_ips.length)));
+    if (nCountries) h("span", "stat-sub", " from " + nCountries + " countr" + (nCountries === 1 ? "y" : "ies"), v);
+  }
+
   // -- page wiring ----------------------------------------------------------
 
   var root = document.getElementById("traffic-root");
   if (!root) return;
   var tcRoot = document.querySelector("[data-tc]");
+  var select = document.querySelector("[data-slug-select]");
+  var geoSide = document.getElementById("geo-side");
+  var geoOn = !!geoSide && geoSide.dataset.geoEnabled === "true";
   var slug = "";
   var last = null;
   var tc = null;
@@ -423,18 +479,13 @@
     set("avg", fmtMs(t.avg_ms), t.max_ms != null ? "max " + fmtMs(t.max_ms) : "");
   }
 
-  function setChip(d) {
-    var row = root.querySelector("[data-filter-row]");
-    if (!slug) { row.hidden = true; return; }
-    var match = d.hosts.filter(function (x) { return x.service_slug === slug; })[0];
-    var nameEl = root.querySelector("[data-filter-name]");
-    nameEl.textContent = match ? (match.service_name || slug) : slug;
-    if (match && match.service_state === "down") {
-      nameEl.appendChild(document.createTextNode(" "));
-      var b = h("span", "badge down", "guest stopped — requests to it are failing", nameEl);
-      b.title = match.service_state_reason || "";
+  function syncSelect() {
+    if (!select) return;
+    if (slug && !Array.prototype.some.call(select.options, function (o) { return o.value === slug; })) {
+      var o = h("option", null, slug, select);
+      o.value = slug;
     }
-    row.hidden = false;
+    select.value = slug;
   }
 
   function renderCharts(d) {
@@ -444,31 +495,37 @@
 
   function render(d) {
     setTiles(d);
-    setChip(d);
     renderCharts(d);
     drawTable(root.querySelector("[data-host-rows]"), d, slug, pick);
   }
 
   function pick(newSlug) {
     slug = newSlug || "";
+    syncSelect();
     tc.setParam("slug", slug);
     tc.refresh();
+  }
+
+  async function getJSON(path, q) {
+    var r = await fetch(path + "?" + q.toString(), { headers: { Accept: "application/json" } });
+    if (!r.ok) throw new Error(path + " " + r.status);
+    return r.json();
   }
 
   async function load(state) {
     var q = new URLSearchParams({ range: state.range });
     if (slug) q.set("slug", slug);
     var statusP = window.CollectorStatus ? window.CollectorStatus.refresh().catch(function () {}) : null;
-    var r = await fetch("/api/traffic/series?" + q.toString(), { headers: { Accept: "application/json" } });
-    if (!r.ok) throw new Error("series " + r.status);
-    last = await r.json();
+    var geoP = geoOn ? getJSON("/api/traffic/geo", q).then(drawGeo, function () {}) : null;
+    last = await getJSON("/api/traffic/series", q);
     render(last);
-    await statusP;
+    await Promise.all([statusP, geoP]);
   }
 
   tc = new window.TimeControls(tcRoot, { onRefresh: load });
   slug = tc.getParam("slug") || root.dataset.slug || "";
-  root.querySelector("[data-filter-clear]").addEventListener("click", function () { pick(""); });
+  syncSelect();
+  if (select) select.addEventListener("change", function () { pick(select.value); });
   window.addEventListener("resize", debounce(function () { if (last) renderCharts(last); }, 150));
   tc.start();
 })();

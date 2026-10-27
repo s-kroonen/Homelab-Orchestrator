@@ -263,7 +263,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     # Same resilience rule as every other scheduler: a failure to start
     # must not take the app down. One access-log tail feeds both /traffic
-    # (per-minute rollups) and /traffic/geo (GeoIP samples, GEOIP_ENABLED
+    # (per-minute rollups) and its countries (GeoIP samples, GEOIP_ENABLED
     # only) — see docs/traffic_metrics.md.
     access_log_collector: AccessLogCollector | None = None
     try:
@@ -275,7 +275,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             error=str(exc),
             error_type=type(exc).__name__,
             traceback=traceback.format_exc(),
-            impact="No access-log traffic will be collected; /traffic and /traffic/geo stay empty.",
+            impact="No access-log traffic will be collected; /traffic stays empty.",
         )
         access_log_collector = None
     app.state.access_log_collector = access_log_collector

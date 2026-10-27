@@ -269,8 +269,9 @@ See [design/README.md](design/README.md) for the approved wireframes and the rul
 | 1. Foundations | Tokens and status vocabulary in `app.css` (old badge names mapped onto them); `static/ui.js` (helpers, drawer, confirm, menu, tabs, live sections, data table); one Jinja environment with `asset()` for content-versioned, immutable static URLs | Display settings in the base template (still `/api/display` on load) |
 | 2. Speed | Pages built so far paint from the database and read live systems afterwards, per section | Adapter read cache with `as_of`; per-node streaming status; moving the remaining inline scripts out |
 | 3. Navigation | New sidebar and header (breadcrumb, search `/`, pending pill, live, user menu), phone tab bar; Services list; Admins & devices out of the dashboard; autosave of `services.yaml` + autopush (`registry/autosave.py`, `REGISTRY_AUTOSAVE`) with the pending pill | Removing Save to YAML / Reset from the pages not rebuilt yet; redirects once pages move |
-| 4. Service detail | | everything |
-| 5. Lists | Services, Nodes & guests (guests tab of Connectivity folded in), Proxy hosts (drawer replaces the form pages) | Containers, Backups; Import/Format as real tabs (they link to Data sources for now) |
-| 6. Settings | | everything |
-| 7. Dashboard and phone | Phone card layout of the data table | the dashboard itself |
+| 4. Service detail | `/services/{slug}` with Overview, Configuration (edits in the service drawer), Related and History tabs, painted from `/api/views/service/{slug}` | |
+| 5. Lists | Services, Nodes & guests (guests tab of Connectivity folded in), Proxy hosts (drawer replaces the form pages), Backups (policies, snapshots, dumps, the orchestrator's own backup; the policy drawer replaces the form pages) | Containers (needs a wireframe); Import/Format as real tabs (they link to Data sources for now) |
+| 6. Settings | Connections (one list, the connection page keeps its detail) | Notifications, AI assistants, System, Archive (need wireframes) |
+| 7. Dashboard and phone | Phone card layout of the data table; the dashboard (needs attention, tiles, nodes, recent activity, services at a glance) | |
+| 8. Activity | Traffic is one page with the countries included (`/traffic/geo` redirects) | Map; Activity (needs a wireframe) |
 

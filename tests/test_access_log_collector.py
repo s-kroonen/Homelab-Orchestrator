@@ -947,11 +947,10 @@ def test_traffic_page_error_notice_quotes_traefik_manager(client: TestClient) ->
 
 def test_pages_list_unmatched_routers_when_nothing_matched(client: TestClient) -> None:
     _store_status(matched=0, unmatched_routers=[{"router": "ghost@docker", "hits": 184}])
-    for path in ("/traffic", "/traffic/geo"):
-        text = client.get(path).text
-        assert "notice-warn" in text
-        assert "<code>ghost@docker</code>" in text
-        assert 'href="/proxy-hosts"' in text
+    text = client.get("/traffic").text
+    assert "notice-warn" in text
+    assert "<code>ghost@docker</code>" in text
+    assert 'href="/proxy-hosts"' in text
 
 
 def test_dashboard_links_to_traffic_page(client: TestClient) -> None:
@@ -959,7 +958,7 @@ def test_dashboard_links_to_traffic_page(client: TestClient) -> None:
 
 
 # ---------------------------------------------------------------------------
-# /traffic/geo page
+# Countries and client addresses on /traffic (/traffic/geo redirects there)
 # ---------------------------------------------------------------------------
 
 
@@ -1007,19 +1006,22 @@ def _seed_geo_samples() -> None:
         s.commit()
 
 
-def test_geo_page_requires_login(app: Any) -> None:
-    with TestClient(app) as anon:
-        r = anon.get("/traffic/geo", follow_redirects=False)
+def test_geo_page_redirects_to_traffic(client: TestClient) -> None:
+    r = client.get("/traffic/geo?slug=beta&range=7d", follow_redirects=False)
     assert r.status_code == 303
-    assert r.headers["location"].startswith("/login")
+    assert r.headers["location"] == "/traffic?slug=beta&range=7d"
+    r = client.get("/traffic/geo", follow_redirects=False)
+    assert r.headers["location"] == "/traffic"
 
 
 def test_geo_page_disabled_notice(client: TestClient) -> None:
-    r = client.get("/traffic/geo")
+    r = client.get("/traffic")
     assert r.status_code == 200
+    assert "GeoIP is off" in r.text
     assert "GEOIP_ENABLED" in r.text
     assert "geoip_traffic.md" in r.text
-    assert "<table" not in r.text
+    assert 'data-geo-enabled="false"' in r.text
+    assert "data-geo-countries" not in r.text
 
 
 def test_geo_page_renders_countries_and_ips(
@@ -1029,9 +1031,10 @@ def test_geo_page_renders_countries_and_ips(
     config_module.reset_settings_cache()
     _seed_geo_samples()
 
-    r = client.get("/traffic/geo")
+    r = client.get("/traffic")
     assert r.status_code == 200
     text = r.text
+    assert 'data-geo-enabled="true"' in text
     assert "United States" in text
     assert "Netherlands" in text
     assert "Local network" in text
@@ -1052,14 +1055,14 @@ def test_geo_page_slug_filter(client: TestClient, monkeypatch: pytest.MonkeyPatc
     config_module.reset_settings_cache()
     _seed_geo_samples()
 
-    r = client.get("/traffic/geo?slug=beta")
+    r = client.get("/traffic?slug=beta")
     assert r.status_code == 200
     assert "Netherlands" in r.text
     assert "United States" not in r.text
     assert "8.8.8.8" not in r.text
     assert '<option value="beta" selected>' in r.text
 
-    r = client.get("/traffic/geo?slug=")
+    r = client.get("/traffic?slug=")
     assert "United States" in r.text and "Netherlands" in r.text
 
 
@@ -1073,8 +1076,8 @@ def test_geo_page_range_filter(client: TestClient, monkeypatch: pytest.MonkeyPat
                 row.sampled_at = datetime.now(UTC) - timedelta(days=3)
                 s.add(row)
         s.commit()
-    assert "Netherlands" not in client.get("/traffic/geo?range=24h").text
-    text = client.get("/traffic/geo?range=7d").text
+    assert "Netherlands" not in client.get("/traffic?range=24h").text
+    text = client.get("/traffic?range=7d").text
     assert "Netherlands" in text
     assert '<option value="7d" selected>' in text
 
@@ -1087,9 +1090,11 @@ def test_flag_emoji_helper() -> None:
     assert _flag_emoji("XYZ") == ""
 
 
-def test_traffic_pages_link_to_each_other(client: TestClient) -> None:
-    assert 'href="/traffic/geo"' in client.get("/traffic").text
-    assert 'href="/traffic"' in client.get("/traffic/geo").text
+def test_traffic_js_draws_countries_live(client: TestClient) -> None:
+    text = client.get("/static/traffic.js").text
+    assert "/api/traffic/geo" in text
+    assert '"Local network"' in text
+    assert "data-slug-select" in text
 
 
 # ---------------------------------------------------------------------------

@@ -15,6 +15,7 @@ unauthenticated visitor should be redirected to ``/login``, not shown a raw
 from __future__ import annotations
 
 from typing import Any
+from urllib.parse import urlencode
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
@@ -255,20 +256,31 @@ async def traffic_page(
     """Requests / status classes / latency over time, rolled up from
     Traefik's access log by ``orchestrator.scheduler.access_log_collector``.
     The page is a shell: ``static/traffic.js`` fetches
-    ``/api/traffic/series`` and draws the charts; the collector status strip
-    is server-rendered for the first paint. See ``docs/traffic_metrics.md``."""
+    ``/api/traffic/series`` and ``/api/traffic/geo`` and draws the charts and
+    the countries; the collector status strip and the first countries list
+    are server-rendered for the first paint. See ``docs/traffic_metrics.md``
+    and ``docs/geoip_traffic.md``."""
     admin = get_current_admin(request, session)
     if admin is None:
         return login_redirect(request)
 
+    slug = (slug or "").strip()
+    range_key = _range_param(range)
+    geo = _decorate_geo_view(
+        build_geo_view(
+            session, enabled=settings.geoip_enabled, slug=slug or None, range_key=range_key
+        )
+    )
     return _templates.TemplateResponse(
         request,
         "traffic.html",
         {
             "admin": admin,
             "collector": collector_status_payload(session, settings),
-            "range": _range_param(range),
-            "slug": (slug or "").strip(),
+            "range": range_key,
+            "slug": slug,
+            "geo": geo,
+            "services": session.exec(select(Service).order_by(Service.slug)).all(),
         },
     )
 
@@ -327,40 +339,13 @@ def _decorate_geo_view(view: dict[str, Any]) -> dict[str, Any]:
 
 
 @router.get("/traffic/geo", response_model=None)
-async def traffic_geo_page(
-    request: Request,
-    session: SessionDep,
-    settings: SettingsDep,
-    slug: str | None = None,
-    range: str | None = None,
-) -> HTMLResponse | RedirectResponse:
-    """Traffic by country / client IP — the dashboard page over
-    :func:`orchestrator.web.routers.geo_traffic.build_geo_view` (the same
-    aggregation ``GET /api/traffic/geo`` returns). Server-rendered like
-    ``/traffic``. See ``docs/geoip_traffic.md``."""
-    admin = get_current_admin(request, session)
-    if admin is None:
-        return login_redirect(request)
-
-    slug = (slug or "").strip() or None
-    range_key = _range_param(range)
-    view = _decorate_geo_view(
-        build_geo_view(session, enabled=settings.geoip_enabled, slug=slug, range_key=range_key)
+async def traffic_geo_page(slug: str | None = None, range: str | None = None) -> RedirectResponse:
+    """Countries and client addresses are part of ``/traffic`` now; keep old
+    links (and notification deep links) working."""
+    query = urlencode(
+        {k: v for k, v in (("slug", (slug or "").strip()), ("range", range or "")) if v}
     )
-    services = session.exec(select(Service).order_by(Service.slug)).all() if view["enabled"] else []
-
-    return _templates.TemplateResponse(
-        request,
-        "traffic_geo.html",
-        {
-            "admin": admin,
-            "view": view,
-            "services": services,
-            "slug": slug or "",
-            "range": range_key,
-            "collector": collector_status_payload(session, settings),
-        },
-    )
+    return RedirectResponse("/traffic" + ("?" + query if query else ""), status_code=303)
 
 
 @router.get("/sources", response_model=None)
@@ -398,8 +383,6 @@ async def infra_guests_page(
     """The guests are on Nodes & guests now; an old link (an alert's) lands on the guest."""
     if get_current_admin(request, session) is None:
         return login_redirect(request)
-    from urllib.parse import urlencode
-
     q = (vmid or node or "").strip()
     return RedirectResponse("/nodes" + (f"?{urlencode({'q': q})}" if q else ""), status_code=303)
 
