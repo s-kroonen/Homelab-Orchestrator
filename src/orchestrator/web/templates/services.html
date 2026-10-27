@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+{% block title %}homelab-orchestrator — services{% endblock %}
+{% block crumbs %}<span class="here">Services</span>{% endblock %}
+{% block content %}
+<div class="page-header">
+  <h1>Services <span class="count" id="svc-count">{{ initial.rows | length }}</span></h1>
+  <div class="actions">
+    <a class="btn secondary" href="/nodes">Import from Proxmox</a>
+    <button type="button" id="new-service">+ New service</button>
+  </div>
+</div>
+<p class="page-sub">Everything the orchestrator watches, wakes and backs up. Sub-services sit under their parent.</p>
+<div id="services-table"></div>
+<script type="application/json" id="initial">{{ initial | tojson }}</script>
+{% endblock %}
+{% block scripts %}
+<script src="{{ asset('objects.js') }}"></script>
+<script src="{{ asset('services.js') }}"></script>
+{% endblock %}

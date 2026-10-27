@@ -632,12 +632,11 @@ def test_the_form_and_list_carry_the_config_file_ui(
 ) -> None:
     sim = SimTM(files=("_shared.yml",), config_dir=True)
     client = _client(monkeypatch, sim)
-    html = client.get("/proxy-hosts/new").text
-    assert 'id="ph-config-file"' in html and 'list="ph-config-files"' in html
-    assert "config_file: document.getElementById" in html
-    assert "(from TRAEFIK_MANAGER_CONFIG_FILE)" in html
-    listing = client.get("/proxy-hosts").text
-    assert "host-file" in listing and "move-config-file" in listing
+    js = client.get("/static/objects.js").text
+    assert 'key: "config_file", label: "Config file"' in js and "config_files" in js
+    assert "config_file_template" in js  # the blank default says where it goes
+    listing = client.get("/static/proxy_hosts.js").text
+    assert "config_file_misplaced" in listing and "move-config-file" in listing
 
 
 def test_env_layout_documents_the_setting() -> None:

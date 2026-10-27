@@ -35,6 +35,7 @@ from orchestrator.events import install_db_hooks
 from orchestrator.logging_setup import configure_logging, get_logger
 from orchestrator.notify import hooks as notify_hooks
 from orchestrator.notify.engine import NotificationEngine
+from orchestrator.registry.autosave import Autosaver
 from orchestrator.registry.loader import RegistryPathError, reconcile_yaml_into_db
 from orchestrator.scheduler import BackupScheduler
 from orchestrator.scheduler.access_log_collector import AccessLogCollector
@@ -74,11 +75,13 @@ from orchestrator.web.routers import (
     proxy_hosts,
     push,
     setup,
+    shell,
     sources,
     stacks,
     system,
     traffic,
     ui,
+    views,
     wake,
 )
 from orchestrator.web.routers import (
@@ -309,6 +312,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         self_backup = None
     app.state.self_backup = self_backup
 
+    # One save model: registry changes are written to services.yaml and pushed by themselves.
+    autosaver = Autosaver(settings=settings, adapters=adapters)
+    autosaver.start()
+    app.state.autosaver = autosaver
+
     # Edits to connections.yaml made outside the dashboard (the CLI, an editor) apply by themselves.
     conn_watcher = ConnectionsWatcher(adapters)
     conn_watcher.start()
@@ -320,6 +328,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         log.info("orchestrator.stop")
         notify_hooks.install(None)
         await conn_watcher.shutdown()
+        await autosaver.shutdown()
         if self_backup is not None:
             await self_backup.shutdown()
         if ip_discovery is not None:
@@ -364,6 +373,8 @@ def create_app() -> FastAPI:
     app.include_router(wake.router)
     app.include_router(auth.router)
     app.include_router(ui.router)
+    app.include_router(shell.router)
+    app.include_router(views.router)
     app.include_router(dashboard.router)
     app.include_router(infra.router)
     app.include_router(backup.router)

@@ -102,7 +102,9 @@ Something that is off on purpose (a node asleep, its services) is **off**, never
 * **Phone (under 40 rem):** bottom tab bar (Dashboard · Services · Activity · More), status and
   actions first, 44 px touch targets, tables become cards, no horizontal page scroll.
 * **Shared code:** the helpers, drawer, confirm, tabs, table and live sections come from one
-  shared script and one stylesheet. Pages do not define their own copies (`$`, `el`, `setMsg`…),
+  shared script (`static/ui.js`) and one stylesheet (`static/app.css`); the drawer and actions
+  of each object (service, node, proxy host) from `static/objects.js`, so every page edits it
+  the same way; the header from `static/shell.js`. Pages do not define their own copies (`$`, `el`, `setMsg`…),
   their own `<style>` blocks or colours outside the tokens above.
 
 ## The wireframes

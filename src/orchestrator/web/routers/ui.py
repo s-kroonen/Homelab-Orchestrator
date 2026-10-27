@@ -14,15 +14,12 @@ unauthenticated visitor should be redirected to ``/login``, not shown a raw
 
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
-from fastapi.templating import Jinja2Templates
 from sqlmodel import Session, select
 
-from orchestrator.adapters.proxy.base import RouteOptions
 from orchestrator.db.models import (
     BackupPolicy,
     BackupRecord,
@@ -49,9 +46,10 @@ from orchestrator.web.routers.traffic import (
     RANGES,
     collector_status_payload,
 )
+from orchestrator.web.templating import templates
 
 router = APIRouter(tags=["ui"])
-_templates = Jinja2Templates(directory=str(Path(__file__).parent.parent / "templates"))
+_templates = templates
 
 
 #: Probe state -> the ``ol.steps`` class maintenance.html already styles
@@ -393,27 +391,25 @@ def _ping_transport(raw: str) -> dict[str, Any] | None:
 async def proxy_hosts_page(
     request: Request, session: SessionDep
 ) -> HTMLResponse | RedirectResponse:
-    """List-only proxy-host page. Add/edit live on their own dedicated pages
-    (:func:`new_proxy_host_page`/:func:`edit_proxy_host_page`) — this page
-    is driven entirely by ``/api/proxy-hosts`` via ``fetch`` for the table,
-    plus Resync's bulk-discovery flow (see ``docs/proxy_hosts.md``). The
-    service list here is only for the "Discovered on Traefik" section's
-    per-row service picker."""
+    """The proxy hosts list. It paints from the database (what each host is); the page then
+    asks ``/api/proxy-hosts`` for what Traefik and Traefik Manager say about them. Adding and
+    editing happen in the drawer (``static/objects.js``), not on pages of their own."""
     admin = get_current_admin(request, session)
     if admin is None:
         return login_redirect(request)
+    from orchestrator.web.routers.proxy_hosts import _serialize, _services_by_id
 
-    services = session.exec(select(Service).order_by(Service.slug)).all()
-    diff = compute_registry_diff(session)
+    services = _services_by_id(session)
+    hosts = session.exec(select(ProxyHost).order_by(ProxyHost.hostname)).all()
     return _templates.TemplateResponse(
         request,
         "proxy_hosts.html",
         {
             "admin": admin,
-            "services": [{"id": s.id, "slug": s.slug, "name": s.name} for s in services],
-            "providers": [p.value for p in RouterProvider],
-            "registry_dirty": diff.dirty,
-            "yaml_path": diff.yaml_path,
+            "initial": {
+                "hosts": [_serialize(ph, services, None) for ph in hosts],
+                "services": _service_choices(session),
+            },
         },
     )
 
@@ -422,73 +418,24 @@ async def proxy_hosts_page(
 async def new_proxy_host_page(
     request: Request, session: SessionDep, service_id: int | None = Query(None)
 ) -> HTMLResponse | RedirectResponse:
-    """Dedicated add page (``docs/roadmap.md``'s "dedicated add/edit pages"
-    small feature) — replaces the bottom-of-page form that used to live on
-    ``/proxy-hosts`` and the inline one on a service's own page. Submits to
-    the existing ``POST /api/proxy-hosts`` (database only; a ``traefik`` host
-    with an upstream is pushed on Save to YAML / Push now - see
-    ``web/routers/proxy_hosts.py``).
-    ``?service_id=`` pre-fills the service picker — used by the "Add proxy
-    host" link on a service's own detail page.
-    """
-    admin = get_current_admin(request, session)
-    if admin is None:
+    """Old address of the add form: opens the drawer on the list instead."""
+    if get_current_admin(request, session) is None:
         return login_redirect(request)
-
-    return _templates.TemplateResponse(
-        request,
-        "proxy_host_form.html",
-        {
-            "admin": admin,
-            "mode": "new",
-            "proxy_host": None,
-            "initial_service_id": service_id,
-            "services": _service_choices(session),
-            "providers": [p.value for p in RouterProvider],
-        },
-    )
+    extra = f"&service_id={service_id}" if service_id is not None else ""
+    return RedirectResponse(f"/proxy-hosts?new=1{extra}", status_code=303)
 
 
 @router.get("/proxy-hosts/{proxy_host_id}/edit", response_model=None)
 async def edit_proxy_host_page(
     proxy_host_id: int, request: Request, session: SessionDep
 ) -> HTMLResponse | RedirectResponse:
-    """Dedicated edit page — see :func:`new_proxy_host_page`. Prefilled
-    server-side from the ``ProxyHost`` row directly (same pattern
-    ``service_detail_page`` already uses), not re-fetched client-side."""
-    admin = get_current_admin(request, session)
-    if admin is None:
+    """Old address of the edit form: opens the drawer on the list instead (a deleted host
+    still answers 404, which says where it went)."""
+    if get_current_admin(request, session) is None:
         return login_redirect(request)
-
-    ph = session.get(ProxyHost, proxy_host_id)
-    if ph is None:
+    if session.get(ProxyHost, proxy_host_id) is None:
         raise HTTPException(status_code=404, detail=f"proxy host {proxy_host_id} not found")
-
-    return _templates.TemplateResponse(
-        request,
-        "proxy_host_form.html",
-        {
-            "admin": admin,
-            "mode": "edit",
-            "proxy_host": {
-                "id": ph.id,
-                "hostname": ph.hostname,
-                "upstream": ph.upstream,
-                "router_provider": ph.router_provider.value,
-                "service_id": ph.service_id,
-                "wake_on_hit": ph.wake_on_hit,
-                "extra": ph.extra or {},
-                "entry_points": list(ph.entry_points or []),
-                "cert_resolver": ph.cert_resolver or "",
-                "entry_points_stored": bool(ph.entry_points),
-                "route_options": RouteOptions.from_dict(ph.route_options).to_dict(),
-                "enabled": ph.enabled,
-            },
-            "initial_service_id": None,
-            "services": _service_choices(session),
-            "providers": [p.value for p in RouterProvider],
-        },
-    )
+    return RedirectResponse(f"/proxy-hosts?edit={proxy_host_id}", status_code=303)
 
 
 @router.get("/backup-policies", response_model=None)

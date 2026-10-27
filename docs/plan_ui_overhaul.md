@@ -1,7 +1,8 @@
 # UI overhaul: analysis and plan
 
-**Status: approved, not built yet.** The target design and its wireframes are in
-[design/README.md](design/README.md); build to those. The functions are all there; what is missing is
+**Status: being built.** The target design and its wireframes are in
+[design/README.md](design/README.md); build to those. See [Progress](#progress) for what is
+done. The functions are all there; what is missing is
 one way of doing each thing. This document measures where the dashboard is today, names what
 makes it feel like chaos, and proposes a target design and an order to build it in.
 
@@ -260,3 +261,16 @@ event updates a region without a reload, drawer save and cancel.
    page with countries included.
 
 See [design/README.md](design/README.md) for the approved wireframes and the rules they follow.
+
+## Progress
+
+| Phase | Done | Still to do |
+|---|---|---|
+| 1. Foundations | Tokens and status vocabulary in `app.css` (old badge names mapped onto them); `static/ui.js` (helpers, drawer, confirm, menu, tabs, live sections, data table); one Jinja environment with `asset()` for content-versioned, immutable static URLs | Display settings in the base template (still `/api/display` on load) |
+| 2. Speed | Pages built so far paint from the database and read live systems afterwards, per section | Adapter read cache with `as_of`; per-node streaming status; moving the remaining inline scripts out |
+| 3. Navigation | New sidebar and header (breadcrumb, search `/`, pending pill, live, user menu), phone tab bar; Services list; Admins & devices out of the dashboard; autosave of `services.yaml` + autopush (`registry/autosave.py`, `REGISTRY_AUTOSAVE`) with the pending pill | Removing Save to YAML / Reset from the pages not rebuilt yet; redirects once pages move |
+| 4. Service detail | | everything |
+| 5. Lists | Services, Nodes & guests (guests tab of Connectivity folded in), Proxy hosts (drawer replaces the form pages) | Containers, Backups; Import/Format as real tabs (they link to Data sources for now) |
+| 6. Settings | | everything |
+| 7. Dashboard and phone | Phone card layout of the data table | the dashboard itself |
+

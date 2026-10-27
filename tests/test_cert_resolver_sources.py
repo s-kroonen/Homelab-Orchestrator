@@ -291,10 +291,10 @@ def test_push_status_and_resync_refresh_the_catalog(
 
 
 def test_the_form_shows_the_source_of_each_resolver(client_ui: TestClient) -> None:
-    html = client_ui.get("/proxy-hosts/new").text
-    assert "cert_resolver_sources" in html and "Seen in:" in html
-    assert "not known to Traefik" in html  # the free-text fallback keeps its marker
-    assert 'id="ph-resolver-text"' in html  # ...and the free-text field itself
+    js = client_ui.get("/static/objects.js").text
+    assert "cert_resolver_sources" in js and "Seen in:" in js
+    assert "not known to Traefik" in js  # the free-text fallback keeps its marker
+    assert 'placeholder: "blank = none"' in js  # ...and the free-text field itself
 
 
 @pytest.fixture

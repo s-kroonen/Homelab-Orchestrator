@@ -8,12 +8,10 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
-from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, ConfigDict
 from sqlmodel import Session
 
@@ -24,6 +22,7 @@ from orchestrator.system import selfupdate as updater
 from orchestrator.system import update as upd
 from orchestrator.web.auth import CurrentAdmin, get_current_admin, login_redirect, require_admin
 from orchestrator.web.deps import SessionDep, SettingsDep
+from orchestrator.web.templating import templates
 
 api = APIRouter(prefix="/api/system", tags=["system"], dependencies=[Depends(require_admin)])
 pages = APIRouter(tags=["system"])
@@ -31,7 +30,7 @@ router = APIRouter()
 router.include_router(api)
 router.include_router(pages)
 
-_templates = Jinja2Templates(directory=str(Path(__file__).parent.parent / "templates"))
+_templates = templates
 
 
 def _audit(session: Session, admin: Any, action: str, target: str, **details: Any) -> None:

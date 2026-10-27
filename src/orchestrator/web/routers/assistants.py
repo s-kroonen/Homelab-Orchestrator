@@ -7,12 +7,10 @@ elsewhere. Everything here needs a logged-in admin.
 
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.responses import HTMLResponse, RedirectResponse
-from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, ConfigDict, Field
 from sqlmodel import col, select
 
@@ -23,6 +21,7 @@ from orchestrator.mcp.scopes import ROLE_BLURBS, ROLES, SCOPES, parse_scope, rol
 from orchestrator.mcp.tools import TOOLS, ToolError
 from orchestrator.web.auth import CurrentAdmin, get_current_admin, login_redirect, require_admin
 from orchestrator.web.deps import AdaptersDep, SessionDep, SettingsDep
+from orchestrator.web.templating import templates
 
 api = APIRouter(
     prefix="/api/assistants", tags=["assistants"], dependencies=[Depends(require_admin)]
@@ -32,7 +31,7 @@ router = APIRouter()
 router.include_router(api)
 router.include_router(pages)
 
-_templates = Jinja2Templates(directory=str(Path(__file__).parent.parent / "templates"))
+_templates = templates
 
 
 class GrantIn(BaseModel):

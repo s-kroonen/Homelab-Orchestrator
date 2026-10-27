@@ -757,37 +757,38 @@ def test_dry_run_create_edit_flow_end_to_end(dry_client: TestClient, service: Se
     assert "Available: web, websecure, traefik" in bad.json()["detail"]["errors"]["entry_points"]
 
 
-def test_new_form_renders_the_entry_point_controls(
-    dry_client: TestClient, service: Service
-) -> None:
-    html = dry_client.get("/proxy-hosts/new").text
+def test_the_drawer_has_the_entry_point_controls(dry_client: TestClient, service: Service) -> None:
+    # The add form is a drawer on the list now; its old address opens it.
+    r = dry_client.get("/proxy-hosts/new", follow_redirects=False)
+    assert r.status_code == 303 and r.headers["location"] == "/proxy-hosts?new=1"
+    js = dry_client.get("/static/objects.js").text
     for marker in (
-        'id="ep-list"',
-        'id="ep-text"',
-        'id="ph-resolver"',
-        "Refresh from Traefik Manager",
-        'data-error-for="entry_points"',
-        'data-error-for="hostname"',
-        "/api/proxy/entrypoints",
+        "/api/proxy/entrypoints",  # the catalog the choices come from
+        'key: "entry_points", label: "Entry points"',
+        'key: "cert_resolver", label: "Certificate resolver"',
+        'key: "hostname", label: "Hostname"',
+        "websecure, web",  # free text when Traefik cannot be read
     ):
-        assert marker in html, marker
+        assert marker in js, marker
 
 
 def test_edit_form_carries_the_stored_selection(dry_client: TestClient, service: Service) -> None:
     created = dry_client.post(
         "/api/proxy-hosts", json=_body(service, entry_points=["web"], cert_resolver="")
     ).json()
-    html = dry_client.get(f"/proxy-hosts/{created['id']}/edit").text
-    assert '"entry_points": ["web"]' in html and '"stored": true' in html
-    legacy = dry_client.post(
-        "/api/proxy-hosts", json=_body(service, hostname="l.example.com", upstream="")
-    )
-    html = dry_client.get(f"/proxy-hosts/{legacy.json()['id']}/edit").text
-    assert '"stored": false' in html and "Not stored yet" in html
+    r = dry_client.get(f"/proxy-hosts/{created['id']}/edit", follow_redirects=False)
+    assert r.headers["location"] == f"/proxy-hosts?edit={created['id']}"
+    html = dry_client.get("/proxy-hosts").text
+    assert '"entry_points": ["web"]' in html and '"entry_points_stored": true' in html
+    dry_client.post("/api/proxy-hosts", json=_body(service, hostname="l.example.com", upstream=""))
+    # Not stored yet: the drawer pre-selects what the route has in Traefik.
+    assert '"entry_points_stored": false' in dry_client.get("/proxy-hosts").text
+    assert "h.traefik.entry_points" in dry_client.get("/static/objects.js").text
 
 
 def test_list_page_has_entry_point_and_router_status_columns(dry_client: TestClient) -> None:
     html = dry_client.get("/proxy-hosts").text
-    assert ">Entry points</th>" in html
-    assert "appendRouterStatus" in html and "router-error" in html
-    assert "table-scroll" in html
+    assert "/static/proxy_hosts.js?v=" in html
+    js = dry_client.get("/static/proxy_hosts.js").text
+    # Traefik's verdict on the router, its error text included, in its own column.
+    assert 'label: "Traefik"' in js and 'label: "error", sub: t.message' in js

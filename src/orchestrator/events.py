@@ -19,6 +19,7 @@ Topics and their data:
 * ``alert``    the notification engine recorded an event
 * ``registry`` a service, probe, proxy host or node changed: ``what``, ``service_id`` when known
 * ``mcp``      an assistant's call, connection or request for approval changed: ``what``
+* ``pending``  the autosaver started or finished writing services.yaml / pushing: ``running``
 
 Everything runs in one process, so this is an in-memory fan-out; a subscriber that cannot keep up
 loses its oldest events (they are only hints).

@@ -101,37 +101,15 @@
     <p class="msg" id="nodes-msg"></p>
   </section>
 
-  <section>
-    <h2>My devices</h2>
-    <ul class="devices" id="devices-list"><li>Loading…</li></ul>
-    <div class="row">
-      <input id="device-label" placeholder="device name (optional)">
-      <button id="add-device-btn">Add this device</button>
-      <span class="msg" id="device-msg"></span>
-    </div>
-  </section>
-
-  <section>
-    <h2>Invite another admin</h2>
-    <div class="row">
-      <input id="invite-label" placeholder="label (optional, e.g. a name)">
-      <button id="invite-btn">Create invite link</button>
-    </div>
-    <p class="msg" id="invite-msg"></p>
-    <ul class="invites" id="invites-list"></ul>
-  </section>
 {% endblock %}
 {% block extra_head %}
 <style>
-  ul.invites, ul.devices { list-style: none; padding: 0; font-size: 0.85rem; }
-  ul.invites li, ul.devices li { padding: 0.3rem 0; border-bottom: 1px solid #1a1e27; color: #9aa4b2; }
   td a, td a:visited { color: #5b8def; text-decoration: none; }
   td a:hover { text-decoration: underline; }
   /* Effective IP under the service name: small and muted, its own line. */
   .svc-ip { display: block; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.72rem; color: #9aa4b2; margin-top: 0.1rem; overflow-wrap: anywhere; }
 </style>
 {% endblock %}
-{% block webauthn_script %}<script src="/static/webauthn.js"></script>{% endblock %}
 {% block scripts %}
 <script src="/static/push.js"></script>
 <script src="/static/bulk.js"></script>
@@ -152,47 +130,6 @@
       setTimeout(() => location.reload(), 600);
     } catch (err) {
       setMsg("registry-msg", "Reset failed: " + err.message, "error");
-    }
-  });
-
-  async function loadDevices() {
-    const creds = await apiFetch("GET", "/api/auth/credentials");
-    const list = document.getElementById("devices-list");
-    list.innerHTML = creds.length ? "" : "<li>No devices yet.</li>";
-    for (const c of creds) {
-      const li = document.createElement("li");
-      li.textContent = `${c.label} — added ${c.created_at}` + (c.last_used_at ? `, last used ${c.last_used_at}` : "");
-      list.appendChild(li);
-    }
-  }
-  document.getElementById("add-device-btn").addEventListener("click", async () => {
-    try {
-      await addDevicePasskey(document.getElementById("device-label").value.trim());
-      setMsg("device-msg", "Device added.", "ok");
-      await loadDevices();
-    } catch (err) {
-      setMsg("device-msg", err.message, "error");
-    }
-  });
-
-  async function loadInvites() {
-    const invites = await apiFetch("GET", "/api/auth/invites");
-    const list = document.getElementById("invites-list");
-    list.innerHTML = invites.length ? "" : "<li>No invites yet.</li>";
-    for (const inv of invites) {
-      const li = document.createElement("li");
-      li.textContent = `${inv.label || "(no label)"} — ${inv.status}, requested by ${inv.requested_by} on ${inv.requested_at}`;
-      list.appendChild(li);
-    }
-  }
-  document.getElementById("invite-btn").addEventListener("click", async () => {
-    const label = document.getElementById("invite-label").value.trim();
-    try {
-      const data = await apiFetch("POST", "/api/auth/invites", { label }, { suppressToast: true });
-      setMsg("invite-msg", `Link (valid once, expires ${data.expires_at}): ${data.url}`, "ok");
-      await loadInvites();
-    } catch (err) {
-      setMsg("invite-msg", err.message, "error");
     }
   });
 
@@ -523,8 +460,6 @@
   });
 
   loadNodes();
-  loadDevices();
-  loadInvites();
 
   // This page only displays health/backup state the periodic HealthScanner
   // already collected (see routers/dashboard.py) — nothing on it mutates via

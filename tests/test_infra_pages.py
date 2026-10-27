@@ -76,8 +76,8 @@ def test_pages_require_admin(app: Any, path: str) -> None:
 def test_pages_render_shared_chrome(client: TestClient, path: str) -> None:
     r = client.get(path)
     assert r.status_code == 200, r.text
-    assert '<link rel="stylesheet" href="/static/app.css">' in r.text
-    assert '<script src="/static/app.js"></script>' in r.text
+    assert '<link rel="stylesheet" href="/static/app.css?v=' in r.text
+    assert '<script src="/static/app.js?v=' in r.text
     assert '<aside class="sidebar">' in r.text
 
 

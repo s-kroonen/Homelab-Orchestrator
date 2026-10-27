@@ -257,9 +257,10 @@ def test_dashboard_shows_the_ip_under_the_name(client: TestClient) -> None:
 def test_proxy_form_offers_use_service_ip(client: TestClient) -> None:
     _seed(("media", 100))
     client.put("/api/registry/services/media", json={"ip_address": "10.0.0.5"})
-    html = client.get("/proxy-hosts/new").text
-    assert 'id="ph-use-ip"' in html and 'id="ph-service-ip"' in html
-    assert '"ip": "10.0.0.5"' in html
+    html = client.get("/proxy-hosts?new=1").text
+    assert '"ip": "10.0.0.5"' in html  # the drawer's picker knows each service's address
+    js = client.get("/static/objects.js").text
+    assert "Its service's address is" in js and '"Use it"' in js
 
 
 # ---------------------------------------------------------------------------

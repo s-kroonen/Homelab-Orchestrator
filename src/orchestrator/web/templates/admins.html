@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% block title %}homelab-orchestrator — admins & devices{% endblock %}
+{% block crumbs %}Settings / <span class="here">Admins &amp; devices</span>{% endblock %}
+{% block content %}
+<div class="page-header"><h1>Admins &amp; devices</h1></div>
+<p class="page-sub">Who can sign in, and with which passkeys. There are no passwords: every device signs in with its own passkey.</p>
+
+<div class="grid-2">
+  <section class="card col-main" aria-labelledby="dev-h">
+    <div class="card-head">
+      <h2 id="dev-h">Your devices</h2>
+      <span class="faint" style="font-size: 13px">signed in as {{ admin.username }}</span>
+      <span style="flex: 1"></span>
+      <button type="button" class="secondary small" id="add-device">Add this device</button>
+    </div>
+    <div id="devices"></div>
+  </section>
+
+  <section class="card col-side" aria-labelledby="inv-h">
+    <div class="card-head">
+      <h2 id="inv-h">Invite another admin</h2>
+      <span style="flex: 1"></span>
+      <button type="button" class="small" id="new-invite">Create invite link</button>
+    </div>
+    <p class="faint" style="margin: 0 0 10px; font-size: 13px">A link that works once. Whoever opens it registers their own passkey and becomes an admin.</p>
+    <div id="invites"></div>
+  </section>
+</div>
+{% endblock %}
+{% block webauthn_script %}<script src="{{ asset('webauthn.js') }}"></script>{% endblock %}
+{% block scripts %}
+<script src="{{ asset('admins.js') }}"></script>
+{% endblock %}

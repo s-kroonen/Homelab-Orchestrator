@@ -159,6 +159,11 @@ ENV_SECTIONS: tuple[EnvSection, ...] = (
                 "the DB live and can Save back here or Reset from here.",
             ),
             EnvKey(
+                "REGISTRY_AUTOSAVE",
+                "Write services.yaml and push to Traefik Manager by themselves after every change\n"
+                "(the previous file is kept in STATE_DIR/registry-history). false = Save by hand.",
+            ),
+            EnvKey(
                 "CONNECTIONS_PATH",
                 "Where the connections live (Proxmox, PBS, Traefik Manager, Portainer, MQTT,\n"
                 "notifier channels, SSH): edited from the dashboard, applied without a restart.\n"

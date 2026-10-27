@@ -116,6 +116,9 @@ class Settings(BaseSettings):
 
     # ---- Service registry -------------------------------------------------
     services_yaml_path: Path = Path("./config/services.yaml")
+    #: Write services.yaml and push to Traefik Manager by themselves after every registry change
+    #: (registry/autosave.py). Off: the Save to YAML and Push buttons do it, as before.
+    registry_autosave: bool = True
     #: Where the connections live (blank: ``connections.yaml`` in STATE_DIR). See docs/connections.md.
     connections_path: Path | None = None
     #: This orchestrator's own site name ("home", "offsite"), for telling its connections from

@@ -39,9 +39,7 @@ def test_service_page_has_save_and_apply(client: TestClient) -> None:
     assert "PrevPage.go(" in html and "finishSave()" in html
 
 
-@pytest.mark.parametrize(
-    "path", ["/proxy-hosts/new", "/backup-policies/new", "/backup-policies/nightly/edit"]
-)
+@pytest.mark.parametrize("path", ["/backup-policies/new", "/backup-policies/nightly/edit"])
 def test_form_pages_have_save_and_apply(client: TestClient, path: str) -> None:
     html = client.get(path).text
     assert 'id="submit-btn"' in html and 'id="apply-btn"' in html

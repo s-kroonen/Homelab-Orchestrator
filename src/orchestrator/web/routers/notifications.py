@@ -5,12 +5,10 @@ See docs/notifications.md. Everything is admin-only.
 
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import HTMLResponse, RedirectResponse
-from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, ConfigDict, Field
 from sqlmodel import Session, col, select
 
@@ -26,6 +24,7 @@ from orchestrator.notify.engine import (
 )
 from orchestrator.web.auth import CurrentAdmin, get_current_admin, login_redirect, require_admin
 from orchestrator.web.deps import AdaptersDep, SessionDep, SettingsDep
+from orchestrator.web.templating import templates
 
 CHANNEL_NAMES = ("ntfy", "email", "webhook")
 
@@ -37,7 +36,7 @@ router = APIRouter()
 router.include_router(api)
 router.include_router(pages)
 
-_templates = Jinja2Templates(directory=str(Path(__file__).parent.parent / "templates"))
+_templates = templates
 
 
 def _engine(request: Request) -> NotificationEngine:

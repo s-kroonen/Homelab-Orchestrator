@@ -9,12 +9,10 @@ change is audited (the fields that changed, never their values).
 
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import HTMLResponse, PlainTextResponse, RedirectResponse
-from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, Field
 from sqlmodel import Session, select
 
@@ -28,6 +26,7 @@ from orchestrator.connections.store import path_for
 from orchestrator.db.models import Service
 from orchestrator.web.auth import CurrentAdmin, get_current_admin, login_redirect, require_admin
 from orchestrator.web.deps import AdaptersDep, SessionDep, SettingsDep
+from orchestrator.web.templating import templates
 
 api = APIRouter(
     prefix="/api/connections", tags=["connections"], dependencies=[Depends(require_admin)]
@@ -37,7 +36,7 @@ router = APIRouter()
 router.include_router(api)
 router.include_router(pages)
 
-_templates = Jinja2Templates(directory=str(Path(__file__).parent.parent / "templates"))
+_templates = templates
 
 
 class ConnectionIn(BaseModel):

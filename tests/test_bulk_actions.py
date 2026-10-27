@@ -343,8 +343,10 @@ def test_pages_render_the_selection_column_and_bar(client: TestClient) -> None:
     assert (
         "Bulk.attach({" in page and '"/api/bulk/services"' in page and '"/api/bulk/nodes"' in page
     )
-    ph = client.get("/proxy-hosts").text
-    assert "/static/bulk.js" in ph and "Enabled</th>" in ph and '"/api/bulk/proxy-hosts"' in ph
+    assert "/static/proxy_hosts.js?v=" in client.get("/proxy-hosts").text
+    ph = client.get("/static/proxy_hosts.js").text
+    assert 'bulk("proxy-hosts"' in ph and "bulk: (rows)" in ph  # the shared table's bulk bar
+    assert '"/api/bulk/" + resource' in client.get("/static/objects.js").text
     guests = client.get("/infra/guests").text
     assert "/static/bulk.js" in guests and "/api/infra/guests/" in guests
     js = client.get("/static/bulk.js")

@@ -16,11 +16,9 @@ from __future__ import annotations
 
 import secrets
 from datetime import timedelta
-from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request, status
-from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
 from sqlmodel import desc, func, select
 
@@ -30,9 +28,10 @@ from orchestrator.domain.enums import ApprovalKind, ApprovalStatus, AuditResult
 from orchestrator.web import auth as auth_lib
 from orchestrator.web.auth import CurrentAdmin
 from orchestrator.web.deps import SessionDep, SettingsDep
+from orchestrator.web.templating import templates
 
 router = APIRouter(tags=["auth"])
-_templates = Jinja2Templates(directory=str(Path(__file__).parent.parent / "templates"))
+_templates = templates
 
 
 def _admin_count(session: SessionDep) -> int:

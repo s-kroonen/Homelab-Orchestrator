@@ -4,9 +4,9 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{% block title %}homelab-orchestrator{% endblock %}</title>
-<link rel="stylesheet" href="/static/app.css">
+<link rel="stylesheet" href="{{ asset('app.css') }}">
 <link rel="manifest" href="/manifest.webmanifest">
-<meta name="theme-color" content="#0b0e14">
+<meta name="theme-color" content="#0d1015">
 <link rel="icon" type="image/png" sizes="192x192" href="/static/icons/icon-192.png">
 <link rel="apple-touch-icon" href="/static/icons/apple-touch-icon.png">
 <meta name="apple-mobile-web-app-capable" content="yes">
@@ -14,102 +14,99 @@
 <meta name="apple-mobile-web-app-title" content="Orchestrator">
 {% block extra_head %}{% endblock %}
 </head>
+{# The navigation of docs/design/README.md. ``match``: other paths that live under an entry. #}
+{% set path = request.url.path %}
+{% set nav_groups = [
+  ("Overview", [("/", "Dashboard", []), ("/map", "Map", [])]),
+  ("Services", [("/services", "Services", ["/services/"])]),
+  ("Infrastructure", [
+    ("/nodes", "Nodes & guests", ["/infra/guests", "/sources"]),
+    ("/proxy-hosts", "Proxy hosts", ["/proxy-hosts/", "/sources/format"]),
+    ("/portainer", "Containers", ["/portainer/"]),
+    ("/backup-policies", "Backups", ["/backup-policies/", "/infra/snapshots"]),
+  ]),
+  ("Activity", [("/activity", "Activity", ["/activity/"]), ("/traffic", "Traffic", ["/traffic/"])]),
+  ("Settings", [
+    ("/infra/connections", "Connections", ["/infra/connections/"]),
+    ("/notifications", "Notifications", []),
+    ("/assistants", "AI assistants", ["/assistants/"]),
+    ("/admins", "Admins & devices", []),
+    ("/system", "System", []),
+    ("/archive", "Archive", []),
+  ]),
+] %}
+{% macro is_current(href, match) -%}
+  {%- set ns = namespace(cur = (path == href) or (href == "/infra/connections" and path == "/infra")) -%}
+  {%- for m in match -%}{%- if path == m or (m.endswith("/") and path.startswith(m)) or path.startswith(m + "/") -%}{%- set ns.cur = true -%}{%- endif -%}{%- endfor -%}
+  {{- "1" if ns.cur else "" -}}
+{%- endmacro %}
 <body{% if admin %} class="has-sidebar"{% endif %}>
   {% block header %}
   <aside class="sidebar">
     <div class="brand">
-      <a href="/">homelab-orchestrator</a>{% block title_suffix %}{% endblock %}
+      <a href="/">homelab-orchestrator</a>
       <button type="button" class="nav-toggle" aria-label="Menu" aria-expanded="false" aria-controls="sidebar-nav">☰</button>
     </div>
     {% block nav %}
-    {% set path = request.url.path %}
-    {% macro navlink(href, label, exact=False, match=[]) -%}
-      {% if exact %}
-        {% set ns = namespace(cur = path == href) %}
-        {% for m in match %}{% if path == m or path.startswith(m + "/") %}{% set ns.cur = true %}{% endif %}{% endfor %}
-        {% set is_current = ns.cur %}
-      {% elif href == "/" %}
-        {% set is_current = path == "/" or path.startswith("/services/") %}
-      {% else %}
-        {% set is_current = path == href or path.startswith(href + "/") %}
-      {% endif %}
-      <a href="{{ href }}"{% if is_current %} class="current"{% endif %}>{{ label }}</a>
-    {%- endmacro %}
-    <nav id="sidebar-nav">
+    <nav id="sidebar-nav" aria-label="Main">
+      {% for heading, items in nav_groups %}
       <div class="nav-group">
-        <div class="nav-heading">Overview</div>
-        {{ navlink("/", "Dashboard") }}
-        {{ navlink("/map", "Map", exact=True) }}
+        <div class="nav-heading">{{ heading }}</div>
+        {% for href, label, match in items %}
+        <a href="{{ href }}"{% if is_current(href, match) %} class="current" aria-current="page"{% endif %}>{{ label }}</a>
+        {% endfor %}
       </div>
-      <div class="nav-group">
-        <div class="nav-heading">Networking</div>
-        {{ navlink("/proxy-hosts", "Proxy hosts") }}
-        {{ navlink("/traffic", "Traffic", exact=True) }}
-        {{ navlink("/traffic/geo", "Traffic by country", exact=True) }}
-      </div>
-      <div class="nav-group">
-        <div class="nav-heading">Backups</div>
-        {{ navlink("/backup-policies", "Backup policies") }}
-      </div>
-      <div class="nav-group">
-        <div class="nav-heading">Orchestrator</div>
-        {{ navlink("/sources", "Data sources", exact=True) }}
-        {{ navlink("/sources/format", "Format routes", exact=True) }}
-        {{ navlink("/archive", "Archive", exact=True) }}
-        {{ navlink("/system", "System and backups", exact=True) }}
-      </div>
-      <div class="nav-group">
-        <div class="nav-heading">Monitoring</div>
-        {{ navlink("/activity", "Activity") }}
-        {{ navlink("/portainer", "Portainer") }}
-        {{ navlink("/notifications", "Notifications") }}
-        {{ navlink("/assistants", "AI assistants") }}
-        {{ navlink("/infra", "Connectivity", match=["/infra/connections", "/infra/guests"], exact=True) }}
-        {{ navlink("/infra/snapshots", "Snapshots", exact=True) }}
-      </div>
+      {% endfor %}
     </nav>
     {% endblock %}
-    {% if admin %}
-    <div class="who">
-      <span class="live-dot" id="live-dot" title="Not live: this page refreshes on a timer"></span>{{ admin.username }}
-      <button class="logout" id="logout-btn">Log out</button>
-    </div>
-    {% endif %}
   </aside>
   {% endblock %}
 
-  <div class="wrap">
-    {% block content %}{% endblock %}
+  <div class="{% if admin %}main{% endif %}">
+    {% if admin %}
+    <header class="topbar">
+      <nav class="crumbs" aria-label="Breadcrumb">{% block crumbs %}<span class="here">{{ self.title().split(" — ")[-1] | capitalize }}</span>{% endblock %}</nav>
+      <div class="spacer"></div>
+      <div class="search" role="search">
+        <span class="faint" aria-hidden="true">⌕</span>
+        <input id="global-search" type="search" placeholder="Search services, nodes, hosts" aria-label="Search services, nodes, hosts and pages" autocomplete="off" aria-controls="search-results" aria-expanded="false">
+        <kbd aria-hidden="true">/</kbd>
+        <div class="search-results" id="search-results" role="listbox" hidden></div>
+      </div>
+      <div class="pending-pill" id="pending-pill" hidden>
+        <button type="button" class="small" id="pending-btn" aria-haspopup="dialog" aria-expanded="false"></button>
+        <div class="pending-pop" id="pending-pop" role="dialog" aria-label="Pending changes" hidden></div>
+      </div>
+      <span class="pill off" id="live-pill" title="Not live: this page refreshes on a timer"><span class="live-dot" id="live-dot"></span><span>Live</span></span>
+      <div class="user-menu">
+        <button type="button" class="ghost" id="user-btn" aria-haspopup="menu" aria-expanded="false"><span class="name">{{ admin.username }}</span> ▾</button>
+      </div>
+    </header>
+    {% endif %}
+    <div class="wrap">
+      {% block content %}{% endblock %}
+    </div>
   </div>
 
-<script src="/static/app.js"></script>
+  {% if admin %}
+  <nav class="phonebar" aria-label="Main">
+    <a href="/"{% if path == "/" %} class="current"{% endif %}><span class="i" aria-hidden="true">◉</span>Dashboard</a>
+    <a href="/services"{% if path.startswith("/services") %} class="current"{% endif %}><span class="i" aria-hidden="true">▤</span>Services</a>
+    <a href="/activity"{% if path.startswith("/activity") %} class="current"{% endif %}><span class="i" aria-hidden="true">≋</span>Activity</a>
+    <a href="#sidebar-nav" id="phone-more"><span class="i" aria-hidden="true">☰</span>More</a>
+  </nav>
+  {% endif %}
+
+<script src="{{ asset('app.js') }}"></script>
 {# Not deferred: pages (notifications) call OrchPush from their own inline scripts, which run
    before a deferred script would. It only registers listeners, so loading it here is cheap. #}
-<script src="/static/pwa.js"></script>
-{% if admin %}<script src="/static/live.js"></script>{% endif %}
-<script>
-  (() => {
-    const sb = document.querySelector(".sidebar");
-    const btn = sb && sb.querySelector(".nav-toggle");
-    if (!btn) return;
-    btn.addEventListener("click", () => {
-      const open = sb.classList.toggle("open");
-      btn.setAttribute("aria-expanded", String(open));
-    });
-  })();
-</script>
-{% block webauthn_script %}{% endblock %}
+<script src="{{ asset('pwa.js') }}"></script>
 {% if admin %}
-<script>
-  const logoutBtn = document.getElementById("logout-btn");
-  if (logoutBtn) {
-    logoutBtn.addEventListener("click", async () => {
-      await fetch("/api/auth/logout", { method: "POST" });
-      location.href = "/login";
-    });
-  }
-</script>
+<script src="{{ asset('live.js') }}"></script>
+<script src="{{ asset('ui.js') }}"></script>
+<script src="{{ asset('shell.js') }}"></script>
 {% endif %}
+{% block webauthn_script %}{% endblock %}
 {% block scripts %}{% endblock %}
 </body>
 </html>

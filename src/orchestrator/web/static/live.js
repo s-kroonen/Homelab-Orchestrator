@@ -1,6 +1,6 @@
 /* Live updates: one EventSource per page (GET /api/events), shared by whatever wants it.
  *
- *   OrchLive.on("run", (data) => ...)               // run | health | audit | alert | registry
+ *   OrchLive.on("run", (data) => ...)               // run | health | audit | alert | registry | mcp | pending
  *   OrchLive.on(["run", "health"], fn, { wait: 1500 })   // debounced: fn runs once after 1.5 s of quiet
  *   OrchLive.connected                               // true while the stream is open
  *
@@ -43,7 +43,7 @@
     state.source = src;
     src.addEventListener("hello", () => { state.connected = true; dot(true); });
     src.onerror = () => { state.connected = false; dot(false); }; // the browser retries
-    for (const topic of ["run", "health", "audit", "alert", "registry", "mcp"]) {
+    for (const topic of ["run", "health", "audit", "alert", "registry", "mcp", "pending"]) {
       src.addEventListener(topic, (ev) => {
         let data = {};
         try { data = JSON.parse(ev.data || "{}"); } catch (e) { /* a hint without data */ }

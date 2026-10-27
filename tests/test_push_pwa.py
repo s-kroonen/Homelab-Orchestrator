@@ -80,7 +80,8 @@ def test_pwa_js_runs_before_the_pages_own_scripts(client: TestClient) -> None:
     """The notifications page calls OrchPush from an inline script; a `defer`red pwa.js would
     only run after it ("OrchPush is not defined")."""
     html = client.get("/notifications").text
-    tag = '<script src="/static/pwa.js"></script>'
+    start = html.index('<script src="/static/pwa.js?v=')
+    tag = html[start : html.index("</script>", start) + len("</script>")]
     assert (
         tag in html
         and "defer"

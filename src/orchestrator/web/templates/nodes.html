@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% block title %}homelab-orchestrator — nodes & guests{% endblock %}
+{% block crumbs %}Infrastructure / <span class="here">Nodes &amp; guests</span>{% endblock %}
+{% block content %}
+<div class="page-header">
+  <h1>Nodes &amp; guests</h1>
+  <div class="actions">
+    <a class="btn secondary" href="/sources#proxmox">Import from Proxmox</a>
+    <span id="nodes-more"></span>
+  </div>
+</div>
+<p class="page-sub">The Proxmox machines, how they are powered, and every guest on them. New guests are created in Proxmox and imported here.</p>
+
+<div class="node-grid" id="node-cards" aria-live="polite"></div>
+
+<section aria-labelledby="guests-h">
+  <div class="page-header" style="margin-bottom: 12px">
+    <h2 id="guests-h" style="font-size: 18px; margin: 0">Guests <span class="count" id="guest-count"></span></h2>
+  </div>
+  <div id="guests"></div>
+</section>
+<script type="application/json" id="initial">{{ initial | tojson }}</script>
+<script type="application/json" id="services-initial">{{ services_initial | tojson }}</script>
+{% endblock %}
+{% block scripts %}
+<script src="{{ asset('objects.js') }}"></script>
+<script src="{{ asset('nodes.js') }}"></script>
+{% endblock %}

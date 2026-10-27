@@ -8,22 +8,21 @@ else gets a plain "not found" with a way back. API and machine callers keep the 
 from __future__ import annotations
 
 import re
-from pathlib import Path
 
 from fastapi import Request
 from fastapi.exception_handlers import http_exception_handler
 from fastapi.responses import Response
-from fastapi.templating import Jinja2Templates
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from orchestrator.db.session import session_scope
 from orchestrator.logging_setup import get_logger
 from orchestrator.registry import archive as arch
 from orchestrator.web.auth import get_current_admin
+from orchestrator.web.templating import templates
 
 log = get_logger(__name__)
 
-_templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
+_templates = templates
 _SERVICE_PAGE = re.compile(r"^/services/([^/]+)/?$")
 _HOST_PAGE = re.compile(r"^/proxy-hosts/(\d+)/edit/?$")
 _POLICY_PAGE = re.compile(r"^/backup-policies/([^/]+)/edit/?$")

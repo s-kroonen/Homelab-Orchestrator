@@ -18,11 +18,8 @@ before the handler body runs) — see ``/readyz`` for that same limit.
 
 from __future__ import annotations
 
-from pathlib import Path
-
 from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse
-from fastapi.templating import Jinja2Templates
 from sqlmodel import Session, desc, select
 
 from orchestrator.adapters.errors import AdapterError
@@ -37,13 +34,14 @@ from orchestrator.pipelines.wake import (
 )
 from orchestrator.registry.tree import is_served
 from orchestrator.web.deps import AdaptersDep, SessionDep, SettingsDep
+from orchestrator.web.templating import templates
 from orchestrator.web.wake_button import WAKE_HEADER, make_token, verify_token
 from orchestrator.web.wake_support import fire_background
 
 router = APIRouter(tags=["maintenance"])
 log = get_logger(__name__)
 
-_templates = Jinja2Templates(directory=str(Path(__file__).parent.parent / "templates"))
+_templates = templates
 
 _FALLBACK_HTML = """<!DOCTYPE html><html><head><meta charset="utf-8">
 <meta http-equiv="refresh" content="5"><title>Starting up</title></head>

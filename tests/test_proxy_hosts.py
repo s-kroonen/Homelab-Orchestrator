@@ -330,12 +330,10 @@ def test_page_renders_for_logged_in_admin(client: TestClient, service: Service) 
     r = client.get("/proxy-hosts")
     assert r.status_code == 200
     assert "storm" in r.text
-    assert "working copy" in r.text and "Push now" in r.text
-    assert 'href="/proxy-hosts/new"' in r.text  # dedicated add page, not an inline form
-    assert "/sources#traefik" in r.text  # importing moved to Data sources
-    assert (
-        "Thing" in r.text and '"slug": "thing"' in r.text
-    )  # services passed to JS for the discovery section's per-row picker
+    assert 'id="add-host"' in r.text  # adds in the drawer, not on a page of its own
+    assert "/sources#traefik" in r.text  # the Import tab
+    # The services for the drawer's picker are in the page.
+    assert "Thing" in r.text and '"slug": "thing"' in r.text
 
 
 def test_dashboard_links_to_proxy_hosts_page(client: TestClient) -> None:
@@ -1522,18 +1520,17 @@ def test_delete_skips_write_through_when_provider_is_not_traefik(
 
 
 def test_new_proxy_host_page_renders(client: TestClient, service: Service) -> None:
-    r = client.get("/proxy-hosts/new")
-    assert r.status_code == 200
-    assert "Add a proxy host" in r.text
-    assert "Thing (thing)" in r.text
+    r = client.get("/proxy-hosts/new", follow_redirects=False)
+    assert r.status_code == 303 and r.headers["location"] == "/proxy-hosts?new=1"
+    assert '"slug": "thing"' in client.get("/proxy-hosts?new=1").text
 
 
 def test_new_proxy_host_page_prefills_service_id_from_query_param(
     client: TestClient, service: Service
 ) -> None:
-    r = client.get(f"/proxy-hosts/new?service_id={service.id}")
-    assert r.status_code == 200
-    assert "selected" in r.text
+    r = client.get(f"/proxy-hosts/new?service_id={service.id}", follow_redirects=False)
+    assert r.headers["location"] == f"/proxy-hosts?new=1&service_id={service.id}"
+    assert 'q.get("service_id")' in client.get("/static/proxy_hosts.js").text
 
 
 def test_new_proxy_host_page_redirects_when_not_logged_in(app: Any) -> None:
@@ -1553,10 +1550,10 @@ def test_edit_proxy_host_page_renders_prefilled(client: TestClient, service: Ser
         },
     ).json()
 
-    r = client.get(f"/proxy-hosts/{created['id']}/edit")
-    assert r.status_code == 200
-    assert "Edit edit-me.example.com" in r.text
-    assert "http://u:1" in r.text
+    r = client.get(f"/proxy-hosts/{created['id']}/edit", follow_redirects=False)
+    assert r.status_code == 303 and r.headers["location"] == f"/proxy-hosts?edit={created['id']}"
+    html = client.get(r.headers["location"]).text
+    assert "edit-me.example.com" in html and "http://u:1" in html
 
 
 def test_edit_proxy_host_page_404s_for_unknown_id(client: TestClient) -> None:
@@ -1574,7 +1571,9 @@ def test_edit_proxy_host_page_redirects_when_not_logged_in(app: Any) -> None:
 def test_proxy_hosts_list_page_links_to_new_page(client: TestClient, service: Service) -> None:
     r = client.get("/proxy-hosts")
     assert r.status_code == 200
-    assert 'href="/proxy-hosts/new"' in r.text
+    assert (
+        'id="add-host"' in r.text and "proxyHostDrawer" in client.get("/static/proxy_hosts.js").text
+    )
 
 
 def test_create_is_db_only_even_when_the_backend_is_unreachable(

@@ -35,6 +35,8 @@ def _isolated_settings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Itera
     monkeypatch.setenv("SERVICES_YAML_PATH", str(yaml_path))
     monkeypatch.setenv("DRY_RUN", "true")
     monkeypatch.setenv("RUN_MIGRATIONS_ON_START", "false")
+    # Tests check the Save to YAML / Push steps themselves; autosave has its own tests.
+    monkeypatch.setenv("REGISTRY_AUTOSAVE", "false")
     monkeypatch.setenv("LOG_FORMAT", "console")
     monkeypatch.setenv("LOG_LEVEL", "WARNING")
     # Tests must never sit through the real pauses between backup retries or
