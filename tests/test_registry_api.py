@@ -593,8 +593,8 @@ def test_service_detail_page_renders_for_admin(client: TestClient) -> None:
     r = client.get("/services/media")
     assert r.status_code == 200
     assert "Probes" in r.text
-    assert "http://10.0.0.5/health" in r.text  # probe config embedded for the editor
-    assert 'id="probe-editor"' in r.text
+    assert "http://10.0.0.5/health" in r.text  # probe config embedded for the drawer
+    assert "function probeDrawer" in client.get("/static/service.js").text
 
 
 def test_service_detail_page_404s_for_unknown_service(client: TestClient) -> None:
@@ -652,5 +652,5 @@ def test_service_detail_page_has_group_field(client: TestClient) -> None:
     _make_service(client, node["id"], group="media")
     r = client.get("/services/media")
     assert r.status_code == 200
-    assert 'id="f-group"' in r.text
     assert '"group": "media"' in r.text
+    assert 'key: "group", label: "Group"' in client.get("/static/service.js").text

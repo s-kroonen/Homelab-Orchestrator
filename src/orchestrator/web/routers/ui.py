@@ -28,18 +28,16 @@ from orchestrator.db.models import (
     Service,
     ServiceState,
 )
-from orchestrator.domain.enums import BackupMode, GuestKind, RouterProvider
+from orchestrator.domain.enums import BackupMode, GuestKind
 from orchestrator.ipdiscovery.discovery import SOURCE_LABELS, effective_ip, transport_block
 from orchestrator.pipelines.wake import wake_is_unsupported
 from orchestrator.registry.backup_plan import BLOCKER_NO_POWER_TARGET
 from orchestrator.registry.loader import compute_registry_diff
-from orchestrator.registry.probe_specs import PROBE_SPECS
 from orchestrator.registry.tree import TreeIndex
 from orchestrator.web.auth import get_current_admin, login_redirect
 from orchestrator.web.deps import SessionDep, SettingsDep
 from orchestrator.web.routers.activity import KINDS, build_feed, filter_options
 from orchestrator.web.routers.backup_policies import policy_to_dict
-from orchestrator.web.routers.dashboard import service_detail
 from orchestrator.web.routers.geo_traffic import build_geo_view
 from orchestrator.web.routers.traffic import (
     DEFAULT_RANGE,
@@ -304,76 +302,6 @@ async def dashboard_page(
                 {"id": p.id, "name": p.name}
                 for p in session.exec(select(BackupPolicy).order_by(BackupPolicy.name)).all()
             ],
-        },
-    )
-
-
-@router.get("/services/{slug}", response_model=None)
-async def service_detail_page(
-    slug: str, request: Request, session: SessionDep, settings: SettingsDep
-) -> HTMLResponse | RedirectResponse:
-    """Edit view for one service and its probes. Server-renders the initial
-    state; every change goes through the ``/api/registry/*`` JSON endpoints."""
-    admin = get_current_admin(request, session)
-    if admin is None:
-        return login_redirect(request)
-
-    svc = session.exec(select(Service).where(Service.slug == slug)).first()
-    if svc is None:
-        raise HTTPException(status_code=404, detail=f"no service {slug!r}")
-
-    nodes = session.exec(select(Node).order_by(Node.name)).all()
-    policies = session.exec(select(BackupPolicy).order_by(BackupPolicy.name)).all()
-    other_slugs = [
-        s for s in session.exec(select(Service.slug).order_by(Service.slug)).all() if s != slug
-    ]
-    existing_groups = sorted({g for g in session.exec(select(Service.group)).all() if g})
-    tree = TreeIndex.build(session)
-    below = {d.slug for d in tree.descendants(svc)}
-    parent_choices = [s for s in other_slugs if s not in below]
-    probe_kinds = [
-        {"kind": k.value, "summary": spec.summary, "default_timeout_s": spec.default_timeout_s}
-        for k, spec in PROBE_SPECS.items()
-    ]
-    diff = compute_registry_diff(session)
-    state = session.get(ServiceState, svc.id) if svc.id is not None else None
-    last_results = state.last_probe_results if state else []
-    health = {
-        "verdict": state.last_verdict.value if state else "unknown",
-        "verdict_at": (
-            state.last_verdict_at.isoformat() if state and state.last_verdict_at else None
-        ),
-        "reason": (state.notes or "") if state else "",
-        "down_label": _down_label(state),
-        "guest": guest_gate_view(state),
-        # Last scan's result per probe name, for the Probes tab ("skipped —
-        # guest stopped" when the guest gate kept them from running).
-        "probe_results": {
-            str(r.get("probe_name")): _probe_row(r)
-            for r in last_results
-            if r.get("kind") != "guest"
-        },
-    }
-
-    return _templates.TemplateResponse(
-        request,
-        "service_detail.html",
-        {
-            "admin": admin,
-            "health": health,
-            "service": service_detail(session, svc),
-            "nodes": [{"id": n.id, "name": n.name} for n in nodes],
-            "policies": [{"id": p.id, "name": p.name} for p in policies],
-            "other_slugs": other_slugs,
-            "parent_choices": parent_choices,
-            "requirable": _requirable_services(session, exclude=slug),
-            "existing_groups": existing_groups,
-            "guest_kinds": [k.value for k in GuestKind],
-            "probe_kinds": probe_kinds,
-            "providers": [p.value for p in RouterProvider],
-            "registry_dirty": diff.dirty,
-            "yaml_path": diff.yaml_path,
-            "ping_transport": _ping_transport(settings.ip_discovery_transport),
         },
     )
 

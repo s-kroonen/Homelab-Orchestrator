@@ -288,13 +288,10 @@ def test_dashboard_lists_the_sub_service_under_its_parent(client: TestClient) ->
     assert html.index("portainer") < html.index("nginx container")
     assert "↳" in html and "1 sub" in html
     page = client.get("/services/nginx").text
-    assert 'id="f-parent"' in page and "data-sub-only" in page and 'id="sub-add-btn"' in page
-    assert '<option value="portainer">' in page
+    assert '"parent_choices": ["portainer"]' in page
+    assert 'key: "parent", label: "Part of"' in client.get("/static/service.js").text
     # a root cannot be made a child of its own subtree
-    assert (
-        '<option value="nginx">'
-        not in client.get("/services/portainer").text.split("f-parent")[1][:400]
-    )
+    assert '"parent_choices": []' in client.get("/services/portainer").text
 
 
 def test_cli_parent_and_gate(registry: Path) -> None:

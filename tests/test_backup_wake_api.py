@@ -282,14 +282,10 @@ def test_policies_list_has_a_needs_column(client: TestClient) -> None:
 def test_service_backups_tab_has_the_plan_panel_and_requirements(client: TestClient) -> None:
     _topology(client)
     html = client.get("/services/app").text
-    assert 'id="backup-plan-panel"' in html and "Backup plan" in html
-    assert "/api/backup/plan?slug=app" in html
-    assert "Extra requirements for this service" in html
-    assert 'id="f-backup-requires"' in html
-    assert (
-        'value="truenas"' in html
-        and 'value="app"' not in html.split('id="f-backup-requires"')[1].split("</div>")[0]
-    )
-    assert 'id="run-backup-btn"' in html and "Wakes what the backup plan lists first" in html
-    assert "backupInFlight" in html  # the 60s reload guard knows about a running backup
-    assert "reqFormDirty" in html
+    # What may be woken first is in the page for the Backup drawer's checklist...
+    assert '"requirable": [' in html and '"slug": "truenas"' in html
+    js = client.get("/static/service.js").text
+    assert 'key: "backup_requires", label: "Also wake before its backup", type: "checklist"' in js
+    # ...and the Related tab shows the plan and runs the backup, following its steps.
+    assert '"/api/backup/plan?slug="' in js and "What a backup wakes first" in js
+    assert '"/api/backup/" + enc(slug) + "?verify=true"' in js and "backupSteps" in js

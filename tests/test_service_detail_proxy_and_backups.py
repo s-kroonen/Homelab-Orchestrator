@@ -33,10 +33,10 @@ def test_service_page_renders_proxy_hosts_section_and_form(client: TestClient) -
     assert page.status_code == 200, page.text
     assert "Proxy hosts" in page.text
     assert "media.example.com" in page.text
-    # No more inline add form — a link to the dedicated add page, pre-filled
-    # with this service's id, replaces it (see docs/proxy_hosts.md).
-    assert f'href="/proxy-hosts/new?service_id={svc["id"]}"' in page.text
-    assert "/api/proxy-hosts" in page.text
+    # Adding and editing open the proxy host drawer, pre-filled for this service.
+    js = client.get("/static/service.js").text
+    assert "O.proxyHostDrawer({" in js and "serviceId: S.id" in js
+    assert '"/api/proxy-hosts"' in js  # each host's push state
 
 
 def test_service_page_proxy_host_list_is_scoped_to_this_service(client: TestClient) -> None:
@@ -62,9 +62,8 @@ def test_service_page_renders_backups_section(client: TestClient) -> None:
 
     page = client.get(f"/services/{svc['slug']}")
     assert page.status_code == 200, page.text
-    assert "Backups" in page.text
-    assert "backups-body" in page.text
-    assert f"/api/backups?slug={svc['slug']}" in page.text
+    assert "Backups" in page.text and 'id="backups-card"' in page.text
+    assert '"/api/backups?slug="' in client.get("/static/service.js").text
 
 
 def test_service_page_has_manual_backup_trigger_button(client: TestClient) -> None:
@@ -75,8 +74,8 @@ def test_service_page_has_manual_backup_trigger_button(client: TestClient) -> No
 
     page = client.get(f"/services/{svc['slug']}")
     assert page.status_code == 200, page.text
-    assert 'id="run-backup-btn"' in page.text
-    assert "/api/backup/${encodeURIComponent(SERVICE.slug)}?verify=true" in page.text
+    js = client.get("/static/service.js").text
+    assert '"Back up now"' in js and "function backupNow" in js
 
 
 def test_service_page_shows_guest_power_buttons_when_service_has_a_guest(
@@ -87,9 +86,10 @@ def test_service_page_shows_guest_power_buttons_when_service_has_a_guest(
 
     page = client.get(f"/services/{svc['slug']}")
     assert page.status_code == 200, page.text
-    assert 'id="guest-start-btn"' in page.text
-    assert 'id="guest-stop-btn"' in page.text
-    assert "/api/services/${encodeURIComponent(SERVICE.slug)}/guest/power" in page.text
+    # The guest's start / restart / stop sit in the header's menu, through the controller API.
+    js = client.get("/static/service.js").text
+    assert '"Start the guest"' in js and '"Stop the guest…"' in js
+    assert 'base + "/actions/" + action' in js and "/controller?live=true" in js
 
 
 def test_service_page_hides_guest_power_row_when_service_has_no_guest(
@@ -100,13 +100,13 @@ def test_service_page_hides_guest_power_row_when_service_has_no_guest(
 
     page = client.get(f"/services/{svc['slug']}")
     assert page.status_code == 200, page.text
-    # The buttons are still in the markup (hidden client-side by JS, same
-    # pattern as #wake-unsupported-banner) — this proves the hiding logic
-    # runs, not that the markup is absent.
-    assert 'guest-power-row").hidden = !hasGuest' in page.text
+    # Offered only when the controller says the guest can be acted on.
+    assert "const guestCtl = ctlInfo && ctlInfo.guest && ctlInfo.guest.available" in (
+        client.get("/static/service.js").text
+    )
 
 
-def test_service_page_renders_tablist_and_five_panels_with_counts(client: TestClient) -> None:
+def test_service_page_renders_tablist_and_four_panels_with_counts(client: TestClient) -> None:
     node = _make_node(client)
     svc = _make_service(client, node["id"], slug="media")
     for name in ("web", "port"):
@@ -125,34 +125,25 @@ def test_service_page_renders_tablist_and_five_panels_with_counts(client: TestCl
     )
     assert r.status_code == 201, r.text
 
-    page = client.get(f"/services/{svc['slug']}")
-    assert page.status_code == 200, page.text
-    html = page.text
+    html = client.get(f"/services/{svc['slug']}").text
     assert 'role="tablist"' in html
-    for tab in ("overview", "probes", "proxy-hosts", "backups", "stack"):
-        assert f'id="tab-{tab}" data-tab="{tab}"' in html
-        assert f'aria-controls="panel-{tab}"' in html
-        assert f'role="tabpanel" id="panel-{tab}" aria-labelledby="tab-{tab}"' in html
-    assert html.count('role="tab" class="tab"') == 5
-    assert html.count('class="tabpanel" role="tabpanel"') == 5
-    assert '<span class="tab-count" id="probes-count">2</span>' in html
-    assert '<span class="tab-count" id="proxy-hosts-count">1</span>' in html
-    # Overview is selected server-side; the others start hidden until the JS
-    # reads location.hash.
-    assert 'aria-selected="true" tabindex="0">Overview' in html
-    assert 'id="panel-probes" aria-labelledby="tab-probes" tabindex="0" hidden' in html
-    # Each panel still carries its existing content.
-    assert 'id="svc-save-btn"' in html and 'id="health-strip"' in html
-    assert 'id="probe-add-btn"' in html and 'id="ph-body"' in html
-    assert 'id="run-backup-btn"' in html
-    # The tab survives the auto-reload via the hash; the guard still exists.
-    assert "history.replaceState" in html
-    assert "function shouldSkipAutoReload()" in html
+    for tab in ("overview", "configuration", "related", "history"):
+        assert f'<button role="tab" data-tab="{tab}">' in html
+        assert f'<div role="tabpanel" data-tab="{tab}" hidden>' in html
+    assert html.count('role="tab" ') == 4
+    # The counts come from the data in the page.
+    view = client.get(f"/api/views/service/{svc['slug']}").json()
+    assert len(view["service"]["probes"]) == 2 and len(view["service"]["proxy_hosts"]) == 1
+    js = client.get("/static/service.js").text
+    assert '$("#n-probes").textContent' in js and '$("#n-related").textContent' in js
+    # Old links to a part of the page land on the tab that holds it now.
+    assert 'probes: "configuration"' in js and 'deploys: "related"' in js
 
 
-def test_service_page_tab_counts_are_zero_without_probes_or_hosts(client: TestClient) -> None:
+def test_service_view_is_the_page_data(client: TestClient) -> None:
     node = _make_node(client)
     svc = _make_service(client, node["id"], slug="media")
-    html = client.get(f"/services/{svc['slug']}").text
-    assert '<span class="tab-count" id="probes-count">0</span>' in html
-    assert '<span class="tab-count" id="proxy-hosts-count">0</span>' in html
+    view = client.get(f"/api/views/service/{svc['slug']}").json()
+    assert view["service"]["probes"] == [] and view["service"]["proxy_hosts"] == []
+    assert view["row"]["state"]["label"] == "unknown" and view["health"]["verdict"] == "unknown"
+    assert client.get("/api/views/service/nope").status_code == 404

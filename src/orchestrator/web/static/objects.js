@@ -48,7 +48,7 @@
       backup_policy_id: svc.backup_policy_id == null ? "" : String(svc.backup_policy_id),
       enabled: svc.enabled, wake_on_hit_enabled: svc.wake_on_hit_enabled,
     } : {
-      name: pre.name || "", slug: pre.slug || slugify(pre.name), parent: "", node_id: pre.node_id != null ? String(pre.node_id) : (view.nodes[0] ? String(view.nodes[0].id) : ""),
+      name: pre.name || "", slug: pre.slug || slugify(pre.name), parent: pre.parent || "", node_id: pre.node_id != null ? String(pre.node_id) : (view.nodes[0] ? String(view.nodes[0].id) : ""),
       guest_kind: pre.guest_kind || "vm", guest_id: pre.guest_id == null ? null : pre.guest_id, group: "",
       backup_policy_id: "", enabled: true, wake_on_hit_enabled: true,
     };
@@ -381,5 +381,32 @@
     return true;
   }
 
-  window.Objects = { bulk, slugify, serviceDrawer, serviceActions, deleteService, nodeDrawer, nodePower, deleteNode, proxyHostDrawer, deleteProxyHosts, catalogFor };
+  // --- activity -------------------------------------------------------------------------------
+  // One line per event of GET /api/activity: {cls, tag, text, href} - the service History tab,
+  // the dashboard and the Activity page all describe an event the same way.
+  const RUN_CLS = { succeeded: "ok", failed: "fail", running: "pending", queued: "pending", skipped: "warn", cancelled: "off" };
+  const SEV_CLS = { error: "fail", critical: "fail", warn: "warn", info: "ok" };
+  function describeEvent(ev) {
+    if (ev.type === "run") {
+      const what = ev.kind.charAt(0).toUpperCase() + ev.kind.slice(1);
+      return { cls: RUN_CLS[ev.status] || "off", tag: ev.kind, text: what + " " + (ev.status === "succeeded" ? "ok" : ev.status) +
+        (ev.error ? ": " + ev.error : "") + (ev.actor && ev.actor !== "system" ? " · " + ev.actor : ""), service: ev.service };
+    }
+    if (ev.type === "alert") {
+      return { cls: ev.suppressed ? "off" : SEV_CLS[ev.severity] || "off", tag: "alert", text: ev.title + (ev.suppressed ? " (not sent: " + (ev.suppressed_reason || "muted") + ")" : ""), href: ev.link, service: ev.service };
+    }
+    const action = String(ev.action || "").replace(/[._]/g, " ");
+    const target = String(ev.target || "").replace(/^[a-z_]+:/, "");
+    return { cls: ev.result === "ok" ? "pending" : "fail", tag: "change", text: (ev.actor || "someone") + " · " + action + (target ? " " + target : ""), service: ev.service };
+  }
+  function eventRow(ev, opts) {
+    const d = describeEvent(ev);
+    const when = el("time", { "data-ts": ev.at, class: "mono faint", style: { fontSize: "12px", whiteSpace: "nowrap" } }, window.OrchTime ? window.OrchTime.fmt(ev.at) : ev.at);
+    return el("div", { class: "event-row" }, when, el("span", { class: "pill " + d.cls }, d.tag),
+      el("span", { class: "event-text" }, d.text,
+        opts && opts.service && d.service ? [" · ", el("a", { href: "/services/" + encodeURIComponent(d.service) }, d.service)] : null),
+      d.href ? el("a", { href: d.href, class: "faint", style: { fontSize: "12px" } }, "open") : null);
+  }
+
+  window.Objects = { bulk, slugify, serviceDrawer, serviceActions, deleteService, nodeDrawer, nodePower, deleteNode, proxyHostDrawer, deleteProxyHosts, catalogFor, describeEvent, eventRow };
 })();

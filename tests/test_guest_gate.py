@@ -536,11 +536,13 @@ def test_dashboard_table_shows_guest_status_enabled_and_wake_on_hit(client: Test
 def test_service_page_shows_guest_gate_and_skipped_probes(client: TestClient) -> None:
     r = client.get("/services/nas")
     assert r.status_code == 200, r.text
-    assert 'id="guest-gate"' in r.text
-    assert "storage" in r.text and "stopped" in r.text
-    assert 'class="badge down"' in r.text
-    assert "Skipped on the last scan — guest stopped" in r.text
-    assert '"state": "skipped"' in r.text  # LAST_PROBE_RESULTS for the Probes tab
+    # The last scan, guest gate included, is in the page for the Health card.
+    assert '"guest": {' in r.text and '"guest_state": "stopped"' in r.text
+    assert "storage" in r.text
+    assert '"state": "skipped"' in r.text  # each probe's last result
+    assert '"label": "stopped"' in r.text  # off on purpose: off, never failed
+    js = client.get("/static/service.js").text
+    assert 'name: "guest gate"' in js
 
 
 def test_series_api_includes_service_state(client: TestClient) -> None:

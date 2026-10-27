@@ -240,10 +240,11 @@ def test_service_page_renders_the_address_block(client: TestClient) -> None:
         )
         s.commit()
     html = client.get("/services/media").text
-    assert 'id="address"' in html and 'id="addr-discover-btn"' in html
-    assert 'id="f-ip"' in html and 'id="addr-ping-btn"' in html
     assert "10.0.0.21" in html and MAC in html
-    assert 'data-kind="ping"' in html  # the probe editor knows the kind
+    js = client.get("/static/service.js").text
+    assert '"/ip/discover"' in js and "function addPing" in js  # find now, one-click ping
+    assert 'key: "ip_address", label: "Address by hand"' in js
+    assert 'show: is("ping")' in js  # the probe drawer knows the kind
 
 
 def test_dashboard_shows_the_ip_under_the_name(client: TestClient) -> None:

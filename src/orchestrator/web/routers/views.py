@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from sqlalchemy import func
 from sqlmodel import Session, select
@@ -27,10 +27,20 @@ from orchestrator.db.models import (
     ServiceState,
 )
 from orchestrator.domain.enums import GuestKind, PipelineKind, PipelineStatus
+from orchestrator.registry.probe_specs import PROBE_SPECS
 from orchestrator.registry.tree import TreeIndex
 from orchestrator.web.auth import get_current_admin, login_redirect, require_admin
-from orchestrator.web.deps import SessionDep
-from orchestrator.web.routers.ui import _down_label, _guest_cell_for, _service_choices
+from orchestrator.web.deps import SessionDep, SettingsDep
+from orchestrator.web.routers.dashboard import service_detail
+from orchestrator.web.routers.ui import (
+    _down_label,
+    _guest_cell_for,
+    _ping_transport,
+    _probe_row,
+    _requirable_services,
+    _service_choices,
+    guest_gate_view,
+)
 from orchestrator.web.templating import templates
 
 pages = APIRouter(tags=["views"])
@@ -293,3 +303,88 @@ async def admins_page(request: Request, session: SessionDep) -> HTMLResponse | R
 async def proxy_host_services(session: SessionDep) -> list[dict[str, Any]]:
     """The proxy host drawer's service picker, each service with its address ("Use it")."""
     return _service_choices(session)
+
+
+# --- one service ------------------------------------------------------------------------------
+
+
+def health_view(session: Session, svc: Service) -> dict[str, Any]:
+    """The last scan of one service: verdict, why, the guest gate and each probe's result."""
+    state = session.get(ServiceState, svc.id) if svc.id is not None else None
+    results = state.last_probe_results if state else []
+    return {
+        "verdict": state.last_verdict.value if state else "unknown",
+        "verdict_at": (
+            state.last_verdict_at.isoformat() if state and state.last_verdict_at else None
+        ),
+        "reason": (state.notes or "") if state else "",
+        "down_label": _down_label(state),
+        "guest": guest_gate_view(state),
+        "probe_results": {
+            str(r.get("probe_name")): _probe_row(r) for r in results if r.get("kind") != "guest"
+        },
+    }
+
+
+def service_view(session: Session, settings: Any, svc: Service) -> dict[str, Any]:
+    """Everything the service page shows, from the database only."""
+    detail = service_detail(session, svc)
+    row = next((r for r in service_rows(session) if r["slug"] == svc.slug), None)
+    tree = TreeIndex.build(session)
+    below = {d.slug for d in tree.descendants(svc)}
+    others = [s.slug for s in session.exec(select(Service).order_by(Service.slug)).all()]
+    policy = (
+        session.get(BackupPolicy, svc.backup_policy_id)
+        if svc.backup_policy_id is not None
+        else None
+    )
+    return {
+        "service": detail,
+        "row": row,
+        "health": health_view(session, svc),
+        "policy": (
+            {
+                "name": policy.name,
+                "schedule_cron": policy.schedule_cron,
+                "retention": policy.retention,
+            }
+            if policy
+            else None
+        ),
+        "other_slugs": [x for x in others if x != svc.slug],
+        "parent_choices": [x for x in others if x != svc.slug and x not in below],
+        "requirable": _requirable_services(session, exclude=svc.slug),
+        "probe_kinds": [
+            {"kind": k.value, "summary": spec.summary, "default_timeout_s": spec.default_timeout_s}
+            for k, spec in PROBE_SPECS.items()
+        ],
+        "ping_transport": _ping_transport(settings.ip_discovery_transport),
+        **{k: v for k, v in services_view(session).items() if k != "rows"},
+    }
+
+
+def _service_or_404(session: Session, slug: str) -> Service:
+    svc = session.exec(select(Service).where(Service.slug == slug)).first()
+    if svc is None:
+        raise HTTPException(status_code=404, detail=f"no service {slug!r}")
+    return svc
+
+
+@api.get("/service/{slug}")
+async def service_api(slug: str, session: SessionDep, settings: SettingsDep) -> dict[str, Any]:
+    return service_view(session, settings, _service_or_404(session, slug))
+
+
+@pages.get("/services/{slug}", response_model=None)
+async def service_page(
+    slug: str, request: Request, session: SessionDep, settings: SettingsDep
+) -> HTMLResponse | RedirectResponse:
+    admin = get_current_admin(request, session)
+    if admin is None:
+        return login_redirect(request)
+    svc = _service_or_404(session, slug)
+    return templates.TemplateResponse(
+        request,
+        "service_detail.html",
+        {"admin": admin, "service": svc, "initial": service_view(session, settings, svc)},
+    )

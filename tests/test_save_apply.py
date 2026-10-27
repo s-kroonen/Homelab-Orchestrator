@@ -32,11 +32,13 @@ def client(monkeypatch: pytest.MonkeyPatch) -> Any:
         yield c
 
 
-def test_service_page_has_save_and_apply(client: TestClient) -> None:
-    html = client.get("/services/media").text
-    for button in ("svc-save-btn", "svc-apply-btn", "probe-apply-btn", "req-apply-btn"):
-        assert f'id="{button}"' in html
-    assert "PrevPage.go(" in html and "finishSave()" in html
+def test_service_page_edits_in_drawers(client: TestClient) -> None:
+    assert client.get("/services/media").status_code == 200
+    js = client.get("/static/service.js").text
+    # One way to edit: each card's Edit opens a drawer; Save applies it (no Apply/Back pages).
+    for fn in ("editGeneral", "editWhere", "editPower", "editBackup", "probeDrawer"):
+        assert f"function {fn}" in js
+    assert "PrevPage" not in js
 
 
 @pytest.mark.parametrize("path", ["/backup-policies/new", "/backup-policies/nightly/edit"])

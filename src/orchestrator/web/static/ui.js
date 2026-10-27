@@ -44,6 +44,8 @@
     return node;
   }
   function clear(node) { while (node.firstChild) node.removeChild(node.firstChild); return node; }
+  // Replace a node's children; arrays (nested too), null and false are fine.
+  function fill(node, ...children) { return append(clear(node), children); }
   const pill = (cls, text) => el("span", { class: "pill " + (cls || "off") }, text);
 
   // --- API and formatting ----------------------------------------------------------------------
@@ -238,6 +240,21 @@
         input.addEventListener("change", () => set(f.key, input.checked));
         controls[f.key] = { input, err };
         return el("div", { class: "field check" }, input, el("label", { for: id }, f.label), help, err);
+      }
+      if (f.type === "checklist") {
+        // value: an array of the checked option values; options: [{value, label, note, warn}]
+        const chosen = new Set(Array.isArray(v) ? v : []);
+        const box = el("div", { class: "checklist", id, role: "group", "aria-describedby": describedBy });
+        for (const o of f.options || []) {
+          const cb = el("input", { type: "checkbox", value: o.value, disabled: !!f.readonly });
+          cb.checked = chosen.has(o.value);
+          cb.addEventListener("change", () => set(f.key, Array.from(box.querySelectorAll("input:checked")).map((x) => x.value)));
+          box.append(el("label", { class: "inline" }, cb, " ", o.label, o.note ? el("span", { class: "faint" }, " " + o.note) : null,
+            o.warn ? el("span", { class: "pill fail", title: o.warn, style: { marginLeft: "4px" } }, "cannot be woken") : null));
+        }
+        if (!(f.options || []).length) box.append(el("span", { class: "faint" }, f.empty || "Nothing to choose."));
+        controls[f.key] = { input: box, err };
+        return el("div", { class: "field" }, el("div", { class: "label" }, f.label), help, box, err);
       }
       if (f.type === "select") {
         input = el("select", { id, "aria-describedby": describedBy, disabled: !!f.readonly });
@@ -452,6 +469,7 @@
   //   bulk: (rows) => [{label, onClick, danger}], empty: {title, text, action: Node},
   //   sort: {key, dir: 1|-1}, noun: ["service", "services"], urlState: true, children: (r) => parentKey,
   //   groupBy: [{key: "node", label: "Node", of: (r) => "node-a"}] (adds a "Group by" select),
+  //   plain: true (inside a card already: no card, filter box or footer of its own),
   // }) -> {setRows(rows), get selected(), clearSelection()}
   function table(container, opts) {
     const o = Object.assign({ urlState: true, noun: ["item", "items"] }, opts);
@@ -483,7 +501,9 @@
     const thead = el("thead"); const tbody = el("tbody");
     const tableEl = el("table", { class: "dt" }, thead, tbody);
     const foot = el("div", { class: "dt-foot" });
-    const card = el("div", { class: "card flush" }, el("div", { class: "dt-scroll" }, tableEl), foot);
+    // plain: the table sits inside a card already (no second card, no filter box).
+    const card = el("div", { class: o.plain ? "dt-plain" : "card flush" }, el("div", { class: "dt-scroll" }, tableEl), o.plain ? null : foot);
+    if (o.plain) toolbar.hidden = true;
     const bulkbar = el("div", { class: "bulkbar", hidden: true, role: "region", "aria-label": "Selected rows" });
     clear(container).append(toolbar, card, bulkbar);
 
@@ -629,7 +649,7 @@
       clear(foot).append(
         el("span", {}, rows.length === state.rows.length ? state.rows.length + " " + (state.rows.length === 1 ? o.noun[0] : o.noun[1])
           : rows.length + " of " + state.rows.length + " " + o.noun[1] + " shown"),
-        o.age || null);
+        o.age || "");
       renderBulk();
     }
     function renderBulk() {
@@ -658,5 +678,5 @@
     };
   }
 
-  window.UI = { $, $$, el, append, clear, pill, api, fmt, menu, menuButton, confirm, drawer, tabs, region, table, closeMenu };
+  window.UI = { $, $$, el, append, clear, fill, pill, api, fmt, menu, menuButton, confirm, drawer, tabs, region, table, closeMenu };
 })();

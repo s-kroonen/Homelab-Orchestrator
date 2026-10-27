@@ -390,7 +390,8 @@ def test_service_detail_page_has_autorefresh_script(client: TestClient) -> None:
 
     r = client.get("/services/svc")
     assert r.status_code == 200, r.text
-    assert "setInterval" in r.text
-    assert "location.reload" in r.text
-    # The guard that keeps the refresh from clobbering an in-progress edit.
-    assert "shouldSkipAutoReload" in r.text
+    # Refreshed in place from its JSON view on live events, never by reloading the page.
+    assert client.get("/api/views/service/svc").status_code == 200
+    js = client.get("/static/service.js").text
+    assert '"/api/views/service/"' in js and 'topics: ["health", "registry", "run"]' in js
+    assert "location.reload" not in js
