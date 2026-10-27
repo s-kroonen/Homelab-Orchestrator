@@ -2,7 +2,8 @@
 {% block title %}homelab-orchestrator — connections{% endblock %}
 {% block content %}
   <section>
-    <h2>Connections</h2>
+    <h2>Connectivity</h2>
+    {% set tab = "connections" %}{% include "_infra_tabs.html" %}
     <p class="msg">
       The systems the orchestrator talks to: Proxmox, backup server, Traefik Manager, Portainer (as many as you
       have), Home Assistant, MQTT, alert channels and SSH. They are kept in <code id="c-path">connections.yaml</code>
@@ -124,7 +125,8 @@
     });
     const edit = el("button", { className: "small", textContent: "Edit" });
     edit.addEventListener("click", () => openForm(spec, c));
-    const btns = [test, " ", edit];
+    const open = el("a", { className: "btn small secondary", href: `/infra/connections/${encodeURIComponent(c.id)}`, textContent: "Open" });
+    const btns = [open, " ", test, " ", edit];
     if (spec.multi && !c.default && c.enabled && c.source !== "env") {
       const mk = el("button", { className: "small secondary", textContent: "Make default" });
       mk.addEventListener("click", async () => {

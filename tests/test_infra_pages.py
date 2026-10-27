@@ -81,10 +81,10 @@ def test_pages_render_shared_chrome(client: TestClient, path: str) -> None:
     assert '<aside class="sidebar">' in r.text
 
 
-def test_connectivity_page_fetches_infra_status(client: TestClient) -> None:
+def test_connectivity_page_fetches_the_overview(client: TestClient) -> None:
     r = client.get("/infra")
     assert r.status_code == 200, r.text
-    assert "/api/infra/status" in r.text
+    assert "/api/infra/overview" in r.text
     assert "orchestrator-cli check" in r.text
 
 

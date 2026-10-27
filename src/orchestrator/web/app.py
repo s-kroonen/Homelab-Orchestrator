@@ -64,6 +64,7 @@ from orchestrator.web.routers import (
     health,
     hooks,
     infra,
+    infra_overview,
     linked,
     maintenance,
     mcp_endpoint,
@@ -377,6 +378,7 @@ def create_app() -> FastAPI:
     app.include_router(sources.router)
     app.include_router(archive.router)
     app.include_router(connections.router)
+    app.include_router(infra_overview.router)
     app.include_router(hooks.router)
     app.include_router(events.router)
     app.include_router(stacks.router)

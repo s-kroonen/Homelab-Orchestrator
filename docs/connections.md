@@ -42,9 +42,28 @@ Edit it by hand if you like: the running orchestrator notices the change within 
 that cannot be read does not take anything down — the error is shown on the Connections page and
 the previous settings stay in force.
 
-## The page
+## Where it lives in the dashboard
 
-**Connections** lists every kind with its connections, a **Test** button each (read-only: it
+**Connectivity** (Monitoring menu) has three tabs:
+
+* **Overview** - is each connection reachable? One card per *connection* (a Proxmox, each
+  Portainer, PBS, Traefik Manager...), never the guests, stacks or containers inside it, with a
+  state (reachable / unreachable / switched off / incomplete / not checked in dry-run), the
+  latency, and buttons to **Open** it, jump to its **Web UI**, or **Manage** it. The flat command
+  line equivalent is still `orchestrator-cli check`.
+* **Connections** - add, edit, test, delete (below).
+* **Guests** - the Proxmox guests list (it used to be a menu entry of its own).
+
+**Open** on a card is the connection's own page (`/infra/connections/<id>`): what is up inside it.
+For Portainer its environments (up or down, running and stopped containers, stacks) with a button
+into the Portainer page already set to that instance; for Proxmox its nodes (in the cluster? own
+API answering? version, latency) and how many guests run, with a button to the Guests tab; for PBS
+the datastore usage and a button to Snapshots; for Traefik Manager how many routes it knows; for
+the power manager its targets. `/connections` redirects to the Connections tab.
+
+## The Connections tab
+
+It lists every kind with its connections, a **Test** button each (read-only: it
 logs in, lists something, changes nothing; in dry-run mode nothing is contacted), and **Add** /
 **Edit** forms built from the kind's fields. Saving applies at once: the adapters are rebuilt and
 swapped in behind the same handles, so running schedulers and collectors pick up the new values.

@@ -84,6 +84,7 @@ ADMIN_PAGES = [
     "/activity",
     "/infra",
     "/infra/guests",
+    "/infra/connections",
     "/infra/snapshots",
 ]
 
@@ -99,7 +100,6 @@ NAV_GROUPS = [
         [
             ("/activity", "Activity"),
             ("/infra", "Connectivity"),
-            ("/infra/guests", "Guests"),
             ("/infra/snapshots", "Snapshots"),
         ],
     ),
@@ -126,7 +126,9 @@ def test_admin_pages_share_one_grouped_sidebar(client: TestClient) -> None:
         ("/traffic", '/traffic" class="current"'),
         ("/activity", '/activity" class="current"'),
         ("/infra", '/infra" class="current"'),
-        ("/infra/guests", '/infra/guests" class="current"'),
+        # Guests and Connections are tabs of Connectivity, which stays the current link
+        ("/infra/guests", '/infra" class="current"'),
+        ("/infra/connections", '/infra" class="current"'),
         ("/infra/snapshots", '/infra/snapshots" class="current"'),
     ]:
         r = client.get(path)

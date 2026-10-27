@@ -12,7 +12,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import HTMLResponse, PlainTextResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, Field
@@ -133,6 +133,12 @@ def _view(settings: Settings) -> dict[str, Any]:
 
 
 @pages.get("/connections", response_model=None)
+async def connections_page_moved() -> RedirectResponse:
+    """The Connections page is a tab of Connectivity now."""
+    return RedirectResponse("/infra/connections", status.HTTP_307_TEMPORARY_REDIRECT)
+
+
+@pages.get("/infra/connections", response_model=None)
 async def connections_page(
     request: Request, session: SessionDep
 ) -> HTMLResponse | RedirectResponse:
@@ -140,6 +146,19 @@ async def connections_page(
     if admin is None:
         return login_redirect(request)
     return _templates.TemplateResponse(request, "connections.html", {"admin": admin})
+
+
+@pages.get("/infra/connections/{ident}", response_model=None)
+async def connection_page(
+    ident: str, request: Request, session: SessionDep
+) -> HTMLResponse | RedirectResponse:
+    """What is up inside one connection (its data comes from ``/api/infra/connections/{id}``)."""
+    admin = get_current_admin(request, session)
+    if admin is None:
+        return login_redirect(request)
+    return _templates.TemplateResponse(
+        request, "infra_connection.html", {"admin": admin, "ident": ident}
+    )
 
 
 @api.get("")

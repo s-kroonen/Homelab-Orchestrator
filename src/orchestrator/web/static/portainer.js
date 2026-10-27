@@ -311,7 +311,9 @@
     try {
       const list = await apiFetch("GET", "/api/portainer/instances", undefined, { suppressToast: true });
       const sel = $("p-inst");
-      sel.replaceChildren(...list.map((i) => { const o = el("option", "", i.name + (i.default ? " (default)" : "") + (i.configured ? "" : " - not set up")); o.value = i.id; o.selected = i.default; return o; }));
+      const asked = new URLSearchParams(location.search).get("instance") || "";
+      const pick = list.some((i) => i.id === asked) ? asked : (list.find((i) => i.default) || list[0] || {}).id;
+      sel.replaceChildren(...list.map((i) => { const o = el("option", "", i.name + (i.default ? " (default)" : "") + (i.configured ? "" : " - not set up")); o.value = i.id; o.selected = i.id === pick; return o; }));
       $("p-inst-wrap").hidden = list.length < 2;
     } catch (e) { /* the page works with the default one */ }
   }

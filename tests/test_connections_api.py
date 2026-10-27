@@ -255,8 +255,10 @@ def test_cli_adds_lists_and_hides_secrets(client: TestClient) -> None:
 
 
 def test_the_page_renders_for_admins_only(client: TestClient) -> None:
-    page = client.get("/connections")
+    page = client.get("/infra/connections")
     assert page.status_code == 200 and "Connections" in page.text and 'id="c-kinds"' in page.text
+    old = client.get("/connections", follow_redirects=False)  # it moved under Connectivity
+    assert old.status_code == 307 and old.headers["location"] == "/infra/connections"
     client.cookies.clear()
-    r = client.get("/connections", follow_redirects=False)
+    r = client.get("/infra/connections", follow_redirects=False)
     assert r.status_code in (302, 303, 307) and "/login" in r.headers["location"]

@@ -1,0 +1,80 @@
+{% extends "base.html" %}
+{% block title %}homelab-orchestrator — connection{% endblock %}
+{% block content %}
+  <section>
+    <h2 id="cd-title">Connection</h2>
+    {% set tab = "connections" %}{% include "_infra_tabs.html" %}
+    <p class="msg"><a href="/infra">← Overview</a> · <a href="/infra/connections">Manage connections</a></p>
+    <div id="cd-head"></div>
+    <div class="row" id="cd-links"></div>
+    <div id="cd-body"><p class="muted">Loading…</p></div>
+  </section>
+{% endblock %}
+{% block scripts %}
+<script>
+  const CONN = {{ ident | tojson }};
+  const $ = (id) => document.getElementById(id);
+  const el = (tag, props = {}, ...kids) => { const e = Object.assign(document.createElement(tag), props); e.append(...kids); return e; };
+  const badge = (state, text) => el("span", { className: "badge " + state, textContent: text });
+  const bytes = (n) => { if (n == null) return "?"; const u = ["B", "KB", "MB", "GB", "TB"]; let i = 0; while (n >= 1024 && i < 4) { n /= 1024; i++; } return n.toFixed(i ? 1 : 0) + " " + u[i]; };
+  function table(heads, rows) {
+    const t = el("table");
+    t.append(el("thead", {}, el("tr", {}, ...heads.map((h) => el("th", { textContent: h })))));
+    t.append(el("tbody", {}, ...(rows.length ? rows : [[el("span", { className: "muted", textContent: "Nothing to show." })]]).map((r) =>
+      el("tr", {}, ...r.map((c, i) => el("td", { colSpan: rows.length ? 1 : heads.length }, c))))));
+    return el("div", { className: "table-scroll" }, t);
+  }
+  const yn = (v) => v == null ? badge("unknown", "?") : v ? badge("up", "up") : badge("down", "down");
+
+  function sections(c) {
+    const s = c.sections || {};
+    const out = [];
+    if (s.error) out.push(el("p", { className: "msg error", textContent: s.error }));
+    if (s.environments) {
+      const up = s.environments.filter((e) => e.status !== "down").length;
+      out.push(el("h3", { textContent: `Environments (${up} of ${s.environments.length} up)` }));
+      out.push(table(["Id", "Name", "Type", "Status", "Running", "Stopped", "Stacks"], s.environments.map((e) =>
+        [String(e.id), e.name, e.type, badge(e.status === "down" ? "down" : e.status === "up" ? "up" : "unknown", e.status),
+         e.running ?? "–", e.stopped ?? "–", e.stacks ?? "–"])));
+    }
+    if (s.nodes) {
+      out.push(el("h3", { textContent: "Nodes" }));
+      out.push(table(["Node", "Address", "In the cluster", "Own API", "Version", "Latency"], s.nodes.map((n) =>
+        [n.name + (n.always_on ? " (always on)" : ""), n.address || "–", yn(n.online), n.address ? yn(n.reachable) : "no address",
+         n.version || "–", n.latency_ms != null ? n.latency_ms + " ms" : "–"])));
+      if (s.cluster_error) out.push(el("p", { className: "msg error", textContent: "Cluster: " + s.cluster_error }));
+      if (s.guests) out.push(el("p", { className: "msg", textContent: `${s.guests.running} of ${s.guests.total} guests running.` }));
+    }
+    if (s.datastore) {
+      const d = s.datastore;
+      out.push(el("h3", { textContent: "Datastore" }));
+      out.push(el("p", {}, el("code", { textContent: d.name }), `  ${bytes(d.used_bytes)} of ${bytes(d.total_bytes)} used (${(d.used_fraction * 100).toFixed(1)}%)`));
+    }
+    if (s.routes !== undefined) out.push(el("p", { className: "msg", textContent: s.routes == null ? "Routes could not be listed." : `${s.routes} route(s) known to the proxy.` }));
+    if (s.targets) {
+      out.push(el("h3", { textContent: "Power targets" }));
+      out.push(table(["Target", "Status", "Detail"], s.targets.map((t) => [t.target, yn(t.reachable), t.detail])));
+    }
+    return out;
+  }
+
+  async function load() {
+    let c;
+    try { c = await apiFetch("GET", `/api/infra/connections/${encodeURIComponent(CONN)}`, undefined, { suppressToast: true }); }
+    catch (err) { $("cd-body").replaceChildren(el("p", { className: "msg error", textContent: err.message })); return; }
+    $("cd-title").textContent = c.name;
+    document.title = "homelab-orchestrator — " + c.name;
+    $("cd-head").replaceChildren(el("p", {},
+      badge(c.state, c.state === "up" ? "reachable" : c.state === "down" ? "unreachable" : c.state), " ",
+      el("code", { textContent: c.id }), ` · ${c.kind_title}`, c.site ? ` · ${c.site}` : "",
+      el("br"), el("span", { className: c.state === "down" ? "error" : "muted", textContent: c.detail + (c.ms != null ? ` (${c.ms} ms)` : "") })));
+    const links = c.links.map((l) => el("a", { className: "btn", href: l.href, textContent: l.label }));
+    if (c.web_url) links.push(el("a", { className: "btn secondary", href: c.web_url, target: "_blank", rel: "noopener", textContent: "Web UI" }));
+    links.push(el("a", { className: "btn secondary", href: "/infra/connections", textContent: "Edit" }));
+    $("cd-links").replaceChildren(...links);
+    const body = sections(c);
+    $("cd-body").replaceChildren(...(body.length ? body : [el("p", { className: "muted", textContent: c.state === "up" ? "Nothing more to show for this kind of connection." : "" })]));
+  }
+  load();
+</script>
+{% endblock %}
