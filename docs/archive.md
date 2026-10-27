@@ -28,7 +28,7 @@ behave as after any delete. A database dump file on disk is also untouched.
 
 ## Restoring
 
-Archive page → **Restore**, or `orchestrator-cli archive restore <id|slug>`, or the button on
+Archive page (Settings → Archive) → **Restore** on a row, or select several and Restore them together, or `orchestrator-cli archive restore <id|slug>`, or the button on
 the "was deleted" page an old alert link lands on. Restore is refused, and changes nothing, when:
 
 * a service with that slug exists again (rename or delete it first);
@@ -38,13 +38,14 @@ the "was deleted" page an old alert link lands on. Restore is refused, and chang
 Smaller problems are repaired and reported as notes: a backup policy that is gone is left off,
 `depends_on` / `backup_requires` entries for services that no longer exist are dropped, and a
 proxy host whose hostname another service now uses comes back switched off.
-Restored proxy hosts are not yet pushed to Traefik Manager; Save pushes them. Save to YAML
-afterwards to make the restore permanent in `services.yaml`.
+Like every other change, a restore is written to `services.yaml` and restored proxy hosts are
+pushed to Traefik Manager by themselves (the header's pending pill shows anything still waiting).
 
 ## Purging
 
 A job removes expired entries every six hours (and the Archive page and CLI purge on read).
-**Delete now** removes one immediately.
+**Delete for good** (a row's ⋯ menu, or several selected at once) removes them immediately,
+after you type the name.
 
 ## Pages that lead nowhere
 
