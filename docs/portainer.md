@@ -14,13 +14,21 @@ one ("Linked to").
 
 ## Setup
 
-```bash
-PORTAINER_URL=https://portainer.example.lan:9443
-PORTAINER_API_KEY=ptr_...          # Portainer: My account -> Access tokens
-PORTAINER_VERIFY_TLS=true          # false for a self-signed certificate
-PORTAINER_PUBLIC_URL=              # what you open in a browser, if different (for "Open in Portainer")
-PORTAINER_ADAPTER=api              # dry_run serves sample data (DRY_RUN=true does too)
-```
+Add Portainer on the **Connections** page (or `orchestrator-cli connections add portainer --set
+url=https://portainer.example.lan:9443 --set api_key=ptr_...`) - no restart. You can have
+several; the pages and the CLI take the one to look at (`-i NAME`), and a controller or probe
+names its connection with `instance:` (see [connections.md](connections.md)).
+
+| Field | |
+|---|---|
+| `url` | Portainer itself, `https://<host>:9443` |
+| `api_key` | Portainer: My account -> Access tokens |
+| `verify_tls` | `false` for a self-signed certificate |
+| `public_url` | what you open in a browser, if different (for "Open in Portainer") |
+| `read_only` | every write refuses |
+
+An install that still has `PORTAINER_URL` and `PORTAINER_API_KEY` in `.env` keeps working; move it
+into the file from the Connections page.
 
 The token acts as the user that created it, so for reading only a user with **read** access to
 the environments is enough; the write side ([portainer_deploys.md](portainer_deploys.md)) needs
@@ -94,7 +102,7 @@ object 404.
   or whose containers cannot be read (a 5xx, a timeout), is left out of the page, the environment
   list and the stack lists (page, Data sources, CLI), and one line names what was hidden. The other
   environments load normally. It comes back by itself once it answers again.
-* **Point `PORTAINER_URL` at Portainer itself** (`https://<host>:9443`), not at the public
+* **Point the connection's `url` at Portainer itself** (`https://<host>:9443`), not at the public
   address behind Traefik. Behind Traefik, a 5xx from Portainer can be replaced by the
   orchestrator's own "not available" page, which hides Portainer's real message; the error
   then reads "an HTML page came back instead of Portainer's reply". `PORTAINER_PUBLIC_URL` is

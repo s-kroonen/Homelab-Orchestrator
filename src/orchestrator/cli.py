@@ -234,7 +234,9 @@ async def _check_portainer(adapters: Any) -> int:
     rows = await portainer_checks(adapters)
     if not rows:
         click.secho(
-            "  --    portainer: not configured (PORTAINER_URL / PORTAINER_API_KEY)", fg="yellow"
+            "  --    portainer: not configured (add it: orchestrator-cli connections add portainer"
+            " --set url=... --set api_key=...)",
+            fg="yellow",
         )
         return 0
     failures = 0

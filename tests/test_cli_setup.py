@@ -17,6 +17,7 @@ from orchestrator.cli import cli
 from orchestrator.domain.enums import GuestKind
 from orchestrator.registry.editor import RegistryEditor
 from orchestrator.setup.envfile import read_env
+from orchestrator.setup.project import read_values
 
 SECRET = "pve-secret-value-0001"
 
@@ -138,8 +139,15 @@ def test_init_writes_env_and_registry_from_the_cluster(
     )
     assert result.exit_code == 0, result.output
 
-    env = read_env(project / ".env")
+    env = read_values(project / ".env")  # .env with the connections laid over it
     assert env["PROXMOX_TOKEN_SECRET"] == SECRET
+    # the adapter answers went to connections.yaml, not .env
+    raw = read_env(project / ".env")
+    assert not {"PROXMOX_HOST", "PROXMOX_TOKEN_SECRET", "PBS_HOST", "PBS_DATASTORE"} & set(raw)
+    assert SECRET not in (project / ".env").read_text(encoding="utf-8")
+    conns = project / "config" / "connections.yaml"
+    assert SECRET in conns.read_text(encoding="utf-8")
+    assert conns.stat().st_mode & 0o777 == 0o600
     assert env["PBS_DATASTORE"] == "store1"  # the only datastore PBS listed
     assert env["PVE_BACKUP_STORAGE"] == "pbs-lab"  # worked out from PVE, not asked
     assert env["GATEWAY_SERVICE"] == "gateway"
@@ -233,7 +241,7 @@ def test_init_treats_an_empty_env_as_a_clean_install(
     )
 
     assert result.exit_code == 0, result.output
-    assert read_env(project / ".env")["PROXMOX_TOKEN_SECRET"] == SECRET
+    assert read_values(project / ".env")["PROXMOX_TOKEN_SECRET"] == SECRET
     assert list(project.glob(".env.bak-*")) == []
 
 
@@ -269,10 +277,13 @@ def test_config_edit_changes_only_its_section(project: Path, discovery: FakeDisc
     )
 
     assert result.exit_code == 0, result.output
-    env = read_env(project / ".env")
+    env = read_values(project / ".env")
     assert env["PROBE_PROXY_BASE_URL"] == "https://10.0.0.3"
     assert env["PROXMOX_HOST"] == "10.0.0.11"
     assert env["PROXMOX_TOKEN_SECRET"] == SECRET
+    # saving moved the connector keys the old .env still had into connections.yaml
+    assert "PROXMOX_HOST" not in read_env(project / ".env")
+    assert (project / "config" / "connections.yaml").is_file()
     assert len(list(project.glob(".env.bak-*"))) == 1
     assert "PROXMOX_PORT" not in result.output.split("Changes:")[1]  # defaults are not edits
     assert SECRET not in result.output

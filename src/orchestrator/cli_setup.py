@@ -63,8 +63,8 @@ from orchestrator.setup.envfile import (
     read_env,
     render_generated,
     secret_names,
-    write_env,
 )
+from orchestrator.setup.project import connections_path, read_values, save_values
 
 # ---------------------------------------------------------------------------
 # discovery — read-only, live, DRY_RUN-independent
@@ -992,7 +992,7 @@ def existing_config(project_dir: Path) -> list[Path]:
     """
     return [
         p
-        for p in install_paths(project_dir)
+        for p in (*install_paths(project_dir), connections_path(project_dir / ".env"))
         if p.is_file() and p.read_text(encoding="utf-8").strip()
     ]
 
@@ -1028,11 +1028,14 @@ def plan_install(
 
 
 def write_install(w: Wizard, editor: RegistryEditor, env_path: Path, yaml_path: Path) -> list[Path]:
-    """Write .env and services.yaml; returns the backups of anything replaced."""
-    env_backup = write_env(env_path, w.values)
+    """Write .env, connections.yaml and services.yaml; returns the backups of anything replaced.
+
+    The adapter-related answers (Proxmox, PBS, Traefik Manager, Portainer, MQTT, alerts, SSH...)
+    go into config/connections.yaml; ``.env`` keeps the orchestrator's own settings."""
+    backups = save_values(w.values, env_path, connections_path(env_path))
     yaml_backup = backup_file(yaml_path)
     editor.save()
-    return [b for b in (env_backup, yaml_backup) if b is not None]
+    return [b for b in (*backups, yaml_backup) if b is not None]
 
 
 _DIR_OPTION = click.option(
@@ -1126,7 +1129,7 @@ def init(
             return
 
     try:
-        previous = read_env(answers_file or env_path)
+        previous = read_env(answers_file) if answers_file else read_values(env_path)
         old_registry = RegistryEditor(yaml_path) if yaml_path.exists() else None
     except (EnvFileError, RegistryEditError) as exc:
         raise click.ClickException(str(exc)) from exc
@@ -1316,7 +1319,7 @@ def _require_env(project_dir: Path) -> Path:
 def config_show(project_dir: Path) -> None:
     """Print .env grouped by section. Secrets are masked, never shown."""
     try:
-        values = read_env(_require_env(project_dir))
+        values = read_values(_require_env(project_dir))
     except EnvFileError as exc:
         raise click.ClickException(str(exc)) from exc
 
@@ -1350,7 +1353,7 @@ def config_edit(section_id: str, project_dir: Path, no_verify: bool) -> None:
     env_path = _require_env(project_dir)
     yaml_path = project_dir / "config" / "services.yaml"
     try:
-        previous = read_env(env_path)
+        previous = read_values(env_path)
         editor = RegistryEditor(yaml_path) if yaml_path.exists() else None
     except (EnvFileError, RegistryEditError) as exc:
         raise click.ClickException(str(exc)) from exc
@@ -1420,9 +1423,9 @@ def config_edit(section_id: str, project_dir: Path, no_verify: bool) -> None:
 
     try:
         if changed:
-            backup = write_env(env_path, w.values)
-            click.secho(f"Wrote {env_path}", fg="green")
-            if backup is not None:
+            backups = save_values(w.values, env_path, connections_path(env_path))
+            click.secho(f"Wrote {env_path} and {connections_path(env_path)}", fg="green")
+            for backup in backups:
                 click.echo(f"  previous version kept as {backup}")
         if nodes_changed and editor is not None:
             editor.save()
@@ -1430,7 +1433,10 @@ def config_edit(section_id: str, project_dir: Path, no_verify: bool) -> None:
             click.secho(f"Updated {what} in {yaml_path}", fg="green")
     except (EnvFileError, RegistryEditError) as exc:
         raise click.ClickException(str(exc)) from exc
-    click.echo("\nApply it:  docker compose up -d   (recreates the container with the new .env)")
+    click.echo(
+        "\nConnections apply by themselves within a few seconds. Anything kept in .env needs:\n"
+        "  docker compose up -d   (recreates the container with the new .env)"
+    )
 
 
 # ---------------------------------------------------------------------------

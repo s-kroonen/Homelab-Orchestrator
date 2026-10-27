@@ -3,7 +3,8 @@
 A backup is one ``orchestrator-<time>-<reason>.tar.gz`` in ``state_dir/backups``
 holding ``manifest.json``, ``orchestrator.db`` (a consistent copy taken with
 SQLite's online backup, safe while the app is running) and ``services.yaml``.
-``.env`` is not included: it lives on the host and holds secrets.
+``.env`` and ``config/connections.yaml`` are not included: they live on the host and hold
+secrets (the latter keeps its own last five copies in ``config/connections-backups/``).
 
 Restoring never swaps the database under a running app. It is *staged*
 (extracted next to the live files with a marker) and applied on the next start,

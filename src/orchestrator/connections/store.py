@@ -40,7 +40,9 @@ class ConnectionsFileError(Exception):
 
 def path_for(settings: Settings) -> Path:
     custom = getattr(settings, "connections_path", None)
-    return Path(custom) if custom else Path(settings.state_dir) / "connections.yaml"
+    # next to services.yaml: that directory is the one every container mounts (the setup
+    # container included), and the one you can see and back up from the host
+    return Path(custom) if custom else Path(settings.services_yaml_path).parent / "connections.yaml"
 
 
 # -- the file ------------------------------------------------------------------------------------

@@ -99,6 +99,8 @@ probing services the orchestrator cannot reach directly,
 [docs/host_runner.md](docs/host_runner.md) for running credentialed checks
 off-container,
 [docs/service_tree.md](docs/service_tree.md) for sub-services, the tree and the map,
+[docs/connections.md](docs/connections.md) for the Connections page: every adapter and controller (several Portainers included) in one file, edited live,
+[docs/redundancy.md](docs/redundancy.md) for the design of a second orchestrator at another site,
 [docs/portainer.md](docs/portainer.md) for reading Portainer stacks, containers and logs,
 [docs/portainer_deploys.md](docs/portainer_deploys.md) for stacks as sub-services: one on/off switch,
 adopt / create / delete, guarded deploys and the deploy webhook,
