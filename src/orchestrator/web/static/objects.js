@@ -16,7 +16,7 @@
   // --- bulk ----------------------------------------------------------------------------------
   const VERBS = {
     resync: "Checked", wake: "Woken", backup: "Backup started for", enable: "Enabled", disable: "Disabled",
-    update: "Updated", ctl_restart: "Restarted", ctl_start: "Started", ctl_stop: "Stopped",
+    update: "Updated", discover_ip: "Looked for the address of", ctl_restart: "Restarted", ctl_start: "Started", ctl_stop: "Stopped",
     power_off: "Power off sent to", delete: "Deleted", wake_on_hit_on: "Wake on hit on for", wake_on_hit_off: "Wake on hit off for",
   };
   async function bulk(resource, action, ids, params) {
@@ -136,6 +136,7 @@
       } } : null,
       row.backup_policy_id != null && !row.parent ? { label: "Run a backup now", onClick: one("backup") } : null,
       { label: "Edit settings…", onClick: () => serviceDrawer({ service: row, view, onSaved: after }) },
+      { label: "Its activity", href: "/activity?service=" + encodeURIComponent(row.slug) },
       { label: row.enabled ? "Disable" : "Enable", onClick: one(row.enabled ? "disable" : "enable") },
       "-",
       { label: "Delete…", danger: true, onClick: () => deleteService(row, view, refresh).catch(() => {}) },
@@ -401,7 +402,7 @@
   }
   function eventRow(ev, opts) {
     const d = describeEvent(ev);
-    const when = el("time", { "data-ts": ev.at, class: "mono faint", style: { fontSize: "12px", whiteSpace: "nowrap" } }, window.OrchTime ? window.OrchTime.fmt(ev.at) : ev.at);
+    const when = el("time", { datetime: ev.at, title: window.OrchTime ? window.OrchTime.fmt(ev.at) : ev.at, class: "mono faint", style: { fontSize: "12px", whiteSpace: "nowrap" } }, window.UI.fmt.short(ev.at));
     return el("div", { class: "event-row" }, when, el("span", { class: "pill " + d.cls }, d.tag),
       el("span", { class: "event-text" }, d.text,
         opts && opts.service && d.service ? [" · ", el("a", { href: "/services/" + encodeURIComponent(d.service) }, d.service)] : null),

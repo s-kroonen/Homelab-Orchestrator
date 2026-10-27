@@ -107,9 +107,9 @@ def test_unreachable_proxmox_and_power_errors_do_not_fail_the_call(
     assert by["compute"]["power_detail"] == "mqtt broker gone"
 
 
-def test_dashboard_has_the_state_column(app: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_dashboard_shows_each_nodes_state(app: Any, monkeypatch: pytest.MonkeyPatch) -> None:
     with TestClient(app) as client:
         _login(client, monkeypatch)
-        html = client.get("/").text
-    assert "<th>State</th>" in html
-    assert "/api/infra/nodes/status" in html
+        assert client.get("/").status_code == 200
+        js = client.get("/static/dashboard.js").text
+    assert '"/api/infra/nodes/status"' in js

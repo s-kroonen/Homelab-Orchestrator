@@ -28,7 +28,7 @@
       { key: "check", label: "Last check", render: (r) => two(r.check.text, r.check.at ? fmt.ago(r.check.at) : "") },
       { key: "backup", label: "Backup", sort: (r) => r.backup.main,
         render: (r) => two(r.backup.main, [r.backup.sub, r.backup.at ? fmt.ago(r.backup.at) : ""].filter(Boolean).join(" · ")) },
-      { key: "wake_on_hit", label: "Wake on hit", sort: true },
+      { key: "wake_on_hit", label: "Wake on hit", sort: true, render: (r) => el("span", { title: r.wake_on_hit_why || null }, r.wake_on_hit) },
     ],
     chips: [
       { key: "failed", label: "Failed", test: (r) => r.state.cls === "fail" },
@@ -49,6 +49,7 @@
         { label: "Check", onClick: run("resync") },
         { label: "Wake", onClick: run("wake") },
         { label: "Set backup policy…", onClick: () => policyDrawer(slugs) },
+        { label: "Find addresses", onClick: run("discover_ip") },
         { label: "Enable", onClick: run("enable") },
         { label: "Disable", onClick: run("disable") },
       ];

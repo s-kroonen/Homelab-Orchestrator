@@ -59,6 +59,19 @@
   const fmt = {
     time: (iso) => (window.OrchTime ? window.OrchTime.fmt(iso) : String(iso || "")),
     ago: (iso) => (window.OrchTime ? window.OrchTime.ago(iso) : ""),
+    // "14:58" today, "yesterday 03:12", "Mon 09:12" this week, else "27 Oct 14:58".
+    short(iso) {
+      if (!iso || !window.OrchTime) return String(iso || "");
+      const d = new Date(iso); if (isNaN(d)) return String(iso);
+      const T = window.OrchTime;
+      const hm = T.fmt(iso, { hour: "2-digit", minute: "2-digit", hourCycle: "h23" });
+      const day = (x) => T.fmt(x.toISOString(), { year: "numeric", month: "2-digit", day: "2-digit" });
+      const now = new Date();
+      if (day(d) === day(now)) return hm;
+      if (day(d) === day(new Date(now.getTime() - 86400000))) return "yesterday " + hm;
+      if (now - d < 6 * 86400000) return T.fmt(iso, { weekday: "short" }) + " " + hm;
+      return T.fmt(iso, { day: "2-digit", month: "short" }) + " " + hm;
+    },
     secondsAgo(ms) {
       const s = Math.max(0, Math.round((Date.now() - ms) / 1000));
       if (s < 5) return "just now";

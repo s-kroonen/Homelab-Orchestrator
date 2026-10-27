@@ -298,12 +298,19 @@ def test_dashboard_explains_an_unhealthy_badge(app: Any, monkeypatch: pytest.Mon
         _register(client, monkeypatch)
         _seed()
         r = client.get("/")
+        view = client.get("/api/views/dashboard").json()
+        services = client.get("/static/objects.js").text
 
     assert r.status_code == 200
     assert 'href="/activity"' in r.text  # nav link
-    assert '<li class="failed">web-up' in r.text
-    assert "HTTP 502 from upstream" in r.text
-    assert 'href="/activity?service=media"' in r.text
+    # Needs attention says which probe failed and why.
+    [item] = [i for i in view["attention"] if i["slug"] == "media"]
+    assert (
+        item["kind"] == "failed"
+        and "web-up" in item["text"]
+        and "HTTP 502 from upstream" in item["text"]
+    )
+    assert '"/activity?service=" + encodeURIComponent(row.slug)' in services  # its activity
 
 
 def test_login_redirect_keeps_the_query_of_an_alert_link(app: Any) -> None:

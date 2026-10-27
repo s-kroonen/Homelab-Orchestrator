@@ -150,10 +150,10 @@ def test_cli_cannot_attach_a_policy_to_it(registry: Path) -> None:
 
 
 def test_the_forms_show_it_but_will_not_let_you_pick_it(client: TestClient) -> None:
-    html = client.get("/backup-policies/new").text
-    fieldset = html[html.index("Target services") :]
-    assert "never backed up" in fieldset
-    box = fieldset[fieldset.index('value="truenas"') : fieldset.index('value="truenas"') + 200]
-    assert "disabled" in box
-    media = fieldset[fieldset.index('value="media"') : fieldset.index('value="media"') + 120]
-    assert "disabled" not in media
+    view = client.get("/api/views/backups").json()
+    by = {s["slug"]: s for s in view["services"]}
+    assert by["truenas"]["excluded"] is True and by["media"]["excluded"] is False
+    assert any(x["slug"] == "truenas" for x in view["excluded"])  # "Not backed up: never"
+    js = client.get("/static/backups.js").text
+    # the policy drawer does not offer it
+    assert "V.services.filter((s) => !s.excluded)" in js

@@ -891,11 +891,8 @@ def test_every_save_button_surfaces_the_push_outcome(dry_client: TestClient) -> 
         assert 'id="pending-pill"' in dry_client.get(path).text
     shell = dry_client.get("/static/shell.js").text
     assert "/api/pending/retry" in shell and "Save and push" in shell
-    # Pages not rebuilt yet keep their Save to YAML, which also pushes.
     for path in ("/", "/backup-policies"):
-        assert "PushUI.save" in dry_client.get(path).text
-    js = dry_client.get("/static/push.js")
-    assert js.status_code == 200 and "push_results" in js.text
+        assert "PushUI.save" not in dry_client.get(path).text  # no Save to YAML any more
     # The proxy host list offers a push for one host; the drawer says Save pushes.
     assert "Push now" in dry_client.get("/static/proxy_hosts.js").text
     assert "pushes it to Traefik Manager" in dry_client.get("/static/objects.js").text

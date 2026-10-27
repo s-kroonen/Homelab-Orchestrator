@@ -24,6 +24,7 @@ from orchestrator.db.models import (
     BackupRecord,
     Node,
     PipelineRun,
+    ProxyHost,
     Service,
     ServiceState,
 )
@@ -177,10 +178,18 @@ def service_rows(session: Session) -> list[dict[str, Any]]:
                 "cls": "warn",
             }
         node_wakes = node.wake_on_hit_enabled if node is not None else False
+        wake_why = ""
         if parent is not None and not svc.wake_on_hit_enabled:
             wake = "via parent"
+        elif svc.wake_on_hit_enabled and node_wakes:
+            wake = "yes (button)" if svc.wake_trigger.value == "button" else "yes"
         else:
-            wake = "yes" if svc.wake_on_hit_enabled and node_wakes else "no"
+            wake = "no"
+            wake_why = (
+                "off for this service"
+                if not svc.wake_on_hit_enabled
+                else f"off for its node {node.name if node else '?'}"
+            )
         rows.append(
             {
                 "slug": svc.slug,
@@ -206,6 +215,7 @@ def service_rows(session: Session) -> list[dict[str, Any]]:
                     or backup_failed
                 ),
                 "wake_on_hit": wake,
+                "wake_on_hit_why": wake_why,
                 "wake_on_hit_enabled": svc.wake_on_hit_enabled,
                 "has_controller": bool(svc.controller) or svc.guest_kind is not GuestKind.NONE,
             }
@@ -523,3 +533,105 @@ async def snapshots_page(request: Request, session: SessionDep) -> HTMLResponse 
     if get_current_admin(request, session) is None:
         return login_redirect(request)
     return RedirectResponse("/backup-policies?tab=snapshots", status_code=303)
+
+
+# --- dashboard ---------------------------------------------------------------------------------
+
+
+def _attention(session: Session, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """What needs a look, worst first. Only from the database; the page adds what needs a live
+    read (proxy hosts changed in Traefik) once it is shown."""
+    items: list[dict[str, Any]] = []
+    runs = _latest_backup_runs(session)
+    ids = {s.slug: s.id for s in session.exec(select(Service)).all()}
+    for r in rows:
+        st = r["state"]
+        if st["cls"] == "fail":
+            items.append(
+                {
+                    "kind": "failed",
+                    "cls": "fail",
+                    "label": "Failed",
+                    "slug": r["slug"],
+                    "title": f"{r['name']} is down",
+                    "text": r["check"]["text"] if r["check"]["text"] else st["why"],
+                    "at": r["check"]["at"],
+                    "action": "check",
+                }
+            )
+        elif st["label"] == "backup failed":
+            run = runs.get(ids.get(r["slug"]) or -1)
+            items.append(
+                {
+                    "kind": "backup",
+                    "cls": "warn",
+                    "label": "Backup",
+                    "slug": r["slug"],
+                    "title": f"{r['name']} backup failed",
+                    "text": (run.error if run and run.error else "its last backup did not finish"),
+                    "at": (run.finished_at or run.started_at).isoformat() if run else None,
+                    "action": "run",
+                }
+            )
+    return items
+
+
+def dashboard_view(session: Session, scheduler: Any) -> dict[str, Any]:
+    rows = service_rows(session)
+    groups: dict[str, list[dict[str, Any]]] = {}
+    for r in rows:
+        if r["parent"]:
+            continue
+        groups.setdefault(r["group"] or r["node"] or "Other", []).append(
+            {
+                "slug": r["slug"],
+                "name": r["name"],
+                "cls": r["state"]["cls"],
+                "label": r["state"]["label"],
+            }
+        )
+    policies = [
+        policy_to_dict(session, p, scheduler)
+        for p in session.exec(select(BackupPolicy).order_by(BackupPolicy.name)).all()
+    ]
+    nxt = sorted((p for p in policies if p["next_run"]), key=lambda p: p["next_run"])
+    last = _last_runs(session)
+    counts: dict[str, int] = {}
+    for r in rows:
+        counts[r["state"]["cls"]] = counts.get(r["state"]["cls"], 0) + 1
+    return {
+        "attention": _attention(session, rows),
+        "services": {"total": len(rows), "by_state": counts},
+        "glance": [{"name": k, "services": v} for k, v in sorted(groups.items())],
+        "nodes": nodes_view(session)["nodes"],
+        "proxy_hosts": len(session.exec(select(ProxyHost)).all()),
+        "backups": {
+            "runs": len(last),
+            "ok": sum(1 for x in last if x["status"] == "succeeded"),
+            "next_run": nxt[0]["next_run"] if nxt else None,
+            "next_policy": nxt[0]["name"] if nxt else None,
+        },
+        "view": services_view(session) | {"rows": rows},
+    }
+
+
+@api.get("/dashboard")
+async def dashboard_api(request: Request, session: SessionDep) -> dict[str, Any]:
+    return dashboard_view(session, getattr(request.app.state, "scheduler", None))
+
+
+@pages.get("/", response_model=None)
+async def dashboard_page(request: Request, session: SessionDep) -> HTMLResponse | RedirectResponse:
+    """What needs attention first, then the numbers, the nodes, recent activity and every
+    service at a glance (the Main wireframe)."""
+    admin = get_current_admin(request, session)
+    if admin is None:
+        return login_redirect(request)
+    return templates.TemplateResponse(
+        request,
+        "dashboard.html",
+        {
+            "admin": admin,
+            "initial": dashboard_view(session, getattr(request.app.state, "scheduler", None)),
+        },
+    )

@@ -250,7 +250,7 @@ input.switch:checked { background: #1f6b3d; border-color: #2a8a50; }
 input.switch:checked::after { left: 18px; background: #fff; }
 @media (prefers-reduced-motion: reduce) { input.switch::after { transition: none; } }
 
-.event-row { display: grid; grid-template-columns: 9.5rem auto minmax(0, 1fr) auto; gap: 4px 12px; align-items: center; padding: 9px 0; border-top: 1px solid var(--line); font-size: 13.5px; }
+.event-row { display: grid; grid-template-columns: 7.5rem auto minmax(0, 1fr) auto; gap: 4px 12px; align-items: center; padding: 9px 0; border-top: 1px solid var(--line); font-size: 13.5px; }
 .event-row:first-child { border-top: 0; }
 .event-row .event-text { min-width: 0; overflow-wrap: anywhere; }
 @media (max-width: 40rem) { .event-row { grid-template-columns: auto minmax(0, 1fr); } .event-row > time { grid-column: 1 / -1; } }
@@ -280,6 +280,20 @@ input.switch:checked::after { left: 18px; background: #fff; }
 .conn-row { display: grid; grid-template-columns: 7.5rem minmax(0, 1fr) auto auto 32px; gap: 6px 14px; align-items: center; padding: 12px 18px; border-top: 1px solid var(--line); }
 .card-head + .conn-row { border-top: 0; }
 @media (max-width: 40rem) { .conn-row { grid-template-columns: minmax(0, 1fr) auto auto; } .conn-row > :first-child { grid-column: 1 / -1; } .conn-row > :nth-child(2) { grid-column: 1 / -1; } }
+
+/* dashboard */
+.attn-row { display: grid; grid-template-columns: 6.5rem minmax(0, 1fr) auto auto auto; gap: 6px 14px; align-items: center; padding: 12px 18px; border-top: 1px solid var(--line); }
+.attn-row:first-child { border-top: 0; }
+.attn-row > .pill { justify-self: start; }
+.stat-row-5 { grid-template-columns: repeat(auto-fit, minmax(min(100%, 170px), 1fr)); }
+a.stat-tile:hover { border-color: var(--line-strong); background: var(--hover); }
+.glance { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 300px), 1fr)); gap: 14px; }
+@media (max-width: 40rem) {
+  #attention .attn-row { grid-template-columns: 1fr auto; padding: 14px; }
+  #attention .attn-row > :nth-child(2) { grid-column: 1 / -1; }
+  #attention .attn-row > :nth-child(3) { grid-column: 2; grid-row: 1; }
+  #attention .attn-row > :nth-child(4), #attention .attn-row > :nth-child(5) { width: 100%; }
+}
 
 /* --- status: one word, one colour, everywhere ------------------------------------------------ */
 .pill, .badge {

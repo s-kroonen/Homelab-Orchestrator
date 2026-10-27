@@ -247,12 +247,12 @@ def test_service_page_renders_the_address_block(client: TestClient) -> None:
     assert 'show: is("ping")' in js  # the probe drawer knows the kind
 
 
-def test_dashboard_shows_the_ip_under_the_name(client: TestClient) -> None:
+def test_services_list_can_find_addresses(client: TestClient) -> None:
     _seed(("media", 100))
     client.put("/api/registry/services/media", json={"ip_address": "10.0.0.5"})
-    html = client.get("/").text
-    assert '<span class="svc-ip" title="IP (manual)">10.0.0.5</span>' in html
-    assert 'class="bulk-cb"' in html and 'action: "discover_ip"' in html
+    assert "10.0.0.5" in client.get("/services/media").text  # on the service's page
+    js = client.get("/static/services.js").text
+    assert 'run("discover_ip")' in js  # the bulk bar
 
 
 def test_proxy_form_offers_use_service_ip(client: TestClient) -> None:

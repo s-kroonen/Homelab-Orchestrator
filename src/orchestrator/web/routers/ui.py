@@ -21,8 +21,6 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from sqlmodel import Session, select
 
 from orchestrator.db.models import (
-    BackupPolicy,
-    BackupRecord,
     Node,
     ProxyHost,
     Service,
@@ -32,7 +30,6 @@ from orchestrator.domain.enums import GuestKind
 from orchestrator.ipdiscovery.discovery import SOURCE_LABELS, effective_ip, transport_block
 from orchestrator.pipelines.wake import wake_is_unsupported
 from orchestrator.registry.backup_plan import BLOCKER_NO_POWER_TARGET
-from orchestrator.registry.loader import compute_registry_diff
 from orchestrator.registry.tree import TreeIndex
 from orchestrator.web.auth import get_current_admin, login_redirect
 from orchestrator.web.deps import SessionDep, SettingsDep
@@ -98,18 +95,6 @@ def _requirable_services(session: Session, *, exclude: str | None = None) -> lis
             }
         )
     return out
-
-
-def _group_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Bucket service rows by their ``group`` field for the dashboard's
-    collapsible sections. Named groups sort alphabetically; ungrouped services
-    (``group == ""``) always come last, under "Ungrouped" — never hidden."""
-    buckets: dict[str, list[dict[str, Any]]] = {}
-    for row in rows:
-        buckets.setdefault(row.get("group") or "", []).append(row)
-    named = sorted(name for name in buckets if name)
-    ordered = named + ([""] if "" in buckets else [])
-    return [{"name": name or "Ungrouped", "services": buckets[name]} for name in ordered]
 
 
 def _probe_row(result: dict[str, Any]) -> dict[str, Any]:
@@ -180,28 +165,6 @@ def _guest_cell_for(
     return {**base, "title": f"{root.slug}'s guest - {base['title']}"}
 
 
-def _children_summary(
-    tree: TreeIndex, svc: Service, states: dict[int, ServiceState]
-) -> dict[str, Any] | None:
-    """How the sub-services below this one are doing, for the parent's row."""
-    kids = tree.descendants(svc)
-    if not kids:
-        return None
-    counts: dict[str, int] = {}
-    for k in kids:
-        if not k.enabled:
-            key = "disabled"
-        else:
-            st = states.get(k.id) if k.id is not None else None
-            key = st.last_verdict.value if st else "unknown"
-        counts[key] = counts.get(key, 0) + 1
-    worst = next(
-        (k for k in ("failed", "down", "unknown", "healthy", "disabled") if counts.get(k)),
-        "unknown",
-    )
-    return {"total": len(kids), "counts": counts, "worst": worst}
-
-
 def _guest_cell(svc: Service, state: ServiceState | None) -> dict[str, str]:
     """What the services table shows for the Proxmox guest: its power state as
     of the last health scan (``css`` is a badge class)."""
@@ -215,94 +178,6 @@ def _guest_cell(svc: Service, state: ServiceState | None) -> dict[str, str]:
     status = gate["guest_state"]
     css = {"running": "healthy", "stopped": "disabled"}.get(status, "unknown")
     return {"label": status, "css": css, "title": f"{gate['guest']} - {gate['message']}"}
-
-
-@router.get("/", response_model=None)
-async def dashboard_page(
-    request: Request, session: SessionDep, settings: SettingsDep
-) -> HTMLResponse | RedirectResponse:
-    admin = get_current_admin(request, session)
-    if admin is None:
-        return login_redirect(request)
-
-    node_rows = {n.id: n for n in session.exec(select(Node)).all()}
-    nodes = {nid: n.name for nid, n in node_rows.items()}
-    states = {s.service_id: s for s in session.exec(select(ServiceState)).all()}
-    services = session.exec(select(Service).order_by(Service.slug)).all()
-    tree = TreeIndex(list(services))
-    # Parents before their children, so a group lists them as a tree.
-    services = [s for s, _ in tree.walk()]
-    guest_cells: dict[str, dict[str, str]] = {}
-
-    rows: list[dict[str, Any]] = []
-    for svc in services:
-        state = states.get(svc.id) if svc.id is not None else None
-        last_backup = None
-        if state is not None and state.last_backup_id is not None:
-            last_backup = session.get(BackupRecord, state.last_backup_id)
-        ip, ip_source = effective_ip(svc, state)
-        node = node_rows.get(svc.node_id)
-        node_wakes = node.wake_on_hit_enabled if node is not None else False
-        rows.append(
-            {
-                "slug": svc.slug,
-                "name": svc.name,
-                "ip": ip,
-                "ip_source": SOURCE_LABELS.get(ip_source, ip_source),
-                "enabled": svc.enabled,
-                "group": svc.group,
-                "node": nodes.get(svc.node_id, "?"),
-                "guest": _guest_cell_for(svc, state, tree, states, guest_cells),
-                "parent": tree.parent(svc).slug if tree.parent(svc) else None,
-                "depth": tree.depth(svc),
-                "children": _children_summary(tree, svc, states),
-                "served": tree.is_served(svc),
-                # On only when the service AND its node allow it (see Node.wake_on_hit_enabled).
-                "wake_on_hit": svc.wake_on_hit_enabled and node_wakes,
-                "wake_on_hit_why": (
-                    ""
-                    if svc.wake_on_hit_enabled and node_wakes
-                    else (
-                        "off for this service"
-                        if not svc.wake_on_hit_enabled
-                        else f"off for its node {nodes.get(svc.node_id, '?')}"
-                    )
-                ),
-                "wake_trigger": svc.wake_trigger.value,
-                "verdict": state.last_verdict.value if state else "unknown",
-                "verdict_reason": (state.notes or "") if state else "",
-                "down_label": _down_label(state),
-                "verdict_at": (
-                    state.last_verdict_at.isoformat() if state and state.last_verdict_at else None
-                ),
-                "last_backup_at": last_backup.created_at.isoformat() if last_backup else None,
-                "last_backup_verified": last_backup.verified if last_backup else None,
-                # The "why" behind the badge: each probe's own state + message.
-                "probes": [_probe_row(p) for p in (state.last_probe_results if state else [])],
-            }
-        )
-
-    diff = compute_registry_diff(session)
-    all_nodes = session.exec(select(Node).order_by(Node.name)).all()
-
-    return _templates.TemplateResponse(
-        request,
-        "dashboard.html",
-        {
-            "admin": admin,
-            "services": rows,
-            "service_groups": _group_rows(rows),
-            "nodes": [{"id": n.id, "name": n.name} for n in all_nodes],
-            "guest_kinds": [k.value for k in GuestKind],
-            "registry_dirty": diff.dirty,
-            "yaml_path": diff.yaml_path,
-            # For the bulk "Set policy" action.
-            "backup_policies": [
-                {"id": p.id, "name": p.name}
-                for p in session.exec(select(BackupPolicy).order_by(BackupPolicy.name)).all()
-            ],
-        },
-    )
 
 
 def _ping_transport(raw: str) -> dict[str, Any] | None:
