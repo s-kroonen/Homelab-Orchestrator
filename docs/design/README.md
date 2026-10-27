@@ -124,6 +124,13 @@ Something that is off on purpose (a node asleep, its services) is **off**, never
 | Backups: policies, snapshots, dumps, orchestrator backups | [PNG](wireframes/Backups.png) · [HTML](wireframes/Backups.html) |
 | Map: one row per node, shared backups, selection sidebar | [PNG](wireframes/Map.png) · [HTML](wireframes/Map.html) |
 | Traffic: one page, countries included | [PNG](wireframes/Traffic.png) · [HTML](wireframes/Traffic.html) |
+| Activity: one feed, run details in the drawer | [PNG](wireframes/Activity.png) · [HTML](wireframes/Activity.html) |
+| Containers: stacks with their containers | [PNG](wireframes/Containers.png) · [HTML](wireframes/Containers.html) |
+| Settings: Notifications (rules, channels, this device) | [PNG](wireframes/Notifications.png) · [HTML](wireframes/Notifications.html) |
+| Settings: AI assistants (waiting, connections, calls) | [PNG](wireframes/Assistants.png) · [HTML](wireframes/Assistants.html) |
+| Settings: System (update, time, this orchestrator) | [PNG](wireframes/System.png) · [HTML](wireframes/System.html) |
+| Settings: Archive | [PNG](wireframes/Archive.png) · [HTML](wireframes/Archive.html) |
+| Settings: Admins & devices (passkeys, invites) | [PNG](wireframes/Admins.png) · [HTML](wireframes/Admins.html) |
 | Phone: dashboard | [PNG](wireframes/PhoneDashboard.png) · [HTML](wireframes/PhoneDashboard.html) |
 | Phone: service | [PNG](wireframes/PhoneService.png) · [HTML](wireframes/PhoneService.html) |
 
