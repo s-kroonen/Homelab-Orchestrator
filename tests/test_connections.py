@@ -197,3 +197,59 @@ def test_a_broken_file_leaves_the_environment_in_force(monkeypatch: pytest.Monke
     config_module.reset_settings_cache()
     assert get_settings().portainer_url == "https://env.example:9443"
     assert "not valid YAML" in runtime.current().error
+
+
+# -- adapters follow the connections ------------------------------------------------------------
+
+
+async def test_the_bundle_has_one_portainer_per_connection_and_reloads_in_place() -> None:
+    from orchestrator.adapters.factory import build_adapters
+    from orchestrator.adapters.portainer.shared import get_shared
+
+    config_module.reset_settings_cache()
+    live = get_settings()
+    write_file(
+        path_for(live),
+        [
+            portainer("home", site="home"),
+            portainer("offsite", settings={"url": "https://off.example:9443"}, site="offsite"),
+        ],
+    )
+    reload_settings()
+    live.dry_run = False  # build the live adapters (nothing is contacted by building them)
+    bundle = build_adapters(live)
+    assert sorted(bundle.portainers) == ["home", "offsite"] and bundle.default_portainer == "home"
+    assert bundle.portainer_for() is bundle.portainer_for("home") is bundle.portainer
+    assert bundle.portainer_for("offsite").base_url == "https://off.example:9443"  # type: ignore[union-attr]
+    assert bundle.portainer_for("offsite").instance_id == "offsite"  # type: ignore[union-attr]
+    assert bundle.portainer_for("nope") is None
+    assert get_shared("offsite") is bundle.portainer_for("offsite")
+
+    # the handles other components hold keep working across a reload
+    proxmox_handle = bundle.proxmox
+    first = proxmox_handle.target
+    write_file(path_for(live), [portainer("home"), portainer("offsite", default=True)])
+    reload_settings()
+    await bundle.reload(live)
+    assert bundle.proxmox is proxmox_handle and bundle.default_portainer == "offsite"
+    assert proxmox_handle.target is not first
+    assert isinstance(bundle.portainer, type(bundle.portainer_for("offsite")))
+
+
+async def test_a_check_says_what_is_wrong_without_touching_anything(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from orchestrator.connections.checks import check_connection
+
+    config_module.reset_settings_cache()
+    live = get_settings()
+    blank = Connection(id="p", kind="portainer", enabled=False)
+    assert (await check_connection(blank, live)).ok is False
+    ok = portainer()
+    assert (await check_connection(ok, live)).ok is None  # DRY_RUN in tests: not contacted
+    live.dry_run = False
+    ssh = Connection(id="s", kind="ssh", settings={"key_path": "/nowhere/id_ed25519"})
+    result = await check_connection(ssh, live)
+    assert result.ok is False and "not there" in result.detail
+    ntfy = Connection(id="n", kind="ntfy", settings={"url": "https://ntfy.sh/x"})
+    assert (await check_connection(ntfy, live)).ok is None

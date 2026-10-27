@@ -538,6 +538,12 @@ def reload_settings() -> Settings:
     fresh = _load_settings()
     for name in Settings.model_fields:
         setattr(current, name, getattr(fresh, name))
+    try:  # the connections that were applied to `fresh` are in force for the singleton
+        from orchestrator.connections.runtime import current as snapshot
+
+        snapshot().owner = current
+    except Exception:  # pragma: no cover - defensive
+        pass
     return current
 
 

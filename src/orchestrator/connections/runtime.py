@@ -46,6 +46,8 @@ class Snapshot:
     env: list[Connection] = field(default_factory=list)
     #: Why the file could not be used ("" = fine). Then the environment is used as it is.
     error: str = ""
+    #: The Settings object these were applied to.
+    owner: Any = None
 
     @property
     def all(self) -> list[Connection]:
@@ -88,7 +90,7 @@ def apply_to(settings: Settings, *, path: Path | None = None) -> Snapshot:
     global _snapshot
     with _lock:
         path = path or path_for(settings)
-        snap = Snapshot(path=path)
+        snap = Snapshot(path=path, owner=settings)
         try:
             snap.file = read_file(path)
         except ConnectionsFileError as exc:
@@ -110,6 +112,19 @@ def apply_to(settings: Settings, *, path: Path | None = None) -> Snapshot:
             )
         _snapshot = snap
         return snap
+
+
+def instances_for(settings: Settings, kind: str) -> list[Connection]:
+    """The enabled, filled-in connections of ``kind`` that ``settings`` stands for. For the live
+    settings that is what the file and ``.env`` say; for any other Settings object (a wizard
+    check, a test) just what its own values say."""
+    snap = current()
+    pool = snap.all if snap.owner is settings else env_connections(settings)
+    return [c for c in pool if c.kind == kind and c.enabled and c.configured]
+
+
+def pick_default(conns: list[Connection]) -> Connection | None:
+    return next((c for c in conns if c.default), conns[0] if conns else None)
 
 
 def settings_for(settings: Settings, conn: Connection) -> Settings:
