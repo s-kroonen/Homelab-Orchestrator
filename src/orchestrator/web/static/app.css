@@ -890,3 +890,20 @@ body.page-map .wrap { padding-right: calc(var(--map-side-w) + 32px); }
 .invite-line { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .invite-line .mono { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
 .invite-done { display: flex; align-items: center; gap: 8px; padding: 6px 2px; font-size: 13.5px; }
+
+/* System: label/value pairs, the update run */
+dl.kv { display: grid; grid-template-columns: minmax(110px, max-content) minmax(0, 1fr); gap: 8px 16px; margin: 0 0 12px; font-size: 13.5px; }
+dl.kv dt { color: var(--faint); }
+dl.kv dd { margin: 0; overflow-wrap: anywhere; }
+dl.kv.kv-2 { grid-template-columns: minmax(110px, max-content) minmax(0, 1fr) minmax(110px, max-content) minmax(0, 1fr); }
+@media (max-width: 860px) { dl.kv.kv-2 { grid-template-columns: minmax(100px, max-content) minmax(0, 1fr); } }
+.sys-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 0 0 8px; }
+.sys-pre { margin: 8px 0 0; padding: 10px 12px; background: var(--inset); border: 1px solid var(--line); border-radius: 8px; font: 12px var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; color: var(--text-2); }
+.sys-run { margin: 10px 0 8px; padding: 10px 12px; border-radius: 10px; font-size: 13.5px; border: 1px solid var(--line-strong); background: var(--off-bg); }
+.sys-run.busy { background: var(--pending-bg); border-color: #2f4c80; }
+.sys-run.ok { background: var(--ok-bg); border-color: #1f5a37; }
+.sys-run.fail { background: var(--fail-bg); border-color: #5a2626; }
+.sys-steps { list-style: none; margin: 0 0 8px; padding: 0; display: grid; gap: 4px; font-size: 13.5px; }
+.sys-steps .faint { font-size: 12.5px; }
+.sys-banner { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; color: var(--text-2); }
+.sys-banner strong { color: var(--text); }

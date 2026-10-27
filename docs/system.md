@@ -1,8 +1,15 @@
 # Managing the orchestrator itself
 
-The dashboard's **System and backups** page (`/system`) and `orchestrator-cli system`
-cover what used to be shell commands on the Docker host: what is running, backups and
-restores, the database schema, updating, and restarting.
+The dashboard's **System** page (Settings → System, `/system`), the **Orchestrator backups**
+tab on Backups (`/backup-policies?tab=orchestrator`) and `orchestrator-cli system` cover what
+used to be shell commands on the Docker host: what is running, backups and restores, the
+database schema, updating, and restarting.
+
+The System page shows, from the top: a banner when the database needs upgrading or a restore
+is staged, the **Update** card (running and newest build, the updater, Update now / Check
+again / the last update's log, and the run's steps while one is going), **Time and
+schedules**, and **This orchestrator** (version, image, uptime, database, schema, registry,
+its backups). **Restart…** is in the page header.
 
 ## What it shows
 
@@ -93,7 +100,7 @@ button on the System page, or `docker exec orchestrator orchestrator-cli system 
 When the updater is running, all three go through it, with the safety net below; the script
 also refreshes the compose files and the updater first, which the other two do not.
 
-Then **Back up and update** on the System page (or `orchestrator-cli system update`):
+Then **Update now** on the System page (or `orchestrator-cli system update`):
 
 1. the orchestrator takes a `pre-update` backup and writes a small request file into the
    shared state volume (`STATE_DIR/update/request`: who asked, which backup to go back to -
@@ -194,7 +201,7 @@ and `docker compose up -d --force-recreate orchestrator`.
 
 ## Restart
 
-**Restart the orchestrator** stops the process (SIGTERM); the Compose policy
+**Restart…** (System page header) stops the process (SIGTERM); the Compose policy
 `restart: unless-stopped` starts it again. Outside Docker it just stops.
 
 ## Settings

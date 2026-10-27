@@ -6,8 +6,10 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, ConfigDict
+from sqlmodel import Session
 
 from orchestrator.audit import log as audit
+from orchestrator.config import Settings
 from orchestrator.display import (
     default_timezone,
     is_valid_timezone,
@@ -28,7 +30,7 @@ class DisplayIn(BaseModel):
     timezone: str
 
 
-def _state(session: SessionDep, settings: SettingsDep) -> dict[str, Any]:
+def display_state(session: Session, settings: Settings) -> dict[str, Any]:
     return {
         "timezone": timezone_name(session, settings),
         "default": default_timezone(settings),
@@ -37,7 +39,7 @@ def _state(session: SessionDep, settings: SettingsDep) -> dict[str, Any]:
 
 @router.get("")
 async def get_display(session: SessionDep, settings: SettingsDep) -> dict[str, Any]:
-    return _state(session, settings)
+    return display_state(session, settings)
 
 
 @router.get("/timezones")
@@ -73,4 +75,4 @@ async def put_display(
     scheduler = getattr(request.app.state, "scheduler", None)
     if scheduler is not None:
         scheduler.sync_jobs()
-    return _state(session, settings)
+    return display_state(session, settings)
