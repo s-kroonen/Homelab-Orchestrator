@@ -227,9 +227,11 @@ def test_cli_backup_list_and_restore(settings: Settings) -> None:
     runner = CliRunner()
     out = runner.invoke(cli, ["system", "backup", "--note", "cli"])
     assert out.exit_code == 0, out.output
-    listing = runner.invoke(cli, ["system", "backups"]).output
+    # a background collector left running by another test may print a log line into this output
+    lines = runner.invoke(cli, ["system", "backups"]).output.splitlines()
+    listing = "\n".join(line for line in lines if line.startswith("orchestrator-"))
     name = listing.split()[0]
-    assert name.startswith("orchestrator-") and "cli" in listing
+    assert "cli" in listing
     staged = runner.invoke(cli, ["system", "restore", name])
     assert staged.exit_code == 0 and "Staged" in staged.output
     assert runner.invoke(cli, ["system", "restore-cancel"]).output.strip() == "Cancelled."

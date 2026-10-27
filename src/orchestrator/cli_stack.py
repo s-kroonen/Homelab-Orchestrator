@@ -54,9 +54,22 @@ def _run(fn: Callable[[Session, AdapterBundle, Settings], Awaitable[Any]]) -> An
         raise click.ClickException(str(exc)) from exc
 
 
+def _instance() -> str | None:
+    """The Portainer connection --instance named (None = the default one)."""
+    return click.get_current_context().meta.get("portainer_instance")
+
+
 @click.group()
-def stack() -> None:
+@click.option(
+    "--instance",
+    "-i",
+    default=None,
+    help="Which Portainer connection (its id on the Connections page); default: the default one.",
+)
+@click.pass_context
+def stack(ctx: click.Context, instance: str | None) -> None:
     """Adopt, create, delete and control Portainer stacks."""
+    ctx.meta["portainer_instance"] = instance
 
 
 def _print_suggestion(s: dict[str, Any]) -> None:
@@ -91,9 +104,13 @@ def _print_suggestion(s: dict[str, Any]) -> None:
 @click.option("--json", "as_json", is_flag=True)
 def stack_suggest(endpoint: int, name: str, parent: str | None, as_json: bool) -> None:
     """What adopting NAME would create (reads only)."""
+    instance = _instance()
 
     async def go(session: Session, adapters: AdapterBundle, settings: Settings) -> Any:
-        return (await adoption.suggest(session, adapters, endpoint, name, parent=parent)).as_dict()
+        found = await adoption.suggest(
+            session, adapters, endpoint, name, parent=parent, instance=instance
+        )
+        return found.as_dict()
 
     data = _run(go)
     if as_json:
@@ -135,9 +152,12 @@ def stack_adopt(
     yes: bool,
 ) -> None:
     """Link a Portainer stack as a sub-service, with a child per container."""
+    instance = _instance()
 
     async def go(session: Session, adapters: AdapterBundle, settings: Settings) -> Any:
-        s = await adoption.suggest(session, adapters, endpoint, name, parent=parent)
+        s = await adoption.suggest(
+            session, adapters, endpoint, name, parent=parent, instance=instance
+        )
         click.echo("")
         _print_suggestion(s.as_dict())
         chosen_hosts = list(hosts) or (
@@ -146,6 +166,7 @@ def stack_adopt(
         plan = AdoptPlan(
             endpoint_id=endpoint,
             stack=s.stack,
+            instance=s.instance,
             slug=slug or s.slug,
             parent=parent or s.parent or "",
             name=s.name,
@@ -251,6 +272,7 @@ def stack_create(
     yes: bool,
 ) -> None:
     """Create a stack in Portainer (from Git or a compose file). The request is shown first."""
+    instance = _instance()
     if bool(repository_url) == bool(compose_file):
         raise click.UsageError("give exactly one of --git and --compose-file")
     spec = StackCreate(
@@ -269,7 +291,7 @@ def stack_create(
     )
 
     async def go(session: Session, adapters: AdapterBundle, settings: Settings) -> Any:
-        request = stack_ops.preview(adapters, spec)
+        request = stack_ops.preview(adapters, spec, instance)
         click.echo("This is what will be sent to Portainer (secrets masked):")
         click.echo(json.dumps(request, indent=2))
         if not yes:
@@ -280,7 +302,9 @@ def stack_create(
             plan = AdoptPlan(
                 endpoint_id=endpoint, stack=name, slug=adopt_as, parent=s_parent, name=name
             )
-        return await stack_ops.create(session, adapters, settings, "cli", spec, adopt_plan=plan)
+        return await stack_ops.create(
+            session, adapters, settings, "cli", spec, adopt_plan=plan, instance=instance
+        )
 
     result = _run(go)
     click.secho(f"Created stack {result.stack.name} in Portainer.", fg="green")
@@ -306,6 +330,7 @@ def stack_delete(
     endpoint: int, name: str, confirm_name: str | None, take_down: bool, keep_services: bool
 ) -> None:
     """Delete the stack in Portainer (its volumes are kept), then the link."""
+    instance = _instance()
     typed = (
         confirm_name
         if confirm_name is not None
@@ -316,6 +341,7 @@ def stack_delete(
         return await stack_ops.delete(
             session, adapters, settings, "cli", endpoint, name,
             confirm_name=typed, take_down=take_down, remove_services=not keep_services,
+            instance=instance,
         )  # fmt: skip
 
     result = _run(go)
@@ -334,7 +360,14 @@ def stack_delete(
 def _control(kind: str, endpoint: int, ref: str, action: str) -> None:
     async def go(session: Session, adapters: AdapterBundle, settings: Settings) -> Any:
         return await stack_ops.control(
-            session, adapters, "cli", kind=kind, endpoint_id=endpoint, ref=ref, action=action
+            session,
+            adapters,
+            "cli",
+            kind=kind,
+            endpoint_id=endpoint,
+            ref=ref,
+            action=action,
+            instance=_instance(),
         )
 
     click.echo(_run(go))

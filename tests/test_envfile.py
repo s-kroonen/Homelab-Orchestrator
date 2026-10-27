@@ -23,6 +23,7 @@ from orchestrator.setup.envfile import (
     read_env,
     render_env,
     render_example,
+    render_generated,
     write_env,
 )
 
@@ -94,13 +95,13 @@ def test_keys_added_by_hand_are_kept() -> None:
 
 def test_write_env_backs_up_the_previous_file(tmp_path: Path) -> None:
     env = tmp_path / ".env"
-    env.write_text("PROXMOX_TOKEN_SECRET=old-secret\n", encoding="utf-8")
+    env.write_text("SESSION_SECRET=old-secret\n", encoding="utf-8")
 
-    backup = write_env(env, {**default_values(), "PROXMOX_TOKEN_SECRET": "new-secret"})
+    backup = write_env(env, {**default_values(), "SESSION_SECRET": "new-secret"})
 
     assert backup is not None
-    assert backup.read_text(encoding="utf-8") == "PROXMOX_TOKEN_SECRET=old-secret\n"
-    assert read_env(env)["PROXMOX_TOKEN_SECRET"] == "new-secret"
+    assert backup.read_text(encoding="utf-8") == "SESSION_SECRET=old-secret\n"
+    assert read_env(env)["SESSION_SECRET"] == "new-secret"
     assert not (tmp_path / ".env.tmp").exists()
 
 
@@ -109,7 +110,7 @@ def test_a_bad_value_fails_before_anything_is_touched(tmp_path: Path) -> None:
     env.write_text("KEEP=1\n", encoding="utf-8")
 
     with pytest.raises(EnvFileError):
-        write_env(env, {"PROXMOX_TOKEN_SECRET": "bad'value with space"})
+        write_env(env, {"SESSION_SECRET": "bad'value with space"})
 
     assert env.read_text(encoding="utf-8") == "KEEP=1\n"
     assert list(tmp_path.iterdir()) == [env]  # no backup, no temp file
@@ -153,3 +154,12 @@ def test_read_env_rejects_a_directory(tmp_path: Path) -> None:
     (tmp_path / ".env").mkdir()
     with pytest.raises(EnvFileError, match="directory"):
         read_env(tmp_path / ".env")
+
+
+def test_connector_keys_are_not_written_to_env() -> None:
+    from orchestrator.connections.envmap import MANAGED_ENV
+
+    text = render_generated({**default_values(), "PROXMOX_HOST": "pve.lan", "DRY_RUN": "true"})
+    assert "DRY_RUN=true" in text
+    assert not any(line.split("=")[0] in MANAGED_ENV for line in text.splitlines() if "=" in line)
+    assert "PROXMOX_HOST" not in text and "Proxmox VE" not in text

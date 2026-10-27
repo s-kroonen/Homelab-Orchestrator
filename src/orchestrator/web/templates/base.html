@@ -23,9 +23,11 @@
     </div>
     {% block nav %}
     {% set path = request.url.path %}
-    {% macro navlink(href, label, exact=False) -%}
+    {% macro navlink(href, label, exact=False, match=[]) -%}
       {% if exact %}
-        {% set is_current = path == href %}
+        {% set ns = namespace(cur = path == href) %}
+        {% for m in match %}{% if path == m or path.startswith(m + "/") %}{% set ns.cur = true %}{% endif %}{% endfor %}
+        {% set is_current = ns.cur %}
       {% elif href == "/" %}
         {% set is_current = path == "/" or path.startswith("/services/") %}
       {% else %}
@@ -62,8 +64,7 @@
         {{ navlink("/portainer", "Portainer") }}
         {{ navlink("/notifications", "Notifications") }}
         {{ navlink("/assistants", "AI assistants") }}
-        {{ navlink("/infra", "Connectivity", exact=True) }}
-        {{ navlink("/infra/guests", "Guests", exact=True) }}
+        {{ navlink("/infra", "Connectivity", match=["/infra/connections", "/infra/guests"], exact=True) }}
         {{ navlink("/infra/snapshots", "Snapshots", exact=True) }}
       </div>
     </nav>

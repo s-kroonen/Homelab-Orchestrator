@@ -48,6 +48,12 @@ def validate_controller(raw: dict[str, Any] | None) -> dict[str, Any]:
             raise ValueError("portainer 'endpoint' is the endpoint's number") from None
         if bool(cfg.get("container")) == bool(cfg.get("stack")):
             raise ValueError("a portainer controller needs exactly one of 'container' or 'stack'")
+        # Which Portainer connection (Connections page). Absent = the default one.
+        instance = str(cfg.get("instance") or "").strip()
+        if instance:
+            cfg["instance"] = instance
+        else:
+            cfg.pop("instance", None)
     if kind == "haos" and bool(cfg.get("addon")) == bool(cfg.get("core")):
         raise ValueError("a haos controller needs exactly one of 'addon' or 'core: true'")
     if kind == "command":

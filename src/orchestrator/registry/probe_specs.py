@@ -187,6 +187,11 @@ PROBE_SPECS: dict[ProbeKind, ProbeKindSpec] = {
             FieldSpec("endpoint", "Portainer environment number", required=True, parse=int),
             FieldSpec("stack", "Stack name (or leave blank and give a container)", default=None),
             FieldSpec("container", "Container name (when not a stack)", default=None),
+            FieldSpec(
+                "instance",
+                "Portainer connection (blank = the default one)",
+                default=None,
+            ),
         ),
     ),
     ProbeKind.DB_MARIADB: ProbeKindSpec(

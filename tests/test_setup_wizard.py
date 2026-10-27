@@ -26,6 +26,7 @@ from orchestrator.db.models import AuditEntry
 from orchestrator.db.session import get_engine
 from orchestrator.domain.enums import AuditResult, GuestKind
 from orchestrator.setup.envfile import read_env
+from orchestrator.setup.project import read_values
 from orchestrator.web import auth as auth_lib
 from orchestrator.web.app import create_app
 
@@ -218,7 +219,8 @@ def test_submit_writes_env_and_registry_then_closes_the_page(
     assert sorted(data["services"]) == ["gateway", "media"]
     assert discovery.calls > 0  # init's live checks ran, against the fake
 
-    env = read_env(project / ".env")
+    assert "PROXMOX_TOKEN_SECRET" not in read_env(project / ".env")  # connectors are not in .env
+    env = read_values(project / ".env")
     assert env["PROXMOX_TOKEN_SECRET"] == PVE_SECRET
     assert env["PBS_DATASTORE"] == "store1"  # chosen the way init chooses it
     assert env["PVE_BACKUP_STORAGE"] == "pbs-lab"  # worked out, not asked

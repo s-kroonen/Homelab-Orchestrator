@@ -32,6 +32,7 @@ from dotenv import dotenv_values
 from pydantic import SecretStr
 
 from orchestrator.config import Settings
+from orchestrator.connections.envmap import MANAGED_ENV
 
 
 class EnvFileError(Exception):
@@ -156,6 +157,17 @@ ENV_SECTIONS: tuple[EnvSection, ...] = (
                 "SERVICES_YAML_PATH",
                 "The SAVED registry. Boot reconciles it into the DB; the dashboard edits\n"
                 "the DB live and can Save back here or Reset from here.",
+            ),
+            EnvKey(
+                "CONNECTIONS_PATH",
+                "Where the connections live (Proxmox, PBS, Traefik Manager, Portainer, MQTT,\n"
+                "notifier channels, SSH): edited from the dashboard, applied without a restart.\n"
+                "Blank = connections.yaml in STATE_DIR. See docs/connections.md.",
+            ),
+            EnvKey(
+                "ORCHESTRATOR_SITE",
+                "This orchestrator's own site name (home, offsite...). Connections carry one too;\n"
+                "it is how two orchestrators tell their own from each other's.",
             ),
         ),
     ),
@@ -812,15 +824,21 @@ def _section_rule(title: str) -> str:
     return f"# ---- {title} " + "-" * max(4, 72 - len(title))
 
 
-def render_env(values: dict[str, str], header: str) -> str:
-    """Render the whole file. Raises before returning if any value is unwritable."""
+def render_env(values: dict[str, str], header: str, *, skip: frozenset[str] = frozenset()) -> str:
+    """Render the whole file. Raises before returning if any value is unwritable.
+
+    ``skip`` names layout keys to leave out (a section whose keys are all skipped disappears):
+    the adapter-related ones, which live in connections.yaml."""
     lines = [_RULE, *_comment(header), _RULE]
     known: set[str] = set()
 
     for sec in ENV_SECTIONS:
+        keys = [k for k in sec.keys if k.name not in skip]
+        known.update(k.name for k in sec.keys)
+        if not keys:
+            continue
         lines += ["", _section_rule(sec.title)]
-        for i, key in enumerate(sec.keys):
-            known.add(key.name)
+        for i, key in enumerate(keys):
             if key.comment:
                 if i:
                     lines.append("")
@@ -838,15 +856,17 @@ def render_env(values: dict[str, str], header: str) -> str:
 
 
 def render_example() -> str:
-    return render_env({**default_values(), **EXAMPLE_VALUES}, EXAMPLE_HEADER)
+    return render_env({**default_values(), **EXAMPLE_VALUES}, EXAMPLE_HEADER, skip=MANAGED_ENV)
 
 
 def render_generated(values: dict[str, str]) -> str:
     header = GENERATED_HEADER.format(
         date=datetime.now().strftime("%Y-%m-%d %H:%M"),
-        sections=", ".join(sec.id for sec in ENV_SECTIONS),
+        sections=", ".join(
+            sec.id for sec in ENV_SECTIONS if any(k.name not in MANAGED_ENV for k in sec.keys)
+        ),
     )
-    return render_env(values, header)
+    return render_env(values, header, skip=MANAGED_ENV)
 
 
 def read_env(path: Path) -> dict[str, str]:

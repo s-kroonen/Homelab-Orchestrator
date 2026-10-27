@@ -194,6 +194,9 @@ class StackListing:
 
 class PortainerAdapter(ABC):
     IMPLEMENTED = True
+    #: The connection this adapter serves (set when it is built from one).
+    instance_id: str = "portainer"
+    instance_name: str = "Portainer"
 
     async def start(self) -> None:
         return None

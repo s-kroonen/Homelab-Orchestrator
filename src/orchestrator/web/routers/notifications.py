@@ -74,7 +74,7 @@ async def get_channels(adapters: AdaptersDep, settings: SettingsDep) -> dict[str
         "channels": names,
         "known": list(CHANNEL_NAMES),
         "dry_run": settings.dry_run,
-        "adapter": type(adapters.notifier).__name__,
+        "adapter": adapters.notifier.__class__.__name__,
         "hint": (
             None
             if names

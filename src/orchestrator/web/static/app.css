@@ -485,3 +485,20 @@ th.num, td.num { text-align: right; font-variant-numeric: tabular-nums; white-sp
 
 /* The row an alert linked to (infra guests, ?vmid=). */
 tr.linked-row td { background: rgba(91, 141, 239, 0.16); }
+
+/* Page tabs that are links (Connectivity: Overview / Connections / Guests). */
+.tabbar { display: flex; gap: 0.2rem; border-bottom: 1px solid #2a2f3a; margin: 0 0 1rem; flex-wrap: wrap; }
+.tabbar a.tab, .tabbar a.tab:link, .tabbar a.tab:visited {
+  color: #9aa4b2; text-decoration: none; border-bottom: 2px solid transparent;
+  padding: 0.5rem 0.9rem; display: inline-block;
+}
+.tabbar a.tab:hover { color: #e6e9ef; }
+.tabbar a.tab[aria-current="page"] { color: #e6e9ef; border-bottom-color: #5b8def; }
+.badge.up { background: #113b23; color: #3ecf6d; }
+.badge.off, .badge.unchecked, .badge.incomplete { background: #2a2f3a; color: #9aa4b2; }
+.conn-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(18rem, 1fr)); gap: 0.8rem; margin-bottom: 1.5rem; }
+.conn-card { border: 1px solid #2a2f3a; border-radius: 0.5rem; padding: 0.8rem 1rem; display: flex; flex-direction: column; gap: 0.35rem; }
+.conn-card h3 { margin: 0; font-size: 1rem; display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; }
+.conn-card .meta { font-size: 0.78rem; color: #9aa4b2; }
+.conn-card .detail { font-size: 0.82rem; overflow-wrap: anywhere; }
+.conn-card .actions { margin-top: auto; display: flex; gap: 0.4rem; flex-wrap: wrap; padding-top: 0.4rem; }

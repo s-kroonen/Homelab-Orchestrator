@@ -70,7 +70,7 @@ async def overview(session: SessionDep, adapters: AdaptersDep) -> dict[str, Any]
         if not (s.ip_address or (states.get(s.id) and states[s.id].discovered_ip))
     ]
     hosts = session.exec(select(ProxyHost)).all()
-    portainer = getattr(adapters, "portainer", None)
+    portainers = getattr(adapters, "portainers", {})
     return {
         "refreshed": _stamps(session),
         "proxmox": {"nodes": len(session.exec(select(Node)).all()), "guests": len(with_guest)},
@@ -79,7 +79,10 @@ async def overview(session: SessionDep, adapters: AdaptersDep) -> dict[str, Any]
             "hosts": len(hosts),
             "never_pushed": sum(1 for h in hosts if h.enabled and not (h.pushed_sig or "")),
         },
-        "portainer": {"configured": bool(portainer and portainer.configured)},
+        "portainer": {
+            "configured": any(a.configured for a in portainers.values()),
+            "instances": len(portainers),
+        },
     }
 
 
@@ -564,14 +567,17 @@ async def _execute(
 
 
 @router.get("/portainer")
-async def portainer(session: SessionDep, adapters: AdaptersDep) -> dict[str, Any]:
-    """Stacks and which services they are linked to (adopt them from here)."""
+async def portainer(
+    session: SessionDep, adapters: AdaptersDep, instance: str | None = None
+) -> dict[str, Any]:
+    """Stacks and which services they are linked to (adopt them from here). ``instance`` is
+    the Portainer connection; blank = the default one."""
     from orchestrator.web.routers import portainer as pr
 
-    adapter = getattr(adapters, "portainer", None)
+    adapter = adapters.portainer_for(instance)
     if adapter is None or not adapter.configured:
         return {"configured": False, "stacks": [], "errors": {}, "refreshed": None}
-    out = await pr.stacks(adapters, session, None)
+    out = await pr.stacks(adapters, session, None, instance)
     _stamp(session, "portainer")
     session.commit()
     return {"configured": True, **out, "refreshed": _stamps(session).get("portainer")}

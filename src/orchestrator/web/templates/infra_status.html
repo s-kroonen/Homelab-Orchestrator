@@ -3,130 +3,57 @@
 {% block content %}
   <section>
     <h2>Connectivity</h2>
+    {% set tab = "overview" %}{% include "_infra_tabs.html" %}
     <p class="msg">
-      The dashboard equivalent of <code>orchestrator-cli check</code>: one call to
-      <code>/api/infra/status</code> that answers "can I reach everything?" for Proxmox,
-      PBS and the power manager (MQTT broker and each node's power target). This is deliberately separate from <code>/healthz</code> — that reports on the
-      orchestrator itself; this reports on what it can currently see of the cluster.
+      Is each connection reachable? One card per connection — a Proxmox, a Portainer, the backup
+      server — not the guests, stacks or containers inside it. Open a card to see what is up in
+      there, or manage the connections on the Connections tab. This is separate from
+      <code>/healthz</code>, which reports on the orchestrator itself; the flat command-line
+      version is <code>orchestrator-cli check</code>.
     </p>
+    <p class="msg error" id="ov-error" hidden></p>
     <div class="row">
-      <button class="secondary" id="refresh-btn">Refresh</button>
+      <button class="secondary" id="refresh-btn">Check again</button>
       <span class="msg" id="status-msg"></span>
     </div>
-    <dl class="kv" id="settings-kv" hidden>
-      <div><dt>dry run</dt><dd id="kv-dry-run"></dd></div>
-      <div><dt>PVE backup storage</dt><dd id="kv-pve-storage"></dd></div>
-      <div><dt>PBS datastore</dt><dd id="kv-pbs-datastore"></dd></div>
-    </dl>
-    <div class="table-scroll">
-    <table>
-      <thead>
-        <tr><th>Target</th><th>Reachable</th><th>OK</th><th>Detail</th></tr>
-      </thead>
-      <tbody id="status-rows"><tr><td colspan="4">Loading…</td></tr></tbody>
-    </table>
-    </div>
+    <div class="conn-grid" id="ov-grid"><p class="muted">Checking…</p></div>
   </section>
-{% endblock %}
-{% block extra_head %}
-<style>
-  dl.kv { display: flex; gap: 1.5rem; flex-wrap: wrap; margin: 0 0 1.25rem; font-size: 0.85rem; }
-  dl.kv > div { display: flex; gap: 0.4rem; }
-  dl.kv dt { color: #9aa4b2; }
-  dl.kv dd { margin: 0; }
-</style>
 {% endblock %}
 {% block scripts %}
 <script>
-  function setMsg(text, kind) {
-    const el = document.getElementById("status-msg");
-    el.textContent = text;
-    el.className = "msg" + (kind ? " " + kind : "");
+  const $ = (id) => document.getElementById(id);
+  const el = (tag, props = {}, ...kids) => { const e = Object.assign(document.createElement(tag), props); e.append(...kids); return e; };
+  const LABEL = { up: "reachable", down: "unreachable", unchecked: "not checked", off: "off", incomplete: "incomplete" };
+
+  function card(c) {
+    const where = [c.site, c.scope === "shared" ? "shared" : "", c.default ? "default" : "", c.source === "env" ? "from .env" : ""].filter(Boolean).join(" · ");
+    const open = el("a", { className: "btn small", href: `/infra/connections/${encodeURIComponent(c.id)}`, textContent: "Open" });
+    const actions = el("div", { className: "actions" }, open);
+    if (c.web_url) actions.append(el("a", { className: "btn small secondary", href: c.web_url, target: "_blank", rel: "noopener", textContent: "Web UI" }));
+    actions.append(el("a", { className: "btn small secondary", href: "/infra/connections", textContent: "Manage" }));
+    return el("div", { className: "conn-card" },
+      el("h3", {}, c.name, el("span", { className: "badge " + c.state, textContent: LABEL[c.state] || c.state })),
+      el("div", { className: "meta" }, el("code", { textContent: c.id }), " · " + c.kind_title + (where ? " · " + where : "")),
+      el("div", { className: "detail" + (c.state === "down" ? " error" : " muted"), textContent: c.detail + (c.ms != null ? ` (${c.ms} ms)` : "") }),
+      actions);
   }
 
-  function cell(text, cls) {
-    const td = document.createElement("td");
-    if (cls) td.className = cls;
-    td.textContent = text;
-    return td;
-  }
-
-  function describeResult(target, result) {
-    if (target === "proxmox" || target === "pbs") {
-      return `version ${result.version}${result.release ? " (" + result.release + ")" : ""}`;
-    }
-    if (target === "pbs_datastore") {
-      const pct = (result.used_fraction * 100).toFixed(1);
-      return `${result.name}: ${result.used_bytes} / ${result.total_bytes} bytes used (${pct}%)`;
-    }
-    if (result && result.detail) return result.detail;
-    return JSON.stringify(result);
-  }
-
-  async function loadStatus() {
-    const body = document.getElementById("status-rows");
+  async function load() {
+    $("status-msg").textContent = "Checking…"; $("status-msg").className = "msg";
     let data;
-    try {
-      data = await apiFetch("GET", "/api/infra/status", undefined, { suppressToast: true });
-    } catch (err) {
-      body.innerHTML = "";
-      const tr = document.createElement("tr");
-      const td = cell(err.message);
-      td.colSpan = 4;
-      tr.appendChild(td);
-      body.appendChild(tr);
-      setMsg("Could not reach the orchestrator API.", "error");
-      return;
-    }
-
-    const kv = document.getElementById("settings-kv");
-    kv.hidden = false;
-    document.getElementById("kv-dry-run").textContent = data.dry_run ? "yes" : "no";
-    document.getElementById("kv-pve-storage").textContent = data.pve_backup_storage;
-    document.getElementById("kv-pbs-datastore").textContent = data.pbs_datastore;
-
-    body.innerHTML = "";
-    let failures = 0;
-    for (const check of data.checks) {
-      const tr = document.createElement("tr");
-      tr.appendChild(cell(check.target));
-
-      const reachBadge = document.createElement("span");
-      reachBadge.className = "badge " + (check.reachable ? "healthy" : "failed");
-      reachBadge.textContent = check.reachable ? "reachable" : "unreachable";
-      const reachTd = document.createElement("td");
-      reachTd.appendChild(reachBadge);
-      tr.appendChild(reachTd);
-
-      const okTd = document.createElement("td");
-      if (check.reachable) {
-        const okBadge = document.createElement("span");
-        okBadge.className = "badge " + (check.ok ? "healthy" : "failed");
-        okBadge.textContent = check.ok ? "ok" : "failed";
-        okTd.appendChild(okBadge);
-      } else {
-        okTd.textContent = "—";
-        okTd.className = "muted";
-      }
-      tr.appendChild(okTd);
-
-      const detail = check.ok
-        ? describeResult(check.target, check.result)
-        : (check.error || "");
-      tr.appendChild(cell(detail, check.ok ? "" : "muted"));
-
-      if (!check.ok) failures += 1;
-      body.appendChild(tr);
-    }
-
-    if (failures === 0) {
-      setMsg("All checks passed.", "ok");
-    } else {
-      setMsg(`${failures} check(s) failed.`, "error");
-    }
+    try { data = await apiFetch("GET", "/api/infra/overview", undefined, { suppressToast: true }); }
+    catch (err) { $("ov-grid").replaceChildren(); $("status-msg").textContent = err.message; $("status-msg").className = "msg error"; return; }
+    $("ov-error").hidden = !data.error;
+    $("ov-error").textContent = data.error ? "The connections file cannot be used (the .env values stay in force): " + data.error : "";
+    const rows = data.connections;
+    if (!rows.length) {
+      $("ov-grid").replaceChildren(el("p", { className: "muted" }, "No connections yet. Add one on the ", el("a", { href: "/infra/connections", textContent: "Connections" }), " tab."));
+    } else $("ov-grid").replaceChildren(...rows.map(card));
+    const down = rows.filter((r) => r.state === "down").length;
+    $("status-msg").textContent = data.dry_run ? "Dry-run is on: nothing outside is contacted." : down ? `${down} connection(s) unreachable.` : "Everything that is switched on is reachable.";
+    $("status-msg").className = "msg" + (down ? " error" : data.dry_run ? "" : " ok");
   }
-
-  document.getElementById("refresh-btn").addEventListener("click", loadStatus);
-  loadStatus();
+  $("refresh-btn").addEventListener("click", load);
+  load();
 </script>
 {% endblock %}

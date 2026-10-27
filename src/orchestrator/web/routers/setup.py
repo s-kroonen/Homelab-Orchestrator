@@ -46,7 +46,8 @@ from orchestrator.audit import log as audit
 from orchestrator.config import Settings
 from orchestrator.domain.enums import AuditResult
 from orchestrator.registry.editor import RegistryEditError
-from orchestrator.setup.envfile import EnvFileError, default_values, read_env
+from orchestrator.setup.envfile import EnvFileError, default_values
+from orchestrator.setup.project import read_values
 from orchestrator.web.auth import get_current_admin, login_redirect
 from orchestrator.web.deps import SessionDep, SettingsDep
 from orchestrator.web.routers.auth import _admin_count
@@ -333,7 +334,7 @@ def _install(
     output = io.StringIO()
     try:
         with redirect_stdout(output), redirect_stderr(output):
-            previous = read_env(env_path) if env_path.is_file() else {}
+            previous = read_values(env_path) if env_path.is_file() else {}
             values = cli_setup._merge_previous(previous)
             # Blank means "keep the default", as Enter does in the CLI wizard.
             values.update({k: v.strip() for k, v in body.values.items() if v.strip()})

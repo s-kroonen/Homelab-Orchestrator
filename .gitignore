@@ -26,6 +26,9 @@ state-dumps/
 !.env.example
 !.env.local.example
 config/services.yaml
+# Connections hold credentials (written by the dashboard / `orchestrator-cli connections`).
+config/connections.yaml
+config/connections-backups/
 config/services.*.yaml
 !config/services.example.yaml
 config/*.local.*

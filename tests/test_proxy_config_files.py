@@ -641,9 +641,10 @@ def test_the_form_and_list_carry_the_config_file_ui(
 
 
 def test_env_layout_documents_the_setting() -> None:
-    from orchestrator.setup.envfile import render_example
+    from orchestrator.setup.envfile import EXAMPLE_VALUES, default_values, render_env
 
-    text = render_example()
+    # the key lives in connections.yaml now, so it is documented by the layout, not the example
+    text = render_env({**default_values(), **EXAMPLE_VALUES}, "layout")
     assert "TRAEFIK_MANAGER_CONFIG_FILE={service}.yml" in text
 
 

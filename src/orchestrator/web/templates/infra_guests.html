@@ -2,7 +2,8 @@
 {% block title %}homelab-orchestrator — guests{% endblock %}
 {% block content %}
   <section>
-    <h2>Proxmox guests</h2>
+    <h2>Connectivity</h2>
+    {% set tab = "guests" %}{% include "_infra_tabs.html" %}
     <p class="msg">
       The dashboard equivalent of <code>orchestrator-cli guests</code>: every guest
       <code>/api/infra/proxmox/guests</code> can see on the cluster, whether or not it is

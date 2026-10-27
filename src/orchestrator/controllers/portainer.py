@@ -26,6 +26,14 @@ class PortainerController(ServiceController):
     type = "portainer"
 
     def __init__(self, settings: Settings, cfg: dict[str, Any]) -> None:
+        self._instance = str(cfg.get("instance") or "").strip()
+        if self._instance:  # a particular Portainer connection, not the default one
+            from orchestrator.connections import runtime
+
+            conn = runtime.find_instance(settings, "portainer", self._instance)
+            if conn is None:
+                raise ControllerError(f"there is no Portainer connection called {self._instance!r}")
+            settings = runtime.settings_for(settings, conn)
         self._base = settings.portainer_url.strip().rstrip("/")
         self._key = settings.portainer_api_key.get_secret_value()
         self._verify = settings.portainer_verify_tls
@@ -37,12 +45,14 @@ class PortainerController(ServiceController):
 
     def describe(self) -> str:
         what = f"container {self._container}" if self._container else f"stack {self._stack_name}"
-        return f"Portainer endpoint {self._endpoint}, {what}"
+        where = f"Portainer {self._instance}" if self._instance else "Portainer"
+        return f"{where} endpoint {self._endpoint}, {what}"
 
     async def _call(self, method: str, path: str, **kw: Any) -> httpx.Response:
         if not self._base or not self._key:
             raise ControllerError(
-                "Portainer is not configured - set PORTAINER_URL and PORTAINER_API_KEY"
+                "Portainer is not configured - add it on the Connections page "
+                "(or set PORTAINER_URL and PORTAINER_API_KEY)"
             )
         try:
             async with httpx.AsyncClient(

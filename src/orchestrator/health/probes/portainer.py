@@ -37,14 +37,20 @@ class PortainerProbe(Probe):
         if bool(stack) == bool(container):
             return self._config_error(row, "needs exactly one of 'stack' or 'container'")
 
-        adapter = get_shared()
+        instance = str(cfg.get("instance") or "").strip()
+        adapter = get_shared(instance)
         own: PortainerAdapter | None = None
-        if adapter is None:
+        if adapter is None and not instance:
             from orchestrator.adapters.factory import build_adapters
             from orchestrator.config import get_settings
 
             own = adapter = build_adapters(get_settings()).portainer
-        assert adapter is not None
+        if adapter is None:
+            return self._result(
+                row,
+                HealthState.UNKNOWN,
+                message=f"there is no Portainer connection called {instance!r}",
+            )
         started = time.monotonic()
         try:
             if not adapter.configured:

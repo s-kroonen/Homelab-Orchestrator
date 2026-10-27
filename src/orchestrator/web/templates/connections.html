@@ -1,0 +1,300 @@
+{% extends "base.html" %}
+{% block title %}homelab-orchestrator — connections{% endblock %}
+{% block content %}
+  <section>
+    <h2>Connectivity</h2>
+    {% set tab = "connections" %}{% include "_infra_tabs.html" %}
+    <p class="msg">
+      The systems the orchestrator talks to: Proxmox, backup server, Traefik Manager, Portainer (as many as you
+      have), Home Assistant, MQTT, alert channels and SSH. They are kept in <code id="c-path">connections.yaml</code>
+      and apply the moment you save — no restart. Secrets are never shown again once saved; leave a secret box blank
+      to keep what is stored. <em>Test</em> only reads; it never changes anything on the other side.
+    </p>
+    <p class="msg error" id="c-error" hidden></p>
+    <div id="c-env" class="msg" hidden>
+      <strong>Still configured in <code>.env</code>:</strong> <span id="c-env-list"></span>
+      <button id="c-import" class="small">Move them into the file</button>
+    </div>
+    <p class="msg" id="c-env-left" hidden></p>
+    <div id="c-kinds"></div>
+    <p class="msg" id="c-msg" aria-live="polite"></p>
+  </section>
+
+  <section>
+    <h2>Controllers</h2>
+    <p class="msg">
+      Each service's controller acts through a connection. A Portainer controller without a named connection uses the
+      default one; pick another per service from the service's page.
+    </p>
+    <div class="table-scroll">
+    <table>
+      <thead><tr><th>Service</th><th>Controller</th><th>Connection</th><th></th></tr></thead>
+      <tbody id="c-ctl"><tr><td colspan="4">Loading…</td></tr></tbody>
+    </table>
+    </div>
+  </section>
+
+  <section>
+    <h2>Share with another orchestrator</h2>
+    <p class="msg">
+      Connections marked <em>shared</em> are the ones a second orchestrator (another site) should have too; the others
+      stay local. Export leaves secrets out by default and imports arrive switched off, so you add the secrets and turn
+      them on there.
+    </p>
+    <div class="row">
+      <button id="x-export" class="secondary">Export shared connections</button>
+      <label><input type="checkbox" id="x-secrets"> include secrets</label>
+    </div>
+    <textarea id="x-body" rows="6" placeholder="Paste an export here to import it" spellcheck="false" style="width:100%;font-family:monospace"></textarea>
+    <div class="row"><button id="x-import" class="secondary">Import</button></div>
+  </section>
+
+  <dialog id="c-dlg">
+    <form method="dialog" id="c-form">
+      <h3 id="c-dlg-title"></h3>
+      <p class="msg" id="c-dlg-blurb"></p>
+      <div id="c-fields"></div>
+      <details>
+        <summary>Where it lives</summary>
+        <div class="grid">
+          <label>Site <input id="f-site" placeholder="home, offsite…"></label>
+          <label>Scope
+            <select id="f-scope"><option value="local">local — only this orchestrator</option><option value="shared">shared — every orchestrator</option></select>
+          </label>
+        </div>
+        <label>Notes <input id="f-notes"></label>
+      </details>
+      <p class="msg" id="c-test" aria-live="polite"></p>
+      <div class="row">
+        <button type="submit" id="c-save">Save</button>
+        <button type="button" id="c-try" class="secondary">Test</button>
+        <button type="button" id="c-cancel" class="secondary">Cancel</button>
+      </div>
+    </form>
+  </dialog>
+{% endblock %}
+{% block scripts %}
+<script>
+  const $ = (id) => document.getElementById(id);
+  const el = (tag, props = {}, ...kids) => { const e = Object.assign(document.createElement(tag), props); e.append(...kids); return e; };
+  function setMsg(text, kind) { const e = $("c-msg"); e.textContent = text; e.className = "msg" + (kind ? " " + kind : ""); }
+  const api = (m, u, b) => apiFetch(m, u, b, { suppressToast: true });
+  let VIEW = null;
+  let EDIT = null; // { kind, conn|null }
+
+  function render(view) {
+    VIEW = view;
+    $("c-path").textContent = view.path;
+    $("c-error").hidden = !view.error;
+    $("c-error").textContent = view.error ? `The file cannot be used, so the .env values stay in force: ${view.error}` : "";
+    const envOnly = view.connections.filter((c) => c.source === "env");
+    $("c-env").hidden = !envOnly.length;
+    $("c-env-list").textContent = envOnly.map((c) => c.kind_title).join(", ");
+    $("c-env-left").hidden = !view.env_keys.length;
+    $("c-env-left").textContent = view.env_keys.length
+      ? `These .env keys are no longer used and can be deleted from .env: ${view.env_keys.join(", ")}`
+      : "";
+    $("c-kinds").replaceChildren(...view.kinds.map(kindBlock));
+  }
+
+  function kindBlock(spec) {
+    const conns = VIEW.connections.filter((c) => c.kind === spec.kind);
+    const head = el("h3", {}, spec.title, " ");
+    const add = el("button", { className: "small secondary", textContent: conns.length && !spec.multi ? "Add another" : "Add" });
+    add.addEventListener("click", () => openForm(spec, null));
+    const table = el("table");
+    table.append(el("thead", {}, el("tr", {}, ...["Name", "Id", "Where", "State", ""].map((h) => el("th", { textContent: h })))));
+    const body = el("tbody");
+    if (!conns.length) body.append(el("tr", {}, el("td", { colSpan: 5, className: "muted", textContent: "Not set up." })));
+    for (const c of conns) body.append(row(spec, c));
+    table.append(body);
+    return el("div", { className: "conn-kind" }, head, add, el("p", { className: "muted", textContent: spec.blurb }),
+      el("div", { className: "table-scroll" }, table));
+  }
+
+  function row(spec, c) {
+    const state = el("span", { className: "badge" });
+    state.textContent = !c.enabled ? "off" : !c.configured ? "incomplete" : c.source === "env" ? "from .env" : "on";
+    const tags = [c.default && spec.multi ? "default" : "", c.scope === "shared" ? "shared" : ""].filter(Boolean);
+    const verdict = el("span", { className: "muted", id: `v-${c.id}` });
+    const test = el("button", { className: "small secondary", textContent: "Test" });
+    test.addEventListener("click", async () => {
+      verdict.textContent = "…";
+      try { const r = await api("POST", `/api/connections/${c.id}/test`); showVerdict(verdict, r); }
+      catch (err) { verdict.textContent = err.message; }
+    });
+    const edit = el("button", { className: "small", textContent: "Edit" });
+    edit.addEventListener("click", () => openForm(spec, c));
+    const open = el("a", { className: "btn small secondary", href: `/infra/connections/${encodeURIComponent(c.id)}`, textContent: "Open" });
+    const btns = [open, " ", test, " ", edit];
+    if (spec.multi && !c.default && c.enabled && c.source !== "env") {
+      const mk = el("button", { className: "small secondary", textContent: "Make default" });
+      mk.addEventListener("click", async () => {
+        try {
+          const r = await api("POST", `/api/connections/${c.id}/default`);
+          render(r);
+          setMsg(r.pinned.length ? `Default changed. ${r.pinned.join(", ")} stay on ${r.default_was || "the old default"} — Save the registry to YAML to keep that.` : "Default changed.", "ok");
+        } catch (err) { setMsg(err.message, "error"); }
+      });
+      btns.push(" ", mk);
+    }
+    if (c.source !== "env") {
+      const del = el("button", { className: "danger secondary small", textContent: "Delete" });
+      del.addEventListener("click", () => remove(c));
+      btns.push(" ", del);
+    }
+    return el("tr", {},
+      el("td", {}, el("strong", { textContent: c.name }), ...tags.map((t) => el("span", { className: "badge", textContent: t })),
+        c.site ? el("span", { className: "muted", textContent: " " + c.site }) : ""),
+      el("td", {}, el("code", { textContent: c.id })),
+      el("td", { className: "muted", textContent: summary(spec, c) }),
+      el("td", {}, state, " ", verdict),
+      el("td", {}, ...btns));
+  }
+
+  function summary(spec, c) {
+    const f = spec.fields.find((x) => x.name === spec.marker);
+    const v = f && c.settings[f.name];
+    return v ? String(v) : "";
+  }
+
+  function showVerdict(node, r) {
+    node.textContent = (r.ok === true ? "✓ " : r.ok === false ? "✗ " : "– ") + r.detail + (r.ms != null ? ` (${r.ms} ms)` : "");
+    node.className = r.ok === false ? "error" : r.ok ? "ok" : "muted";
+  }
+
+  async function remove(c) {
+    if (!confirm(`Delete the connection ${c.id}? Anything that uses it stops working until you point it elsewhere.`)) return;
+    try { render(await api("DELETE", `/api/connections/${c.id}`)); setMsg(`Deleted ${c.id}.`, "ok"); }
+    catch (err) {
+      if (/use\(s\) this connection/.test(err.message) && confirm(err.message + "\n\nDelete it anyway?")) {
+        try { render(await api("DELETE", `/api/connections/${c.id}?force=true`)); setMsg(`Deleted ${c.id}.`, "ok"); }
+        catch (e2) { setMsg(e2.message, "error"); }
+      } else setMsg(err.message, "error");
+    }
+  }
+
+  // -- the form, built from the kind's schema ----------------------------------------------------
+  function fieldInput(f, c) {
+    const id = `ff-${f.name}`;
+    let input;
+    if (f.type === "bool") {
+      input = el("input", { type: "checkbox", id });
+      input.checked = c ? !!c.settings[f.name] : !!f.default;
+    } else if (f.type === "choice") {
+      input = el("select", { id }, ...f.choices.map((o) => el("option", { value: o, textContent: o })));
+      input.value = c ? c.settings[f.name] : f.default;
+    } else if (f.type === "secret") {
+      const isSet = c && c.secrets_set[f.name];
+      input = el("input", { type: "password", id, autocomplete: "new-password", placeholder: isSet ? "set — leave blank to keep" : "" });
+    } else {
+      input = el("input", { type: f.type === "int" || f.type === "float" ? "number" : "text", id, step: f.type === "float" ? "any" : undefined });
+      input.value = c ? (c.settings[f.name] ?? "") : (f.default ?? "");
+    }
+    input.dataset.field = f.name;
+    input.dataset.type = f.type;
+    const label = el("label", {}, f.label + (f.required ? " *" : ""), " ", input);
+    if (f.help) label.append(el("small", { className: "muted", textContent: " " + f.help }));
+    return label;
+  }
+
+  function openForm(spec, c) {
+    EDIT = { spec, conn: c };
+    $("c-dlg-title").textContent = c ? `Edit ${c.name}` : `Add ${spec.title}`;
+    $("c-dlg-blurb").textContent = spec.blurb;
+    const common = [];
+    common.push(el("label", {}, "Name ", el("input", { id: "f-name", value: c ? c.name : spec.title })));
+    if (!c) common.push(el("label", {}, "Id ", el("input", { id: "f-id", placeholder: "generated from the name", pattern: "[a-z0-9][a-z0-9_-]*" })));
+    const en = el("input", { type: "checkbox", id: "f-enabled" }); en.checked = c ? c.enabled : true;
+    common.push(el("label", {}, en, " Enabled"));
+    if (spec.multi && !c) { const d = el("input", { type: "checkbox", id: "f-default" }); common.push(el("label", {}, d, " Make it the default")); }
+    $("c-fields").replaceChildren(...common, ...spec.fields.map((f) => fieldInput(f, c)));
+    $("f-site").value = c ? c.site : VIEW.site || "";
+    $("f-scope").value = c ? c.scope : "local";
+    $("f-notes").value = c ? c.notes : "";
+    $("c-test").textContent = "";
+    $("c-dlg").showModal();
+  }
+
+  function collect() {
+    const settings = {}, secrets = {};
+    for (const i of $("c-fields").querySelectorAll("[data-field]")) {
+      const v = i.dataset.type === "bool" ? i.checked : i.value;
+      (i.dataset.type === "secret" ? secrets : settings)[i.dataset.field] = v;
+    }
+    return { settings, secrets };
+  }
+
+  $("c-cancel").addEventListener("click", () => $("c-dlg").close());
+  $("c-try").addEventListener("click", async () => {
+    const { settings, secrets } = collect();
+    $("c-test").textContent = "Testing…";
+    try {
+      const r = await api("POST", "/api/connections/test", {
+        kind: EDIT.spec.kind, existing_id: EDIT.conn ? EDIT.conn.id : "", settings, secrets,
+      });
+      showVerdict($("c-test"), r);
+    } catch (err) { $("c-test").textContent = err.message; $("c-test").className = "msg error"; }
+  });
+  $("c-form").addEventListener("submit", async (ev) => {
+    ev.preventDefault();
+    const { settings, secrets } = collect();
+    const common = {
+      name: $("f-name").value, enabled: $("f-enabled").checked,
+      site: $("f-site").value, scope: $("f-scope").value, notes: $("f-notes").value, settings, secrets,
+    };
+    try {
+      const view = EDIT.conn
+        ? await api("PUT", `/api/connections/${EDIT.conn.id}`, common)
+        : await api("POST", "/api/connections", {
+            ...common, kind: EDIT.spec.kind, id: $("f-id").value,
+            default: $("f-default") ? $("f-default").checked : false,
+          });
+      $("c-dlg").close();
+      render(view);
+      setMsg("Saved and applied.", "ok");
+      loadControllers();
+    } catch (err) { $("c-test").textContent = err.message; $("c-test").className = "msg error"; }
+  });
+
+  $("c-import").addEventListener("click", async () => {
+    try {
+      const r = await api("POST", "/api/connections/import-env");
+      render(r);
+      setMsg(`Moved ${r.moved.join(", ") || "nothing"} into the file. Delete these from .env when convenient: ${r.delete_from_env.join(", ")}`, "ok");
+    } catch (err) { setMsg(err.message, "error"); }
+  });
+
+  $("x-export").addEventListener("click", async () => {
+    try {
+      const r = await fetch(`/api/connections/export?with_secrets=${$("x-secrets").checked}`, { credentials: "same-origin" });
+      $("x-body").value = await r.text();
+    } catch (err) { setMsg(err.message, "error"); }
+  });
+  $("x-import").addEventListener("click", async () => {
+    try {
+      const r = await api("POST", "/api/connections/import", { body: $("x-body").value });
+      render(r);
+      setMsg(`Added: ${r.added.join(", ") || "nothing"}. Already here: ${r.skipped.join(", ") || "none"}.`, "ok");
+    } catch (err) { setMsg(err.message, "error"); }
+  });
+
+  async function loadControllers() {
+    const body = $("c-ctl");
+    try {
+      const rows = await api("GET", "/api/connections/controllers");
+      if (!rows.length) { body.innerHTML = '<tr><td colspan="4" class="muted">No service has a controller.</td></tr>'; return; }
+      body.replaceChildren(...rows.map((r) => el("tr", {},
+        el("td", {}, el("a", { href: `/services/${r.slug}`, textContent: r.name || r.slug })),
+        el("td", {}, el("code", { textContent: r.type })),
+        el("td", {}, r.connection ? el("code", { textContent: r.connection }) : "—"),
+        el("td", { className: r.usable ? "muted" : "error", textContent: r.usable ? "" : "this connection is missing or switched off" }))));
+    } catch (err) { body.replaceChildren(el("tr", {}, el("td", { colSpan: 4, className: "error", textContent: err.message }))); }
+  }
+
+  (async () => {
+    try { render(await api("GET", "/api/connections")); } catch (err) { setMsg(err.message, "error"); }
+    loadControllers();
+  })();
+</script>
+{% endblock %}

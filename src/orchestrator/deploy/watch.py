@@ -47,10 +47,10 @@ class DeployWatcher:
     async def observe(self, session: Session, adapters: AdapterBundle, settings: Settings) -> int:
         """One pass over the services with a deploy method. Returns how many outside deploys
         were started to be checked."""
-        adapter = getattr(adapters, "portainer", None)
-        if adapter is None or not adapter.configured:
+        if not any(a.configured for a in adapters.portainers.values()):
             return 0
         started = 0
+        down: set[str] = set()  # Portainers that stopped answering during this pass
         pipeline = DeployPipeline(adapters, settings)
         running = {
             r.service_id
@@ -65,10 +65,15 @@ class DeployWatcher:
             cfg = svc.controller or {}
             if not svc.deploy or cfg.get("type") != "portainer" or not cfg.get("stack"):
                 continue
+            named = str(cfg.get("instance") or "")
+            adapter = adapters.portainer_for(named)
+            if adapter is None or not adapter.configured or adapter.instance_id in down:
+                continue
             try:
                 stack = await adapter.get_stack(int(cfg["endpoint"]), str(cfg["stack"]))
             except AdapterUnreachable:
-                break  # Portainer is not answering: the other stacks would only wait too
+                down.add(adapter.instance_id)  # not answering: its other stacks would only wait
+                continue
             except AdapterError:
                 continue
             if stack is None:
