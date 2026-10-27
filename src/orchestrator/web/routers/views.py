@@ -32,8 +32,9 @@ from orchestrator.domain.enums import BackupMode, GuestKind, PipelineKind, Pipel
 from orchestrator.registry.probe_specs import PROBE_SPECS
 from orchestrator.registry.topology import build_map
 from orchestrator.registry.tree import TreeIndex
-from orchestrator.web.auth import get_current_admin, login_redirect, require_admin
+from orchestrator.web.auth import current_device, get_current_admin, login_redirect, require_admin
 from orchestrator.web.deps import SessionDep, SettingsDep
+from orchestrator.web.routers.auth import credentials_view, invites_view
 from orchestrator.web.routers.backup_policies import policy_to_dict
 from orchestrator.web.routers.dashboard import service_detail
 from orchestrator.web.routers.ui import (
@@ -306,11 +307,18 @@ async def nodes_page(request: Request, session: SessionDep) -> HTMLResponse | Re
 
 
 @pages.get("/admins", response_model=None)
-async def admins_page(request: Request, session: SessionDep) -> HTMLResponse | RedirectResponse:
+async def admins_page(
+    request: Request, session: SessionDep, settings: SettingsDep
+) -> HTMLResponse | RedirectResponse:
+    """Your passkeys and the invite links (the Admins wireframe)."""
     admin = get_current_admin(request, session)
     if admin is None:
         return login_redirect(request)
-    return templates.TemplateResponse(request, "admins.html", {"admin": admin})
+    initial = {
+        "credentials": credentials_view(session, admin, current_device(request)),
+        "invites": invites_view(session, settings),
+    }
+    return templates.TemplateResponse(request, "admins.html", {"admin": admin, "initial": initial})
 
 
 @api.get("/proxy-host-services")

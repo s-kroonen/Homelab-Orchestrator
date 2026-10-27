@@ -881,3 +881,12 @@ body.page-map .wrap { padding-right: calc(var(--map-side-w) + 32px); }
   body.page-map .wrap { padding-right: 16px; }
   .map-side { top: 0; bottom: 0; width: 100vw; z-index: 40; padding-bottom: 80px; }
 }
+
+/* a note under a flush card's table */
+.card-foot { margin: 0; padding: 10px 18px 12px; font-size: 12.5px; border-top: 1px solid var(--line); }
+
+/* Admins & devices: the invite links */
+.invite { padding: 10px 12px; margin-top: 8px; background: var(--inset); border: 1px solid var(--line); border-radius: 8px; }
+.invite-line { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.invite-line .mono { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
+.invite-done { display: flex; align-items: center; gap: 8px; padding: 6px 2px; font-size: 13.5px; }

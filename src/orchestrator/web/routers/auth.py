@@ -20,9 +20,10 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request, status
 from pydantic import BaseModel
-from sqlmodel import desc, func, select
+from sqlmodel import Session, desc, func, select
 
 from orchestrator.audit import log as audit
+from orchestrator.config import Settings
 from orchestrator.db.models import Admin, PendingApproval, WebAuthnCredential
 from orchestrator.domain.enums import ApprovalKind, ApprovalStatus, AuditResult
 from orchestrator.web import auth as auth_lib
@@ -155,7 +156,7 @@ async def login_complete(
     session.commit()
 
     assert admin.id is not None  # loaded from the DB by a non-null FK
-    auth_lib.login_admin(request, admin.id)
+    auth_lib.login_admin(request, admin.id, stored.id)
     return {"status": "ok", "username": admin.username}
 
 
@@ -247,7 +248,7 @@ async def register_complete(
     )
     session.commit()
 
-    auth_lib.login_admin(request, admin.id)
+    auth_lib.login_admin(request, admin.id, cred.id)
     return {"status": "ok", "username": admin.username}
 
 
@@ -333,11 +334,15 @@ async def add_credential_complete(
         session, actor=admin.username, action="auth.credential.added", target=f"admin:{admin.id}"
     )
     session.commit()
+    auth_lib.remember_device(request, cred.id)  # it was just made on this device
     return {"status": "ok"}
 
 
-@router.get("/api/auth/credentials")
-async def list_credentials(admin: CurrentAdmin, session: SessionDep) -> list[dict[str, Any]]:
+def credentials_view(
+    session: Session, admin: Admin, this_device: int | None
+) -> list[dict[str, Any]]:
+    """The signed-in admin's passkeys, newest first; ``this_device`` marks the one this browser
+    signed in (or was added) with."""
     creds = session.exec(
         select(WebAuthnCredential)
         .where(WebAuthnCredential.admin_id == admin.id)
@@ -349,9 +354,17 @@ async def list_credentials(admin: CurrentAdmin, session: SessionDep) -> list[dic
             "label": c.label,
             "created_at": c.created_at.isoformat(),
             "last_used_at": c.last_used_at.isoformat() if c.last_used_at else None,
+            "this_device": this_device is not None and c.id == this_device,
         }
         for c in creds
     ]
+
+
+@router.get("/api/auth/credentials")
+async def list_credentials(
+    admin: CurrentAdmin, request: Request, session: SessionDep
+) -> list[dict[str, Any]]:
+    return credentials_view(session, admin, auth_lib.current_device(request))
 
 
 # ---------------------------------------------------------------------------
@@ -391,8 +404,9 @@ async def create_invite(
     }
 
 
-@router.get("/api/auth/invites")
-async def list_invites(admin: CurrentAdmin, session: SessionDep) -> list[dict[str, Any]]:
+def invites_view(session: Session, settings: Settings) -> list[dict[str, Any]]:
+    """The newest 50 invites. An open one (pending, not expired) carries its link again, so an
+    admin can copy it later; only admins see this list, and any admin can make a new link anyway."""
     invites = session.exec(
         select(PendingApproval)
         .where(PendingApproval.kind == ApprovalKind.ADMIN_INVITE)
@@ -405,6 +419,7 @@ async def list_invites(admin: CurrentAdmin, session: SessionDep) -> list[dict[st
         effective_status = inv.status
         if effective_status is ApprovalStatus.PENDING and inv.expires_at < now:
             effective_status = ApprovalStatus.EXPIRED
+        is_open = effective_status is ApprovalStatus.PENDING
         out.append(
             {
                 "label": inv.payload.get("label", ""),
@@ -413,6 +428,15 @@ async def list_invites(admin: CurrentAdmin, session: SessionDep) -> list[dict[st
                 "expires_at": inv.expires_at.isoformat(),
                 "status": effective_status.value,
                 "approved_by": inv.approved_by,
+                "approved_at": inv.approved_at.isoformat() if inv.approved_at else None,
+                "url": f"{settings.webauthn_origin}/login?invite={inv.token}" if is_open else None,
             }
         )
     return out
+
+
+@router.get("/api/auth/invites")
+async def list_invites(
+    admin: CurrentAdmin, session: SessionDep, settings: SettingsDep
+) -> list[dict[str, Any]]:
+    return invites_view(session, settings)
