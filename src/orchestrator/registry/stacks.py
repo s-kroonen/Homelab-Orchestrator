@@ -29,9 +29,11 @@ from orchestrator.registry.switch import SwitchRefused, switch_service
 from orchestrator.registry.tree import TreeIndex
 
 
-def _adapter(adapters: AdapterBundle) -> PortainerAdapter:
-    adapter = adapters.portainer
-    if adapter is None or not adapter.configured:
+def _adapter(adapters: AdapterBundle, instance: str | None = None) -> PortainerAdapter:
+    adapter = adapters.portainer_for(instance)
+    if adapter is None:
+        raise StackError(f"there is no Portainer connection called {instance!r}", 404)
+    if not adapter.configured:
         raise StackError("Portainer is not set up", 503)
     return adapter
 
@@ -58,11 +60,12 @@ async def control(
     endpoint_id: int,
     ref: str,
     action: str,
+    instance: str | None = None,
 ) -> str:
     """start | stop | restart one stack or one container, audited."""
     if action not in {"start", "stop", "restart"}:
         raise StackError(f"unknown action {action!r}", 400)
-    adapter = _adapter(adapters)
+    adapter = _adapter(adapters, instance)
     try:
         if kind == "stack":
             stack = await _stack(adapter, endpoint_id, ref)
@@ -98,9 +101,11 @@ async def control(
 # -- create ----------------------------------------------------------------------------------------
 
 
-def preview(adapters: AdapterBundle, spec: StackCreate) -> dict[str, Any]:
+def preview(
+    adapters: AdapterBundle, spec: StackCreate, instance: str | None = None
+) -> dict[str, Any]:
     """The request that would be sent to Portainer, secrets masked."""
-    adapter = _adapter(adapters)
+    adapter = _adapter(adapters, instance)
     try:
         return adapter.preview_create(spec)
     except AdapterError as exc:
@@ -123,9 +128,10 @@ async def create(
     spec: StackCreate,
     *,
     adopt_plan: AdoptPlan | None = None,
+    instance: str | None = None,
 ) -> CreateResult:
-    adapter = _adapter(adapters)
-    shown = preview(adapters, spec)
+    adapter = _adapter(adapters, instance)
+    shown = preview(adapters, spec, instance)
     try:
         if await adapter.get_stack(spec.endpoint_id, spec.name) is not None:
             raise StackError(f"a stack named {spec.name!r} already exists there", 409)
@@ -153,6 +159,7 @@ async def create(
     if adopt_plan is not None:
         adopt_plan.stack = stack.name
         adopt_plan.endpoint_id = spec.endpoint_id
+        adopt_plan.instance = adapter.instance_id
         try:
             result.adopted = await adoption.adopt(session, adapters, settings, actor, adopt_plan)
         except StackError as exc:
@@ -185,18 +192,25 @@ async def delete(
     confirm_name: str,
     take_down: bool = False,
     remove_services: bool = True,
+    instance: str | None = None,
 ) -> DeleteResult:
     """Delete the stack in Portainer (volumes are kept), then remove the link."""
     from orchestrator.db.models import ProxyHost
     from orchestrator.web.routers import dashboard as api
 
-    adapter = _adapter(adapters)
+    adapter = _adapter(adapters, instance)
     if confirm_name != name:
         raise StackError(f"type the stack's name ({name!r}) to confirm deleting it", 400)
     stack = await _stack(adapter, endpoint_id, name)
     result = DeleteResult(stack=stack.name)
 
-    roots = linked_services(session, endpoint_id, stack.name)
+    roots = linked_services(
+        session,
+        endpoint_id,
+        stack.name,
+        instance=adapter.instance_id,
+        default=adapters.default_portainer,
+    )
     tree = TreeIndex.build(session)
     below = {d.id: d for r in roots for d in tree.descendants(r)}
     linked = [*roots, *below.values()]

@@ -231,7 +231,14 @@ class DumpPipeline:
         try:
             endpoint, container = await self._check(session, rec, svc, cfg)
             part, final = self._paths(slug, cfg)
-            outcome = await self._dump(rec, endpoint, container, cfg, part)
+            outcome = await self._dump(
+                rec,
+                endpoint,
+                container,
+                cfg,
+                part,
+                str((svc.controller or {}).get("instance") or ""),
+            )
             checked = await self._verify(rec, part, cfg, outcome)
             record = self._record(session, rec, run, svc, cfg, part, final, checked)
             removed = prune(session, self._settings, svc, cfg)
@@ -305,8 +312,11 @@ class DumpPipeline:
     async def _check(
         self, session: Session, rec: StepRecorder, svc: Service, cfg: dict[str, Any]
     ) -> tuple[int, str]:
-        portainer = getattr(self._adapters, "portainer", None)
-        if portainer is None or not portainer.configured:
+        named = str((svc.controller or {}).get("instance") or "")
+        portainer = self._adapters.portainer_for(named)
+        if portainer is None:
+            raise DumpFailed(f"there is no Portainer connection called {named!r}")
+        if not portainer.configured:
             raise DumpFailed("Portainer is not set up")
         try:
             endpoint, container = target_of(cfg, svc.controller or {})
@@ -339,9 +349,15 @@ class DumpPipeline:
         return final.with_name(final.name + ".part"), final
 
     async def _dump(
-        self, rec: StepRecorder, endpoint: int, container: str, cfg: dict[str, Any], part: Path
+        self,
+        rec: StepRecorder,
+        endpoint: int,
+        container: str,
+        cfg: dict[str, Any],
+        part: Path,
+        instance: str = "",
     ) -> Any:
-        portainer = self._adapters.portainer
+        portainer = self._adapters.portainer_for(instance)
         assert portainer is not None  # _check already said so
         started = datetime.now(UTC)
         with part.open("wb") as raw, gzip.GzipFile(fileobj=raw, mode="wb", compresslevel=6) as gz:

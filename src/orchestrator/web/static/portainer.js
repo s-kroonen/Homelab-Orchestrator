@@ -28,6 +28,12 @@
     return td;
   };
   const err = (e) => (e && e.message) || String(e);
+  // Which Portainer connection (Connections page) this page is looking at.
+  const inst = () => ($("p-inst") ? $("p-inst").value : "");
+  function u(path) {
+    const i = inst();
+    return i ? path + (path.includes("?") ? "&" : "?") + "instance=" + encodeURIComponent(i) : path;
+  }
 
   // -- stacks ----------------------------------------------------------------------------
   function gitText(g) {
@@ -60,7 +66,7 @@
     $("p-errors").textContent = "";
     const env = $("p-env").value;
     try {
-      const r = await apiFetch("GET", "/api/portainer/stacks" + (env ? "?endpoint=" + env : ""), undefined, { suppressToast: true });
+      const r = await apiFetch("GET", u("/api/portainer/stacks" + (env ? "?endpoint=" + env : "")), undefined, { suppressToast: true });
       state.stacks = r.stacks;
       renderStacks();
       const problems = Object.entries(r.errors || {}).map(([k, v]) => `environment ${k} (${v})`);
@@ -75,11 +81,11 @@
 
   async function loadStatus() {
     try {
-      const s = await apiFetch("GET", "/api/portainer/status", undefined, { suppressToast: true });
+      const s = await apiFetch("GET", u("/api/portainer/status"), undefined, { suppressToast: true });
       $("p-status").textContent = s.detail;
       if (s.url) { $("p-open").href = s.url; $("p-open").hidden = false; }
       if (!s.ok) return false;
-      const envs = await apiFetch("GET", "/api/portainer/environments", undefined, { suppressToast: true });
+      const envs = await apiFetch("GET", u("/api/portainer/environments"), undefined, { suppressToast: true });
       const sel = $("p-env");
       // a down environment is not offered: its stacks are not shown, so there is nothing to pick
       sel.replaceChildren(new Option("all", ""), ...envs.filter((e) => e.status !== "down").map((e) => new Option(`${e.name} (${e.type}, ${e.status})`, String(e.id))));
@@ -95,7 +101,7 @@
     $("d-title").textContent = s.name;
     $("d-meta").textContent = "Loading…";
     try {
-      const d = await apiFetch("GET", `/api/portainer/endpoints/${s.endpoint_id}/stacks/${encodeURIComponent(s.name)}`, undefined, { suppressToast: true });
+      const d = await apiFetch("GET", u(`/api/portainer/endpoints/${s.endpoint_id}/stacks/${encodeURIComponent(s.name)}`), undefined, { suppressToast: true });
       const bits = [`${d.type} stack`, d.status, `kind: ${d.kind}`, d.managed ? "" : "not created through Portainer",
         d.auto_update ? "auto-update on" : "", d.has_webhook ? "has a deploy webhook (id hidden)" : "",
         d.git ? `from ${d.git.url} (${gitText(d.git)})` : "", d.updated_by ? `last updated by ${d.updated_by}` : ""].filter(Boolean);
@@ -150,7 +156,7 @@
   async function loadLogs() {
     const t = state.logTarget;
     if (!t) return;
-    const url = `/api/portainer/endpoints/${t.endpoint}/containers/${encodeURIComponent(t.name)}/logs?tail=${$("l-tail").value}&timestamps=true`;
+    const url = u(`/api/portainer/endpoints/${t.endpoint}/containers/${encodeURIComponent(t.name)}/logs?tail=${$("l-tail").value}&timestamps=true`);
     try {
       const r = await apiFetch("GET", url, undefined, { suppressToast: true });
       state.lines = r.lines;
@@ -184,7 +190,7 @@
   async function containerAction(s, c, verb) {
     if (verb !== "start" && !confirm(`${verb} container ${c.name}?`)) return;
     try {
-      const r = await apiFetch("POST", `/api/containers/${s.endpoint_id}/${encodeURIComponent(c.name)}/${verb}`, undefined, { suppressToast: true });
+      const r = await apiFetch("POST", u(`/api/containers/${s.endpoint_id}/${encodeURIComponent(c.name)}/${verb}`), undefined, { suppressToast: true });
       $("d-msg").textContent = r.message; $("d-msg").className = "msg ok";
     } catch (e) { $("d-msg").textContent = err(e); $("d-msg").className = "msg error"; }
     setTimeout(() => select(s), 800);
@@ -195,7 +201,7 @@
       const verb = b.dataset.stackAction;
       if (verb !== "start" && !confirm(`${verb} stack ${s.name}?`)) return;
       try {
-        const r = await apiFetch("POST", `/api/stacks/${s.endpoint_id}/${encodeURIComponent(s.name)}/${verb}`, undefined, { suppressToast: true });
+        const r = await apiFetch("POST", u(`/api/stacks/${s.endpoint_id}/${encodeURIComponent(s.name)}/${verb}`), undefined, { suppressToast: true });
         $("d-msg").textContent = r.message; $("d-msg").className = "msg ok";
       } catch (e) { $("d-msg").textContent = err(e); $("d-msg").className = "msg error"; }
       setTimeout(async () => { await loadStacks(); select(s); }, 800);
@@ -236,7 +242,7 @@
   }
   async function openCreate() {
     let envs = [];
-    try { envs = await apiFetch("GET", "/api/portainer/environments", undefined, { suppressToast: true }); } catch (e) { /* the panel still opens */ }
+    try { envs = await apiFetch("GET", u("/api/portainer/environments"), undefined, { suppressToast: true }); } catch (e) { /* the panel still opens */ }
     const docker = envs.filter((e) => ["docker", "agent", "edge"].includes(e.type));
     $("c-env").replaceChildren(...docker.map((e) => option(String(e.id), `${e.name} (${e.status})`)));
     let parents = [];
@@ -252,16 +258,16 @@
   for (const id of ["c-env", "c-name", "c-url", "c-ref", "c-path", "c-cred", "c-user", "c-pass", "c-auto", "c-compose"]) $(id).addEventListener("input", invalidate);
   $("c-preview").addEventListener("click", async () => {
     try {
-      previewed = await apiFetch("POST", "/api/stacks/preview", createBody(), { suppressToast: true });
+      previewed = await apiFetch("POST", u("/api/stacks/preview"), createBody(), { suppressToast: true });
       $("c-request").textContent = JSON.stringify(previewed, null, 2); $("c-request").hidden = false;
       $("c-go").disabled = false; $("c-msg").textContent = "This is what will be sent to Portainer. Secrets are masked."; $("c-msg").className = "msg";
     } catch (e) { invalidate(); $("c-msg").textContent = err(e); $("c-msg").className = "msg error"; }
   });
   $("c-go").addEventListener("click", async () => {
     if (!previewed) return;
-    const body = { spec: createBody(), confirm: true };
+    const body = { spec: createBody(), confirm: true, instance: inst() };
     if ($("c-adopt").checked && $("c-slug").value.trim()) {
-      body.adopt = { endpoint_id: body.spec.endpoint_id, stack: body.spec.name, slug: $("c-slug").value.trim(), parent: $("c-parent").value };
+      body.adopt = { endpoint_id: body.spec.endpoint_id, stack: body.spec.name, slug: $("c-slug").value.trim(), parent: $("c-parent").value, instance: inst() };
     }
     $("c-go").disabled = true; $("c-msg").textContent = "Creating…";
     try {
@@ -286,7 +292,7 @@
   $("x-go").addEventListener("click", async () => {
     const s = state.selected; if (!s) return;
     try {
-      const r = await apiFetch("DELETE", `/api/stacks/${s.endpoint_id}/${encodeURIComponent(s.name)}`,
+      const r = await apiFetch("DELETE", u(`/api/stacks/${s.endpoint_id}/${encodeURIComponent(s.name)}`),
         { confirm_name: $("x-name").value, take_down: $("x-down").checked, remove_services: !$("x-keep").checked }, { suppressToast: true });
       const bits = [`Deleted ${r.stack} (volumes kept).`];
       if (r.taken_down.length) bits.push("Switched off: " + r.taken_down.join(", ") + ".");
@@ -301,7 +307,19 @@
 
   // -- wiring ---------------------------------------------------------------------------------
   $("p-env").addEventListener("change", loadStacks);
+  async function loadInstances() {
+    try {
+      const list = await apiFetch("GET", "/api/portainer/instances", undefined, { suppressToast: true });
+      const sel = $("p-inst");
+      sel.replaceChildren(...list.map((i) => { const o = el("option", "", i.name + (i.default ? " (default)" : "") + (i.configured ? "" : " - not set up")); o.value = i.id; o.selected = i.default; return o; }));
+      $("p-inst-wrap").hidden = list.length < 2;
+    } catch (e) { /* the page works with the default one */ }
+  }
+  $("p-inst").addEventListener("change", async () => {
+    state.selected = null; $("detail").hidden = true;
+    if (await loadStatus()) loadStacks(); else { state.stacks = []; renderStacks(); }
+  });
   $("p-search").addEventListener("input", renderStacks);
   $("p-refresh").addEventListener("click", async () => { await loadStacks(); if (state.selected) select(state.selected); });
-  (async () => { if (await loadStatus()) loadStacks(); else renderStacks(); })();
+  (async () => { await loadInstances(); if (await loadStatus()) loadStacks(); else renderStacks(); })();
 })();

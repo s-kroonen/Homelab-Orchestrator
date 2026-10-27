@@ -165,9 +165,22 @@
   }));
 
   // -- Portainer -----------------------------------------------------------------------------------------------
+  // Which Portainer connection this tab shows (Connections page); blank = the default one.
+  const ptInst = () => ($("pt-inst") ? $("pt-inst").value : "");
+  const ptQ = (sep) => (ptInst() ? sep + "instance=" + encodeURIComponent(ptInst()) : "");
+  async function loadPtInstances() {
+    try {
+      const list = await api("GET", "/api/portainer/instances");
+      const sel = $("pt-inst");
+      const keep = sel.value;
+      sel.replaceChildren(...list.map((i) => { const o = new Option(i.name + (i.default ? " (default)" : "") + (i.configured ? "" : " - not set up"), i.id); o.selected = keep ? i.id === keep : i.default; return o; }));
+      $("pt-inst-wrap").hidden = list.length < 2;
+    } catch (e) { /* the tab works with the default one */ }
+  }
   loaders.portainer = async function () {
     let d;
-    try { d = await api("GET", "/api/sources/portainer"); }
+    await loadPtInstances();
+    try { d = await api("GET", "/api/sources/portainer" + ptQ("?")); }
     catch (e) { msg("pt-msg", err(e), "error"); return; }
     $("pt-off").hidden = d.configured;
     if (!d.configured) { $("pt-rows").replaceChildren(emptyRow(6, "Portainer is not set up.")); return; }
@@ -183,6 +196,7 @@
         el("td", null, linkedTo.length ? "" : adopt));
     }) : [emptyRow(6, "No stacks.")]));
   };
+  $("pt-inst").addEventListener("change", () => { $("adopt").hidden = true; loaders.portainer(); });
   $("pt-refresh").addEventListener("click", () => busyButton($("pt-refresh"), async () => { await loaders.portainer(); loadOverview(); }));
 
   let suggestion = null;
@@ -191,7 +205,7 @@
     $("adopt").hidden = false; $("a-result").hidden = true;
     msg("a-msg", "Reading what is there…");
     $("adopt").scrollIntoView({ behavior: "smooth", block: "nearest" });
-    try { suggestion = await api("GET", `/api/stacks/suggest?endpoint=${s.endpoint_id}&name=${encodeURIComponent(s.name)}`); }
+    try { suggestion = await api("GET", `/api/stacks/suggest?endpoint=${s.endpoint_id}&name=${encodeURIComponent(s.name)}${ptQ("&")}`); }
     catch (e) { msg("a-msg", err(e), "error"); return; }
     const g = suggestion;
     $("a-stack").textContent = g.stack;
@@ -221,7 +235,7 @@
     const children = g.children.map((c, i) => ({ c, i })).filter(({ i }) => $("a-c-" + i).checked)
       .map(({ c, i }) => ({ container: c.container, slug: $("a-cs-" + i).value.trim(), name: c.name, backup_gate: $("a-cg-" + i).value }));
     const hosts = g.hosts.map((h, i) => ({ h, i })).filter(({ i }) => $("a-h-" + i) && $("a-h-" + i).checked).map(({ h }) => h.hostname);
-    const body = { endpoint_id: g.endpoint_id, stack: g.stack, slug: $("a-slug").value.trim(), parent: $("a-parent").value,
+    const body = { endpoint_id: g.endpoint_id, instance: g.instance || ptInst(), stack: g.stack, slug: $("a-slug").value.trim(), parent: $("a-parent").value,
       group: $("a-group").value.trim(), children, hosts, probes: $("a-probes").checked,
       deploy: $("a-deploy").value || null, webhook: $("a-deploy").value && $("a-hook").value ? $("a-hook").value : null };
     msg("a-msg", "Creating…");

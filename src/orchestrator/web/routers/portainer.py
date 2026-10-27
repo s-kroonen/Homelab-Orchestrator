@@ -44,10 +44,15 @@ _templates = Jinja2Templates(directory=str(Path(__file__).parent.parent / "templ
 _KIND_CONCURRENCY = 4
 
 
-def _adapter(adapters: AdaptersDep) -> PortainerAdapter:
-    if adapters.portainer is None:
+def _adapter(adapters: AdaptersDep, instance: str | None = None) -> PortainerAdapter:
+    adapter = adapters.portainer_for(instance)
+    if adapter is None and instance:
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND, f"there is no Portainer connection called {instance!r}"
+        )
+    if adapter is None:
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "Portainer is not set up")
-    return adapters.portainer
+    return adapter
 
 
 def _fail(exc: AdapterError) -> HTTPException:
@@ -82,12 +87,17 @@ def _why(name: str | None, detail: str) -> str:
 # -- links the orchestrator keeps (and nothing else about a stack) ------------------------
 
 
-def _links(session: Session) -> dict[tuple[str, int, str], list[str]]:
-    """(kind, environment, name) -> slugs of the sub-services linked to it."""
+def _links(
+    session: Session, adapter: PortainerAdapter, default: str
+) -> dict[tuple[str, int, str], list[str]]:
+    """(kind, environment, name) -> slugs of the sub-services linked to it, on this Portainer
+    (a link naming no connection is on the default one)."""
     out: dict[tuple[str, int, str], list[str]] = {}
     for svc in session.exec(select(Service)).all():
         cfg = svc.controller or {}
         if cfg.get("type") != "portainer":
+            continue
+        if (str(cfg.get("instance") or "") or default) != adapter.instance_id:
             continue
         try:
             eid = int(cfg["endpoint"])
@@ -108,8 +118,10 @@ def _stack_view(
     links: dict[tuple[str, int, str], list[str]],
     containers: list[Container] | None = None,
     kind: str | None = None,
+    instance: str = "",
 ) -> dict[str, Any]:
     data = asdict(s)
+    data["instance"] = instance
     data["open_url"] = stack_url(base, s)
     data["linked_services"] = links.get(("stack", s.endpoint_id, s.name.lower()), [])
     data["host_commands"] = [
@@ -125,9 +137,14 @@ def _stack_view(
 
 
 def _container_view(
-    c: Container, eid: int, base: str, links: dict[tuple[str, int, str], list[str]]
+    c: Container,
+    eid: int,
+    base: str,
+    links: dict[tuple[str, int, str], list[str]],
+    instance: str = "",
 ) -> dict[str, Any]:
     data = asdict(c)
+    data["instance"] = instance
     data["endpoint_id"] = eid
     data["open_url"] = container_url(base, eid, c.id)
     data["linked_services"] = links.get(("container", eid, c.name.lower()), [])
@@ -137,16 +154,37 @@ def _container_view(
 # -- API ----------------------------------------------------------------------------------------
 
 
+@api.get("/instances")
+async def instances(adapters: AdaptersDep) -> list[dict[str, Any]]:
+    """The Portainer connections (Connections page): what the page's picker offers."""
+    return [
+        {
+            "id": a.instance_id,
+            "name": a.instance_name,
+            "default": a.instance_id == adapters.default_portainer,
+            "configured": a.configured,
+            "url": a.base_url,
+        }
+        for a in adapters.portainers.values()
+    ]
+
+
 @api.get("/status")
-async def portainer_status(adapters: AdaptersDep) -> dict[str, Any]:
-    adapter = _adapter(adapters)
+async def portainer_status(
+    adapters: AdaptersDep,
+    instance: str | None = Query(None, description="Portainer connection id; blank = the default"),
+) -> dict[str, Any]:
+    adapter = _adapter(adapters, instance)
     check = await adapter.check()
-    return {**asdict(check), "url": adapter.base_url}
+    return {**asdict(check), "url": adapter.base_url, "instance": adapter.instance_id}
 
 
 @api.get("/environments")
-async def environments(adapters: AdaptersDep) -> list[dict[str, Any]]:
-    adapter = _adapter(adapters)
+async def environments(
+    adapters: AdaptersDep,
+    instance: str | None = Query(None, description="Portainer connection id; blank = the default"),
+) -> list[dict[str, Any]]:
+    adapter = _adapter(adapters, instance)
     try:
         envs = await adapter.list_environments()
     except AdapterError as exc:
@@ -159,9 +197,10 @@ async def stacks(
     adapters: AdaptersDep,
     session: SessionDep,
     endpoint: int | None = Query(None, description="Only this environment"),
+    instance: str | None = Query(None, description="Portainer connection id; blank = the default"),
 ) -> dict[str, Any]:
-    adapter = _adapter(adapters)
-    links = _links(session)
+    adapter = _adapter(adapters, instance)
+    links = _links(session, adapter, adapters.default_portainer)
     try:
         listing = await adapter.list_stacks(endpoint)
     except AdapterError as exc:
@@ -208,8 +247,9 @@ async def stacks(
             for c in containers.get(s.endpoint_id, [])
             if (c.stack or "").lower() == s.name.lower()
         ]
-        rows.append(_stack_view(s, base, links, mine, kind))
+        rows.append(_stack_view(s, base, links, mine, kind, adapter.instance_id))
     return {
+        "instance": adapter.instance_id,
         "stacks": rows,
         "errors": {str(k): _why(names.get(k), v) for k, v in listing.errors.items()},
         "skipped": sorted(listing.errors),
@@ -218,10 +258,14 @@ async def stacks(
 
 @api.get("/endpoints/{endpoint_id}/stacks/{name}")
 async def stack_detail(
-    endpoint_id: int, name: str, adapters: AdaptersDep, session: SessionDep
+    endpoint_id: int,
+    name: str,
+    adapters: AdaptersDep,
+    session: SessionDep,
+    instance: str | None = Query(None, description="Portainer connection id; blank = the default"),
 ) -> dict[str, Any]:
-    adapter = _adapter(adapters)
-    links = _links(session)
+    adapter = _adapter(adapters, instance)
+    links = _links(session, adapter, adapters.default_portainer)
     try:
         found = await adapter.get_stack(endpoint_id, name)
         if found is None:
@@ -233,8 +277,10 @@ async def stack_detail(
     except AdapterError as exc:
         raise _fail(exc) from exc
     base = adapter.base_url
-    view = _stack_view(found, base, links, containers, kind)
-    view["containers"] = [_container_view(c, endpoint_id, base, links) for c in containers]
+    view = _stack_view(found, base, links, containers, kind, adapter.instance_id)
+    view["containers"] = [
+        _container_view(c, endpoint_id, base, links, adapter.instance_id) for c in containers
+    ]
     return view
 
 
@@ -245,21 +291,28 @@ async def containers(
     session: SessionDep,
     stack: str | None = Query(None),
     all: bool = Query(True, description="Include stopped containers"),
+    instance: str | None = Query(None, description="Portainer connection id; blank = the default"),
 ) -> list[dict[str, Any]]:
-    adapter = _adapter(adapters)
-    links = _links(session)
+    adapter = _adapter(adapters, instance)
+    links = _links(session, adapter, adapters.default_portainer)
     try:
         rows = await adapter.list_containers(endpoint_id, stack=stack, include_stopped=all)
     except AdapterError as exc:
         raise _fail(exc) from exc
-    return [_container_view(c, endpoint_id, adapter.base_url, links) for c in rows]
+    return [
+        _container_view(c, endpoint_id, adapter.base_url, links, adapter.instance_id) for c in rows
+    ]
 
 
 @api.get("/endpoints/{endpoint_id}/containers/{ref}")
 async def container_detail(
-    endpoint_id: int, ref: str, adapters: AdaptersDep, session: SessionDep
+    endpoint_id: int,
+    ref: str,
+    adapters: AdaptersDep,
+    session: SessionDep,
+    instance: str | None = Query(None, description="Portainer connection id; blank = the default"),
 ) -> dict[str, Any]:
-    adapter = _adapter(adapters)
+    adapter = _adapter(adapters, instance)
     try:
         detail = await adapter.get_container(endpoint_id, ref)
     except AdapterError as exc:
@@ -270,7 +323,11 @@ async def container_detail(
         )
     view = asdict(detail)
     view["container"] = _container_view(
-        detail.container, endpoint_id, adapter.base_url, _links(session)
+        detail.container,
+        endpoint_id,
+        adapter.base_url,
+        _links(session, adapter, adapters.default_portainer),
+        adapter.instance_id,
     )
     name = detail.container.name
     view["host_commands"] = [
@@ -289,8 +346,9 @@ async def container_logs(
     tail: int = Query(200, ge=1, le=2000),
     since: int | None = Query(None, ge=0, description="Unix seconds"),
     timestamps: bool = Query(True),
+    instance: str | None = Query(None, description="Portainer connection id; blank = the default"),
 ) -> dict[str, Any]:
-    adapter = _adapter(adapters)
+    adapter = _adapter(adapters, instance)
     try:
         lines = await adapter.logs(endpoint_id, ref, tail=tail, since=since, timestamps=timestamps)
     except AdapterError as exc:
@@ -299,8 +357,13 @@ async def container_logs(
 
 
 @api.get("/endpoints/{endpoint_id}/containers/{ref}/stats")
-async def container_stats(endpoint_id: int, ref: str, adapters: AdaptersDep) -> dict[str, Any]:
-    adapter = _adapter(adapters)
+async def container_stats(
+    endpoint_id: int,
+    ref: str,
+    adapters: AdaptersDep,
+    instance: str | None = Query(None, description="Portainer connection id; blank = the default"),
+) -> dict[str, Any]:
+    adapter = _adapter(adapters, instance)
     try:
         return asdict(await adapter.stats(endpoint_id, ref))
     except AdapterError as exc:

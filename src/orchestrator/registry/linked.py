@@ -149,9 +149,9 @@ class LinkedContext:
     routes: list[RouteInfo] | None
     #: One Proxmox read of every guest, shared with whoever else is reading this cycle.
     guest_cache: GuestStateCache | None = None
-    #: Why Portainer could not be reached during this pass; later reads fail at once instead of
-    #: each waiting out its own timeout.
-    portainer_down: str = ""
+    #: Why a Portainer (by connection id) could not be reached during this pass; later reads of
+    #: it fail at once instead of each waiting out its own timeout.
+    portainer_down: dict[str, str] = field(default_factory=dict)
     #: Skip controllers that run a command (docker / systemd / command over a transport): a
     #: pass that runs every few seconds or for every service must not start those.
     light: bool = False
@@ -248,7 +248,9 @@ async def _portainer_part(
     ctx: LinkedContext | None = None,
     host_down: str = "",
 ) -> Part:
-    adapter = getattr(adapters, "portainer", None)
+    named = str(cfg.get("instance") or "")
+    adapter = adapters.portainer_for(named)
+    which = adapter.instance_id if adapter is not None else named
     eid = int(cfg["endpoint"])
     stack_name = str(cfg.get("stack") or "")
     kind = "stack" if stack_name else "container"
@@ -256,10 +258,12 @@ async def _portainer_part(
     label = f"{kind} {name}"
     if host_down:  # it lives on a guest that is not running: no need to ask Portainer
         return Part(kind, name, label, False, f"not running: {host_down}")
-    if adapter is None or not adapter.configured:
+    if adapter is None:
+        return Part(kind, name, label, None, f"there is no Portainer connection called {named!r}")
+    if not adapter.configured:
         return Part(kind, name, label, None, "Portainer is not set up")
-    if ctx is not None and ctx.portainer_down:
-        return Part(kind, name, label, None, ctx.portainer_down)
+    if ctx is not None and which in ctx.portainer_down:
+        return Part(kind, name, label, None, ctx.portainer_down[which])
     base = adapter.base_url
     try:
         if stack_name:
@@ -291,7 +295,7 @@ async def _portainer_part(
         )
     except AdapterError as exc:
         if ctx is not None and isinstance(exc, AdapterUnreachable | AdapterNotConfigured):
-            ctx.portainer_down = str(exc)
+            ctx.portainer_down[which] = str(exc)
         return Part(kind, name, label, None, str(exc))
 
 

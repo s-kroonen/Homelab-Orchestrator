@@ -57,7 +57,7 @@ class AdapterBundle:
     def portainer_for(self, instance: str | None = None) -> PortainerAdapter | None:
         """The Portainer a connection id names (None/blank: the default one)."""
         if not instance:
-            return self.portainers.get(self.default_portainer) or self.portainer
+            return self.portainer
         return self.portainers.get(instance)
 
     async def start_all(self) -> None:

@@ -120,8 +120,10 @@ def _check_allowed(
 
 
 async def _portainer_do(adapters: AdapterBundle, cfg: dict[str, Any], verb: str) -> str:
-    adapter = adapters.portainer
-    if adapter is None or not adapter.configured:
+    adapter = adapters.portainer_for(str(cfg.get("instance") or ""))
+    if adapter is None:
+        raise ControllerError(f"there is no Portainer connection called {cfg.get('instance')!r}")
+    if not adapter.configured:
         raise ControllerError("Portainer is not set up")
     eid = int(cfg["endpoint"])
     try:
@@ -164,16 +166,19 @@ async def _ready(
     """Is the thing up *and settled* (every container running, none still starting)?"""
     if part.kind in {"stack", "container"}:
         cfg = portainer_cfg(svc)
-        assert cfg is not None and adapters.portainer is not None
+        assert cfg is not None
+        portainer = adapters.portainer_for(str(cfg.get("instance") or ""))
+        if portainer is None:
+            return False, f"there is no Portainer connection called {cfg.get('instance')!r}"
         eid = int(cfg["endpoint"])
         try:
             if cfg.get("stack"):
-                stack = await adapters.portainer.get_stack(eid, str(cfg["stack"]))
-                boxes = await adapters.portainer.list_containers(eid, stack=str(cfg["stack"]))
+                stack = await portainer.get_stack(eid, str(cfg["stack"]))
+                boxes = await portainer.list_containers(eid, stack=str(cfg["stack"]))
                 if stack is None or stack.status != "active":
                     return False, "stack not active yet"
             else:
-                detail = await adapters.portainer.get_container(eid, str(cfg["container"]))
+                detail = await portainer.get_container(eid, str(cfg["container"]))
                 boxes = [detail.container] if detail else []
         except AdapterError as exc:
             return False, str(exc)

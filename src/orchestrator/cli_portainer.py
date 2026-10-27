@@ -27,9 +27,10 @@ from orchestrator.logging_setup import configure_logging
 def _with_adapter(fn: Callable[[PortainerAdapter], Awaitable[Any]]) -> Any:
     configure_logging()
     build_engine()
-    adapter = build_adapters(get_settings()).portainer
-    if adapter is None:  # pragma: no cover - build_adapters always sets it
-        raise click.ClickException("Portainer is not set up")
+    named = click.get_current_context().meta.get("portainer_instance")
+    adapter = build_adapters(get_settings()).portainer_for(named)
+    if adapter is None:
+        raise click.ClickException(f"there is no Portainer connection called {named!r}")
 
     async def go() -> Any:
         await adapter.start()
@@ -59,8 +60,16 @@ def _when(iso: str | None) -> str:
 
 
 @click.group()
-def portainer() -> None:
+@click.option(
+    "--instance",
+    "-i",
+    default=None,
+    help="Which Portainer connection (its id on the Connections page); default: the default one.",
+)
+@click.pass_context
+def portainer(ctx: click.Context, instance: str | None) -> None:
     """What Portainer has: environments, stacks, containers, logs (read-only)."""
+    ctx.meta["portainer_instance"] = instance
 
 
 @portainer.command("status")

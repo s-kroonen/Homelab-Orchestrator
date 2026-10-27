@@ -319,7 +319,9 @@ async def _proxy_hosts(ctx: ToolContext, a: dict[str, Any]) -> Any:
 async def _portainer_stacks(ctx: ToolContext, a: dict[str, Any]) -> Any:
     from orchestrator.web.routers import portainer
 
-    return await _call(portainer.stacks(ctx.adapters, ctx.session, a.get("endpoint_id")))
+    return await _call(
+        portainer.stacks(ctx.adapters, ctx.session, a.get("endpoint_id"), a.get("instance") or None)
+    )
 
 
 async def _portainer_containers(ctx: ToolContext, a: dict[str, Any]) -> Any:
@@ -327,7 +329,12 @@ async def _portainer_containers(ctx: ToolContext, a: dict[str, Any]) -> Any:
 
     return await _call(
         portainer.containers(
-            a["endpoint_id"], ctx.adapters, ctx.session, a.get("stack"), not a.get("running_only")
+            a["endpoint_id"],
+            ctx.adapters,
+            ctx.session,
+            a.get("stack"),
+            not a.get("running_only"),
+            a.get("instance") or None,
         )
     )
 
@@ -337,7 +344,13 @@ async def _container_logs(ctx: ToolContext, a: dict[str, Any]) -> Any:
 
     out = await _call(
         portainer.container_logs(
-            a["endpoint_id"], a["container"], ctx.adapters, _limit(a, 100, 1000), None, True
+            a["endpoint_id"],
+            a["container"],
+            ctx.adapters,
+            _limit(a, 100, 1000),
+            None,
+            True,
+            a.get("instance") or None,
         )
     )
     return out["lines"]
@@ -755,7 +768,10 @@ TOOLS: dict[str, Tool] = {
             "Portainer stacks with their containers and which service each is linked to.",
             "read",
             _portainer_stacks,
-            {"endpoint_id": _i("Only this Portainer environment", minimum=1)},
+            {
+                "endpoint_id": _i("Only this Portainer environment", minimum=1),
+                "instance": _s("The Portainer connection id (default: the default one)"),
+            },
         ),
         Tool(
             "portainer_containers",
@@ -767,6 +783,7 @@ TOOLS: dict[str, Tool] = {
                 "endpoint_id": _i("The Portainer environment id", minimum=1),
                 "stack": _s("Only this stack's containers"),
                 "running_only": _b("Leave out stopped containers"),
+                "instance": _s("The Portainer connection id (default: the default one)"),
             },
             ("endpoint_id",),
         ),
@@ -780,6 +797,7 @@ TOOLS: dict[str, Tool] = {
                 "endpoint_id": _i("The Portainer environment id", minimum=1),
                 "container": _s("Container name or id"),
                 "limit": _i("Lines (default 100, max 1000)", minimum=1, maximum=1000),
+                "instance": _s("The Portainer connection id (default: the default one)"),
             },
             ("endpoint_id", "container"),
         ),

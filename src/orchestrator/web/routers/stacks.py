@@ -43,6 +43,8 @@ class AdoptIn(BaseModel):
     stack: str
     slug: str
     parent: str
+    #: The Portainer connection (Connections page); blank = the default one.
+    instance: str = ""
     name: str = ""
     group: str = ""
     children: list[ChildIn] = Field(default_factory=list)
@@ -57,6 +59,7 @@ class AdoptIn(BaseModel):
             stack=self.stack,
             slug=self.slug,
             parent=self.parent,
+            instance=self.instance,
             name=self.name,
             group=self.group,
             children=[ChildPlan(**c.model_dump()) for c in self.children],
@@ -97,6 +100,8 @@ class CreateIn(BaseModel):
     spec: StackCreateIn
     #: must be true: the preview has been looked at
     confirm: bool = False
+    #: The Portainer connection to create it on; blank = the default one.
+    instance: str = ""
     #: also link the new stack as a sub-service (``stack`` and ``endpoint_id`` are filled in)
     adopt: AdoptIn | None = None
 
@@ -114,10 +119,18 @@ class DeleteIn(BaseModel):
 
 @router.get("/stacks/suggest")
 async def suggest(
-    endpoint: int, name: str, session: SessionDep, adapters: AdaptersDep, parent: str | None = None
+    endpoint: int,
+    name: str,
+    session: SessionDep,
+    adapters: AdaptersDep,
+    parent: str | None = None,
+    instance: str | None = None,
 ) -> dict[str, Any]:
     try:
-        return (await adoption.suggest(session, adapters, endpoint, name, parent=parent)).as_dict()
+        found = await adoption.suggest(
+            session, adapters, endpoint, name, parent=parent, instance=instance
+        )
+        return found.as_dict()
     except StackError as exc:
         raise fail(exc) from exc
 
@@ -147,10 +160,12 @@ async def adopt(
 
 
 @router.post("/stacks/preview")
-async def preview(body: StackCreateIn, adapters: AdaptersDep) -> dict[str, Any]:
+async def preview(
+    body: StackCreateIn, adapters: AdaptersDep, instance: str | None = None
+) -> dict[str, Any]:
     """The exact request that would go to Portainer, with passwords and values masked."""
     try:
-        return stack_ops.preview(adapters, body.spec())
+        return stack_ops.preview(adapters, body.spec(), instance)
     except StackError as exc:
         raise fail(exc) from exc
 
@@ -176,6 +191,7 @@ async def create(
             admin.username,
             body.spec.spec(),
             adopt_plan=body.adopt.plan() if body.adopt else None,
+            instance=body.instance or None,
         )
     except StackError as exc:
         raise fail(exc) from exc
@@ -203,6 +219,7 @@ async def delete(
     adapters: AdaptersDep,
     settings: SettingsDep,
     admin: CurrentAdmin,
+    instance: str | None = None,
 ) -> dict[str, Any]:
     try:
         result = await stack_ops.delete(
@@ -215,6 +232,7 @@ async def delete(
             confirm_name=body.confirm_name,
             take_down=body.take_down,
             remove_services=body.remove_services,
+            instance=instance,
         )
     except StackError as exc:
         raise fail(exc) from exc
@@ -229,6 +247,7 @@ async def stack_action(
     session: SessionDep,
     adapters: AdaptersDep,
     admin: CurrentAdmin,
+    instance: str | None = None,
 ) -> dict[str, Any]:
     try:
         message = await stack_ops.control(
@@ -239,6 +258,7 @@ async def stack_action(
             endpoint_id=endpoint_id,
             ref=name,
             action=action,
+            instance=instance,
         )
     except StackError as exc:
         raise fail(exc) from exc
@@ -253,6 +273,7 @@ async def container_action(
     session: SessionDep,
     adapters: AdaptersDep,
     admin: CurrentAdmin,
+    instance: str | None = None,
 ) -> dict[str, Any]:
     try:
         message = await stack_ops.control(
@@ -263,6 +284,7 @@ async def container_action(
             endpoint_id=endpoint_id,
             ref=ref,
             action=action,
+            instance=instance,
         )
     except StackError as exc:
         raise fail(exc) from exc
@@ -302,7 +324,13 @@ async def host_candidates(slug: str, session: SessionDep, adapters: AdaptersDep)
     if cfg.get("type") != "portainer" or not cfg.get("stack"):
         return {"slug": slug, "candidates": [], "linked": _linked(session, svc)}
     try:
-        found = await adoption.suggest(session, adapters, int(cfg["endpoint"]), str(cfg["stack"]))
+        found = await adoption.suggest(
+            session,
+            adapters,
+            int(cfg["endpoint"]),
+            str(cfg["stack"]),
+            instance=str(cfg.get("instance") or "") or None,
+        )
     except StackError as exc:
         raise fail(exc) from exc
     return {"slug": slug, "candidates": found.hosts, "linked": _linked(session, svc)}

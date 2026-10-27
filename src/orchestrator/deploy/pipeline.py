@@ -321,10 +321,18 @@ class DeployPipeline:
 
     # -- pieces -------------------------------------------------------------------------
 
+    def _portainer(self, svc: Service) -> Any:
+        """The Portainer connection this service's stack is on."""
+        named = str((svc.controller or {}).get("instance") or "")
+        adapter = self._adapters.portainer_for(named)
+        if adapter is None:
+            raise DeployFailed(f"there is no Portainer connection called {named!r}")
+        return adapter
+
     async def _stack(self, svc: Service) -> Stack:
-        adapter = getattr(self._adapters, "portainer", None)
         cfg = svc.controller or {}
-        if adapter is None or not adapter.configured:
+        adapter = self._portainer(svc)
+        if not adapter.configured:
             raise DeployFailed("Portainer is not set up")
         try:
             stack = await adapter.get_stack(int(cfg["endpoint"]), str(cfg["stack"]))
@@ -345,8 +353,7 @@ class DeployPipeline:
         }
 
     async def _snapshot(self, svc: Service, stack: Stack) -> dict[str, Any]:
-        adapter = self._adapters.portainer
-        assert adapter is not None
+        adapter = self._portainer(svc)
         try:
             boxes = await adapter.list_containers(stack.endpoint_id, stack=stack.name)
         except AdapterError:
@@ -457,8 +464,7 @@ class DeployPipeline:
     async def _redeploy(
         self, rec: StepRecorder, svc: Service, stack: Stack, cfg: dict[str, Any]
     ) -> None:
-        adapter = self._adapters.portainer
-        assert adapter is not None
+        adapter = self._portainer(svc)
         started = datetime.now(UTC)
         try:
             await adapter.redeploy_stack(stack, pull_image=cfg["pull_image"], prune=cfg["prune"])
@@ -479,8 +485,7 @@ class DeployPipeline:
         )
 
     async def _ready(self, svc: Service) -> tuple[bool, str]:
-        adapter = self._adapters.portainer
-        assert adapter is not None
+        adapter = self._portainer(svc)
         cfg = svc.controller or {}
         try:
             stack = await adapter.get_stack(int(cfg["endpoint"]), str(cfg["stack"]))

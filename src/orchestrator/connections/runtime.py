@@ -127,6 +127,26 @@ def pick_default(conns: list[Connection]) -> Connection | None:
     return next((c for c in conns if c.default), conns[0] if conns else None)
 
 
+def default_id(settings: Settings, kind: str) -> str:
+    """The id of the connection of ``kind`` that is used when nothing names one."""
+    chosen = pick_default(instances_for(settings, kind))
+    return chosen.id if chosen is not None else kind
+
+
+def find_instance(settings: Settings, kind: str, ident: str | None) -> Connection | None:
+    """The enabled connection called ``ident`` (blank: the default one); None if there is none."""
+    conns = instances_for(settings, kind)
+    if not ident:
+        return pick_default(conns)
+    return next((c for c in conns if c.id == ident), None)
+
+
+def instance_of(cfg: dict[str, Any] | None, settings: Settings, kind: str = "portainer") -> str:
+    """The connection a controller / probe config means: its ``instance``, else the default."""
+    named = str((cfg or {}).get("instance") or "").strip()
+    return named or default_id(settings, kind)
+
+
 def settings_for(settings: Settings, conn: Connection) -> Settings:
     """A copy of ``settings`` with ``conn``'s values: one instance's view of the world."""
     return settings.model_copy(update=values_to_settings(BY_KIND[conn.kind], conn))

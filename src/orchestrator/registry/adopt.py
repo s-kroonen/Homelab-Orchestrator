@@ -62,15 +62,27 @@ def free_slug(session: Session, wanted: str, taken: set[str] | None = None) -> s
     return slug
 
 
-def linked_services(session: Session, endpoint_id: int, stack: str) -> list[Service]:
-    """Services whose Portainer link points at this stack (or a container in it)."""
+def instance_extra(adapters: AdapterBundle, instance: str) -> dict[str, str]:
+    """``{"instance": id}`` for a link to a Portainer that is not the default one; nothing for the
+    default (a link without an instance means the default, which stays that way because making
+    another Portainer the default first pins the links that relied on it)."""
+    return {"instance": instance} if instance and instance != adapters.default_portainer else {}
+
+
+def linked_services(
+    session: Session, endpoint_id: int, stack: str, *, instance: str = "", default: str = ""
+) -> list[Service]:
+    """Services whose Portainer link points at this stack (or a container in it), on this
+    Portainer connection (``instance``; a link naming none is on the ``default`` one)."""
     out = []
+    want = instance or default
     for svc in session.exec(select(Service)).all():
         cfg = svc.controller or {}
         if (
             cfg.get("type") == "portainer"
             and int(cfg.get("endpoint", -1)) == endpoint_id
             and str(cfg.get("stack") or "").lower() == stack.lower()
+            and (str(cfg.get("instance") or "") or default) == want
         ):
             out.append(svc)
     return out
@@ -93,6 +105,7 @@ def _upstream_port(upstream: str) -> int | None:
 class Suggestion:
     endpoint_id: int
     stack: str
+    instance: str
     kind: str
     already_linked: list[str]
     parents: list[dict[str, Any]]
@@ -126,10 +139,13 @@ async def suggest(
     stack_name: str,
     *,
     parent: str | None = None,
+    instance: str | None = None,
 ) -> Suggestion:
     """What adopting this stack would create. Reads only."""
-    adapter = adapters.portainer
-    if adapter is None or not adapter.configured:
+    adapter = adapters.portainer_for(instance)
+    if adapter is None:
+        raise StackError(f"there is no Portainer connection called {instance!r}", 404)
+    if not adapter.configured:
         raise StackError("Portainer is not set up", 503)
     try:
         stack = await adapter.get_stack(endpoint_id, stack_name)
@@ -154,8 +170,18 @@ async def suggest(
     out = Suggestion(
         endpoint_id=endpoint_id,
         stack=stack.name,
+        instance=adapter.instance_id,
         kind=kind,
-        already_linked=[s.slug for s in linked_services(session, endpoint_id, stack.name)],
+        already_linked=[
+            s.slug
+            for s in linked_services(
+                session,
+                endpoint_id,
+                stack.name,
+                instance=adapter.instance_id,
+                default=adapters.default_portainer,
+            )
+        ],
         parents=parents,
         parent=chosen,
         slug=slug,
@@ -210,7 +236,7 @@ async def suggest(
 
     out.probes.append(
         {"service": "stack", "kind": "portainer", "name": "portainer", "required": True,
-         "config": {"endpoint": endpoint_id, "stack": stack.name}}
+         "config": {"endpoint": endpoint_id, "stack": stack.name, **instance_extra(adapters, adapter.instance_id)}}
     )  # fmt: skip
     if out.hosts:
         first = out.hosts[0]["hostname"]
@@ -222,7 +248,7 @@ async def suggest(
         out.probes.append(
             {"service": child["slug"], "kind": "portainer", "name": "portainer",
              "required": child["likely_db"],
-             "config": {"endpoint": endpoint_id, "container": child["container"]}}
+             "config": {"endpoint": endpoint_id, "container": child["container"], **instance_extra(adapters, adapter.instance_id)}}
         )  # fmt: skip
     return out
 
@@ -244,6 +270,8 @@ class AdoptPlan:
     stack: str
     slug: str
     parent: str
+    #: The Portainer connection the stack is on (blank = the default one).
+    instance: str = ""
     name: str = ""
     group: str = ""
     children: list[ChildPlan] = field(default_factory=list)
@@ -306,9 +334,12 @@ async def adopt(
 ) -> AdoptResult:
     from orchestrator.web.routers import dashboard as api
 
-    adapter = adapters.portainer
-    if adapter is None or not adapter.configured:
+    adapter = adapters.portainer_for(plan.instance)
+    if adapter is None:
+        raise StackError(f"there is no Portainer connection called {plan.instance!r}", 404)
+    if not adapter.configured:
         raise StackError("Portainer is not set up", 503)
+    extra = instance_extra(adapters, adapter.instance_id)
     try:
         stack = await adapter.get_stack(plan.endpoint_id, plan.stack)
         boxes = await adapter.list_containers(plan.endpoint_id, stack=plan.stack) if stack else []
@@ -318,8 +349,15 @@ async def adopt(
         raise StackError(
             f"no stack {plan.stack!r} on Portainer environment {plan.endpoint_id}", 404
         )
-    if linked_services(session, plan.endpoint_id, stack.name):
-        names = ", ".join(s.slug for s in linked_services(session, plan.endpoint_id, stack.name))
+    taken = linked_services(
+        session,
+        plan.endpoint_id,
+        stack.name,
+        instance=adapter.instance_id,
+        default=adapters.default_portainer,
+    )
+    if taken:
+        names = ", ".join(s.slug for s in taken)
         raise StackError(f"stack {stack.name!r} is already linked to {names}", 409)
     if (
         not plan.parent
@@ -357,7 +395,7 @@ async def adopt(
     moved: list[tuple[ProxyHost, int | None]] = []
     result = AdoptResult(services=[], hosts=[], probes=0, deploy={})
     try:
-        link = {"type": "portainer", "endpoint": plan.endpoint_id, "stack": stack.name}
+        link = {"type": "portainer", "endpoint": plan.endpoint_id, "stack": stack.name, **extra}
         await _call(
             api.create_service(
                 api.ServiceCreate(
@@ -375,7 +413,7 @@ async def adopt(
                     api.ServiceCreate(
                         slug=child.slug, name=child.name or child.container, group=plan.group,
                         parent=plan.slug, backup_gate=child.backup_gate,
-                        controller={"type": "portainer", "endpoint": plan.endpoint_id, "container": child.container},
+                        controller={"type": "portainer", "endpoint": plan.endpoint_id, "container": child.container, **extra},
                     ),
                     session,
                     actor_obj,
@@ -390,7 +428,7 @@ async def adopt(
         session.commit()
 
         if plan.probes:
-            result.probes = await _add_probes(session, api, actor_obj, plan, hosts, boxes)
+            result.probes = await _add_probes(session, api, actor_obj, plan, hosts, boxes, extra)
         if deploy_block:
             await _call(
                 api.update_service(
@@ -437,8 +475,10 @@ async def _add_probes(
     plan: AdoptPlan,
     hosts: list[ProxyHost],
     boxes: list[Container],
+    extra: dict[str, str] | None = None,
 ) -> int:
     count = 0
+    extra = extra or {}
 
     async def add(slug: str, name: str, kind: str, required: bool, config: dict[str, Any]) -> None:
         nonlocal count
@@ -457,7 +497,7 @@ async def _add_probes(
         "portainer",
         "portainer",
         True,
-        {"endpoint": plan.endpoint_id, "stack": plan.stack},
+        {"endpoint": plan.endpoint_id, "stack": plan.stack, **extra},
     )
     if hosts:
         await add(
@@ -468,6 +508,6 @@ async def _add_probes(
     for child in plan.children:
         await add(
             child.slug, "portainer", "portainer", child.container in db_names,
-            {"endpoint": plan.endpoint_id, "container": child.container},
+            {"endpoint": plan.endpoint_id, "container": child.container, **extra},
         )  # fmt: skip
     return count
