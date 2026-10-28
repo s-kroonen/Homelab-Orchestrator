@@ -76,34 +76,29 @@ def test_pages_require_admin(app: Any, path: str) -> None:
 def test_pages_render_shared_chrome(client: TestClient, path: str) -> None:
     r = client.get(path)
     assert r.status_code == 200, r.text
-    assert '<link rel="stylesheet" href="/static/app.css">' in r.text
-    assert '<script src="/static/app.js"></script>' in r.text
+    assert '<link rel="stylesheet" href="/static/app.css?v=' in r.text
+    assert '<script src="/static/app.js?v=' in r.text
     assert '<aside class="sidebar">' in r.text
 
 
-def test_connectivity_page_fetches_the_overview(client: TestClient) -> None:
-    r = client.get("/infra")
-    assert r.status_code == 200, r.text
-    assert "/api/infra/overview" in r.text
-    assert "orchestrator-cli check" in r.text
+def test_connections_page_checks_every_connection(client: TestClient) -> None:
+    r = client.get("/infra", follow_redirects=False)
+    assert r.headers["location"] == "/infra/connections"
+    assert '"/api/infra/overview"' in client.get("/static/connections.js").text
 
 
-def test_guests_page_fetches_infra_guests(client: TestClient) -> None:
-    r = client.get("/infra/guests")
-    assert r.status_code == 200, r.text
-    assert "/api/infra/proxmox/guests" in r.text
-    assert "orchestrator-cli guests" in r.text
+def test_guests_are_on_nodes_and_guests(client: TestClient) -> None:
+    r = client.get("/infra/guests", follow_redirects=False)
+    assert r.headers["location"] == "/nodes"
+    assert '"/api/infra/proxmox/guests"' in client.get("/static/nodes.js").text
 
 
-def test_snapshots_page_fetches_infra_snapshots(client: TestClient) -> None:
-    r = client.get("/infra/snapshots")
-    assert r.status_code == 200, r.text
-    assert "/api/infra/pbs/snapshots" in r.text
-    assert "orchestrator-cli snapshots" in r.text
-
-
-# --- real data through a mocked adapter, same monkeypatch pattern as
-# tests/test_guest_power_api.py --------------------------------------------
+def test_snapshots_page_is_a_tab_of_backups(client: TestClient) -> None:
+    r = client.get("/infra/snapshots", follow_redirects=False)
+    assert r.status_code == 303 and r.headers["location"] == "/backup-policies?tab=snapshots"
+    assert '"/api/infra/pbs/snapshots"' in client.get("/static/backups.js").text
+    ds = client.get("/api/infra/pbs/datastore").json()
+    assert set(ds) >= {"name", "reachable"}
 
 
 def test_infra_status_api_shows_real_adapter_data(client: TestClient) -> None:

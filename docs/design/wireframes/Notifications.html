@@ -1,0 +1,187 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Notifications (wireframe)</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#0d1015}
+a{color:#8fb3ff;text-decoration:none}a:hover{color:#b8d0ff}
+*{box-sizing:border-box}
+.pill{display:inline-flex;align-items:center;gap:6px;padding:3px 9px;border-radius:999px;font-size:12px;font-weight:600;white-space:nowrap}
+.ok{background:#11331f;color:#5fe08b}.warn{background:#3a2c10;color:#f0b44c}.fail{background:#3d1717;color:#ff8a82}.off{background:#232834;color:#b3bccb}.pending{background:#162a45;color:#8fb3ff}
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;height:32px;padding:0 12px;border-radius:8px;border:1px solid #2c3340;background:#1a1f29;color:#e6e9ef;font:600 13px Inter,system-ui,sans-serif;cursor:pointer;white-space:nowrap}
+.btn.primary{background:#4f7fe0;border-color:#4f7fe0;color:#fff}.btn.ghost{background:transparent;border-color:transparent;color:#b3bccb}.btn.small{height:28px;padding:0 10px;font-size:12.5px}.btn.danger{background:transparent;color:#ff8a82}
+.mono{font-family:'JetBrains Mono',ui-monospace,monospace;font-size:12.5px}
+.tag{display:inline-block;padding:1px 6px;border:1px solid #2f3747;border-radius:5px;font-size:11px;color:#b3bccb}
+.card{background:#141922;border:1px solid #232a36;border-radius:12px}
+.card-h{display:flex;flex-wrap:wrap;align-items:center;gap:10px;padding:14px 18px}
+.card-h h2{margin:0;font-size:16px}
+.sub{font-size:12.5px;color:#9aa4b2}
+.faint{color:#8a94a5}
+.age{font-size:12px;color:#8a94a5;margin-left:auto}
+.chip{display:inline-flex;align-items:center;gap:6px;height:30px;padding:0 12px;border-radius:999px;border:1px solid #2c3340;background:#141922;color:#c9d1dc;font-size:13px;font-weight:500}
+.chip.on{background:#16233a;border-color:#4f7fe0;color:#dbe6ff}
+.chip .n{color:#8a94a5}
+.input{display:flex;align-items:center;height:34px;padding:0 10px;border-radius:8px;border:1px solid #2c3340;background:#0f131a;color:#8a94a5;font-size:13.5px}
+.select{display:inline-flex;align-items:center;gap:8px;height:32px;padding:0 10px;border-radius:8px;border:1px solid #2c3340;background:#0f131a;color:#c9d1dc;font-size:13px}
+table{width:100%;border-collapse:collapse}
+th{font-size:12px;font-weight:600;color:#9aa4b2;text-align:left;padding:10px 14px;border-bottom:1px solid #232a36;white-space:nowrap}
+td{padding:10px 14px;border-bottom:1px solid #1d232e;vertical-align:middle}
+tr.selrow td{background:#16233a}
+.kv{display:grid;grid-template-columns:150px 1fr;gap:8px 14px;margin:0;padding:0 18px 16px}
+.kv dt{color:#8a94a5}.kv dd{margin:0}
+.tabs{display:flex;gap:4px;border-bottom:1px solid #232a36}
+.tabs span{padding:8px 12px;color:#9aa4b2;font-weight:600;font-size:13.5px;border-bottom:2px solid transparent}
+.tabs span.on{color:#e6e9ef;border-bottom-color:#4f7fe0}
+.banner{display:flex;flex-wrap:wrap;align-items:center;gap:12px;padding:12px 16px;border-radius:10px}
+.banner.warn{background:#2a2211;border:1px solid #5a4416;color:#e6e9ef}
+.banner.fail{background:#2a1515;border:1px solid #5a2626;color:#e6e9ef}
+.drawer{position:absolute;top:0;right:0;bottom:0;width:500px;background:#11151c;border-left:1px solid #2c3340;box-shadow:-16px 0 40px rgba(0,0,0,.5);display:flex;flex-direction:column}
+.drawer-h{padding:18px 22px;border-bottom:1px solid #232a36}
+.drawer-b{padding:18px 22px;display:flex;flex-direction:column;gap:14px;flex:1;overflow:hidden}
+.drawer-f{padding:14px 22px;border-top:1px solid #232a36;display:flex;gap:10px;justify-content:flex-end;align-items:center}
+.field label{display:block;font-size:12.5px;font-weight:600;color:#c9d1dc;margin-bottom:6px}
+.field .help{font-size:12px;color:#8a94a5;margin-top:4px}
+.scrim{position:absolute;inset:0;background:rgba(5,8,12,.55)}
+.ev{display:grid;grid-template-columns:62px 92px minmax(0,1fr) auto;gap:12px;align-items:center;padding:9px 18px;border-bottom:1px solid #1d232e}
+.day{padding:10px 18px 6px;font-size:11.5px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:#8a94a5}
+.toggle{display:inline-block;width:32px;height:18px;border-radius:999px;background:#4f7fe0;position:relative;vertical-align:middle}
+.toggle::after{content:"";position:absolute;top:2px;right:2px;width:14px;height:14px;border-radius:50%;background:#fff}
+.toggle.offt{background:#2c3340}.toggle.offt::after{right:auto;left:2px;background:#8a94a5}
+</style>
+</head>
+<body>
+
+
+<div style="position: relative; display: flex; flex-wrap: wrap; min-height: 1000px; background: #0d1015; color: #e6e9ef; font-family: Inter, system-ui, sans-serif; font-size: 14px; line-height: 1.45; overflow: hidden">
+  <nav aria-label="Main" style="flex: 0 0 232px; background: #11151c; border-right: 1px solid #222833; padding: 20px 14px; display: flex; flex-direction: column; gap: 18px">
+    <div style="font-weight: 700; font-size: 15px; padding: 0 10px">homelab-orchestrator</div>
+    
+      <div style="display: flex; flex-direction: column; gap: 2px">
+        <div style="font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: #8a94a5; padding: 0 10px 4px">Overview</div>
+        
+          <a href="#" style="display:block;padding:6px 10px;border-radius:7px;font-size:14px;color:#c9d1dc">Dashboard</a>
+        
+          <a href="#" style="display:block;padding:6px 10px;border-radius:7px;font-size:14px;color:#c9d1dc">Map</a>
+        
+      </div>
+    
+      <div style="display: flex; flex-direction: column; gap: 2px">
+        <div style="font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: #8a94a5; padding: 0 10px 4px">Services</div>
+        
+          <a href="#" style="display:block;padding:6px 10px;border-radius:7px;font-size:14px;color:#c9d1dc">Services</a>
+        
+      </div>
+    
+      <div style="display: flex; flex-direction: column; gap: 2px">
+        <div style="font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: #8a94a5; padding: 0 10px 4px">Infrastructure</div>
+        
+          <a href="#" style="display:block;padding:6px 10px;border-radius:7px;font-size:14px;color:#c9d1dc">Nodes &amp; guests</a>
+        
+          <a href="#" style="display:block;padding:6px 10px;border-radius:7px;font-size:14px;color:#c9d1dc">Proxy hosts</a>
+        
+          <a href="#" style="display:block;padding:6px 10px;border-radius:7px;font-size:14px;color:#c9d1dc">Containers</a>
+        
+          <a href="#" style="display:block;padding:6px 10px;border-radius:7px;font-size:14px;color:#c9d1dc">Backups</a>
+        
+      </div>
+    
+      <div style="display: flex; flex-direction: column; gap: 2px">
+        <div style="font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: #8a94a5; padding: 0 10px 4px">Activity</div>
+        
+          <a href="#" style="display:block;padding:6px 10px;border-radius:7px;font-size:14px;color:#c9d1dc">Activity</a>
+        
+          <a href="#" style="display:block;padding:6px 10px;border-radius:7px;font-size:14px;color:#c9d1dc">Traffic</a>
+        
+      </div>
+    
+      <div style="display: flex; flex-direction: column; gap: 2px">
+        <div style="font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: #8a94a5; padding: 0 10px 4px">Settings</div>
+        
+          <a href="#" style="display:block;padding:6px 10px;border-radius:7px;font-size:14px;color:#c9d1dc">Connections</a>
+        
+          <a href="#" style="display:block;padding:6px 10px;border-radius:7px;font-size:14px;color:#c9d1dc;background:#1d2430;color:#ffffff;font-weight:600;box-shadow:inset 3px 0 0 #4f7fe0">Notifications</a>
+        
+          <a href="#" style="display:block;padding:6px 10px;border-radius:7px;font-size:14px;color:#c9d1dc">AI assistants</a>
+        
+          <a href="#" style="display:block;padding:6px 10px;border-radius:7px;font-size:14px;color:#c9d1dc">Admins &amp; devices</a>
+        
+          <a href="#" style="display:block;padding:6px 10px;border-radius:7px;font-size:14px;color:#c9d1dc">System</a>
+        
+          <a href="#" style="display:block;padding:6px 10px;border-radius:7px;font-size:14px;color:#c9d1dc">Archive</a>
+        
+      </div>
+    
+  </nav>
+  <div style="flex: 999 1 560px; min-width: 0; display: flex; flex-direction: column">
+    <header style="display: flex; flex-wrap: wrap; align-items: center; gap: 12px; padding: 12px 32px; border-bottom: 1px solid #222833">
+      <div style="font-size: 13px; color: #8a94a5">Settings / <span style="color: #e6e9ef">Notifications</span></div>
+      <div class="input" style="margin-left: auto; width: 300px">⌕ Search services, nodes, hosts</div>
+      <span class="pill ok">● Live</span>
+      <button class="btn ghost" type="button">admin ▾</button>
+    </header>
+
+    <main style="padding: 28px 32px 48px; max-width: 1280px; width: 100%; display: flex; flex-direction: column; gap: 20px">
+      <div style="display: flex; flex-wrap: wrap; align-items: flex-end; gap: 12px">
+        <div style="flex: 1 1 420px">
+          <h1 style="margin: 0; font-size: 24px; font-weight: 700">Notifications</h1>
+          <div style="color: #9aa4b2; margin-top: 4px">Who hears about what, and where it goes. Channels (ntfy, e-mail, a webhook) are set up on <a href="#">Connections</a>.</div>
+        </div>
+        <button class="btn" type="button">Send a test</button>
+        <button class="btn primary" type="button">+ Add rule</button>
+      </div>
+      <div style="display: flex; flex-wrap: wrap; gap: 20px; align-items: flex-start">
+        <div style="flex: 2 1 560px; min-width: 0; display: flex; flex-direction: column; gap: 20px">
+          <section class="card">
+            <div class="card-h"><h2>Rules</h2><span class="sub">who hears about what · without rules, failed, down and recovered go everywhere</span></div>
+            <table>
+              <thead><tr><th>Rule</th><th>When</th><th>About</th><th>Sends to</th><th>On</th><th></th></tr></thead>
+              <tbody>
+                <tr><td><strong>Failures to my phone</strong></td><td>failed · down · flapping</td><td>everything</td><td><span class="tag">ntfy</span> <span class="tag">push</span></td><td><span class="toggle"></span></td><td style="text-align: right"><button class="btn ghost small" type="button">Edit</button><button class="btn ghost small" type="button">⋯</button></td></tr>
+                <tr><td><strong>Backups by e-mail</strong></td><td>backup failed · recovered</td><td>group <span class="tag">media</span></td><td><span class="tag">e-mail</span></td><td><span class="toggle"></span></td><td style="text-align: right"><button class="btn ghost small" type="button">Edit</button><button class="btn ghost small" type="button">⋯</button></td></tr>
+                <tr><td><strong>Quiet for the dev stack</strong></td><td>everything</td><td>node <span class="tag">node-a</span> · service <span class="tag">dev-tools</span></td><td><span class="faint">nobody (muted)</span></td><td><span class="toggle offt"></span></td><td style="text-align: right"><button class="btn ghost small" type="button">Edit</button><button class="btn ghost small" type="button">⋯</button></td></tr>
+              </tbody>
+            </table>
+          </section>
+          <section class="card">
+            <div class="card-h"><h2>Recent alerts</h2><span class="age">updated 4 s ago</span></div>
+            <div class="ev"><span class="mono faint" style="font-size: 12px">09:42</span><span><span class="pill fail">failed</span></span><span>Backup of <a href="#">Example Cloud</a> failed <span class="faint">· sent to ntfy, push</span></span><a href="#" style="font-size: 12.5px">open</a></div>
+            <div class="ev"><span class="mono faint" style="font-size: 12px">08:55</span><span><span class="pill warn">flapping</span></span><span><a href="#">Example Home Automation</a> changed 3 times in 10 min <span class="faint">· sent to ntfy</span></span><a href="#" style="font-size: 12.5px">open</a></div>
+            <div class="ev"><span class="mono faint" style="font-size: 12px">Yest. 21:10</span><span><span class="pill ok">recovered</span></span><span><a href="#">Example Media</a> answers again <span class="faint">· folded into the earlier alert, not sent</span></span><a href="#" style="font-size: 12.5px">open</a></div>
+            <div style="padding: 12px 18px"><a href="#">All alerts in Activity →</a></div>
+          </section>
+        </div>
+        <div style="flex: 1 1 300px; min-width: 0; display: flex; flex-direction: column; gap: 20px">
+          <section class="card">
+            <div class="card-h"><h2>Channels</h2></div>
+            <div style="padding: 0 18px 16px; display: grid; gap: 10px">
+              <div style="display: flex; align-items: center; gap: 8px"><span class="pill ok">on</span><strong>ntfy</strong><span class="sub mono">ntfy.example.lan/orchestrator</span></div>
+              <div style="display: flex; align-items: center; gap: 8px"><span class="pill ok">on</span><strong>E-mail</strong><span class="sub">to admin@example.lan</span></div>
+              <div style="display: flex; align-items: center; gap: 8px"><span class="pill off">not set up</span><strong>Webhook</strong></div>
+              <a href="#" style="font-size: 13px">Set up channels on Connections →</a>
+            </div>
+          </section>
+          <section class="card">
+            <div class="card-h"><h2>This device</h2><span class="pill off">off</span></div>
+            <div style="padding: 0 18px 16px">
+              <div class="sub" style="margin-bottom: 10px">Alerts reach this phone or computer even when the dashboard is closed. Needs the https address; on an iPhone add it to the Home Screen first.</div>
+              <button class="btn primary" type="button" style="width: 100%">Turn on for this device</button>
+              <div style="margin-top: 14px; font-size: 12.5px; font-weight: 600; color: #c9d1dc">Devices with alerts on (2)</div>
+              <div style="display: grid; gap: 6px; margin-top: 6px; font-size: 13px">
+                <div>Phone · Safari <span class="faint">· admin · since 2 Oct · last ok</span> <a href="#" style="float: right">Remove</a></div>
+                <div>Laptop · Firefox <span class="faint">· admin · since 14 Sep · last ok</span> <a href="#" style="float: right">Remove</a></div>
+              </div>
+            </div>
+          </section>
+        </div>
+      </div>
+    </main>
+  </div>
+
+</div>
+
+</body>
+</html>

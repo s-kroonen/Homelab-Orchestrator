@@ -6,17 +6,16 @@ List, restore and purge-now. The logic is in ``orchestrator.registry.archive``; 
 
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import HTMLResponse, RedirectResponse
-from fastapi.templating import Jinja2Templates
 
 from orchestrator.db.models import ArchivedService
 from orchestrator.registry import archive as arch
 from orchestrator.web.auth import CurrentAdmin, get_current_admin, login_redirect, require_admin
-from orchestrator.web.deps import SessionDep
+from orchestrator.web.deps import SessionDep, SettingsDep
+from orchestrator.web.templating import templates
 
 api = APIRouter(prefix="/api/archive", tags=["archive"], dependencies=[Depends(require_admin)])
 pages = APIRouter(tags=["archive"])
@@ -24,15 +23,27 @@ router = APIRouter()
 router.include_router(api)
 router.include_router(pages)
 
-_templates = Jinja2Templates(directory=str(Path(__file__).parent.parent / "templates"))
+_templates = templates
 
 
 @pages.get("/archive", response_model=None)
-async def archive_page(request: Request, session: SessionDep) -> HTMLResponse | RedirectResponse:
+async def archive_page(
+    request: Request, session: SessionDep, settings: SettingsDep
+) -> HTMLResponse | RedirectResponse:
+    """Deleted services, proxy hosts and policies, restorable for a while (the Archive wireframe)."""
     admin = get_current_admin(request, session)
     if admin is None:
         return login_redirect(request)
-    return _templates.TemplateResponse(request, "archive.html", {"admin": admin})
+    arch.purge_expired(session)
+    return _templates.TemplateResponse(
+        request,
+        "archive.html",
+        {
+            "admin": admin,
+            "initial": [arch.describe(r) for r in arch.list_archive(session)],
+            "retention_days": settings.archive_retention_days,
+        },
+    )
 
 
 @api.get("")

@@ -14,44 +14,37 @@ unauthenticated visitor should be redirected to ``/login``, not shown a raw
 
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Any
+from urllib.parse import urlencode
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
-from fastapi.templating import Jinja2Templates
 from sqlmodel import Session, select
 
-from orchestrator.adapters.proxy.base import RouteOptions
 from orchestrator.db.models import (
-    BackupPolicy,
-    BackupRecord,
     Node,
     ProxyHost,
     Service,
     ServiceState,
 )
-from orchestrator.domain.enums import BackupMode, GuestKind, RouterProvider
+from orchestrator.domain.enums import GuestKind
 from orchestrator.ipdiscovery.discovery import SOURCE_LABELS, effective_ip, transport_block
 from orchestrator.pipelines.wake import wake_is_unsupported
 from orchestrator.registry.backup_plan import BLOCKER_NO_POWER_TARGET
-from orchestrator.registry.loader import compute_registry_diff
-from orchestrator.registry.probe_specs import PROBE_SPECS
 from orchestrator.registry.tree import TreeIndex
 from orchestrator.web.auth import get_current_admin, login_redirect
 from orchestrator.web.deps import SessionDep, SettingsDep
 from orchestrator.web.routers.activity import KINDS, build_feed, filter_options
-from orchestrator.web.routers.backup_policies import policy_to_dict
-from orchestrator.web.routers.dashboard import service_detail
 from orchestrator.web.routers.geo_traffic import build_geo_view
 from orchestrator.web.routers.traffic import (
     DEFAULT_RANGE,
     RANGES,
     collector_status_payload,
 )
+from orchestrator.web.templating import templates
 
 router = APIRouter(tags=["ui"])
-_templates = Jinja2Templates(directory=str(Path(__file__).parent.parent / "templates"))
+_templates = templates
 
 
 #: Probe state -> the ``ol.steps`` class maintenance.html already styles
@@ -103,18 +96,6 @@ def _requirable_services(session: Session, *, exclude: str | None = None) -> lis
             }
         )
     return out
-
-
-def _group_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Bucket service rows by their ``group`` field for the dashboard's
-    collapsible sections. Named groups sort alphabetically; ungrouped services
-    (``group == ""``) always come last, under "Ungrouped" — never hidden."""
-    buckets: dict[str, list[dict[str, Any]]] = {}
-    for row in rows:
-        buckets.setdefault(row.get("group") or "", []).append(row)
-    named = sorted(name for name in buckets if name)
-    ordered = named + ([""] if "" in buckets else [])
-    return [{"name": name or "Ungrouped", "services": buckets[name]} for name in ordered]
 
 
 def _probe_row(result: dict[str, Any]) -> dict[str, Any]:
@@ -185,28 +166,6 @@ def _guest_cell_for(
     return {**base, "title": f"{root.slug}'s guest - {base['title']}"}
 
 
-def _children_summary(
-    tree: TreeIndex, svc: Service, states: dict[int, ServiceState]
-) -> dict[str, Any] | None:
-    """How the sub-services below this one are doing, for the parent's row."""
-    kids = tree.descendants(svc)
-    if not kids:
-        return None
-    counts: dict[str, int] = {}
-    for k in kids:
-        if not k.enabled:
-            key = "disabled"
-        else:
-            st = states.get(k.id) if k.id is not None else None
-            key = st.last_verdict.value if st else "unknown"
-        counts[key] = counts.get(key, 0) + 1
-    worst = next(
-        (k for k in ("failed", "down", "unknown", "healthy", "disabled") if counts.get(k)),
-        "unknown",
-    )
-    return {"total": len(kids), "counts": counts, "worst": worst}
-
-
 def _guest_cell(svc: Service, state: ServiceState | None) -> dict[str, str]:
     """What the services table shows for the Proxmox guest: its power state as
     of the last health scan (``css`` is a badge class)."""
@@ -222,164 +181,6 @@ def _guest_cell(svc: Service, state: ServiceState | None) -> dict[str, str]:
     return {"label": status, "css": css, "title": f"{gate['guest']} - {gate['message']}"}
 
 
-@router.get("/", response_model=None)
-async def dashboard_page(
-    request: Request, session: SessionDep, settings: SettingsDep
-) -> HTMLResponse | RedirectResponse:
-    admin = get_current_admin(request, session)
-    if admin is None:
-        return login_redirect(request)
-
-    node_rows = {n.id: n for n in session.exec(select(Node)).all()}
-    nodes = {nid: n.name for nid, n in node_rows.items()}
-    states = {s.service_id: s for s in session.exec(select(ServiceState)).all()}
-    services = session.exec(select(Service).order_by(Service.slug)).all()
-    tree = TreeIndex(list(services))
-    # Parents before their children, so a group lists them as a tree.
-    services = [s for s, _ in tree.walk()]
-    guest_cells: dict[str, dict[str, str]] = {}
-
-    rows: list[dict[str, Any]] = []
-    for svc in services:
-        state = states.get(svc.id) if svc.id is not None else None
-        last_backup = None
-        if state is not None and state.last_backup_id is not None:
-            last_backup = session.get(BackupRecord, state.last_backup_id)
-        ip, ip_source = effective_ip(svc, state)
-        node = node_rows.get(svc.node_id)
-        node_wakes = node.wake_on_hit_enabled if node is not None else False
-        rows.append(
-            {
-                "slug": svc.slug,
-                "name": svc.name,
-                "ip": ip,
-                "ip_source": SOURCE_LABELS.get(ip_source, ip_source),
-                "enabled": svc.enabled,
-                "group": svc.group,
-                "node": nodes.get(svc.node_id, "?"),
-                "guest": _guest_cell_for(svc, state, tree, states, guest_cells),
-                "parent": tree.parent(svc).slug if tree.parent(svc) else None,
-                "depth": tree.depth(svc),
-                "children": _children_summary(tree, svc, states),
-                "served": tree.is_served(svc),
-                # On only when the service AND its node allow it (see Node.wake_on_hit_enabled).
-                "wake_on_hit": svc.wake_on_hit_enabled and node_wakes,
-                "wake_on_hit_why": (
-                    ""
-                    if svc.wake_on_hit_enabled and node_wakes
-                    else (
-                        "off for this service"
-                        if not svc.wake_on_hit_enabled
-                        else f"off for its node {nodes.get(svc.node_id, '?')}"
-                    )
-                ),
-                "wake_trigger": svc.wake_trigger.value,
-                "verdict": state.last_verdict.value if state else "unknown",
-                "verdict_reason": (state.notes or "") if state else "",
-                "down_label": _down_label(state),
-                "verdict_at": (
-                    state.last_verdict_at.isoformat() if state and state.last_verdict_at else None
-                ),
-                "last_backup_at": last_backup.created_at.isoformat() if last_backup else None,
-                "last_backup_verified": last_backup.verified if last_backup else None,
-                # The "why" behind the badge: each probe's own state + message.
-                "probes": [_probe_row(p) for p in (state.last_probe_results if state else [])],
-            }
-        )
-
-    diff = compute_registry_diff(session)
-    all_nodes = session.exec(select(Node).order_by(Node.name)).all()
-
-    return _templates.TemplateResponse(
-        request,
-        "dashboard.html",
-        {
-            "admin": admin,
-            "services": rows,
-            "service_groups": _group_rows(rows),
-            "nodes": [{"id": n.id, "name": n.name} for n in all_nodes],
-            "guest_kinds": [k.value for k in GuestKind],
-            "registry_dirty": diff.dirty,
-            "yaml_path": diff.yaml_path,
-            # For the bulk "Set policy" action.
-            "backup_policies": [
-                {"id": p.id, "name": p.name}
-                for p in session.exec(select(BackupPolicy).order_by(BackupPolicy.name)).all()
-            ],
-        },
-    )
-
-
-@router.get("/services/{slug}", response_model=None)
-async def service_detail_page(
-    slug: str, request: Request, session: SessionDep, settings: SettingsDep
-) -> HTMLResponse | RedirectResponse:
-    """Edit view for one service and its probes. Server-renders the initial
-    state; every change goes through the ``/api/registry/*`` JSON endpoints."""
-    admin = get_current_admin(request, session)
-    if admin is None:
-        return login_redirect(request)
-
-    svc = session.exec(select(Service).where(Service.slug == slug)).first()
-    if svc is None:
-        raise HTTPException(status_code=404, detail=f"no service {slug!r}")
-
-    nodes = session.exec(select(Node).order_by(Node.name)).all()
-    policies = session.exec(select(BackupPolicy).order_by(BackupPolicy.name)).all()
-    other_slugs = [
-        s for s in session.exec(select(Service.slug).order_by(Service.slug)).all() if s != slug
-    ]
-    existing_groups = sorted({g for g in session.exec(select(Service.group)).all() if g})
-    tree = TreeIndex.build(session)
-    below = {d.slug for d in tree.descendants(svc)}
-    parent_choices = [s for s in other_slugs if s not in below]
-    probe_kinds = [
-        {"kind": k.value, "summary": spec.summary, "default_timeout_s": spec.default_timeout_s}
-        for k, spec in PROBE_SPECS.items()
-    ]
-    diff = compute_registry_diff(session)
-    state = session.get(ServiceState, svc.id) if svc.id is not None else None
-    last_results = state.last_probe_results if state else []
-    health = {
-        "verdict": state.last_verdict.value if state else "unknown",
-        "verdict_at": (
-            state.last_verdict_at.isoformat() if state and state.last_verdict_at else None
-        ),
-        "reason": (state.notes or "") if state else "",
-        "down_label": _down_label(state),
-        "guest": guest_gate_view(state),
-        # Last scan's result per probe name, for the Probes tab ("skipped —
-        # guest stopped" when the guest gate kept them from running).
-        "probe_results": {
-            str(r.get("probe_name")): _probe_row(r)
-            for r in last_results
-            if r.get("kind") != "guest"
-        },
-    }
-
-    return _templates.TemplateResponse(
-        request,
-        "service_detail.html",
-        {
-            "admin": admin,
-            "health": health,
-            "service": service_detail(session, svc),
-            "nodes": [{"id": n.id, "name": n.name} for n in nodes],
-            "policies": [{"id": p.id, "name": p.name} for p in policies],
-            "other_slugs": other_slugs,
-            "parent_choices": parent_choices,
-            "requirable": _requirable_services(session, exclude=slug),
-            "existing_groups": existing_groups,
-            "guest_kinds": [k.value for k in GuestKind],
-            "probe_kinds": probe_kinds,
-            "providers": [p.value for p in RouterProvider],
-            "registry_dirty": diff.dirty,
-            "yaml_path": diff.yaml_path,
-            "ping_transport": _ping_transport(settings.ip_discovery_transport),
-        },
-    )
-
-
 def _ping_transport(raw: str) -> dict[str, Any] | None:
     """The one-click ping probe's transport: IP_DISCOVERY_TRANSPORT (pinging
     from where ARP is read), or None (= local) when unset or local."""
@@ -393,27 +194,25 @@ def _ping_transport(raw: str) -> dict[str, Any] | None:
 async def proxy_hosts_page(
     request: Request, session: SessionDep
 ) -> HTMLResponse | RedirectResponse:
-    """List-only proxy-host page. Add/edit live on their own dedicated pages
-    (:func:`new_proxy_host_page`/:func:`edit_proxy_host_page`) — this page
-    is driven entirely by ``/api/proxy-hosts`` via ``fetch`` for the table,
-    plus Resync's bulk-discovery flow (see ``docs/proxy_hosts.md``). The
-    service list here is only for the "Discovered on Traefik" section's
-    per-row service picker."""
+    """The proxy hosts list. It paints from the database (what each host is); the page then
+    asks ``/api/proxy-hosts`` for what Traefik and Traefik Manager say about them. Adding and
+    editing happen in the drawer (``static/objects.js``), not on pages of their own."""
     admin = get_current_admin(request, session)
     if admin is None:
         return login_redirect(request)
+    from orchestrator.web.routers.proxy_hosts import _serialize, _services_by_id
 
-    services = session.exec(select(Service).order_by(Service.slug)).all()
-    diff = compute_registry_diff(session)
+    services = _services_by_id(session)
+    hosts = session.exec(select(ProxyHost).order_by(ProxyHost.hostname)).all()
     return _templates.TemplateResponse(
         request,
         "proxy_hosts.html",
         {
             "admin": admin,
-            "services": [{"id": s.id, "slug": s.slug, "name": s.name} for s in services],
-            "providers": [p.value for p in RouterProvider],
-            "registry_dirty": diff.dirty,
-            "yaml_path": diff.yaml_path,
+            "initial": {
+                "hosts": [_serialize(ph, services, None) for ph in hosts],
+                "services": _service_choices(session),
+            },
         },
     )
 
@@ -422,183 +221,24 @@ async def proxy_hosts_page(
 async def new_proxy_host_page(
     request: Request, session: SessionDep, service_id: int | None = Query(None)
 ) -> HTMLResponse | RedirectResponse:
-    """Dedicated add page (``docs/roadmap.md``'s "dedicated add/edit pages"
-    small feature) — replaces the bottom-of-page form that used to live on
-    ``/proxy-hosts`` and the inline one on a service's own page. Submits to
-    the existing ``POST /api/proxy-hosts`` (database only; a ``traefik`` host
-    with an upstream is pushed on Save to YAML / Push now - see
-    ``web/routers/proxy_hosts.py``).
-    ``?service_id=`` pre-fills the service picker — used by the "Add proxy
-    host" link on a service's own detail page.
-    """
-    admin = get_current_admin(request, session)
-    if admin is None:
+    """Old address of the add form: opens the drawer on the list instead."""
+    if get_current_admin(request, session) is None:
         return login_redirect(request)
-
-    return _templates.TemplateResponse(
-        request,
-        "proxy_host_form.html",
-        {
-            "admin": admin,
-            "mode": "new",
-            "proxy_host": None,
-            "initial_service_id": service_id,
-            "services": _service_choices(session),
-            "providers": [p.value for p in RouterProvider],
-        },
-    )
+    extra = f"&service_id={service_id}" if service_id is not None else ""
+    return RedirectResponse(f"/proxy-hosts?new=1{extra}", status_code=303)
 
 
 @router.get("/proxy-hosts/{proxy_host_id}/edit", response_model=None)
 async def edit_proxy_host_page(
     proxy_host_id: int, request: Request, session: SessionDep
 ) -> HTMLResponse | RedirectResponse:
-    """Dedicated edit page — see :func:`new_proxy_host_page`. Prefilled
-    server-side from the ``ProxyHost`` row directly (same pattern
-    ``service_detail_page`` already uses), not re-fetched client-side."""
-    admin = get_current_admin(request, session)
-    if admin is None:
+    """Old address of the edit form: opens the drawer on the list instead (a deleted host
+    still answers 404, which says where it went)."""
+    if get_current_admin(request, session) is None:
         return login_redirect(request)
-
-    ph = session.get(ProxyHost, proxy_host_id)
-    if ph is None:
+    if session.get(ProxyHost, proxy_host_id) is None:
         raise HTTPException(status_code=404, detail=f"proxy host {proxy_host_id} not found")
-
-    return _templates.TemplateResponse(
-        request,
-        "proxy_host_form.html",
-        {
-            "admin": admin,
-            "mode": "edit",
-            "proxy_host": {
-                "id": ph.id,
-                "hostname": ph.hostname,
-                "upstream": ph.upstream,
-                "router_provider": ph.router_provider.value,
-                "service_id": ph.service_id,
-                "wake_on_hit": ph.wake_on_hit,
-                "extra": ph.extra or {},
-                "entry_points": list(ph.entry_points or []),
-                "cert_resolver": ph.cert_resolver or "",
-                "entry_points_stored": bool(ph.entry_points),
-                "route_options": RouteOptions.from_dict(ph.route_options).to_dict(),
-                "enabled": ph.enabled,
-            },
-            "initial_service_id": None,
-            "services": _service_choices(session),
-            "providers": [p.value for p in RouterProvider],
-        },
-    )
-
-
-@router.get("/backup-policies", response_model=None)
-async def backup_policies_page(
-    request: Request, session: SessionDep, settings: SettingsDep
-) -> HTMLResponse | RedirectResponse:
-    """List-only backup-policy page, same "dedicated add/edit pages" pattern
-    as ``/proxy-hosts`` (:func:`new_backup_policy_page`/
-    :func:`edit_backup_policy_page`) — see ``docs/proxy_hosts.md``'s
-    "Dedicated add/edit pages" note and ``docs/roadmap.md``. Driven by
-    ``/api/backup-policies`` for mutations; the table, per-policy run-history
-    expanders and name filter all live here."""
-    admin = get_current_admin(request, session)
-    if admin is None:
-        return login_redirect(request)
-
-    scheduler = getattr(request.app.state, "scheduler", None)
-    policies = session.exec(select(BackupPolicy).order_by(BackupPolicy.name)).all()
-    diff = compute_registry_diff(session)
-
-    return _templates.TemplateResponse(
-        request,
-        "backup_policies.html",
-        {
-            "admin": admin,
-            "policies": [policy_to_dict(session, p, scheduler) for p in policies],
-            "scheduler_enabled": settings.scheduler_enabled,
-            "scheduler_running": bool(scheduler and scheduler.running),
-            "dry_run": settings.dry_run,
-            "registry_dirty": diff.dirty,
-            "yaml_path": diff.yaml_path,
-        },
-    )
-
-
-def _policy_form_context(session: Session) -> dict[str, Any]:
-    """Shared context for both dedicated backup-policy form pages: the
-    service picker (with each service's group, for the group-select-all
-    buttons — see ``docs/adding_a_service.md``'s Groups section) and the
-    list of modes."""
-    services = session.exec(select(Service).order_by(Service.slug)).all()
-    return {
-        "services": [
-            {
-                "slug": s.slug,
-                "group": s.group,
-                # never backed up (e.g. the VM hosting the PBS datastore): not selectable
-                "excluded": s.backup_excluded,
-                "reason": s.backup_excluded_reason,
-            }
-            for s in services
-        ],
-        "requirable": _requirable_services(session),
-        "groups": sorted({s.group for s in services if s.group}),
-        "modes": [m.value for m in BackupMode],
-    }
-
-
-@router.get("/backup-policies/new", response_model=None)
-async def new_backup_policy_page(
-    request: Request, session: SessionDep
-) -> HTMLResponse | RedirectResponse:
-    """Dedicated add page — see :func:`new_proxy_host_page` for the
-    precedent this follows. Submits to the existing ``POST
-    /api/backup-policies``."""
-    admin = get_current_admin(request, session)
-    if admin is None:
-        return login_redirect(request)
-
-    return _templates.TemplateResponse(
-        request,
-        "backup_policy_form.html",
-        {
-            "admin": admin,
-            "mode": "new",
-            "policy": None,
-            **_policy_form_context(session),
-        },
-    )
-
-
-@router.get("/backup-policies/{name}/edit", response_model=None)
-async def edit_backup_policy_page(
-    name: str, request: Request, session: SessionDep
-) -> HTMLResponse | RedirectResponse:
-    """Dedicated edit page — see :func:`edit_proxy_host_page` for the
-    precedent this follows. Policies are keyed by ``name`` (unique, no
-    surrogate id exposed here), so this takes the name directly rather than
-    an id, matching ``PUT /api/backup-policies/{name}``. Prefilled from
-    :func:`orchestrator.web.routers.backup_policies.policy_to_dict`, the same
-    serialization the list page and the API already use."""
-    admin = get_current_admin(request, session)
-    if admin is None:
-        return login_redirect(request)
-
-    policy = session.exec(select(BackupPolicy).where(BackupPolicy.name == name)).one_or_none()
-    if policy is None:
-        raise HTTPException(status_code=404, detail=f"no backup policy named {name!r}")
-
-    scheduler = getattr(request.app.state, "scheduler", None)
-    return _templates.TemplateResponse(
-        request,
-        "backup_policy_form.html",
-        {
-            "admin": admin,
-            "mode": "edit",
-            "policy": policy_to_dict(session, policy, scheduler),
-            **_policy_form_context(session),
-        },
-    )
+    return RedirectResponse(f"/proxy-hosts?edit={proxy_host_id}", status_code=303)
 
 
 def _range_param(value: str | None) -> str:
@@ -616,20 +256,31 @@ async def traffic_page(
     """Requests / status classes / latency over time, rolled up from
     Traefik's access log by ``orchestrator.scheduler.access_log_collector``.
     The page is a shell: ``static/traffic.js`` fetches
-    ``/api/traffic/series`` and draws the charts; the collector status strip
-    is server-rendered for the first paint. See ``docs/traffic_metrics.md``."""
+    ``/api/traffic/series`` and ``/api/traffic/geo`` and draws the charts and
+    the countries; the collector status strip and the first countries list
+    are server-rendered for the first paint. See ``docs/traffic_metrics.md``
+    and ``docs/geoip_traffic.md``."""
     admin = get_current_admin(request, session)
     if admin is None:
         return login_redirect(request)
 
+    slug = (slug or "").strip()
+    range_key = _range_param(range)
+    geo = _decorate_geo_view(
+        build_geo_view(
+            session, enabled=settings.geoip_enabled, slug=slug or None, range_key=range_key
+        )
+    )
     return _templates.TemplateResponse(
         request,
         "traffic.html",
         {
             "admin": admin,
             "collector": collector_status_payload(session, settings),
-            "range": _range_param(range),
-            "slug": (slug or "").strip(),
+            "range": range_key,
+            "slug": slug,
+            "geo": geo,
+            "services": session.exec(select(Service).order_by(Service.slug)).all(),
         },
     )
 
@@ -688,40 +339,13 @@ def _decorate_geo_view(view: dict[str, Any]) -> dict[str, Any]:
 
 
 @router.get("/traffic/geo", response_model=None)
-async def traffic_geo_page(
-    request: Request,
-    session: SessionDep,
-    settings: SettingsDep,
-    slug: str | None = None,
-    range: str | None = None,
-) -> HTMLResponse | RedirectResponse:
-    """Traffic by country / client IP — the dashboard page over
-    :func:`orchestrator.web.routers.geo_traffic.build_geo_view` (the same
-    aggregation ``GET /api/traffic/geo`` returns). Server-rendered like
-    ``/traffic``. See ``docs/geoip_traffic.md``."""
-    admin = get_current_admin(request, session)
-    if admin is None:
-        return login_redirect(request)
-
-    slug = (slug or "").strip() or None
-    range_key = _range_param(range)
-    view = _decorate_geo_view(
-        build_geo_view(session, enabled=settings.geoip_enabled, slug=slug, range_key=range_key)
+async def traffic_geo_page(slug: str | None = None, range: str | None = None) -> RedirectResponse:
+    """Countries and client addresses are part of ``/traffic`` now; keep old
+    links (and notification deep links) working."""
+    query = urlencode(
+        {k: v for k, v in (("slug", (slug or "").strip()), ("range", range or "")) if v}
     )
-    services = session.exec(select(Service).order_by(Service.slug)).all() if view["enabled"] else []
-
-    return _templates.TemplateResponse(
-        request,
-        "traffic_geo.html",
-        {
-            "admin": admin,
-            "view": view,
-            "services": services,
-            "slug": slug or "",
-            "range": range_key,
-            "collector": collector_status_payload(session, settings),
-        },
-    )
+    return RedirectResponse("/traffic" + ("?" + query if query else ""), status_code=303)
 
 
 @router.get("/sources", response_model=None)
@@ -744,44 +368,23 @@ async def format_page(request: Request, session: SessionDep) -> HTMLResponse | R
 
 
 @router.get("/infra", response_model=None)
-async def infra_status_page(
-    request: Request, session: SessionDep
-) -> HTMLResponse | RedirectResponse:
-    """Connectivity check across Proxmox/PBS — the dashboard equivalent of
-    ``orchestrator-cli check``. Entirely client-rendered: the page just calls
-    the existing ``/api/infra/status`` via ``apiFetch``, same pattern as the
-    other list-only pages."""
-    admin = get_current_admin(request, session)
-    if admin is None:
+async def infra_status_page(request: Request, session: SessionDep) -> RedirectResponse:
+    """Connectivity's overview is Settings > Connections now: every connection says there
+    whether it answers."""
+    if get_current_admin(request, session) is None:
         return login_redirect(request)
-
-    return _templates.TemplateResponse(request, "infra_status.html", {"admin": admin})
+    return RedirectResponse("/infra/connections", status_code=303)
 
 
 @router.get("/infra/guests", response_model=None)
 async def infra_guests_page(
-    request: Request, session: SessionDep
-) -> HTMLResponse | RedirectResponse:
-    """Proxmox guests across the cluster — the dashboard equivalent of
-    ``orchestrator-cli guests``. Client-rendered via ``/api/infra/proxmox/guests``."""
-    admin = get_current_admin(request, session)
-    if admin is None:
+    request: Request, session: SessionDep, node: str | None = None, vmid: str | None = None
+) -> RedirectResponse:
+    """The guests are on Nodes & guests now; an old link (an alert's) lands on the guest."""
+    if get_current_admin(request, session) is None:
         return login_redirect(request)
-
-    return _templates.TemplateResponse(request, "infra_guests.html", {"admin": admin})
-
-
-@router.get("/infra/snapshots", response_model=None)
-async def infra_snapshots_page(
-    request: Request, session: SessionDep
-) -> HTMLResponse | RedirectResponse:
-    """PBS snapshots in the configured datastore — the dashboard equivalent of
-    ``orchestrator-cli snapshots``. Client-rendered via ``/api/infra/pbs/snapshots``."""
-    admin = get_current_admin(request, session)
-    if admin is None:
-        return login_redirect(request)
-
-    return _templates.TemplateResponse(request, "infra_snapshots.html", {"admin": admin})
+    q = (vmid or node or "").strip()
+    return RedirectResponse("/nodes" + (f"?{urlencode({'q': q})}" if q else ""), status_code=303)
 
 
 @router.get("/activity", response_model=None)
@@ -797,7 +400,9 @@ async def activity_page(
     since_hours: str | None = Query(None),
     q: str | None = Query(None),
 ) -> HTMLResponse | RedirectResponse:
-    """History of wakes, backups, admin actions and alerts — see ``routers/activity.py``."""
+    """One feed of runs, changes and alerts, newest first, filtered on the server (the Activity
+    wireframe). The filters are the URL's, so a link can open it filtered; the page then filters
+    and refreshes in place. See ``routers/activity.py``."""
     admin = get_current_admin(request, session)
     if admin is None:
         return login_redirect(request)
@@ -825,23 +430,20 @@ async def activity_page(
         since_hours=hours,
         q=q,
     )
-    return _templates.TemplateResponse(
-        request,
-        "activity.html",
-        {
-            "admin": admin,
-            "events": events,
-            "f": {
-                "service": service,
-                "group": group,
-                "node": node,
-                "guest": guest,
-                "kind": kind,
-                "problems": problems,
-                "since_hours": hours,
-                "q": q or "",
-            },
-            "options": filter_options(session),
-            "filtered": any((service, group, node, guest, kind, problems, hours, q)),
+    initial = {
+        "events": events,
+        "filters": {
+            "service": service or "",
+            "group": group or "",
+            "node": node or "",
+            "guest": guest or "",
+            "kind": kind or "",
+            "problems": problems,
+            "since_hours": hours,
+            "q": q or "",
         },
+        "options": filter_options(session),
+    }
+    return _templates.TemplateResponse(
+        request, "activity.html", {"admin": admin, "initial": initial}
     )

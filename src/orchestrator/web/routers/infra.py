@@ -553,6 +553,25 @@ async def guest_power_action(
     return {"status": "ok", "node": node, "vmid": vmid, "action": body.action, "upid": handle.upid}
 
 
+@router.get("/pbs/datastore")
+async def datastore_usage(adapters: AdaptersDep, settings: SettingsDep) -> dict[str, Any]:
+    """How full the PBS datastore is (the Backups page's tile). Never raises for an unreachable
+    PBS: ``reachable`` is false and ``error`` says why."""
+    try:
+        ds = await asyncio.wait_for(adapters.pbs.datastore_status(settings.pbs_datastore), 10)
+    except Exception as exc:
+        return {"name": settings.pbs_datastore, "reachable": False, "error": str(exc)}
+    return {
+        "name": ds.name,
+        "reachable": ds.reachable,
+        "total_bytes": ds.total_bytes,
+        "used_bytes": ds.used_bytes,
+        "available_bytes": ds.available_bytes,
+        "used_fraction": ds.used_fraction,
+        "error": None,
+    }
+
+
 @router.get("/pbs/snapshots")
 async def list_snapshots(
     adapters: AdaptersDep,

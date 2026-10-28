@@ -75,7 +75,7 @@ def test_detail_for_proxmox_lists_nodes_and_guest_counts(client: TestClient) -> 
     d = client.get("/api/infra/connections/pve").json()
     assert [n["name"] for n in d["sections"]["nodes"]] == ["eve1"]
     assert set(d["sections"]["guests"]) == {"total", "running"}
-    assert {"label": "Guests", "href": "/infra/guests"} in d["links"]
+    assert {"label": "Nodes & guests", "href": "/nodes"} in d["links"]
 
 
 def test_detail_of_a_switched_off_or_unknown_connection(client: TestClient) -> None:
@@ -85,15 +85,17 @@ def test_detail_of_a_switched_off_or_unknown_connection(client: TestClient) -> N
     assert client.get("/api/infra/connections/nope").status_code == 404
 
 
-def test_pages_and_tabs(client: TestClient) -> None:
-    for path in ("/infra", "/infra/connections", "/infra/guests"):
-        r = client.get(path)
-        assert r.status_code == 200
-        assert 'href="/infra/guests"' in r.text and 'href="/infra/connections"' in r.text
-    assert 'aria-current="page"' in client.get("/infra/guests").text
+def test_pages_and_redirects(client: TestClient) -> None:
+    # Connectivity's overview and guests moved: to Settings > Connections and Nodes & guests.
+    r = client.get("/infra", follow_redirects=False)
+    assert r.status_code == 303 and r.headers["location"] == "/infra/connections"
+    r = client.get("/infra/guests?node=eve1&vmid=101", follow_redirects=False)
+    assert r.status_code == 303 and r.headers["location"] == "/nodes?q=101"
+    assert client.get("/infra/connections").status_code == 200
     _add(client, "portainer", "home", {"url": "https://a.example"}, {"api_key": "k"})
     detail = client.get("/infra/connections/home")
     assert detail.status_code == 200 and '"home"' in detail.text
+    assert 'href="/infra/connections"' in detail.text  # the breadcrumb back
     client.cookies.clear()
     r = client.get("/infra/connections/home", follow_redirects=False)
     assert r.status_code in (302, 303, 307) and "/login" in r.headers["location"]

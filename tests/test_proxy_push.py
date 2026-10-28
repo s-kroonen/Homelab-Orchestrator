@@ -886,15 +886,13 @@ def test_cli_proxy_push_exits_1_when_an_item_fails(
 
 
 def test_every_save_button_surfaces_the_push_outcome(dry_client: TestClient) -> None:  # noqa: F811
-    page = dry_client.get("/proxy-hosts").text
-    assert 'id="push-banner"' in page and 'id="push-now-btn"' in page
-    assert 'id="push-results"' in page and "Save to YAML also pushes" in page
+    # What is not pushed shows in one place: the pending pill in the header, on every page.
     for path in ("/proxy-hosts", "/", "/backup-policies"):
-        html = dry_client.get(path).text
-        assert "/static/push.js" in html and 'title="Writes services.yaml, then pushes' in html
+        assert 'id="pending-pill"' in dry_client.get(path).text
+    shell = dry_client.get("/static/shell.js").text
+    assert "/api/pending/retry" in shell and "Save and push" in shell
     for path in ("/", "/backup-policies"):
-        assert "PushUI.save" in dry_client.get(path).text
-    js = dry_client.get("/static/push.js")
-    assert js.status_code == 200 and "push_results" in js.text
-    form = dry_client.get("/proxy-hosts/new").text
-    assert "Pushed to Traefik Manager on Save to YAML (or Push now)." in form
+        assert "PushUI.save" not in dry_client.get(path).text  # no Save to YAML any more
+    # The proxy host list offers a push for one host; the drawer says Save pushes.
+    assert "Push now" in dry_client.get("/static/proxy_hosts.js").text
+    assert "pushes it to Traefik Manager" in dry_client.get("/static/objects.js").text

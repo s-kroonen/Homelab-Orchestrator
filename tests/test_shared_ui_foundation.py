@@ -78,6 +78,9 @@ def client(app: Any, monkeypatch: pytest.MonkeyPatch) -> Any:
 # separately below since it's pre-auth.)
 ADMIN_PAGES = [
     "/",
+    "/services",
+    "/nodes",
+    "/admins",
     "/backup-policies",
     "/proxy-hosts",
     "/traffic",
@@ -88,73 +91,110 @@ ADMIN_PAGES = [
     "/infra/snapshots",
 ]
 
-#: Every sidebar nav link, grouped the way base.html renders them — used to
-#: assert every page carries the full, grouped sidebar (not just its own
-#: link) and that nothing was dropped when the flat top-nav became this.
+#: The navigation of docs/design/README.md, grouped the way base.html renders it.
 NAV_GROUPS = [
-    ("Overview", [("/", "Dashboard")]),
-    ("Networking", [("/proxy-hosts", "Proxy hosts"), ("/traffic", "Traffic")]),
-    ("Backups", [("/backup-policies", "Backup policies")]),
+    ("Overview", [("/", "Dashboard"), ("/map", "Map")]),
+    ("Services", [("/services", "Services")]),
     (
-        "Monitoring",
+        "Infrastructure",
         [
-            ("/activity", "Activity"),
-            ("/infra", "Connectivity"),
-            ("/infra/snapshots", "Snapshots"),
+            ("/nodes", "Nodes &amp; guests"),
+            ("/proxy-hosts", "Proxy hosts"),
+            ("/portainer", "Containers"),
+            ("/backup-policies", "Backups"),
+        ],
+    ),
+    ("Activity", [("/activity", "Activity"), ("/traffic", "Traffic")]),
+    (
+        "Settings",
+        [
+            ("/infra/connections", "Connections"),
+            ("/notifications", "Notifications"),
+            ("/assistants", "AI assistants"),
+            ("/admins", "Admins &amp; devices"),
+            ("/system", "System"),
+            ("/archive", "Archive"),
         ],
     ),
 ]
+
+
+def _sidebar(html: str) -> str:
+    start = html.index('<nav id="sidebar-nav"')
+    return html[start : html.index("</nav>", start)]
 
 
 @pytest.mark.parametrize("path", ADMIN_PAGES)
 def test_admin_pages_link_shared_css_and_js(client: TestClient, path: str) -> None:
     r = client.get(path)
     assert r.status_code == 200, r.text
-    assert '<link rel="stylesheet" href="/static/app.css">' in r.text
-    assert '<script src="/static/app.js"></script>' in r.text
+    # Versioned by content, so browsers may keep them (see web/templating.py).
+    assert '<link rel="stylesheet" href="/static/app.css?v=' in r.text
+    for script in ("app.js", "ui.js", "shell.js", "live.js"):
+        assert f'<script src="/static/{script}?v=' in r.text
 
 
 def test_admin_pages_share_one_grouped_sidebar(client: TestClient) -> None:
-    """Regression guard for the top-nav -> sidebar migration: every admin
-    page still renders the full, grouped sidebar — nothing dropped from
-    navigation — with the current page's own link marked "current" and no
-    other link marked current."""
+    """Every admin page renders the full, grouped navigation, with exactly one entry marked
+    current: the page's own, or the entry the page lives under."""
     for path, current_href in [
-        ("/", '/" class="current"'),
-        ("/backup-policies", '/backup-policies" class="current"'),
-        ("/proxy-hosts", '/proxy-hosts" class="current"'),
-        ("/traffic", '/traffic" class="current"'),
-        ("/activity", '/activity" class="current"'),
-        ("/infra", '/infra" class="current"'),
-        # Guests and Connections are tabs of Connectivity, which stays the current link
-        ("/infra/guests", '/infra" class="current"'),
-        ("/infra/connections", '/infra" class="current"'),
-        ("/infra/snapshots", '/infra/snapshots" class="current"'),
+        ("/", "/"),
+        ("/services", "/services"),
+        ("/nodes", "/nodes"),
+        ("/admins", "/admins"),
+        ("/backup-policies", "/backup-policies"),
+        ("/proxy-hosts", "/proxy-hosts"),
+        ("/traffic", "/traffic"),
+        ("/activity", "/activity"),
+        # Connectivity's overview and connections live under Settings > Connections ...
+        ("/infra", "/infra/connections"),
+        ("/infra/connections", "/infra/connections"),
+        # ... its guests under Nodes & guests, snapshots under Backups.
+        ("/infra/guests", "/nodes"),
+        ("/infra/snapshots", "/backup-policies"),
     ]:
         r = client.get(path)
         assert r.status_code == 200, r.text
         assert '<aside class="sidebar">' in r.text
+        nav = _sidebar(r.text)
         for heading, links in NAV_GROUPS:
-            assert f'<div class="nav-heading">{heading}</div>' in r.text
+            assert f'<div class="nav-heading">{heading}</div>' in nav
             for href, label in links:
-                assert f'<a href="{href}"' in r.text
-                assert label in r.text
-        assert r.text.count('class="current"') == 1
-        assert current_href in r.text
+                assert f'<a href="{href}"' in nav and label in nav
+        assert nav.count('class="current"') == 1, path
+        assert f'<a href="{current_href}" class="current"' in nav, path
+
+
+def test_admin_pages_have_the_header(client: TestClient) -> None:
+    html = client.get("/services").text
+    for needle in ('id="global-search"', 'id="pending-pill"', 'id="live-pill"', 'id="user-btn"'):
+        assert needle in html
+    assert 'class="phonebar"' in html  # the bottom tab bar on a phone
 
 
 def test_login_page_links_shared_css_and_js(app: Any) -> None:
     with TestClient(app) as client:
         r = client.get("/login")
         assert r.status_code == 200, r.text
-        assert '<link rel="stylesheet" href="/static/app.css">' in r.text
-        assert '<script src="/static/app.js"></script>' in r.text
-        # No admin session yet - the shared nav/logout button must not render.
-        assert "logout-btn" not in r.text
-        # ...nor the admin sidebar itself (base.html's {% block header %} is
-        # fully overridden on unauthenticated pages — see login.html).
+        assert '<link rel="stylesheet" href="/static/app.css?v=' in r.text
+        assert '<script src="/static/app.js?v=' in r.text
+        # No admin session yet - neither the header nor the admin sidebar render.
+        assert 'id="user-btn"' not in r.text
         assert '<aside class="sidebar">' not in r.text
         assert 'class="has-sidebar"' not in r.text
+
+
+def test_versioned_static_files_are_cached_for_good(app: Any) -> None:
+    from orchestrator.web.templating import asset
+
+    with TestClient(app) as client:
+        url = asset("app.css")
+        assert url.startswith("/static/app.css?v=") and len(url) > len("/static/app.css?v=")
+        r = client.get(url)
+        assert r.status_code == 200
+        assert "immutable" in r.headers["cache-control"]
+        # Without a version: still revalidated every time.
+        assert client.get("/static/app.css").headers["cache-control"] == "no-cache"
 
 
 def test_unauthenticated_pages_never_show_the_admin_sidebar(app: Any) -> None:

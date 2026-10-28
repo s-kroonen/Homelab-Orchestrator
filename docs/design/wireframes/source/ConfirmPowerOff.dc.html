@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Confirm power off</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#0d1015}
+a{color:#8fb3ff;text-decoration:none}a:hover{color:#b8d0ff}
+*{box-sizing:border-box}
+.pill{display:inline-flex;align-items:center;gap:6px;padding:3px 9px;border-radius:999px;font-size:12px;font-weight:600;white-space:nowrap}
+.ok{background:#11331f;color:#5fe08b}.fail{background:#3d1717;color:#ff8a82}
+.btn{display:inline-flex;align-items:center;gap:6px;height:36px;padding:0 14px;border-radius:8px;border:1px solid #2c3340;background:#1a1f29;color:#e6e9ef;font:600 13px Inter,system-ui,sans-serif;cursor:pointer;white-space:nowrap}
+.btn.ghost{background:transparent;border-color:transparent;color:#b3bccb}
+.mono{font-family:'JetBrains Mono',ui-monospace,monospace;font-size:12.5px}
+.bar{height:12px;border-radius:6px;background:#1d232e}
+</style>
+</helmet>
+<div style="position: relative; display: flex; flex-wrap: wrap; min-height: 980px; background: #0d1015; color: #e6e9ef; font-family: Inter, system-ui, sans-serif; font-size: 14px; line-height: 1.45">
+  <nav aria-label="Main" style="flex: 0 0 232px; background: #11151c; border-right: 1px solid #222833; padding: 20px 14px; display: flex; flex-direction: column; gap: 18px">
+    <div style="font-weight: 700; font-size: 15px; padding: 0 10px">homelab-orchestrator</div>
+    <sc-for list="{{nav}}" as="g" hint-placeholder-count="5">
+      <div style="display: flex; flex-direction: column; gap: 2px">
+        <div style="font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: #8a94a5; padding: 0 10px 4px">{{g.heading}}</div>
+        <sc-for list="{{g.items}}" as="it" hint-placeholder-count="3">
+          <a href="#" style="{{it.style}}">{{it.label}}</a>
+        </sc-for>
+      </div>
+    </sc-for>
+  </nav>
+  <div style="flex: 999 1 560px; min-width: 0; padding: 28px 32px; display: flex; flex-direction: column; gap: 16px">
+    <h1 style="margin: 0; font-size: 24px">Nodes &amp; guests</h1>
+    <div style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px">
+      <div style="height: 150px; background: #141922; border: 1px solid #232a36; border-radius: 12px"></div>
+      <div style="height: 150px; background: #141922; border: 1px solid #232a36; border-radius: 12px"></div>
+    </div>
+    <sc-for list="{{bars}}" as="b" hint-placeholder-count="6">
+      <div style="display: flex; gap: 24px; padding: 10px 0; border-bottom: 1px solid #1d232e"><div class="bar" style="width: 60px"></div><div class="bar" style="width: 180px"></div><div class="bar" style="width: 120px"></div></div>
+    </sc-for>
+  </div>
+
+  <div aria-hidden="true" style="position: absolute; inset: 0; background: rgba(5, 7, 10, 0.62)"></div>
+  <div role="alertdialog" aria-modal="true" aria-labelledby="ct" aria-describedby="cd" style="position: absolute; left: 50%; top: 120px; transform: translateX(-50%); width: 560px; max-width: calc(100% - 32px); background: #161b25; border: 1px solid #3a2a2a; border-radius: 14px; box-shadow: 0 24px 60px rgba(0,0,0,.55); display: flex; flex-direction: column">
+    <div style="padding: 20px 22px 6px">
+      <h2 id="ct" style="margin: 0 0 6px; font-size: 19px">Power off node-a?</h2>
+      <p id="cd" style="margin: 0; color: #c9d1dc">node-a is marked <strong>always on</strong>. Powering it off also stops:</p>
+    </div>
+    <ul style="margin: 8px 22px 0; padding: 12px 16px 12px 32px; background: #0f131a; border: 1px solid #232a36; border-radius: 10px; display: flex; flex-direction: column; gap: 6px">
+      <li><strong>14 services</strong>, including haos, nextcloud, mailcow and portainer</li>
+      <li><strong>gateway-vm</strong>: every proxy host stops answering</li>
+      <li>The Proxmox API the orchestrator uses to wake other nodes</li>
+      <li>Tonight’s backups, until it is back</li>
+    </ul>
+    <fieldset style="border: 0; margin: 14px 22px 0; padding: 0; display: flex; flex-direction: column; gap: 8px">
+      <legend style="font-weight: 600; margin-bottom: 6px">How</legend>
+      <label style="display: flex; gap: 10px; align-items: flex-start"><input type="radio" name="how" checked style="margin-top: 3px"><span>Shut down cleanly<br><span style="font-size: 12px; color: #9aa4b2">Guests first, then the node. Takes a few minutes.</span></span></label>
+      <label style="display: flex; gap: 10px; align-items: flex-start"><input type="radio" name="how" style="margin-top: 3px"><span>Cut power now<br><span style="font-size: 12px; color: #9aa4b2">Through the power manager. Guests are not shut down.</span></span></label>
+    </fieldset>
+    <div style="margin: 16px 22px 0; display: flex; flex-direction: column; gap: 6px">
+      <label for="cf" style="font-weight: 600">Type <span class="mono" style="background: #232834; padding: 1px 6px; border-radius: 4px">node-a</span> to confirm</label>
+      <input id="cf" class="mono" value="evep" style="height: 38px; padding: 0 12px; background: #0f131a; border: 1px solid #2f3747; border-radius: 8px; color: #e6e9ef">
+    </div>
+    <div style="display: flex; flex-wrap: wrap; align-items: center; gap: 10px; padding: 18px 22px; margin-top: 8px">
+      <span style="flex: 1 1 200px; font-size: 12px; color: #9aa4b2">You can follow it in Activity. Wake it again from this page.</span>
+      <button class="btn ghost" type="button">Cancel</button>
+      <button class="btn" type="button" disabled style="background: #5a2323; border-color: #5a2323; color: #e6c9c6; opacity: .6">Power off node-a</button>
+    </div>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":980}}'>
+class Component extends DCLogic {
+  renderVals() {
+    const cur = 'Nodes & guests';
+    const base = 'display:block;padding:6px 10px;border-radius:7px;font-size:14px;color:#c9d1dc';
+    const on = base + ';background:#1d2430;color:#ffffff;font-weight:600;box-shadow:inset 3px 0 0 #4f7fe0';
+    const groups = [
+      ['Overview', ['Dashboard', 'Map']],
+      ['Services', ['Services']],
+      ['Infrastructure', ['Nodes & guests', 'Proxy hosts', 'Containers', 'Backups']],
+      ['Activity', ['Activity', 'Traffic']],
+      ['Settings', ['Connections', 'Notifications', 'AI assistants', 'Admins & devices', 'System', 'Archive']],
+    ];
+    return {
+      nav: groups.map(([heading, items]) => ({ heading, items: items.map((label) => ({ label, style: label === cur ? on : base })) })),
+      bars: Array.from({ length: 6 }, (_, i) => ({ i })),
+    };
+  }
+}
+</script>
+</body>
+</html>

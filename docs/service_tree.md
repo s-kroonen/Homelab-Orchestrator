@@ -43,28 +43,39 @@ services:
 
 ## The map (`/map`)
 
-Everything comes from `GET /api/map` (login required), built from the registry and the
-last scan - no live calls, so the page is instant. It refreshes itself every 30 seconds.
+Built to the Map wireframe ([docs/design](design/README.md)). The page paints at once from the
+database (`GET /api/views/map`: `GET /api/map`'s picture plus each service's row as on the
+Services page, the nodes and the policies' next runs) and then reads what is live: node power
+and Proxmox versions (`/api/infra/nodes/status`) and how full the datastore is
+(`/api/infra/pbs/datastore`). It refreshes in place on live events.
 
-**Boxes view** - three columns:
+**One row per node**, in three columns:
 
 | Column | Shows |
 |--------|-------|
-| Entry | each proxy host Traefik serves (struck through when not served) |
-| Boxes | node -> guest (VM/CT, status) -> service cards, sub-services nested inside their parent |
-| Backups | the Proxmox Backup Server datastore |
+| Way in | the proxy hosts that lead to the node's services, grouped by service (faint and "off" when not served) |
+| Node | the node (power, wakes on demand or always on, address, Proxmox version, Wake or Check) and one row per service: VM/CT id, name, state |
+| Backups | one card for the backup server every node shares: how full it is, then per node how many guests it backs up, the policy and its next run, and whether it wakes the node and puts it back off |
 
-Lines (toggle each one at the top; hover a card to follow only its lines):
+Services without a node, and proxy hosts that lead to no service, get a "No node" row at the end.
+
+**Click** a node, service, proxy host or the backup server to select it. The selection sidebar
+says what it is and its state, why (for example "Not broken: its node is off. Wake it and it
+comes back."), the actions (Wake, Check now, Back up now, Open, Edit, and the rest in ⋯), its
+details, its proxy hosts, **the path** (traffic through Traefik, where it runs, what must be
+awake, where it backs up to), its backups and its recent activity. The selection is in the URL
+(`?sel=svc:<slug>`), so a link opens the map with it selected. On a narrow screen the sidebar
+slides over the page.
+
+**Lines** are drawn for what is selected (or for everything, with **All**):
 
 | Line | Meaning |
 |------|---------|
 | blue | traffic: proxy host -> the service that answers it (faint when not served) |
 | grey dashed | `depends_on` |
-| green | backup: service's guest -> PBS, labelled with the policy (faint = never backed up) |
+| green | backup: service -> its node's row on the backup server (faint = never backed up) |
 | amber dotted | the backup waits for this sub-service (`backup_gate: required`) |
-| purple dashed | PBS needs this service awake (`backup_requires`) |
+| purple dashed | the backup needs this service awake (`backup_requires`, a policy's `requires`) |
 
-Card colour = verdict (green healthy, red failed, blue down, grey disabled/parked/unknown).
-Click a card for details and **Start / Stop / Restart** (same audited actions as the
-service page). There is also a **Tree** view - the same data as a plain indented list -
-plus a search box and an "only problems" filter.
+Sub-services sit inside their parent's row (`+2`); their lines start there. **Find** filters on
+node, service, host, address and group; **Problems only** keeps failed and warning services.

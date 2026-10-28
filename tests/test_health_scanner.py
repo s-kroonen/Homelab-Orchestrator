@@ -379,8 +379,10 @@ def test_health_history_endpoint_unknown_service_is_404(client: TestClient) -> N
 def test_dashboard_page_has_autorefresh_script(client: TestClient) -> None:
     r = client.get("/")
     assert r.status_code == 200, r.text
-    assert "setInterval" in r.text
-    assert "location.reload" in r.text
+    js = client.get("/static/dashboard.js").text
+    # Refreshed in place on live events, never by reloading the page.
+    assert '"/api/views/dashboard"' in js and 'topics: ["health", "run", "registry"]' in js
+    assert "location.reload" not in js
 
 
 def test_service_detail_page_has_autorefresh_script(client: TestClient) -> None:
@@ -390,7 +392,8 @@ def test_service_detail_page_has_autorefresh_script(client: TestClient) -> None:
 
     r = client.get("/services/svc")
     assert r.status_code == 200, r.text
-    assert "setInterval" in r.text
-    assert "location.reload" in r.text
-    # The guard that keeps the refresh from clobbering an in-progress edit.
-    assert "shouldSkipAutoReload" in r.text
+    # Refreshed in place from its JSON view on live events, never by reloading the page.
+    assert client.get("/api/views/service/svc").status_code == 200
+    js = client.get("/static/service.js").text
+    assert '"/api/views/service/"' in js and 'topics: ["health", "registry", "run"]' in js
+    assert "location.reload" not in js

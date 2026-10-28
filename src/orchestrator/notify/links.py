@@ -49,13 +49,13 @@ def link_for(level: str, target: str, event: str = "") -> str | None:
         spot = _SERVICE_SPOT.get(event, "health")
         return f"/services/{quote(target, safe='')}#{spot}"
     if level == "node":
-        return f"/infra/guests?{urlencode({'node': target})}" if target else None
+        return f"/nodes?{urlencode({'q': target})}" if target else None
     if level == "guest":
+        # Nodes & guests, its guest list filtered to this one.
         node, _, vmid = target.partition("/")
         if not node:
             return None
-        query = {"node": node, **({"vmid": vmid} if vmid else {})}
-        return f"/infra/guests?{urlencode(query)}"
+        return f"/nodes?{urlencode({'q': vmid or node})}"
     return None
 
 

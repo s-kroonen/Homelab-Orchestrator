@@ -11,12 +11,10 @@ from __future__ import annotations
 import asyncio
 import re
 from dataclasses import asdict
-from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.responses import HTMLResponse, RedirectResponse
-from fastapi.templating import Jinja2Templates
 from sqlmodel import Session, select
 
 from orchestrator.adapters.errors import (
@@ -31,6 +29,7 @@ from orchestrator.adapters.portainer.links import container_url, env_url, stack_
 from orchestrator.db.models import Service
 from orchestrator.web.auth import get_current_admin, login_redirect, require_admin
 from orchestrator.web.deps import AdaptersDep, SessionDep
+from orchestrator.web.templating import templates
 
 api = APIRouter(prefix="/api/portainer", tags=["portainer"], dependencies=[Depends(require_admin)])
 pages = APIRouter(tags=["portainer"])
@@ -38,7 +37,7 @@ router = APIRouter()
 router.include_router(api)
 router.include_router(pages)
 
-_templates = Jinja2Templates(directory=str(Path(__file__).parent.parent / "templates"))
+_templates = templates
 
 #: How many stack compose files are read at once when labelling image/build.
 _KIND_CONCURRENCY = 4

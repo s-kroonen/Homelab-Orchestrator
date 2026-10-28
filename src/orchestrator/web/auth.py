@@ -39,15 +39,29 @@ from orchestrator.web.deps import SessionDep
 
 _SESSION_ADMIN_KEY = "admin_id"
 _SESSION_CHALLENGE_KEY = "webauthn_challenge"
+_SESSION_CREDENTIAL_KEY = "credential_id"
 
 # ---------------------------------------------------------------------------
 # Session helpers
 # ---------------------------------------------------------------------------
 
 
-def login_admin(request: Request, admin_id: int) -> None:
+def login_admin(request: Request, admin_id: int, credential_id: int | None = None) -> None:
     request.session[_SESSION_ADMIN_KEY] = admin_id
     request.session.pop(_SESSION_CHALLENGE_KEY, None)
+    remember_device(request, credential_id)
+
+
+def remember_device(request: Request, credential_id: int | None) -> None:
+    """Which passkey this browser signed in (or was added) with, so Admins & devices can say
+    "this device". Display only: nothing is allowed or refused because of it."""
+    if credential_id is not None:
+        request.session[_SESSION_CREDENTIAL_KEY] = credential_id
+
+
+def current_device(request: Request) -> int | None:
+    value = request.session.get(_SESSION_CREDENTIAL_KEY)
+    return value if isinstance(value, int) else None
 
 
 def logout_admin(request: Request) -> None:

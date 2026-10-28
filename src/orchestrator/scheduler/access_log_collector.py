@@ -1,6 +1,6 @@
 """Periodic poll of Traefik's access log, tailed through Traefik Manager —
 the ONE ingestion pipeline behind both ``/traffic`` (per-minute
-:class:`TrafficRollup` rows) and ``/traffic/geo`` (:class:`GeoTrafficSample`
+:class:`TrafficRollup` rows) and its countries (:class:`GeoTrafficSample`
 rows, only when ``GEOIP_ENABLED``).
 
 **Why the access log, not Prometheus.** Operators who run Traefik Manager

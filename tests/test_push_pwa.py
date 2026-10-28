@@ -72,21 +72,23 @@ def test_manifest_and_service_worker_are_public_and_installable(client: TestClie
 def test_every_page_links_the_manifest_and_loads_pwa_js(client: TestClient) -> None:
     html = client.get("/notifications").text
     assert 'rel="manifest" href="/manifest.webmanifest"' in html
-    assert "/static/pwa.js" in html and 'id="dev-enable"' in html
+    assert "/static/pwa.js" in html and 'id="device"' in html
     assert client.get("/static/pwa.js").status_code == 200
 
 
 def test_pwa_js_runs_before_the_pages_own_scripts(client: TestClient) -> None:
-    """The notifications page calls OrchPush from an inline script; a `defer`red pwa.js would
+    """The notifications page's script calls OrchPush as it starts; a `defer`red pwa.js would
     only run after it ("OrchPush is not defined")."""
     html = client.get("/notifications").text
-    tag = '<script src="/static/pwa.js"></script>'
+    start = html.index('<script src="/static/pwa.js?v=')
+    tag = html[start : html.index("</script>", start) + len("</script>")]
     assert (
         tag in html
         and "defer"
         not in html[html.index("/static/pwa.js") - 20 : html.index("/static/pwa.js") + 40]
     )
-    assert html.index(tag) < html.index("await OrchPush.status()")
+    assert html.index(tag) < html.index('<script src="/static/notifications.js?v=')
+    assert "window.OrchPush" in client.get("/static/notifications.js").text
 
 
 def test_vapid_key_is_created_once_and_is_a_p256_point(client: TestClient) -> None:

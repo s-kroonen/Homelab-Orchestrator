@@ -1,10 +1,9 @@
 {% extends "base.html" %}
 {% block title %}homelab-orchestrator — connection{% endblock %}
+{% block crumbs %}Settings / <a href="/infra/connections">Connections</a> / <span class="here">{{ ident }}</span>{% endblock %}
 {% block content %}
   <section>
     <h2 id="cd-title">Connection</h2>
-    {% set tab = "connections" %}{% include "_infra_tabs.html" %}
-    <p class="msg"><a href="/infra">← Overview</a> · <a href="/infra/connections">Manage connections</a></p>
     <div id="cd-head"></div>
     <div class="row" id="cd-links"></div>
     <div id="cd-body"><p class="muted">Loading…</p></div>

@@ -154,9 +154,9 @@ def test_resync_whole_node_and_one(app: Any, monkeypatch: pytest.MonkeyPatch) ->
         assert client.post("/api/infra/resync", json={"node": "nope"}).status_code == 404
         assert client.post("/api/infra/resync", json={"slug": "nope"}).status_code == 404
 
-        # The dashboard column reads the stored result.
-        page = client.get("/").text
-        assert ">running</span>" in page
+        # The Services list reads the stored result.
+        rows = {r["slug"]: r for r in client.get("/api/views/services").json()["rows"]}
+        assert rows["media"]["runs_on"]["sub"].endswith("running")
 
         bulk = client.post("/api/bulk/services", json={"action": "resync", "slugs": ["media"]})
         assert bulk.json()["ok_count"] == 1

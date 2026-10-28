@@ -1,66 +1,83 @@
 {% extends "base.html" %}
 {% block title %}homelab-orchestrator — traffic{% endblock %}
+{% block crumbs %}Activity / <span class="here">Traffic</span>{% endblock %}
 {% block content %}
-  <div class="page-head">
-    <h2>Traffic</h2>
-    <a class="page-link" href="/traffic/geo">By country &rarr;</a>
+<div class="page-header">
+  <h1>Traffic</h1>
+  <div class="actions traffic-controls">
+    <label class="tc-field" for="svc-select"><span class="tc-label">Service</span>
+      <select id="svc-select" data-slug-select>
+        <option value=""{% if not slug %} selected{% endif %}>All services</option>
+        {% for svc in services %}<option value="{{ svc.slug }}"{% if svc.slug == slug %} selected{% endif %}>{{ svc.slug }}</option>{% endfor %}
+      </select>
+    </label>
+    {% include "_timecontrols.html" %}
+  </div>
+</div>
+<p class="page-sub">Requests through Traefik. Pick a service, or click one in the table, to filter the whole page. <a href="https://github.com/s-kroonen/homelab-orchestrator/blob/dev/docs/traffic_metrics.md">How this is measured</a></p>
+
+{% include "_collector_status.html" %}
+
+<div id="traffic-root" class="traffic-root" data-slug="{{ slug }}">
+  <div class="stat-row stat-row-5" data-tiles>
+    <div class="stat-tile"><div class="stat-label">Requests</div><div class="stat-value" data-stat="hits">—</div></div>
+    <div class="stat-tile"><div class="stat-label">Server errors (5xx)</div><div class="stat-value" data-stat="s5xx">—</div></div>
+    <div class="stat-tile"><div class="stat-label">Average latency</div><div class="stat-value" data-stat="avg">—</div></div>
+    <div class="stat-tile"><div class="stat-label">Visitors</div><div class="stat-value" data-stat="visitors">{{ geo.top_ips | length if geo.enabled else "—" }}</div></div>
+    <div class="stat-tile"><div class="stat-label">Client errors (4xx)</div><div class="stat-value" data-stat="s4xx">—</div></div>
   </div>
 
-  {% include "_collector_status.html" %}
-  {% include "_timecontrols.html" %}
+  <section class="chart-card">
+    <div class="chart-head"><h3>Requests by status</h3><div class="chart-legend" data-legend="requests"></div></div>
+    <div class="chart" data-chart="requests"><p class="chart-empty">Loading…</p></div>
+  </section>
+  <section class="chart-card">
+    <div class="chart-head"><h3>Latency</h3><div class="chart-legend" data-legend="latency"></div></div>
+    <div class="chart" data-chart="latency"><p class="chart-empty">Loading…</p></div>
+  </section>
 
-  <div id="traffic-root" class="traffic-root" data-slug="{{ slug }}">
-    <p class="filter-chip-row" data-filter-row hidden>
-      <span class="filter-chip">Service: <strong data-filter-name></strong>
-        <button type="button" class="chip-clear" data-filter-clear aria-label="Show all services">&times;</button>
-      </span>
-    </p>
-
-    <div class="stat-tiles" data-tiles>
-      <div class="stat-tile"><div class="stat-label">Requests</div><div class="stat-value" data-stat="hits">—</div></div>
-      <div class="stat-tile"><div class="stat-label">Client errors (4xx)</div><div class="stat-value" data-stat="s4xx">—</div></div>
-      <div class="stat-tile"><div class="stat-label">Server errors (5xx)</div><div class="stat-value" data-stat="s5xx">—</div></div>
-      <div class="stat-tile"><div class="stat-label">Avg latency</div><div class="stat-value" data-stat="avg">—</div></div>
-    </div>
-
-    <section class="chart-card">
-      <div class="chart-head">
-        <h3>Requests by status</h3>
-        <div class="chart-legend" data-legend="requests"></div>
-      </div>
-      <div class="chart" data-chart="requests"><p class="chart-empty">Loading…</p></div>
-    </section>
-
-    <section class="chart-card">
-      <div class="chart-head">
-        <h3>Latency</h3>
-        <div class="chart-legend" data-legend="latency"></div>
-      </div>
-      <div class="chart" data-chart="latency"><p class="chart-empty">Loading…</p></div>
-    </section>
-
-    <section>
-      <h2>By service</h2>
-      <p class="msg table-hint">Click a row to scope the charts to that service.</p>
-      <div class="table-scroll">
+  <div class="grid-2">
+    <section class="card col-main flush" aria-labelledby="h-by-service">
+      <div class="card-head" style="padding-bottom: 10px"><h2 id="h-by-service">By service</h2><span class="faint" style="font-size: 12.5px">click a row to filter the page</span></div>
+      <div class="table-scroll" style="margin: 0">
         <table class="host-table">
-          <thead>
-            <tr>
-              <th>Service</th><th>Hostname</th><th class="num">Hits</th>
-              <th class="num">4xx</th><th class="num">5xx</th>
-              <th class="num">Avg</th><th class="num">Max</th><th>Trend</th>
-            </tr>
-          </thead>
-          <tbody data-host-rows>
-            <tr><td colspan="8" class="muted">Loading…</td></tr>
-          </tbody>
+          <thead><tr><th>Service</th><th>Hostname</th><th class="num">Requests</th><th class="num">4xx</th><th class="num">5xx</th><th class="num">Avg</th><th class="num">Max</th><th>Trend</th></tr></thead>
+          <tbody data-host-rows><tr><td colspan="8" class="muted">Loading…</td></tr></tbody>
         </table>
       </div>
     </section>
+
+    <div class="col-side" id="geo-side" data-geo-enabled="{{ 'true' if geo.enabled else 'false' }}">
+      {% if not geo.enabled %}
+      <section class="card">
+        <div class="card-head"><h2>Countries</h2></div>
+        <p class="faint" style="margin: 0; font-size: 13px"><strong style="color: var(--text)">GeoIP is off.</strong> Set <code>GEOIP_ENABLED=true</code> (with Traefik's access log reachable through Traefik Manager) to see which countries and client addresses reach your services. See <a href="https://github.com/s-kroonen/homelab-orchestrator/blob/dev/docs/geoip_traffic.md">docs/geoip_traffic.md</a>.</p>
+      </section>
+      {% else %}
+      <section class="card" aria-labelledby="h-countries">
+        <div class="card-head"><h2 id="h-countries">Countries</h2><span style="flex:1"></span><span class="faint" data-geo-count>{{ geo.country_count }}</span></div>
+        <p class="faint geo-summary" style="margin: 0 0 8px; font-size: 12.5px" data-geo-summary>{% if geo.sample_count %}<strong>{{ geo.total_hits }}</strong> hits · local {{ geo.local_pct }}% / external {{ geo.external_pct }}%{% else %}No GeoIP samples in this range{% if slug %} for <code>{{ slug }}</code>{% endif %}.{% endif %}</p>
+        <div data-geo-countries>
+          {% for c in geo.countries[:12] %}
+          <div class="geo-row"><span class="flag" aria-hidden="true">{{ c.flag }}</span><span class="name">{{ c.label }}</span><span class="bar"><span class="ok" style="width: {{ c.pct }}%"></span></span><span class="num mono">{{ c.hits }}</span></div>
+          {% endfor %}
+        </div>
+      </section>
+      <section class="card" aria-labelledby="h-ips">
+        <div class="card-head"><h2 id="h-ips">Top client addresses</h2></div>
+        <div data-geo-ips>
+          {% for i in geo.top_ips[:10] %}
+          <div class="geo-row ip"><code>{{ i.client_ip }}</code><span class="faint">{{ i.flag }} {{ i.label }}</span><span class="num mono">{{ i.hits }}</span></div>
+          {% endfor %}
+        </div>
+      </section>
+      {% endif %}
+    </div>
   </div>
+</div>
 {% endblock %}
 {% block scripts %}
-<script src="/static/timecontrols.js"></script>
-<script src="/static/collector_status.js"></script>
-<script src="/static/traffic.js"></script>
+<script src="{{ asset('timecontrols.js') }}"></script>
+<script src="{{ asset('collector_status.js') }}"></script>
+<script src="{{ asset('traffic.js') }}"></script>
 {% endblock %}

@@ -1,0 +1,164 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Services</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#0d1015}
+a{color:#8fb3ff;text-decoration:none}a:hover{color:#b8d0ff}
+*{box-sizing:border-box}
+.pill{display:inline-flex;align-items:center;gap:6px;padding:3px 9px;border-radius:999px;font-size:12px;font-weight:600;white-space:nowrap}
+.ok{background:#11331f;color:#5fe08b}.warn{background:#3a2c10;color:#f0b44c}.fail{background:#3d1717;color:#ff8a82}.off{background:#232834;color:#b3bccb}.pending{background:#162a45;color:#8fb3ff}
+.btn{display:inline-flex;align-items:center;gap:6px;height:32px;padding:0 12px;border-radius:8px;border:1px solid #2c3340;background:#1a1f29;color:#e6e9ef;font:600 13px Inter,system-ui,sans-serif;cursor:pointer;white-space:nowrap}
+.btn.primary{background:#4f7fe0;border-color:#4f7fe0;color:#fff}.btn.ghost{background:transparent;border-color:transparent;color:#b3bccb}
+.mono{font-family:'JetBrains Mono',ui-monospace,monospace;font-size:12.5px}
+th{font-size:12px;font-weight:600;color:#9aa4b2;text-align:left;padding:10px 12px;border-bottom:1px solid #232a36;white-space:nowrap}
+td{padding:11px 12px;border-bottom:1px solid #1d232e;vertical-align:middle}
+</style>
+</helmet>
+<div style="display: flex; flex-wrap: wrap; min-height: 1000px; background: #0d1015; color: #e6e9ef; font-family: Inter, system-ui, sans-serif; font-size: 14px; line-height: 1.45">
+  <nav aria-label="Main" style="flex: 0 0 232px; background: #11151c; border-right: 1px solid #222833; padding: 20px 14px; display: flex; flex-direction: column; gap: 18px">
+    <div style="font-weight: 700; font-size: 15px; padding: 0 10px">homelab-orchestrator</div>
+    <sc-for list="{{nav}}" as="g" hint-placeholder-count="5">
+      <div style="display: flex; flex-direction: column; gap: 2px">
+        <div style="font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: #8a94a5; padding: 0 10px 4px">{{g.heading}}</div>
+        <sc-for list="{{g.items}}" as="it" hint-placeholder-count="3">
+          <a href="#" style="{{it.style}}">{{it.label}}</a>
+        </sc-for>
+      </div>
+    </sc-for>
+  </nav>
+  <div style="flex: 999 1 560px; min-width: 0; display: flex; flex-direction: column">
+    <header style="display: flex; flex-wrap: wrap; align-items: center; gap: 12px; padding: 12px 32px; border-bottom: 1px solid #222833">
+      <div style="font-size: 13px; color: #8a94a5">Services</div>
+      <label style="flex: 1 1 260px; max-width: 460px; margin-left: auto; display: flex; align-items: center; gap: 8px; height: 34px; padding: 0 12px; background: #141922; border: 1px solid #2a3140; border-radius: 8px; color: #8a94a5; font-size: 13px">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="11" cy="11" r="7"></circle><path d="M20 20l-3.5-3.5"></path></svg>
+        <input aria-label="Search" placeholder="Search services, hosts, nodes" style="flex: 1; min-width: 0; background: transparent; border: 0; color: #e6e9ef; font: inherit; outline: none">
+      </label>
+      <span class="pill ok">● Live</span>
+      <button class="btn ghost" type="button">admin ▾</button>
+    </header>
+
+    <main style="padding: 28px 32px 48px; max-width: 1280px; width: 100%; display: flex; flex-direction: column; gap: 18px">
+      <div style="display: flex; flex-wrap: wrap; align-items: flex-end; gap: 12px">
+        <div style="flex: 1 1 400px">
+          <h1 style="margin: 0; font-size: 24px; font-weight: 700">Services <span style="color: #8a94a5; font-weight: 500">24</span></h1>
+          <div style="color: #9aa4b2; margin-top: 4px">Everything the orchestrator watches, wakes and backs up. Sub-services sit under their parent.</div>
+        </div>
+        <button class="btn" type="button">Import from Proxmox</button>
+        <button class="btn primary" type="button">+ New service</button>
+      </div>
+
+      <div style="display: flex; flex-wrap: wrap; align-items: center; gap: 8px">
+        <label style="flex: 0 1 300px; display: flex; align-items: center; gap: 8px; height: 34px; padding: 0 12px; background: #141922; border: 1px solid #2a3140; border-radius: 8px">
+          <input aria-label="Filter services" placeholder="Filter by name, slug, host…" style="flex: 1; min-width: 0; background: transparent; border: 0; color: #e6e9ef; font: inherit; outline: none">
+        </label>
+        <sc-for list="{{chips}}" as="c" hint-placeholder-count="5">
+          <button type="button" style="{{c.style}}">{{c.label}} <span style="opacity: .7">{{c.n}}</span></button>
+        </sc-for>
+        <span style="flex: 1"></span>
+        <label style="font-size: 13px; color: #9aa4b2">Group by
+          <select style="margin-left: 6px; height: 32px; background: #141922; color: #e6e9ef; border: 1px solid #2a3140; border-radius: 8px; padding: 0 8px; font: inherit">
+            <option>Nothing</option><option>Group</option><option>Node</option>
+          </select>
+        </label>
+      </div>
+
+      <div style="display: flex; flex-wrap: wrap; align-items: center; gap: 10px; padding: 10px 14px; background: #162a45; border: 1px solid #27497a; border-radius: 10px">
+        <strong>2 selected</strong>
+        <button class="btn" type="button">Check</button>
+        <button class="btn" type="button">Wake</button>
+        <button class="btn" type="button">Set backup policy…</button>
+        <button class="btn" type="button">Enable / disable…</button>
+        <button class="btn ghost" type="button" style="margin-left: auto">Clear selection</button>
+      </div>
+
+      <div style="background: #141922; border: 1px solid #232a36; border-radius: 12px; overflow-x: auto; position: relative">
+        <table style="width: 100%; border-collapse: collapse; min-width: 900px">
+          <thead>
+            <tr>
+              <th style="width: 36px"><input type="checkbox" aria-label="Select all"></th>
+              <th>Service ▲</th><th>State ↕</th><th>Runs on ↕</th><th>Last check</th><th>Backup ↕</th><th>Wake on hit</th><th style="width: 52px"><span style="position: absolute; left: -9999px">Actions</span></th>
+            </tr>
+          </thead>
+          <tbody>
+            <sc-for list="{{rows}}" as="r" hint-placeholder-count="7">
+              <tr style="{{r.rowStyle}}">
+                <td><input type="checkbox" aria-label="Select {{r.name}}" checked="{{r.sel}}"></td>
+                <td style="padding-left: {{r.indent}}">
+                  <a href="#" style="color: #e6e9ef; font-weight: 600">{{r.name}}</a>
+                  <div class="mono" style="color: #8a94a5">{{r.slug}}</div>
+                </td>
+                <td><span class="pill {{r.kind}}">{{r.state}}</span></td>
+                <td><div>{{r.node}}</div><div style="font-size: 12px; color: #9aa4b2">{{r.guest}}</div></td>
+                <td style="font-size: 13px; color: #b3bccb">{{r.check}}</td>
+                <td><div>{{r.policy}}</div><div style="font-size: 12px; color: #9aa4b2">{{r.last}}</div></td>
+                <td>{{r.wake}}</td>
+                <td><button class="btn ghost" type="button" aria-label="Actions for {{r.name}}">⋯</button></td>
+              </tr>
+            </sc-for>
+          </tbody>
+        </table>
+        <div role="menu" aria-label="Actions for nextcloud" style="position: absolute; right: 18px; top: 168px; width: 220px; background: #1a1f29; border: 1px solid #2f3747; border-radius: 10px; padding: 6px; box-shadow: 0 12px 32px rgba(0,0,0,.45); display: flex; flex-direction: column">
+          <button type="button" role="menuitem" style="text-align: left; background: transparent; border: 0; color: #e6e9ef; padding: 8px 10px; border-radius: 6px; font: inherit">Check now</button>
+          <button type="button" role="menuitem" style="text-align: left; background: transparent; border: 0; color: #e6e9ef; padding: 8px 10px; border-radius: 6px; font: inherit">Restart</button>
+          <button type="button" role="menuitem" style="text-align: left; background: transparent; border: 0; color: #e6e9ef; padding: 8px 10px; border-radius: 6px; font: inherit">Run a backup now</button>
+          <button type="button" role="menuitem" style="text-align: left; background: transparent; border: 0; color: #e6e9ef; padding: 8px 10px; border-radius: 6px; font: inherit">Edit settings…</button>
+          <div style="height: 1px; background: #2a3140; margin: 4px 0"></div>
+          <button type="button" role="menuitem" style="text-align: left; background: transparent; border: 0; color: #ff8a82; padding: 8px 10px; border-radius: 6px; font: inherit">Delete…</button>
+        </div>
+        <div style="display: flex; align-items: center; gap: 12px; padding: 10px 14px; font-size: 13px; color: #9aa4b2">
+          <span>1–24 of 24</span><span style="margin-left: auto">updated 4 s ago</span>
+        </div>
+      </div>
+    </main>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":1000}}'>
+class Component extends DCLogic {
+  renderVals() {
+    const cur = 'Services';
+    const base = 'display:block;padding:6px 10px;border-radius:7px;font-size:14px;color:#c9d1dc';
+    const on = base + ';background:#1d2430;color:#ffffff;font-weight:600;box-shadow:inset 3px 0 0 #4f7fe0';
+    const groups = [
+      ['Overview', ['Dashboard', 'Map']],
+      ['Services', ['Services']],
+      ['Infrastructure', ['Nodes & guests', 'Proxy hosts', 'Containers', 'Backups']],
+      ['Activity', ['Activity', 'Traffic']],
+      ['Settings', ['Connections', 'Notifications', 'AI assistants', 'Admins & devices', 'System', 'Archive']],
+    ];
+    const chip = 'height:32px;padding:0 12px;border-radius:999px;border:1px solid #2a3140;background:#141922;color:#c9d1dc;font:600 13px Inter,system-ui,sans-serif;cursor:pointer';
+    const chipOn = chip + ';background:#1d2c47;border-color:#3d64b3;color:#ffffff';
+    const sel = 'background:#16233a';
+    return {
+      nav: groups.map(([heading, items]) => ({ heading, items: items.map((label) => ({ label, style: label === cur ? on : base })) })),
+      chips: [
+        { label: 'All', n: '24', style: chipOn },
+        { label: 'Failed', n: '1', style: chip },
+        { label: 'Warnings', n: '1', style: chip },
+        { label: 'Off', n: '2', style: chip },
+        { label: 'Not backed up', n: '3', style: chip },
+      ],
+      rows: [
+        { name: 'Jellyfin', slug: 'jellyfin', kind: 'ok', state: 'healthy', node: 'node-b', guest: 'vm 104 · running', check: '2/2 probes ok · 1 min ago', policy: 'daily-frequent', last: 'ok · 03:04', wake: 'yes', indent: '12px', sel: true, rowStyle: sel },
+        { name: 'Wizarr', slug: 'wizarr', kind: 'ok', state: 'healthy', node: 'jellyfin', guest: 'sub-service · stack wizarr', check: '1/1 ok · 1 min ago', policy: 'with parent', last: '—', wake: 'via parent', indent: '34px', sel: false, rowStyle: '' },
+        { name: 'NextCloud', slug: 'nextcloud', kind: 'fail', state: 'failed', node: 'node-a', guest: 'vm 101 · running', check: 'https probe: 502 · 12 min', policy: 'daily-frequent', last: 'ok · 03:01', wake: 'no', indent: '12px', sel: true, rowStyle: sel },
+        { name: 'TrueNAS', slug: 'truenas', kind: 'off', state: 'off', node: 'node-a', guest: 'vm 100 · stopped', check: 'not checked while off', policy: 'never backed up', last: '—', wake: 'yes', indent: '12px', sel: false, rowStyle: '' },
+        { name: 'Home Assistant', slug: 'haos', kind: 'ok', state: 'healthy', node: 'node-a', guest: 'vm 102 · running', check: '1/1 ok · 30 s ago', policy: 'daily-frequent', last: 'ok · 03:00', wake: 'no', indent: '12px', sel: false, rowStyle: '' },
+        { name: 'mailcow', slug: 'mailcow', kind: 'warn', state: 'backup failed', node: 'node-a', guest: 'vm 103 · running', check: '3/3 ok · 2 min ago', policy: 'daily-frequent', last: 'failed · 03:12', wake: 'no', indent: '12px', sel: false, rowStyle: '' },
+        { name: 'Portainer', slug: 'portainer', kind: 'ok', state: 'healthy', node: 'node-a', guest: 'vm 105 · running', check: '1/1 ok · 1 min ago', policy: 'weekly', last: 'ok · Sun', wake: 'no', indent: '12px', sel: false, rowStyle: '' },
+      ],
+    };
+  }
+}
+</script>
+</body>
+</html>

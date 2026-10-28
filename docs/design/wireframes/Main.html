@@ -1,0 +1,310 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Dashboard (wireframe)</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#0d1015}
+a{color:#8fb3ff;text-decoration:none}a:hover{color:#b8d0ff}
+*{box-sizing:border-box}
+.pill{display:inline-flex;align-items:center;gap:6px;padding:3px 9px;border-radius:999px;font-size:12px;font-weight:600;white-space:nowrap}
+.ok{background:#11331f;color:#5fe08b}.warn{background:#3a2c10;color:#f0b44c}.fail{background:#3d1717;color:#ff8a82}.off{background:#232834;color:#b3bccb}.pending{background:#162a45;color:#8fb3ff}
+.btn{display:inline-flex;align-items:center;gap:6px;height:32px;padding:0 12px;border-radius:8px;border:1px solid #2c3340;background:#1a1f29;color:#e6e9ef;font:600 13px Inter,system-ui,sans-serif;cursor:pointer;white-space:nowrap}
+.btn.primary{background:#4f7fe0;border-color:#4f7fe0;color:#fff}.btn.ghost{background:transparent;border-color:transparent;color:#b3bccb}
+.mono{font-family:'JetBrains Mono',ui-monospace,monospace;font-size:12.5px}
+</style>
+</head>
+<body>
+
+
+<div style="display: flex; flex-wrap: wrap; min-height: 1120px; background: #0d1015; color: #e6e9ef; font-family: Inter, system-ui, sans-serif; font-size: 14px; line-height: 1.45">
+  <nav aria-label="Main" style="flex: 0 0 232px; background: #11151c; border-right: 1px solid #222833; padding: 20px 14px; display: flex; flex-direction: column; gap: 18px">
+    <div style="font-weight: 700; font-size: 15px; padding: 0 10px">homelab-orchestrator</div>
+    
+      <div style="display: flex; flex-direction: column; gap: 2px">
+        <div style="font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: #8a94a5; padding: 0 10px 4px">Overview</div>
+        
+          <a href="#" style="display:block;padding:6px 10px;border-radius:7px;font-size:14px;color:#c9d1dc;background:#1d2430;color:#ffffff;font-weight:600;box-shadow:inset 3px 0 0 #4f7fe0">Dashboard</a>
+        
+          <a href="#" style="display:block;padding:6px 10px;border-radius:7px;font-size:14px;color:#c9d1dc">Map</a>
+        
+      </div>
+    
+      <div style="display: flex; flex-direction: column; gap: 2px">
+        <div style="font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: #8a94a5; padding: 0 10px 4px">Services</div>
+        
+          <a href="#" style="display:block;padding:6px 10px;border-radius:7px;font-size:14px;color:#c9d1dc">Services</a>
+        
+      </div>
+    
+      <div style="display: flex; flex-direction: column; gap: 2px">
+        <div style="font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: #8a94a5; padding: 0 10px 4px">Infrastructure</div>
+        
+          <a href="#" style="display:block;padding:6px 10px;border-radius:7px;font-size:14px;color:#c9d1dc">Nodes &amp; guests</a>
+        
+          <a href="#" style="display:block;padding:6px 10px;border-radius:7px;font-size:14px;color:#c9d1dc">Proxy hosts</a>
+        
+          <a href="#" style="display:block;padding:6px 10px;border-radius:7px;font-size:14px;color:#c9d1dc">Containers</a>
+        
+          <a href="#" style="display:block;padding:6px 10px;border-radius:7px;font-size:14px;color:#c9d1dc">Backups</a>
+        
+      </div>
+    
+      <div style="display: flex; flex-direction: column; gap: 2px">
+        <div style="font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: #8a94a5; padding: 0 10px 4px">Activity</div>
+        
+          <a href="#" style="display:block;padding:6px 10px;border-radius:7px;font-size:14px;color:#c9d1dc">Activity</a>
+        
+          <a href="#" style="display:block;padding:6px 10px;border-radius:7px;font-size:14px;color:#c9d1dc">Traffic</a>
+        
+      </div>
+    
+      <div style="display: flex; flex-direction: column; gap: 2px">
+        <div style="font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: #8a94a5; padding: 0 10px 4px">Settings</div>
+        
+          <a href="#" style="display:block;padding:6px 10px;border-radius:7px;font-size:14px;color:#c9d1dc">Connections</a>
+        
+          <a href="#" style="display:block;padding:6px 10px;border-radius:7px;font-size:14px;color:#c9d1dc">Notifications</a>
+        
+          <a href="#" style="display:block;padding:6px 10px;border-radius:7px;font-size:14px;color:#c9d1dc">AI assistants</a>
+        
+          <a href="#" style="display:block;padding:6px 10px;border-radius:7px;font-size:14px;color:#c9d1dc">Admins &amp; devices</a>
+        
+          <a href="#" style="display:block;padding:6px 10px;border-radius:7px;font-size:14px;color:#c9d1dc">System</a>
+        
+          <a href="#" style="display:block;padding:6px 10px;border-radius:7px;font-size:14px;color:#c9d1dc">Archive</a>
+        
+      </div>
+    
+  </nav>
+  <div style="flex: 999 1 560px; min-width: 0; display: flex; flex-direction: column">
+    <header style="display: flex; flex-wrap: wrap; align-items: center; gap: 12px; padding: 12px 32px; border-bottom: 1px solid #222833">
+      <div style="font-size: 13px; color: #8a94a5">Overview / <span style="color: #e6e9ef">Dashboard</span></div>
+      <label style="flex: 1 1 260px; max-width: 460px; margin-left: auto; display: flex; align-items: center; gap: 8px; height: 34px; padding: 0 12px; background: #141922; border: 1px solid #2a3140; border-radius: 8px; color: #8a94a5; font-size: 13px">
+        <svg width="14" height="14" viewbox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="11" cy="11" r="7"></circle><path d="M20 20l-3.5-3.5"></path></svg>
+        <input aria-label="Search" placeholder="Search services, hosts, nodes" style="flex: 1; min-width: 0; background: transparent; border: 0; color: #e6e9ef; font: inherit; outline: none">
+        <span class="mono" style="border: 1px solid #2a3140; border-radius: 4px; padding: 0 5px">/</span>
+      </label>
+      <a href="#" class="pill pending">1 proxy change not pushed · Retry</a>
+      <span class="pill ok">● Live</span>
+      <button class="btn ghost" type="button">admin ▾</button>
+    </header>
+
+    <main style="padding: 28px 32px 48px; max-width: 1280px; width: 100%; display: flex; flex-direction: column; gap: 28px">
+      <div style="display: flex; flex-wrap: wrap; align-items: flex-end; gap: 16px">
+        <div style="flex: 1 1 400px">
+          <h1 style="margin: 0; font-size: 24px; font-weight: 700">Dashboard</h1>
+          <div style="color: #9aa4b2; margin-top: 4px">3 things need attention. Everything else that is switched on is fine.</div>
+        </div>
+        <button class="btn" type="button">Check everything now</button>
+        <button class="btn primary" type="button">+ New service</button>
+      </div>
+
+      <section aria-labelledby="att" style="background: #141922; border: 1px solid #232a36; border-radius: 12px">
+        <div style="display: flex; align-items: center; gap: 10px; padding: 14px 18px; border-bottom: 1px solid #232a36">
+          <h2 id="att" style="margin: 0; font-size: 15px">Needs attention</h2>
+          <span class="pill fail">1 failed</span><span class="pill warn">2 warnings</span>
+          <span style="margin-left: auto; font-size: 12px; color: #8a94a5">updated 8 s ago</span>
+        </div>
+        
+          <div style="display: flex; flex-wrap: wrap; align-items: center; gap: 12px 16px; padding: 14px 18px; border-bottom: 1px solid #1d232e">
+            <span class="pill fail" style="min-width: 74px; justify-content: center">Failed</span>
+            <div style="flex: 1 1 380px; min-width: 0">
+              <div style="font-weight: 600">nextcloud is down</div>
+              <div style="color: #9aa4b2; font-size: 13px">Probe https://cloud.example.lan answered 502 twice in a row. The guest is running.</div>
+            </div>
+            <span style="font-size: 12px; color: #8a94a5">12 min</span>
+            <button class="btn" type="button">Check now</button>
+            <a class="btn ghost" href="#">Open</a>
+          </div>
+        
+          <div style="display: flex; flex-wrap: wrap; align-items: center; gap: 12px 16px; padding: 14px 18px; border-bottom: 1px solid #1d232e">
+            <span class="pill warn" style="min-width: 74px; justify-content: center">Changed</span>
+            <div style="flex: 1 1 380px; min-width: 0">
+              <div style="font-weight: 600">truenas was changed outside the orchestrator</div>
+              <div style="color: #9aa4b2; font-size: 13px">Proxy host nas.example.lan is off in Traefik Manager but on here.</div>
+            </div>
+            <span style="font-size: 12px; color: #8a94a5">1 h</span>
+            <button class="btn" type="button">Put it back</button>
+            <a class="btn ghost" href="#">Open</a>
+          </div>
+        
+          <div style="display: flex; flex-wrap: wrap; align-items: center; gap: 12px 16px; padding: 14px 18px; border-bottom: 1px solid #1d232e">
+            <span class="pill warn" style="min-width: 74px; justify-content: center">Backup</span>
+            <div style="flex: 1 1 380px; min-width: 0">
+              <div style="font-weight: 600">mailcow backup failed last night</div>
+              <div style="color: #9aa4b2; font-size: 13px">PBS datastore [main] is 91% full. 18 of 19 backups succeeded.</div>
+            </div>
+            <span style="font-size: 12px; color: #8a94a5">03:12</span>
+            <button class="btn" type="button">Open run</button>
+            <a class="btn ghost" href="#">Open</a>
+          </div>
+        
+      </section>
+
+      <div style="display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 12px">
+        
+          <a href="#" style="display: block; background: #141922; border: 1px solid #232a36; border-radius: 12px; padding: 14px 16px; color: #e6e9ef">
+            <div style="font-size: 12px; color: #9aa4b2">Services</div>
+            <div style="font-size: 26px; font-weight: 700; margin: 2px 0">24</div>
+            <div style="font-size: 12px; color: #9aa4b2">21 healthy · 1 failed · 2 off</div>
+          </a>
+        
+          <a href="#" style="display: block; background: #141922; border: 1px solid #232a36; border-radius: 12px; padding: 14px 16px; color: #e6e9ef">
+            <div style="font-size: 12px; color: #9aa4b2">Nodes</div>
+            <div style="font-size: 26px; font-weight: 700; margin: 2px 0">2</div>
+            <div style="font-size: 12px; color: #9aa4b2">both on</div>
+          </a>
+        
+          <a href="#" style="display: block; background: #141922; border: 1px solid #232a36; border-radius: 12px; padding: 14px 16px; color: #e6e9ef">
+            <div style="font-size: 12px; color: #9aa4b2">Proxy hosts</div>
+            <div style="font-size: 26px; font-weight: 700; margin: 2px 0">27</div>
+            <div style="font-size: 12px; color: #9aa4b2">26 in sync · 1 pending</div>
+          </a>
+        
+          <a href="#" style="display: block; background: #141922; border: 1px solid #232a36; border-radius: 12px; padding: 14px 16px; color: #e6e9ef">
+            <div style="font-size: 12px; color: #9aa4b2">Backups last night</div>
+            <div style="font-size: 26px; font-weight: 700; margin: 2px 0">18/19</div>
+            <div style="font-size: 12px; color: #9aa4b2">next at 03:00</div>
+          </a>
+        
+          <a href="#" style="display: block; background: #141922; border: 1px solid #232a36; border-radius: 12px; padding: 14px 16px; color: #e6e9ef">
+            <div style="font-size: 12px; color: #9aa4b2">Connections</div>
+            <div style="font-size: 26px; font-weight: 700; margin: 2px 0">7/7</div>
+            <div style="font-size: 12px; color: #9aa4b2">all reachable</div>
+          </a>
+        
+      </div>
+
+      <div style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px">
+        <section aria-labelledby="nodes" style="background: #141922; border: 1px solid #232a36; border-radius: 12px">
+          <div style="display: flex; align-items: center; padding: 14px 18px; border-bottom: 1px solid #232a36">
+            <h2 id="nodes" style="margin: 0; font-size: 15px">Nodes</h2>
+            <a href="#" style="margin-left: auto; font-size: 13px">All nodes &amp; guests →</a>
+          </div>
+          
+            <div style="display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px; padding: 12px 18px; border-bottom: 1px solid #1d232e">
+              <span class="pill ok">on</span>
+              <div style="flex: 1 1 160px">
+                <div style="font-weight: 600">node-a</div>
+                <div style="font-size: 12px; color: #9aa4b2">always on · 14 services · Proxmox 8.2 · 3 ms</div>
+              </div>
+              <button class="btn" type="button">Check</button>
+              <button class="btn ghost" type="button" aria-label="More actions for node-a">⋯</button>
+            </div>
+          
+            <div style="display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px; padding: 12px 18px; border-bottom: 1px solid #1d232e">
+              <span class="pill off">off</span>
+              <div style="flex: 1 1 160px">
+                <div style="font-weight: 600">node-b</div>
+                <div style="font-size: 12px; color: #9aa4b2">wakes on demand · 6 services · last on 2 h ago</div>
+              </div>
+              <button class="btn" type="button">Wake</button>
+              <button class="btn ghost" type="button" aria-label="More actions for node-b">⋯</button>
+            </div>
+          
+        </section>
+
+        <section aria-labelledby="act" style="background: #141922; border: 1px solid #232a36; border-radius: 12px">
+          <div style="display: flex; align-items: center; padding: 14px 18px; border-bottom: 1px solid #232a36">
+            <h2 id="act" style="margin: 0; font-size: 15px">Recent activity</h2>
+            <a href="#" style="margin-left: auto; font-size: 13px">Activity →</a>
+          </div>
+          
+            <div style="display: flex; gap: 12px; padding: 10px 18px; border-bottom: 1px solid #1d232e; font-size: 13px">
+              <span class="mono" style="color: #8a94a5; flex: 0 0 44px">14:58</span>
+              <span class="pill ok" style="flex: 0 0 auto">wake</span>
+              <span style="min-width: 0">jellyfin woke node-b for a visitor (41 s)</span>
+            </div>
+          
+            <div style="display: flex; gap: 12px; padding: 10px 18px; border-bottom: 1px solid #1d232e; font-size: 13px">
+              <span class="mono" style="color: #8a94a5; flex: 0 0 44px">14:40</span>
+              <span class="pill pending" style="flex: 0 0 auto">format</span>
+              <span style="min-width: 0">Formatted 3 proxy hosts into the standard shape</span>
+            </div>
+          
+            <div style="display: flex; gap: 12px; padding: 10px 18px; border-bottom: 1px solid #1d232e; font-size: 13px">
+              <span class="mono" style="color: #8a94a5; flex: 0 0 44px">14:31</span>
+              <span class="pill fail" style="flex: 0 0 auto">alert</span>
+              <span style="min-width: 0">nextcloud failed: 502 from https://cloud.example.lan</span>
+            </div>
+          
+            <div style="display: flex; gap: 12px; padding: 10px 18px; border-bottom: 1px solid #1d232e; font-size: 13px">
+              <span class="mono" style="color: #8a94a5; flex: 0 0 44px">13:02</span>
+              <span class="pill ok" style="flex: 0 0 auto">deploy</span>
+              <span style="min-width: 0">Deployed site-main from GitHub (main @ 3fa2c1d)</span>
+            </div>
+          
+            <div style="display: flex; gap: 12px; padding: 10px 18px; border-bottom: 1px solid #1d232e; font-size: 13px">
+              <span class="mono" style="color: #8a94a5; flex: 0 0 44px">03:12</span>
+              <span class="pill warn" style="flex: 0 0 auto">backup</span>
+              <span style="min-width: 0">Nightly backups: 18 ok, mailcow failed</span>
+            </div>
+          
+        </section>
+      </div>
+
+      <section aria-labelledby="svc">
+        <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 10px">
+          <h2 id="svc" style="margin: 0; font-size: 15px">Services at a glance</h2>
+          <span style="font-size: 13px; color: #9aa4b2">grouped like the Map; click one to open it</span>
+          <a href="#" style="margin-left: auto; font-size: 13px">All services →</a>
+        </div>
+        <div style="display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px">
+          
+            <div style="background: #141922; border: 1px solid #232a36; border-radius: 12px; padding: 12px 14px">
+              <div style="font-size: 12px; color: #9aa4b2; margin-bottom: 8px">Home</div>
+              <div style="display: flex; flex-wrap: wrap; gap: 6px">
+                
+                  <a href="#" class="pill ok">haos</a>
+                
+                  <a href="#" class="pill ok">adblock</a>
+                
+                  <a href="#" class="pill ok">vaultwarden</a>
+                
+              </div>
+            </div>
+          
+            <div style="background: #141922; border: 1px solid #232a36; border-radius: 12px; padding: 12px 14px">
+              <div style="font-size: 12px; color: #9aa4b2; margin-bottom: 8px">Media &amp; cloud</div>
+              <div style="display: flex; flex-wrap: wrap; gap: 6px">
+                
+                  <a href="#" class="pill ok">jellyfin</a>
+                
+                  <a href="#" class="pill fail">nextcloud</a>
+                
+                  <a href="#" class="pill ok">wizarr</a>
+                
+                  <a href="#" class="pill off">truenas</a>
+                
+              </div>
+            </div>
+          
+            <div style="background: #141922; border: 1px solid #232a36; border-radius: 12px; padding: 12px 14px">
+              <div style="font-size: 12px; color: #9aa4b2; margin-bottom: 8px">Infrastructure</div>
+              <div style="display: flex; flex-wrap: wrap; gap: 6px">
+                
+                  <a href="#" class="pill ok">gateway-vm</a>
+                
+                  <a href="#" class="pill ok">portainer</a>
+                
+                  <a href="#" class="pill ok">mailcow</a>
+                
+                  <a href="#" class="pill off">minecraft-debian</a>
+                
+                  <a href="#" class="pill ok">pt-wings-1</a>
+                
+              </div>
+            </div>
+          
+        </div>
+      </section>
+    </main>
+  </div>
+</div>
+
+</body>
+</html>

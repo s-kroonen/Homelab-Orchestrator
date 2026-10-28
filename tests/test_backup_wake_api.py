@@ -243,53 +243,46 @@ def test_runs_can_be_filtered_by_slug(client: TestClient) -> None:
 
 def test_policy_form_offers_the_requirement_picker_and_wake_toggle(client: TestClient) -> None:
     _topology(client)
-    page = client.get("/backup-policies/new")
+    page = client.get("/backup-policies?new=1")
     assert page.status_code == 200
     html = page.text
-    assert "Services that must be up for this policy" in html
-    assert 'name="req" value="truenas"' in html
-    assert "woken" in html and "held awake until the backup finishes" in html
-    assert 'id="f-wake-before"' in html and "Wake the services being backed up first" in html
-    # new policy: toggle defaults on
-    assert 'id="f-wake-before"\n          checked' in html or "checked>\n          Wake" in html
-    # a node that cannot be woken is flagged before anyone saves
-    assert 'data-blocker="node has no power target' in html
-    assert "cannot be woken" in html
+    # what can be required, with the services whose node can never be woken flagged
+    assert '"requirable": [' in html and '"slug": "truenas"' in html
+    assert '"blocker": "node has no power target' in html
+    js = client.get("/static/backups.js").text
+    assert 'key: "requires", label: "Also needs, for every backup", type: "checklist"' in js
+    assert 'key: "wake_before_backup", label: "Wake the services being backed up first"' in js
+    # new policy: on by default
+    assert "wake_before_backup: editing ? p.wake_before_backup : true" in js
 
 
 def test_policy_edit_form_is_prefilled(client: TestClient) -> None:
     _topology(client)
     _policy(client, requires=["truenas"], wake_before_backup=False)
-    html = client.get("/backup-policies/nightly/edit").text
-    assert 'name="req" value="truenas"' in html
-    truenas_box = html[html.index('name="req" value="truenas"') :].split(">", 1)[0]
-    assert "checked" in truenas_box
-    toggle = html[html.index('id="f-wake-before"') :].split(">", 1)[0]
-    assert "checked" not in toggle
+    view = client.get("/api/views/backups").json()
+    [nightly] = [p for p in view["policies"] if p["name"] == "nightly"]
+    assert nightly["requires"] == ["truenas"] and nightly["wake_before_backup"] is False
 
 
-def test_policies_list_has_a_needs_column(client: TestClient) -> None:
+def test_policies_list_says_what_each_policy_needs(client: TestClient) -> None:
     _topology(client)
     _policy(client, "stuck-pol", requires=["stuck"])
     _policy(client, "calm", requires=["truenas"], wake_before_backup=False)
-    html = client.get("/backup-policies").text
-    assert "<th>Needs</th>" in html
-    assert "<code>truenas</code>" in html
-    assert "stuck: cannot be woken" in html
-    assert "targets not woken" in html
+    view = client.get("/api/views/backups").json()
+    by_name = {p["name"]: p for p in view["policies"]}
+    assert by_name["calm"]["requires"] == ["truenas"]
+    assert [b["slug"] for b in by_name["stuck-pol"]["requires_blockers"]] == ["stuck"]
+    js = client.get("/static/backups.js").text
+    assert '" cannot be woken"' in js and '"does not wake anything"' in js
 
 
 def test_service_backups_tab_has_the_plan_panel_and_requirements(client: TestClient) -> None:
     _topology(client)
     html = client.get("/services/app").text
-    assert 'id="backup-plan-panel"' in html and "Backup plan" in html
-    assert "/api/backup/plan?slug=app" in html
-    assert "Extra requirements for this service" in html
-    assert 'id="f-backup-requires"' in html
-    assert (
-        'value="truenas"' in html
-        and 'value="app"' not in html.split('id="f-backup-requires"')[1].split("</div>")[0]
-    )
-    assert 'id="run-backup-btn"' in html and "Wakes what the backup plan lists first" in html
-    assert "backupInFlight" in html  # the 60s reload guard knows about a running backup
-    assert "reqFormDirty" in html
+    # What may be woken first is in the page for the Backup drawer's checklist...
+    assert '"requirable": [' in html and '"slug": "truenas"' in html
+    js = client.get("/static/service.js").text
+    assert 'key: "backup_requires", label: "Also wake before its backup", type: "checklist"' in js
+    # ...and the Related tab shows the plan and runs the backup, following its steps.
+    assert '"/api/backup/plan?slug="' in js and "What a backup wakes first" in js
+    assert '"/api/backup/" + enc(slug) + "?verify=true"' in js and "backupSteps" in js

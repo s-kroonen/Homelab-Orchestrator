@@ -449,11 +449,12 @@ def test_edit_page_has_the_enable_switch(service: Service, monkeypatch: pytest.M
     fake.seed("hand-made", "pbs.example.com", ["websecure"])
     client = _client(monkeypatch, fake)
     pid = _adopted_host(service)
-    html = client.get(f"/proxy-hosts/{pid}/edit").text
-    assert 'id="toggle-enabled"' in html and "Disable" in html
+    # The on/off switch sits in every row of the list.
+    js = client.get("/static/proxy_hosts.js").text
+    assert 'class: "switch", role: "switch"' in js and "/enabled" in js
+    assert '"enabled": true' in client.get("/proxy-hosts").text
     client.post(f"/api/proxy-hosts/{pid}/enabled", json={"enabled": False})
-    html = client.get(f"/proxy-hosts/{pid}/edit").text
-    assert "parked" in html and ">Enable</button>" in html
+    assert '"enabled": false' in client.get("/proxy-hosts").text
 
 
 def test_link_buttons_keep_their_colour_when_visited() -> None:
@@ -465,10 +466,10 @@ def test_link_buttons_keep_their_colour_when_visited() -> None:
         Path(__file__).parent.parent / "src" / "orchestrator" / "web" / "static" / "app.css"
     ).read_text(encoding="utf-8")
     # The generic link colour never applies to a button-link...
-    assert "a:not(.btn), a:not(.btn):visited { color: #5b8def" in css
+    assert "a:not(.btn), a:not(.btn):visited { color: var(--link)" in css
     # ...and button colours are pinned in every link state.
     assert "a.btn:visited" in css and "a.btn.secondary:visited" in css
-    assert "color: #0b0e14 !important" in css
+    assert "color: #fff !important" in css
 
 
 def test_static_files_are_always_revalidated(monkeypatch: pytest.MonkeyPatch) -> None:

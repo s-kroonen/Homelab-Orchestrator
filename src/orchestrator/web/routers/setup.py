@@ -37,7 +37,6 @@ from typing import Any
 import click
 from fastapi import APIRouter, HTTPException, Request, status
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
-from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
 from sqlmodel import Session
 
@@ -51,9 +50,10 @@ from orchestrator.setup.project import read_values
 from orchestrator.web.auth import get_current_admin, login_redirect
 from orchestrator.web.deps import SessionDep, SettingsDep
 from orchestrator.web.routers.auth import _admin_count
+from orchestrator.web.templating import templates
 
 router = APIRouter(tags=["setup"])
-_templates = Jinja2Templates(directory=str(Path(__file__).parent.parent / "templates"))
+_templates = templates
 
 #: Actor recorded in the audit log when setup runs before any admin exists.
 BOOTSTRAP_ACTOR = "setup-wizard"

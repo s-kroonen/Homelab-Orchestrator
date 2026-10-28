@@ -10,7 +10,9 @@ under each service's `proxy_hosts:` list.
 A `ProxyHost` whose `router_provider` is `traefik` and has an `upstream` is
 **live-managed**: the orchestrator owns a route for it on Traefik Manager. But
 **the database is the working copy and Traefik Manager is written only when
-you push** - on **Save to YAML**, on **Push now** (`POST /api/push`) or with
+you push**. With `REGISTRY_AUTOSAVE=true` (the default) that happens by itself a moment
+after every change (`registry/autosave.py`, see ["One save model"](#one-save-model));
+otherwise on **Save to YAML**, on **Push now** (`POST /api/push`) or with
 `orchestrator-cli proxy push`. Adding, editing, enabling/disabling or deleting
 a host here (UI, API, bulk actions, CLI bulk) changes the DB and nothing else;
 every read-only check (hostname, upstream, entry points, resolver, route
@@ -53,30 +55,31 @@ up "which hostname reaches which service, through what":
 | `orchestrator-cli proxy add/list/remove` | `services.yaml` directly | Reconciled into the DB on next boot / Reset |
 | `orchestrator-cli proxy add --entry-point websecure --cert-resolver letsencrypt` | `services.yaml`; validated first with the same rules as the API (entry points checked against the live Traefik when readable) | As above. `orchestrator-cli proxy entrypoints` lists what the manager reports (exit 1 + a message when unavailable); non-interactive runs use the default rule when no `--entry-point` is given |
 | Dashboard → **Data sources → Traefik Manager** (`/sources#traefik`) | pulls routes into records (import / resync) and rewrites old routes into the standard shape — see [sources.md](sources.md) | the import button and the *Discovered* list moved here from the proxy hosts page |
-| Dashboard → **Proxy hosts** (`/proxy-hosts`) — list page | reads the live DB (+ a push-status badge per host) | **Save to YAML** writes it out **and pushes** pending changes to Traefik Manager; **Push now** pushes only; **Reset to saved** discards unsaved edits and pending deletions; **Resync from Traefik** is the bulk-discovery/drift-catch-up path (see below) |
-| Dashboard → **Add a proxy host** (`/proxy-hosts/new`) / **Edit** (`/proxy-hosts/{id}/edit`) — dedicated pages | live DB only ("Saved here. Pushed to Traefik Manager on Save to YAML (or Push now).") | same underlying API as below; these are the normal way to create/edit one now |
-| Dashboard → a service's own page (`/services/{slug}`), **Proxy hosts** section | read-only list + a link to `/proxy-hosts/new?service_id=<id>` | same create/edit flow as above, pre-filled for this service |
+| Dashboard → **Proxy hosts** (`/proxy-hosts`) — list page | reads the live DB (painted at once), then Traefik's view per host | the Traefik column says serving / not pushed / changed in Traefik / error; the row menu pushes one host, puts back a host changed in Traefik or moves it to its config file; the **On** switch and the bulk bar enable/disable; tabs lead to **Import from Traefik** and **Format routes** (Data sources) |
+| Dashboard → **+ Add proxy host** / **Edit…** — the drawer (`static/objects.js`) | live DB; pushed by the autosaver (or the header pill's **Retry**) | same underlying API as below. The old addresses `/proxy-hosts/new[?service_id=]` and `/proxy-hosts/{id}/edit` open the drawer on the list |
+| Dashboard → a service's own page (`/services/{slug}`), **Proxy hosts** section | read-only list + a link that opens the drawer pre-filled for this service | same create/edit flow as above |
 | `GET/POST/PUT/DELETE /api/proxy-hosts[/{id}]` | live DB only; list/get carry `sync_state` + `sync_changes` | the API every page above calls — see ["Live-managed proxy hosts"](#live-managed-proxy-hosts) |
 | `GET /api/push/status`, `POST /api/push` | status: nothing. Push: Traefik Manager (and any other registered pusher) | **Push now** / the CLI use these — see ["Pushing to Traefik Manager"](#pushing-to-traefik-manager) |
 | `orchestrator-cli proxy status` / `proxy push [--yes]` | status: nothing. Push: Traefik Manager | the same engine in-process; `status` exits 1 when anything is not in sync |
 | `orchestrator-cli proxy resync-maintenance` | nothing in the DB; re-syncs the gateway's maintenance middleware for every already-linked host | DB-only operation, no YAML involved — see ["Backfilling existing proxy hosts"](#backfilling-existing-proxy-hosts) below |
 
-**Dedicated add/edit pages, not an inline form.** Creating or editing a
-`ProxyHost` used to be a form bolted onto the bottom of `/proxy-hosts` (and
-a second, near-duplicate copy of it inline on a service's own page) — "the
-same edit on the same page everywhere" was explicitly the wrong pattern,
-and this was the first page fixed — backup policies got the same treatment
-next (`/backup-policies` + `/backup-policies/new` + `/backup-policies/{name}
-/edit`, see `docs/roadmap.md`). `/proxy-hosts` is now list-only (hostnames, upstream,
-provider, live status, a hostname-substring filter box, an **Add** button
-and a per-row **Edit** link); `/proxy-hosts/new` and
-`/proxy-hosts/{id}/edit` are real, dedicated pages, not fragments, that
-submit to the same `POST`/`PUT /api/proxy-hosts[/{id}]` as before. The
-service page's own inline add-form is gone too — replaced with a link to
-`/proxy-hosts/new?service_id=<id>` (pre-filling the service picker) for
-consistency with the new pattern, since a second near-duplicate copy of
-the same form was exactly the problem being fixed; its own proxy-hosts
-list (and Delete) stay, now with an **Edit** link alongside **Delete**.
+**One drawer, not pages.** Adding and editing a proxy host happen in the same side drawer
+everywhere (docs/design/README.md, rule 2): hostname, service, where it points (with the
+service's discovered address one click away), entry points and certificate from the live
+catalog (`/api/proxy/entrypoints`; free text when Traefik cannot be read), redirect, Host
+header, HSTS, wake on hit and, under Advanced, the config file. Field errors from the API
+land under their field. It replaced the dedicated `/proxy-hosts/new` and `/edit` pages,
+which now redirect to it.
+
+### One save model
+
+With `REGISTRY_AUTOSAVE=true` (the default), *Save* in the drawer is the only step: a
+moment later the autosaver writes `services.yaml` (keeping the previous file in
+`STATE_DIR/registry-history`, the newest 30) and pushes what is pending to Traefik
+Manager. A push that fails is not retried by itself; it shows in the **pending pill** in
+the header of every page (`GET /api/pending`), whose **Retry** writes and pushes again
+(`POST /api/pending/retry`). With `REGISTRY_AUTOSAVE=false`, the pill offers **Save and
+push** instead, and Save to YAML / Push now work as before.
 
 `proxy_host` is YAML-owned ([architecture.md](architecture.md)), so web edits
 behave like any other dashboard registry edit: the "unsaved changes" badge
@@ -140,9 +143,9 @@ What the endpoints do now (`web/routers/proxy_hosts.py`):
 ## Pushing to Traefik Manager
 
 `orchestrator.registry.proxy_push` (the `proxy` pusher) brings Traefik Manager
-in line with the DB rows. It runs on **Save to YAML** (after the YAML was
-written and committed - a push failure never undoes the save and is reported
-in the response), on **Push now**, and from the CLI.
+in line with the DB rows. It runs from the autosaver after a change, on **Save to YAML**
+(after the YAML was written and committed - a push failure never undoes the save and is
+reported in the response), on **Push now**, and from the CLI.
 
 ### What is remembered
 

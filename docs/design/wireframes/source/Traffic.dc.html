@@ -1,0 +1,194 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Traffic</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#0d1015}
+a{color:#8fb3ff;text-decoration:none}a:hover{color:#b8d0ff}
+*{box-sizing:border-box}
+.pill{display:inline-flex;align-items:center;gap:6px;padding:3px 9px;border-radius:999px;font-size:12px;font-weight:600;white-space:nowrap}
+.ok{background:#11331f;color:#5fe08b}.warn{background:#3a2c10;color:#f0b44c}.fail{background:#3d1717;color:#ff8a82}.off{background:#232834;color:#b3bccb}
+.btn{display:inline-flex;align-items:center;gap:6px;height:32px;padding:0 12px;border-radius:8px;border:1px solid #2c3340;background:#1a1f29;color:#e6e9ef;font:600 13px Inter,system-ui,sans-serif;cursor:pointer;white-space:nowrap}
+.btn.ghost{background:transparent;border-color:transparent;color:#b3bccb}
+.mono{font-family:'JetBrains Mono',ui-monospace,monospace;font-size:12.5px}
+.seg{display:inline-flex;border:1px solid #2a3140;border-radius:8px;overflow:hidden}
+th{font-size:12px;font-weight:600;color:#9aa4b2;text-align:left;padding:9px 14px;border-bottom:1px solid #232a36;white-space:nowrap}
+td{padding:9px 14px;border-bottom:1px solid #1d232e;vertical-align:middle;font-size:13.5px}
+.key{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:5px;vertical-align:-1px}
+</style>
+</helmet>
+<div style="display: flex; flex-wrap: wrap; min-height: 1140px; background: #0d1015; color: #e6e9ef; font-family: Inter, system-ui, sans-serif; font-size: 14px; line-height: 1.45">
+  <nav aria-label="Main" style="flex: 0 0 232px; background: #11151c; border-right: 1px solid #222833; padding: 20px 14px; display: flex; flex-direction: column; gap: 18px">
+    <div style="font-weight: 700; font-size: 15px; padding: 0 10px">homelab-orchestrator</div>
+    <sc-for list="{{nav}}" as="g" hint-placeholder-count="5">
+      <div style="display: flex; flex-direction: column; gap: 2px">
+        <div style="font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: #8a94a5; padding: 0 10px 4px">{{g.heading}}</div>
+        <sc-for list="{{g.items}}" as="it" hint-placeholder-count="3">
+          <a href="#" style="{{it.style}}">{{it.label}}</a>
+        </sc-for>
+      </div>
+    </sc-for>
+  </nav>
+  <div style="flex: 999 1 560px; min-width: 0; display: flex; flex-direction: column">
+    <header style="display: flex; flex-wrap: wrap; align-items: center; gap: 12px; padding: 12px 32px; border-bottom: 1px solid #222833">
+      <div style="font-size: 13px; color: #8a94a5">Activity / <span style="color: #e6e9ef">Traffic</span></div>
+      <span class="pill ok" style="margin-left: auto">● Live</span>
+      <button class="btn ghost" type="button">admin ▾</button>
+    </header>
+
+    <main style="padding: 24px 32px 48px; max-width: 1280px; width: 100%; display: flex; flex-direction: column; gap: 18px">
+      <div style="display: flex; flex-wrap: wrap; align-items: flex-end; gap: 12px">
+        <div style="flex: 1 1 360px">
+          <h1 style="margin: 0; font-size: 24px; font-weight: 700">Traffic</h1>
+          <div style="color: #9aa4b2; margin-top: 4px">Requests through Traefik. Click a service or a country to filter the whole page.</div>
+        </div>
+        <div class="seg" role="group" aria-label="Time range">
+          <sc-for list="{{ranges}}" as="r" hint-placeholder-count="5">
+            <button type="button" style="{{r.style}}">{{r.label}}</button>
+          </sc-for>
+        </div>
+        <select aria-label="Service" style="height: 32px; background: #141922; color: #e6e9ef; border: 1px solid #2a3140; border-radius: 8px; padding: 0 10px; font: inherit">
+          <option>All services</option><option>nextcloud</option><option>jellyfin</option>
+        </select>
+      </div>
+
+      <div style="display: flex; flex-wrap: wrap; align-items: center; gap: 10px; font-size: 12.5px; color: #9aa4b2">
+        <span class="pill ok">collecting</span> access log and Traefik metrics · last sample 12 s ago · <a href="#">How this is measured</a>
+      </div>
+
+      <div style="display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 12px">
+        <sc-for list="{{tiles}}" as="t" hint-placeholder-count="5">
+          <div style="background: #141922; border: 1px solid #232a36; border-radius: 12px; padding: 12px 14px">
+            <div style="font-size: 12px; color: #9aa4b2">{{t.label}}</div>
+            <div style="font-size: 24px; font-weight: 700">{{t.value}}</div>
+            <div style="font-size: 12px; color: {{t.subColor}}">{{t.sub}}</div>
+          </div>
+        </sc-for>
+      </div>
+
+      <section aria-labelledby="ch" style="background: #141922; border: 1px solid #232a36; border-radius: 12px; padding: 14px 16px">
+        <div style="display: flex; flex-wrap: wrap; align-items: center; gap: 14px; margin-bottom: 10px">
+          <h2 id="ch" style="margin: 0; font-size: 15px">Requests by status</h2>
+          <span style="font-size: 12px; color: #9aa4b2"><i class="key" style="background: #3f7f5c"></i>2xx <i class="key" style="background: #4a6fa8; margin-left: 8px"></i>3xx <i class="key" style="background: #b58a2e; margin-left: 8px"></i>4xx <i class="key" style="background: #c4473f; margin-left: 8px"></i>5xx</span>
+          <span style="margin-left: auto; font-size: 12px; color: #9aa4b2">latency line: avg ms</span>
+        </div>
+        <div role="img" aria-label="Requests per hour over 24 hours, a 5xx spike at 14:00" style="display: flex; align-items: flex-end; gap: 4px; height: 180px; border-bottom: 1px solid #2a3140; padding-top: 6px">
+          <sc-for list="{{bars}}" as="b" hint-placeholder-count="24">
+            <div style="flex: 1; display: flex; flex-direction: column-reverse; height: 100%">
+              <div style="height: {{b.ok}}; background: #3f7f5c; border-radius: 0 0 2px 2px"></div>
+              <div style="height: {{b.redir}}; background: #4a6fa8"></div>
+              <div style="height: {{b.client}}; background: #b58a2e"></div>
+              <div style="height: {{b.err}}; background: #c4473f; border-radius: 2px 2px 0 0"></div>
+            </div>
+          </sc-for>
+        </div>
+        <div style="display: flex; justify-content: space-between; font-size: 11.5px; color: #8a94a5; margin-top: 4px"><span>yesterday 16:00</span><span>00:00</span><span>08:00</span><span>now</span></div>
+      </section>
+
+      <div style="display: flex; flex-wrap: wrap; gap: 16px; align-items: flex-start">
+        <section aria-labelledby="bs" style="flex: 999 1 560px; min-width: 0; background: #141922; border: 1px solid #232a36; border-radius: 12px; overflow-x: auto">
+          <div style="padding: 12px 16px; border-bottom: 1px solid #232a36"><h2 id="bs" style="margin: 0; font-size: 15px">By service</h2></div>
+          <table style="width: 100%; border-collapse: collapse; min-width: 560px">
+            <thead><tr><th>Service</th><th>Requests ▼</th><th>Share</th><th>Errors</th><th>Avg</th><th>Woke it</th></tr></thead>
+            <tbody>
+              <sc-for list="{{services}}" as="s" hint-placeholder-count="6">
+                <tr>
+                  <td><a href="#" style="font-weight: 600">{{s.name}}</a></td>
+                  <td class="mono">{{s.req}}</td>
+                  <td style="width: 160px"><div style="height: 6px; background: #232834; border-radius: 3px"><div style="width: {{s.share}}; height: 6px; background: #5b8def; border-radius: 3px"></div></div></td>
+                  <td><span class="pill {{s.errCls}}">{{s.err}}</span></td>
+                  <td class="mono">{{s.ms}}</td>
+                  <td>{{s.wakes}}</td>
+                </tr>
+              </sc-for>
+            </tbody>
+          </table>
+        </section>
+
+        <div style="flex: 1 1 300px; display: flex; flex-direction: column; gap: 16px">
+          <section aria-labelledby="co" style="background: #141922; border: 1px solid #232a36; border-radius: 12px; padding: 12px 16px">
+            <div style="display: flex; align-items: center; margin-bottom: 8px"><h2 id="co" style="margin: 0; font-size: 15px">Countries</h2><span style="margin-left: auto; font-size: 12px; color: #9aa4b2">14</span></div>
+            <sc-for list="{{countries}}" as="c" hint-placeholder-count="5">
+              <div style="display: flex; align-items: center; gap: 10px; padding: 5px 0">
+                <span class="mono" style="flex: 0 0 28px; color: #b3bccb">{{c.code}}</span>
+                <span style="flex: 0 0 96px; font-size: 13px">{{c.name}}</span>
+                <div style="flex: 1; height: 6px; background: #232834; border-radius: 3px"><div style="width: {{c.share}}; height: 6px; background: #5b8def; border-radius: 3px"></div></div>
+                <span class="mono" style="flex: 0 0 48px; text-align: right">{{c.req}}</span>
+              </div>
+            </sc-for>
+          </section>
+          <section aria-labelledby="ip" style="background: #141922; border: 1px solid #232a36; border-radius: 12px; padding: 12px 16px">
+            <h2 id="ip" style="margin: 0 0 8px; font-size: 15px">Top client addresses</h2>
+            <sc-for list="{{ips}}" as="i" hint-placeholder-count="3">
+              <div style="display: flex; gap: 10px; padding: 4px 0; font-size: 13px"><span class="mono" style="flex: 1">{{i.ip}}</span><span style="color: #9aa4b2">{{i.where}}</span><span class="mono">{{i.req}}</span></div>
+            </sc-for>
+          </section>
+        </div>
+      </div>
+    </main>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":1140}}'>
+class Component extends DCLogic {
+  renderVals() {
+    const cur = 'Traffic';
+    const base = 'display:block;padding:6px 10px;border-radius:7px;font-size:14px;color:#c9d1dc';
+    const on = base + ';background:#1d2430;color:#ffffff;font-weight:600;box-shadow:inset 3px 0 0 #4f7fe0';
+    const groups = [
+      ['Overview', ['Dashboard', 'Map']],
+      ['Services', ['Services']],
+      ['Infrastructure', ['Nodes & guests', 'Proxy hosts', 'Containers', 'Backups']],
+      ['Activity', ['Activity', 'Traffic']],
+      ['Settings', ['Connections', 'Notifications', 'AI assistants', 'Admins & devices', 'System', 'Archive']],
+    ];
+    const seg = 'height:32px;padding:0 12px;border:0;font:600 13px Inter,sans-serif;background:#141922;color:#b3bccb';
+    const totals = [22, 18, 14, 10, 8, 6, 5, 5, 7, 12, 20, 34, 46, 52, 58, 55, 60, 64, 70, 74, 68, 62, 48, 36];
+    const bars = totals.map((t, i) => {
+      const e = i === 22 ? 9 : 1;
+      return { ok: (t * 0.78) + '%', redir: (t * 0.12) + '%', client: (t * 0.08) + '%', err: (e) + '%' };
+    });
+    return {
+      nav: groups.map(([heading, items]) => ({ heading, items: items.map((label) => ({ label, style: label === cur ? on : base })) })),
+      ranges: ['1 h', '6 h', '24 h', '7 d', '30 d'].map((label) => ({ label, style: label === '24 h' ? seg + ';background:#1d2c47;color:#ffffff' : seg })),
+      tiles: [
+        { label: 'Requests', value: '48.2k', sub: '+12% on the day before', subColor: '#9aa4b2' },
+        { label: 'Server errors', value: '0.8%', sub: '312 × 5xx, most from nextcloud', subColor: '#ff8a82' },
+        { label: 'Average latency', value: '84 ms', sub: 'slowest: jellyfin 410 ms', subColor: '#9aa4b2' },
+        { label: 'Visitors', value: '1,204', sub: 'addresses from 14 countries', subColor: '#9aa4b2' },
+        { label: 'Woke a service', value: '6', sub: 'jellyfin 5 · minecraft 1', subColor: '#9aa4b2' },
+      ],
+      services: [
+        { name: 'nextcloud', req: '14,820', share: '100%', errCls: 'fail', err: '2.0%', ms: '120 ms', wakes: '—' },
+        { name: 'haos', req: '11,402', share: '77%', errCls: 'ok', err: '0.0%', ms: '38 ms', wakes: '—' },
+        { name: 'jellyfin', req: '9,630', share: '65%', errCls: 'ok', err: '0.1%', ms: '410 ms', wakes: '5' },
+        { name: 'vaultwarden', req: '5,214', share: '35%', errCls: 'ok', err: '0.0%', ms: '22 ms', wakes: '—' },
+        { name: 'adblock', req: '3,880', share: '26%', errCls: 'ok', err: '0.0%', ms: '15 ms', wakes: '—' },
+        { name: 'mailcow', req: '2,105', share: '14%', errCls: 'warn', err: '0.6%', ms: '96 ms', wakes: '—' },
+      ],
+      countries: [
+        { code: 'NL', name: 'Netherlands', share: '100%', req: '39.1k' },
+        { code: 'DE', name: 'Germany', share: '14%', req: '5.4k' },
+        { code: 'US', name: 'United States', share: '6%', req: '2.2k' },
+        { code: 'BE', name: 'Belgium', share: '2%', req: '0.9k' },
+        { code: 'FR', name: 'France', share: '1%', req: '0.4k' },
+      ],
+      ips: [
+        { ip: '[198.51.100.x]', where: 'NL', req: '18.3k' },
+        { ip: '[203.0.113.x]', where: 'NL', req: '4.1k' },
+        { ip: '[192.0.2.x]', where: 'DE', req: '1.2k' },
+      ],
+    };
+  }
+}
+</script>
+</body>
+</html>

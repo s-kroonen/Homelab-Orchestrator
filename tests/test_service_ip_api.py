@@ -240,26 +240,28 @@ def test_service_page_renders_the_address_block(client: TestClient) -> None:
         )
         s.commit()
     html = client.get("/services/media").text
-    assert 'id="address"' in html and 'id="addr-discover-btn"' in html
-    assert 'id="f-ip"' in html and 'id="addr-ping-btn"' in html
     assert "10.0.0.21" in html and MAC in html
-    assert 'data-kind="ping"' in html  # the probe editor knows the kind
+    js = client.get("/static/service.js").text
+    assert '"/ip/discover"' in js and "function addPing" in js  # find now, one-click ping
+    assert 'key: "ip_address", label: "Address by hand"' in js
+    assert 'show: is("ping")' in js  # the probe drawer knows the kind
 
 
-def test_dashboard_shows_the_ip_under_the_name(client: TestClient) -> None:
+def test_services_list_can_find_addresses(client: TestClient) -> None:
     _seed(("media", 100))
     client.put("/api/registry/services/media", json={"ip_address": "10.0.0.5"})
-    html = client.get("/").text
-    assert '<span class="svc-ip" title="IP (manual)">10.0.0.5</span>' in html
-    assert 'class="bulk-cb"' in html and 'action: "discover_ip"' in html
+    assert "10.0.0.5" in client.get("/services/media").text  # on the service's page
+    js = client.get("/static/services.js").text
+    assert 'run("discover_ip")' in js  # the bulk bar
 
 
 def test_proxy_form_offers_use_service_ip(client: TestClient) -> None:
     _seed(("media", 100))
     client.put("/api/registry/services/media", json={"ip_address": "10.0.0.5"})
-    html = client.get("/proxy-hosts/new").text
-    assert 'id="ph-use-ip"' in html and 'id="ph-service-ip"' in html
-    assert '"ip": "10.0.0.5"' in html
+    html = client.get("/proxy-hosts?new=1").text
+    assert '"ip": "10.0.0.5"' in html  # the drawer's picker knows each service's address
+    js = client.get("/static/objects.js").text
+    assert "Its service's address is" in js and '"Use it"' in js
 
 
 # ---------------------------------------------------------------------------

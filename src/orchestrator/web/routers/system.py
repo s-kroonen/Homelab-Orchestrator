@@ -8,12 +8,10 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
-from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, ConfigDict
 from sqlmodel import Session
 
@@ -24,6 +22,8 @@ from orchestrator.system import selfupdate as updater
 from orchestrator.system import update as upd
 from orchestrator.web.auth import CurrentAdmin, get_current_admin, login_redirect, require_admin
 from orchestrator.web.deps import SessionDep, SettingsDep
+from orchestrator.web.routers.display import display_state
+from orchestrator.web.templating import templates
 
 api = APIRouter(prefix="/api/system", tags=["system"], dependencies=[Depends(require_admin)])
 pages = APIRouter(tags=["system"])
@@ -31,7 +31,7 @@ router = APIRouter()
 router.include_router(api)
 router.include_router(pages)
 
-_templates = Jinja2Templates(directory=str(Path(__file__).parent.parent / "templates"))
+_templates = templates
 
 
 def _audit(session: Session, admin: Any, action: str, target: str, **details: Any) -> None:
@@ -44,11 +44,19 @@ def _fail(exc: Exception, code: int = status.HTTP_400_BAD_REQUEST) -> HTTPExcept
 
 
 @pages.get("/system", response_model=None)
-async def system_page(request: Request, session: SessionDep) -> HTMLResponse | RedirectResponse:
+async def system_page(
+    request: Request, session: SessionDep, settings: SettingsDep
+) -> HTMLResponse | RedirectResponse:
+    """This orchestrator: update, time zone, its details (the System wireframe). Its own backups
+    are on Backups → Orchestrator."""
     admin = get_current_admin(request, session)
     if admin is None:
         return login_redirect(request)
-    return _templates.TemplateResponse(request, "system.html", {"admin": admin})
+    initial = {
+        "info": await get_info(settings),
+        "display": display_state(session, settings),
+    }
+    return _templates.TemplateResponse(request, "system.html", {"admin": admin, "initial": initial})
 
 
 @api.get("/info")

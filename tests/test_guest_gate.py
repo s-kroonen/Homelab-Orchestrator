@@ -500,21 +500,20 @@ def client(monkeypatch: pytest.MonkeyPatch) -> Any:
 
 
 def test_dashboard_renders_down_badge(client: TestClient) -> None:
-    r = client.get("/")
-    assert r.status_code == 200, r.text
-    assert 'class="badge down"' in r.text
-    assert ">stopped</span>" in r.text
-    assert "guest vm 9001 is stopped" in r.text  # tooltip
-    assert "skipped — guest stopped" in r.text
+    assert client.get("/").status_code == 200
+    rows = {r["slug"]: r for r in client.get("/api/views/services").json()["rows"]}
+    nas = rows["nas"]
+    # Off on purpose, never failed: its guest is stopped.
+    assert nas["state"] == {"cls": "off", "label": "stopped", "why": "its guest is stopped"}
+    assert nas["runs_on"]["sub"].endswith("stopped")
+    assert nas["check"]["text"] == "not checked while off"
 
 
-def test_dashboard_table_shows_guest_status_enabled_and_wake_on_hit(client: TestClient) -> None:
-    r = client.get("/")
-    assert "<th>Guest</th>" in r.text and "<th>Wake on hit</th>" in r.text
-    assert "<th>Enabled</th>" in r.text
-    assert (
-        '<span class="badge disabled" title="vm 9001 - guest vm 9001 is stopped">stopped' in r.text
-    )
+def test_services_list_shows_guest_status_and_wake_on_hit(client: TestClient) -> None:
+    def rows() -> dict[str, Any]:
+        return {r["slug"]: r for r in client.get("/api/views/services").json()["rows"]}
+
+    assert rows()["nas"]["runs_on"]["sub"] == "vm 9001 · stopped"
 
     with Session(get_engine()) as s:
         svc = s.exec(select(Service).where(Service.slug == "nas")).one()
@@ -522,25 +521,27 @@ def test_dashboard_table_shows_guest_status_enabled_and_wake_on_hit(client: Test
         svc.wake_trigger = WakeTrigger.BUTTON
         s.add(svc)
         s.commit()
-    off = client.get("/").text
-    assert 'title="off for this service"' in off
+    nas = rows()["nas"]
+    assert nas["wake_on_hit"] == "no" and nas["wake_on_hit_why"] == "off for this service"
 
     with Session(get_engine()) as s:
         svc = s.exec(select(Service).where(Service.slug == "nas")).one()
         svc.wake_on_hit_enabled = True
         s.add(svc)
         s.commit()
-    assert "(button)" in client.get("/").text
+    assert rows()["nas"]["wake_on_hit"] == "yes (button)"
 
 
 def test_service_page_shows_guest_gate_and_skipped_probes(client: TestClient) -> None:
     r = client.get("/services/nas")
     assert r.status_code == 200, r.text
-    assert 'id="guest-gate"' in r.text
-    assert "storage" in r.text and "stopped" in r.text
-    assert 'class="badge down"' in r.text
-    assert "Skipped on the last scan — guest stopped" in r.text
-    assert '"state": "skipped"' in r.text  # LAST_PROBE_RESULTS for the Probes tab
+    # The last scan, guest gate included, is in the page for the Health card.
+    assert '"guest": {' in r.text and '"guest_state": "stopped"' in r.text
+    assert "storage" in r.text
+    assert '"state": "skipped"' in r.text  # each probe's last result
+    assert '"label": "stopped"' in r.text  # off on purpose: off, never failed
+    js = client.get("/static/service.js").text
+    assert 'name: "guest gate"' in js
 
 
 def test_series_api_includes_service_state(client: TestClient) -> None:

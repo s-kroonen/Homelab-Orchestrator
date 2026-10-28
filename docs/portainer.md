@@ -1,7 +1,15 @@
 # Portainer: what it has, read live
 
-The **Portainer** page (`/portainer`), `orchestrator-cli portainer ...` and `/api/portainer`
-show what Portainer knows: environments, stacks, containers, logs and stats. Adopting, creating,
+The **Containers** page (Infrastructure → Containers, `/portainer`), `orchestrator-cli portainer ...`
+and `/api/portainer` show what Portainer knows: environments, stacks, containers, logs and stats.
+
+On the page the stacks are a table (filter, chips for running / stopped / partly running / not
+linked, an environment and, with several Portainers, a Portainer picker). Click a stack to see
+its containers inside it, each with its image, state, published ports, CPU and memory, **Logs**
+(a drawer: lines, follow, timestamps, wrap, filter, download) and **Restart**, the rest in ⋯.
+A stack's ⋯ has Start, Stop, Restart, Link to a service, Open in Portainer and Delete; select
+several to start, stop or restart them together. **+ New stack** opens a drawer that previews the
+exact request before anything is sent. Adopting, creating,
 deleting and deploying stacks - the write side - is in
 [portainer_deploys.md](portainer_deploys.md); this page is the read side.
 
@@ -10,7 +18,7 @@ creates and deletes them only through Portainer's API. It copies nothing: no com
 Git URLs or branches into `services.yaml`, no stack environment, no container lists. The one
 thing it keeps is the *link* from a sub-service to a stack (a `controller:` with the
 environment and stack name) - and this page tells you which stacks and containers already have
-one ("Linked to").
+one (the Service column).
 
 ## Setup
 

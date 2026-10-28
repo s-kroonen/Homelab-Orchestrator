@@ -32,21 +32,19 @@ def client(monkeypatch: pytest.MonkeyPatch) -> Any:
         yield c
 
 
-def test_service_page_has_save_and_apply(client: TestClient) -> None:
-    html = client.get("/services/media").text
-    for button in ("svc-save-btn", "svc-apply-btn", "probe-apply-btn", "req-apply-btn"):
-        assert f'id="{button}"' in html
-    assert "PrevPage.go(" in html and "finishSave()" in html
+def test_service_page_edits_in_drawers(client: TestClient) -> None:
+    assert client.get("/services/media").status_code == 200
+    js = client.get("/static/service.js").text
+    # One way to edit: each card's Edit opens a drawer; Save applies it (no Apply/Back pages).
+    for fn in ("editGeneral", "editWhere", "editPower", "editBackup", "probeDrawer"):
+        assert f"function {fn}" in js
+    assert "PrevPage" not in js
 
 
-@pytest.mark.parametrize(
-    "path", ["/proxy-hosts/new", "/backup-policies/new", "/backup-policies/nightly/edit"]
-)
-def test_form_pages_have_save_and_apply(client: TestClient, path: str) -> None:
-    html = client.get(path).text
-    assert 'id="submit-btn"' in html and 'id="apply-btn"' in html
-    assert 'type="submit" id="apply-btn"' in html
-    assert "PrevPage.go(" in html and 'id="cancel-link"' in html
+@pytest.mark.parametrize("path", ["/backup-policies/new", "/proxy-hosts/new"])
+def test_old_form_pages_open_the_drawer(client: TestClient, path: str) -> None:
+    r = client.get(path, follow_redirects=False)
+    assert r.status_code == 303 and r.headers["location"].endswith("?new=1")
 
 
 def test_prev_page_helper_only_accepts_same_origin_paths(client: TestClient) -> None:

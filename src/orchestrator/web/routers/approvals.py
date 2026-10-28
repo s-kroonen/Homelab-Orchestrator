@@ -8,12 +8,10 @@ the service page create proposals; the link in the alert opens the page.
 from __future__ import annotations
 
 import asyncio
-from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import HTMLResponse, RedirectResponse
-from fastapi.templating import Jinja2Templates
 from sqlmodel import Session, col, select
 
 from orchestrator.audit import log as audit
@@ -30,6 +28,7 @@ from orchestrator.pipelines.restore import (
 )
 from orchestrator.web.auth import CurrentAdmin, get_current_admin, login_redirect, require_admin
 from orchestrator.web.deps import AdaptersDep, SessionDep, SettingsDep
+from orchestrator.web.templating import templates
 
 api = APIRouter(prefix="/api", tags=["approvals"], dependencies=[Depends(require_admin)])
 pages = APIRouter(tags=["approvals"])
@@ -37,7 +36,7 @@ router = APIRouter()
 router.include_router(api)
 router.include_router(pages)
 
-_templates = Jinja2Templates(directory=str(Path(__file__).parent.parent / "templates"))
+_templates = templates
 #: Strong references to running restores (an unreferenced task can be collected mid-run).
 _RUNNING: set[asyncio.Task[None]] = set()
 

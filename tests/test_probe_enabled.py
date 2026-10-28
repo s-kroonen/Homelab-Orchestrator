@@ -319,9 +319,11 @@ def test_a_probe_can_be_created_switched_off(client: TestClient, service: Servic
 def test_the_service_page_offers_the_toggle_and_a_disabled_badge(
     client: TestClient, service: Service
 ) -> None:
-    html = client.get(f"/services/{service.slug}").text
-    assert 'id="p-enabled"' in html
-    assert "badge disabled" in html and "toggle.textContent" in html
+    assert client.get(f"/services/{service.slug}").status_code == 200
+    js = client.get("/static/service.js").text
+    assert 'key: "enabled", label: "Run it", type: "checkbox"' in js  # in the probe drawer
+    assert '"Stop running it"' in js and '"Run it again"' in js  # in the row menu
+    assert 'title: "Not run and never counted"' in js  # the "off" badge
 
 
 # ---------------------------------------------------------------------------

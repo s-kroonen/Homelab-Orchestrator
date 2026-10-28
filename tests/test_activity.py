@@ -8,6 +8,7 @@ the ordering assertions exact.
 
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from typing import Any
@@ -257,25 +258,38 @@ def test_feed_respects_limit(app: Any, monkeypatch: pytest.MonkeyPatch) -> None:
 # -- pages -------------------------------------------------------------------
 
 
+def _initial(html: str) -> dict[str, Any]:
+    """The data a page embeds for its first paint."""
+    start = html.index('<script type="application/json" id="initial">') + len(
+        '<script type="application/json" id="initial">'
+    )
+    return json.loads(html[start : html.index("</script>", start)])
+
+
 def test_activity_page_renders_runs_with_steps(app: Any, monkeypatch: pytest.MonkeyPatch) -> None:
     with TestClient(app) as client:
         _register(client, monkeypatch)
         _seed()
         r = client.get("/activity")
         filtered = client.get("/activity", params={"service": "wiki"})
+        js = client.get("/static/activity.js").text
 
     assert r.status_code == 200
     assert "text/html" in r.headers["content-type"]
-    # The step list reuses maintenance.html's classes, so ✓/✗ come from the same CSS.
-    assert '<ol class="steps">' in r.text
-    assert '<li class="failed">node_online' in r.text
-    assert "waited_s=300" in r.text
-    assert "node eve1 did not come online" in r.text
-    assert "auth.invite.created" in r.text
-    assert "by maintenance-page" in r.text
+    # Painted from the server: the feed is in the page; static/activity.js draws it (steps in the
+    # run's drawer).
+    events = _initial(r.text)["events"]
+    run = next(e for e in events if e["type"] == "run" and e.get("error"))
+    assert run["error"] == "node eve1 did not come online"
+    failed = next(s for s in run["steps"] if s["status"] == "failed")
+    assert failed["name"] == "node_online" and failed["detail"]["waited_s"] == 300
+    assert any(e.get("action") == "auth.invite.created" for e in events)
+    assert any(e.get("actor") == "maintenance-page" for e in events)
+    assert "run-steps" in js and "/api/activity?" in js
 
-    assert "integrity_gate" in filtered.text
-    assert "node_online" not in filtered.text
+    names = {s["name"] for e in _initial(filtered.text)["events"] for s in e.get("steps") or []}
+    assert "integrity_gate" in names and "node_online" not in names
+    assert _initial(filtered.text)["filters"]["service"] == "wiki"
 
 
 def test_activity_page_offers_and_applies_group_filter(
@@ -287,10 +301,9 @@ def test_activity_page_offers_and_applies_group_filter(
         r = client.get("/activity")
         filtered = client.get("/activity", params={"group": "infra"})
 
-    assert 'name="group"' in r.text
-    assert '<option value="infra"' in r.text
-    assert "node_online" in filtered.text
-    assert "integrity_gate" not in filtered.text
+    assert "infra" in _initial(r.text)["options"]["groups"]
+    names = {s["name"] for e in _initial(filtered.text)["events"] for s in e.get("steps") or []}
+    assert "node_online" in names and "integrity_gate" not in names
 
 
 def test_dashboard_explains_an_unhealthy_badge(app: Any, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -298,12 +311,19 @@ def test_dashboard_explains_an_unhealthy_badge(app: Any, monkeypatch: pytest.Mon
         _register(client, monkeypatch)
         _seed()
         r = client.get("/")
+        view = client.get("/api/views/dashboard").json()
+        services = client.get("/static/objects.js").text
 
     assert r.status_code == 200
     assert 'href="/activity"' in r.text  # nav link
-    assert '<li class="failed">web-up' in r.text
-    assert "HTTP 502 from upstream" in r.text
-    assert 'href="/activity?service=media"' in r.text
+    # Needs attention says which probe failed and why.
+    [item] = [i for i in view["attention"] if i["slug"] == "media"]
+    assert (
+        item["kind"] == "failed"
+        and "web-up" in item["text"]
+        and "HTTP 502 from upstream" in item["text"]
+    )
+    assert '"/activity?service=" + encodeURIComponent(row.slug)' in services  # its activity
 
 
 def test_login_redirect_keeps_the_query_of_an_alert_link(app: Any) -> None:

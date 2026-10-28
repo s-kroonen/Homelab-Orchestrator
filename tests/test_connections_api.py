@@ -256,8 +256,11 @@ def test_cli_adds_lists_and_hides_secrets(client: TestClient) -> None:
 
 def test_the_page_renders_for_admins_only(client: TestClient) -> None:
     page = client.get("/infra/connections")
-    assert page.status_code == 200 and "Connections" in page.text and 'id="c-kinds"' in page.text
-    old = client.get("/connections", follow_redirects=False)  # it moved under Connectivity
+    assert page.status_code == 200 and "Connections" in page.text
+    assert 'id="initial"' in page.text and '"kinds": [' in page.text  # paints from the file
+    js = client.get("/static/connections.js").text
+    assert "function connDrawer" in js and '"/api/infra/overview"' in js
+    old = client.get("/connections", follow_redirects=False)
     assert old.status_code == 307 and old.headers["location"] == "/infra/connections"
     client.cookies.clear()
     r = client.get("/infra/connections", follow_redirects=False)

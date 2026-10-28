@@ -10,13 +10,11 @@ the connection gets - the OAuth part only proves the admin said yes.
 from __future__ import annotations
 
 import secrets
-from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, urlencode, urlsplit
 
 from fastapi import APIRouter, HTTPException, Request, status
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
-from fastapi.templating import Jinja2Templates
 from sqlmodel import Session
 
 from orchestrator.audit import log as audit
@@ -35,9 +33,10 @@ from orchestrator.mcp.scopes import (
 from orchestrator.mcp.store import OAuthError
 from orchestrator.web.auth import get_current_admin
 from orchestrator.web.deps import SessionDep, SettingsDep
+from orchestrator.web.templating import templates
 
 router = APIRouter(tags=["mcp-oauth"])
-_templates = Jinja2Templates(directory=str(Path(__file__).parent.parent / "templates"))
+_templates = templates
 
 #: Where Claude's own connectors call back from (both spellings; the host is shown to the admin).
 KNOWN_CALLBACK_HOSTS = {"claude.ai", "claude.com"}

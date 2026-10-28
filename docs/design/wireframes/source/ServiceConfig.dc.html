@@ -1,0 +1,167 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Service configuration</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#0d1015}
+a{color:#8fb3ff;text-decoration:none}a:hover{color:#b8d0ff}
+*{box-sizing:border-box}
+.pill{display:inline-flex;align-items:center;gap:6px;padding:3px 9px;border-radius:999px;font-size:12px;font-weight:600;white-space:nowrap}
+.ok{background:#11331f;color:#5fe08b}.warn{background:#3a2c10;color:#f0b44c}.fail{background:#3d1717;color:#ff8a82}.off{background:#232834;color:#b3bccb}.pending{background:#162a45;color:#8fb3ff}
+.btn{display:inline-flex;align-items:center;gap:6px;height:32px;padding:0 12px;border-radius:8px;border:1px solid #2c3340;background:#1a1f29;color:#e6e9ef;font:600 13px Inter,system-ui,sans-serif;cursor:pointer;white-space:nowrap}
+.btn.primary{background:#4f7fe0;border-color:#4f7fe0;color:#fff}.btn.ghost{background:transparent;border-color:transparent;color:#b3bccb}
+.mono{font-family:'JetBrains Mono',ui-monospace,monospace;font-size:12.5px}
+dt{color:#9aa4b2;font-size:12px}dd{margin:2px 0 10px}
+.field{display:flex;flex-direction:column;gap:6px}
+.field label{font-size:13px;font-weight:600}
+.input{height:36px;padding:0 12px;background:#0f131a;border:1px solid #2f3747;border-radius:8px;color:#e6e9ef;font:14px Inter,system-ui,sans-serif}
+.hint{font-size:12px;color:#9aa4b2}
+</style>
+</helmet>
+<div style="position: relative; display: flex; flex-wrap: wrap; min-height: 1180px; background: #0d1015; color: #e6e9ef; font-family: Inter, system-ui, sans-serif; font-size: 14px; line-height: 1.45">
+  <nav aria-label="Main" style="flex: 0 0 232px; background: #11151c; border-right: 1px solid #222833; padding: 20px 14px; display: flex; flex-direction: column; gap: 18px">
+    <div style="font-weight: 700; font-size: 15px; padding: 0 10px">homelab-orchestrator</div>
+    <sc-for list="{{nav}}" as="g" hint-placeholder-count="5">
+      <div style="display: flex; flex-direction: column; gap: 2px">
+        <div style="font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: #8a94a5; padding: 0 10px 4px">{{g.heading}}</div>
+        <sc-for list="{{g.items}}" as="it" hint-placeholder-count="3">
+          <a href="#" style="{{it.style}}">{{it.label}}</a>
+        </sc-for>
+      </div>
+    </sc-for>
+  </nav>
+  <div style="flex: 999 1 560px; min-width: 0; display: flex; flex-direction: column">
+    <header style="display: flex; flex-wrap: wrap; align-items: center; gap: 12px; padding: 12px 32px; border-bottom: 1px solid #222833">
+      <div style="font-size: 13px; color: #8a94a5"><a href="#" style="color: #8a94a5">Services</a> / <span style="color: #e6e9ef">NextCloud</span></div>
+      <span class="pill ok" style="margin-left: auto">● Live</span>
+      <button class="btn ghost" type="button">admin ▾</button>
+    </header>
+
+    <main style="padding: 24px 32px 48px; max-width: 1280px; width: 100%; display: flex; flex-direction: column; gap: 18px">
+      <div style="display: flex; flex-wrap: wrap; align-items: center; gap: 12px">
+        <div style="flex: 1 1 420px">
+          <div style="display: flex; align-items: center; gap: 10px">
+            <h1 style="margin: 0; font-size: 26px; font-weight: 700">NextCloud</h1>
+            <span class="pill fail">failed</span>
+          </div>
+        </div>
+        <button class="btn primary" type="button">Check now</button>
+        <button class="btn" type="button">Restart</button>
+        <button class="btn ghost" type="button" aria-label="More actions">⋯</button>
+      </div>
+      <div role="tablist" aria-label="Service sections" style="display: flex; gap: 4px; border-bottom: 1px solid #232a36">
+        <a role="tab" aria-selected="false" href="#" style="padding: 10px 14px; color: #b3bccb">Overview</a>
+        <a role="tab" aria-selected="true" href="#" style="padding: 10px 14px; color: #ffffff; font-weight: 600; box-shadow: inset 0 -2px 0 #4f7fe0">Configuration</a>
+        <a role="tab" aria-selected="false" href="#" style="padding: 10px 14px; color: #b3bccb">Related</a>
+        <a role="tab" aria-selected="false" href="#" style="padding: 10px 14px; color: #b3bccb">History</a>
+      </div>
+
+      <div style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px">
+        <sc-for list="{{cards}}" as="c" hint-placeholder-count="4">
+          <section style="background: #141922; border: 1px solid #232a36; border-radius: 12px; padding: 14px 16px">
+            <div style="display: flex; align-items: center; margin-bottom: 10px">
+              <h2 style="margin: 0; font-size: 15px">{{c.title}}</h2>
+              <button class="btn" type="button" style="margin-left: auto">Edit</button>
+            </div>
+            <dl style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 16px; margin: 0">
+              <sc-for list="{{c.rows}}" as="r" hint-placeholder-count="4">
+                <div><dt>{{r.k}}</dt><dd>{{r.v}}</dd></div>
+              </sc-for>
+            </dl>
+          </section>
+        </sc-for>
+      </div>
+
+      <section style="background: #141922; border: 1px solid #232a36; border-radius: 12px; padding: 14px 16px">
+        <div style="display: flex; align-items: center; margin-bottom: 8px">
+          <h2 style="margin: 0; font-size: 15px">Probes</h2>
+          <button class="btn" type="button" style="margin-left: auto">+ Add probe</button>
+        </div>
+        <sc-for list="{{probes}}" as="p" hint-placeholder-count="2">
+          <div style="{{p.style}}">
+            <strong style="flex: 0 0 90px">{{p.name}}</strong>
+            <span class="mono" style="flex: 1 1 260px; color: #b3bccb">{{p.target}}</span>
+            <span style="font-size: 12px; color: #9aa4b2">{{p.req}}</span>
+            <button class="btn ghost" type="button">Edit</button>
+          </div>
+        </sc-for>
+      </section>
+    </main>
+  </div>
+
+  <div aria-hidden="true" style="position: absolute; inset: 0; background: rgba(5, 7, 10, 0.55)"></div>
+  <aside role="dialog" aria-modal="true" aria-labelledby="dt" style="position: absolute; top: 0; right: 0; bottom: 0; width: 480px; max-width: 100%; background: #141922; border-left: 1px solid #2f3747; box-shadow: -16px 0 40px rgba(0,0,0,.4); display: flex; flex-direction: column">
+    <div style="display: flex; align-items: center; gap: 10px; padding: 18px 22px; border-bottom: 1px solid #232a36">
+      <div>
+        <div style="font-size: 12px; color: #9aa4b2">NextCloud · probe</div>
+        <h2 id="dt" style="margin: 0; font-size: 18px">Edit probe “https”</h2>
+      </div>
+      <button class="btn ghost" type="button" aria-label="Close" style="margin-left: auto">✕</button>
+    </div>
+    <form style="flex: 1; overflow: auto; padding: 18px 22px; display: flex; flex-direction: column; gap: 16px">
+      <div class="field"><label for="f1">Kind</label>
+        <select id="f1" class="input"><option>HTTP(S) request</option><option>TCP port</option><option>Ping</option><option>Docker container</option></select></div>
+      <div class="field"><label for="f2">URL</label>
+        <input id="f2" class="input mono" value="https://cloud.example.lan/status.php">
+        <span class="hint">Asked through the gateway, like a visitor would.</span></div>
+      <div class="field"><label for="f3">Expected status</label>
+        <input id="f3" class="input" value="200-29" style="border-color: #c4473f">
+        <span style="font-size: 12px; color: #ff8a82">Write a range like 200-399 or a list like 200,301.</span></div>
+      <div style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px">
+        <div class="field"><label for="f4">Timeout</label><input id="f4" class="input" value="10 s"></div>
+        <div class="field"><label for="f5">Fails before alert</label><input id="f5" class="input" value="2"></div>
+      </div>
+      <label style="display: flex; gap: 10px; align-items: flex-start"><input type="checkbox" checked style="margin-top: 3px"><span><strong>Required</strong><br><span class="hint">The service counts as failed when this probe fails.</span></span></label>
+      <div style="display: flex; flex-wrap: wrap; align-items: center; gap: 10px; padding: 12px; background: #0f131a; border: 1px solid #232a36; border-radius: 10px">
+        <button class="btn" type="button">Test this probe</button>
+        <span class="pill fail">502</span><span style="font-size: 13px; color: #b3bccb">Bad Gateway in 1.2 s</span>
+      </div>
+    </form>
+    <div style="display: flex; flex-wrap: wrap; align-items: center; gap: 10px; padding: 14px 22px; border-top: 1px solid #232a36">
+      <span class="hint" style="flex: 1 1 200px">Applies as soon as you save; services.yaml is written for you.</span>
+      <button class="btn ghost" type="button">Cancel</button>
+      <button class="btn primary" type="button">Save</button>
+    </div>
+  </aside>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":1180}}'>
+class Component extends DCLogic {
+  renderVals() {
+    const cur = 'Services';
+    const base = 'display:block;padding:6px 10px;border-radius:7px;font-size:14px;color:#c9d1dc';
+    const on = base + ';background:#1d2430;color:#ffffff;font-weight:600;box-shadow:inset 3px 0 0 #4f7fe0';
+    const groups = [
+      ['Overview', ['Dashboard', 'Map']],
+      ['Services', ['Services']],
+      ['Infrastructure', ['Nodes & guests', 'Proxy hosts', 'Containers', 'Backups']],
+      ['Activity', ['Activity', 'Traffic']],
+      ['Settings', ['Connections', 'Notifications', 'AI assistants', 'Admins & devices', 'System', 'Archive']],
+    ];
+    const row = 'display:flex;flex-wrap:wrap;align-items:center;gap:12px;padding:10px 12px;border-radius:8px';
+    return {
+      nav: groups.map(([heading, items]) => ({ heading, items: items.map((label) => ({ label, style: label === cur ? on : base })) })),
+      cards: [
+        { title: 'General', rows: [ { k: 'Name', v: 'NextCloud' }, { k: 'Slug', v: 'nextcloud' }, { k: 'Group', v: 'Media & cloud' }, { k: 'Watched', v: 'yes' } ] },
+        { title: 'Where it runs', rows: [ { k: 'Node', v: 'node-a' }, { k: 'Guest', v: 'VM 101' }, { k: 'Address', v: 'discovered (10.0.1.11)' }, { k: 'Depends on', v: 'gateway-vm' } ] },
+        { title: 'Wake and power', rows: [ { k: 'Wake on hit', v: 'no' }, { k: 'Controller', v: 'Proxmox guest' }, { k: 'Stop when idle', v: 'never' }, { k: 'Restart policy', v: 'restart once, then alert' } ] },
+        { title: 'Backup', rows: [ { k: 'Policy', v: 'daily-frequent' }, { k: 'Before backup', v: 'stop stack [collabora]' }, { k: 'Verify', v: 'after every backup' }, { k: 'Dump', v: 'postgres, daily' } ] },
+      ],
+      probes: [
+        { name: 'https', target: 'https://cloud.example.lan/status.php', req: 'required · expects 200-399', style: row + ';background:#1d2c47;box-shadow:inset 0 0 0 1px #3d64b3' },
+        { name: 'tcp', target: '10.0.1.11:443', req: 'optional', style: row },
+      ],
+    };
+  }
+}
+</script>
+</body>
+</html>

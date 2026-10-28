@@ -593,8 +593,8 @@ def test_service_detail_page_renders_for_admin(client: TestClient) -> None:
     r = client.get("/services/media")
     assert r.status_code == 200
     assert "Probes" in r.text
-    assert "http://10.0.0.5/health" in r.text  # probe config embedded for the editor
-    assert 'id="probe-editor"' in r.text
+    assert "http://10.0.0.5/health" in r.text  # probe config embedded for the drawer
+    assert "function probeDrawer" in client.get("/static/service.js").text
 
 
 def test_service_detail_page_404s_for_unknown_service(client: TestClient) -> None:
@@ -606,9 +606,10 @@ def test_dashboard_links_to_detail_and_offers_create_forms(client: TestClient) -
     _make_service(client, node["id"])
     r = client.get("/")
     assert r.status_code == 200
-    assert 'href="/services/media"' in r.text
-    assert 'id="new-svc-btn"' in r.text
-    assert 'href="/sources#proxmox"' in r.text  # nodes are imported from Proxmox, not typed in
+    assert 'id="new-service"' in r.text  # opens the service drawer
+    assert '"slug": "media"' in r.text  # at a glance, linking to its page
+    assert '"/services/" + enc(s.slug)' in client.get("/static/dashboard.js").text
+    assert 'href="/sources#proxmox"' in client.get("/nodes").text  # nodes are imported
 
 
 def test_service_group_round_trips_through_save_and_reset(client: TestClient) -> None:
@@ -627,24 +628,20 @@ def test_service_group_round_trips_through_save_and_reset(client: TestClient) ->
     assert client.get("/api/registry/services/other").json()["group"] == ""
 
 
-def test_dashboard_groups_services_into_collapsible_sections(client: TestClient) -> None:
+def test_dashboard_groups_services_at_a_glance(client: TestClient) -> None:
     node = _make_node(client)
     _make_service(client, node["id"], slug="media", group="entertainment")
     _make_service(client, node["id"], slug="cloud", group="entertainment")
     _make_service(client, node["id"], slug="gateway", group="")
 
-    r = client.get("/")
-    assert r.status_code == 200
-    # One <details class="group"> section per group, named groups before
-    # "Ungrouped", and every service still appears somewhere (never hidden).
-    assert '<span class="group-name">entertainment</span>' in r.text
-    assert '<span class="group-name">Ungrouped</span>' in r.text
-    entertainment_pos = r.text.index("entertainment</span>")
-    ungrouped_pos = r.text.index("Ungrouped</span>")
-    assert entertainment_pos < ungrouped_pos
-    assert 'href="/services/media"' in r.text
-    assert 'href="/services/gateway"' in r.text
-    assert 'href="/activity?group=entertainment"' in r.text
+    glance = client.get("/api/views/dashboard").json()["glance"]
+    groups = {g["name"]: [s["slug"] for s in g["services"]] for g in glance}
+    # one box per group; a service without a group sits under its node - never hidden
+    assert groups["entertainment"] == ["cloud", "media"]
+    assert groups[node["name"]] == ["gateway"]
+    # the Services list groups the same way on demand, and filters activity per service
+    js = client.get("/static/services.js").text
+    assert 'key: "group", label: "Group"' in js
 
 
 def test_service_detail_page_has_group_field(client: TestClient) -> None:
@@ -652,5 +649,5 @@ def test_service_detail_page_has_group_field(client: TestClient) -> None:
     _make_service(client, node["id"], group="media")
     r = client.get("/services/media")
     assert r.status_code == 200
-    assert 'id="f-group"' in r.text
     assert '"group": "media"' in r.text
+    assert 'key: "group", label: "Group"' in client.get("/static/service.js").text

@@ -188,7 +188,11 @@ def test_api_and_page(settings: Settings, monkeypatch: pytest.MonkeyPatch) -> No
         assert client.get("/api/system/info").status_code == 401  # admin only
         _login(client, monkeypatch)
         page = client.get("/system")
-        assert page.status_code == 200 and "Back up now" in page.text
+        assert page.status_code == 200 and 'id="update-kv"' in page.text
+        # painted from the server: the info and the time zone are in the page
+        assert '"schema":' in page.text and '"timezone":' in page.text
+        # the orchestrator's own backups are on Backups -> Orchestrator
+        assert "/backup-policies?tab=orchestrator" in page.text
         info = client.get("/api/system/info").json()
         assert info["version"] and "schema" in info
 

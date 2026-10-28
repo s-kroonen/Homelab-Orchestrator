@@ -29,8 +29,8 @@ pre-shared secret. If you miss that window, see **Break-glass** below.
 
 ## Invites: adding more admins
 
-Any logged-in admin can create one from the dashboard ("Invite another
-admin"), or via `POST /api/auth/invites`. It returns a one-time URL:
+Any logged-in admin can create one on Settings → Admins & devices ("Create
+invite link"), or via `POST /api/auth/invites`. It returns a one-time URL:
 
 ```
 {WEBAUTHN_ORIGIN}/login?invite=<token>
@@ -43,6 +43,10 @@ register a passkey — no CLI access needed on their end. The link:
   moves from `pending` to `consumed` the moment registration completes, and a
   consumed or expired token is rejected with a 403.
 * **expires** after `INVITE_TTL_HOURS` (default 24, see `.env`).
+* stays copyable while it is open: the Invites list (`GET /api/auth/invites`,
+  admins only) carries the link of a pending, unexpired invite and drops it
+  once the invite is used or expires. Any admin can make a new link anyway, so
+  this shows nothing an admin could not already get.
 * reuses the existing generic `PendingApproval` table (the same one phase 8's
   revert/greenlight approvals will use) rather than a dedicated table — see
   the `ApprovalKind.ADMIN_INVITE` member in `domain/enums.py`.
@@ -50,10 +54,12 @@ register a passkey — no CLI access needed on their end. The link:
 ## Adding a second device to your own account
 
 Passkeys are per-device. To register a second one (a phone, a second laptop,
-a hardware key) for an account you're *already* logged in as, use "My
-devices" on the dashboard, or `POST /api/auth/credentials/add/begin` /
+a hardware key) for an account you're *already* logged in as, use "Add this
+device" on Settings → Admins & devices, or `POST /api/auth/credentials/add/begin` /
 `/complete` directly — this does not consume or need an invite, since you're
-already proving who you are via your current session.
+already proving who you are via your current session. The list marks the
+passkey this browser signed in (or was added) with as "this device"; the
+session remembers its id for that, and for nothing else.
 
 ## Sessions
 

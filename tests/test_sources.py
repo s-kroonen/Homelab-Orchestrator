@@ -297,10 +297,12 @@ def test_the_page_renders_and_the_old_pages_point_at_it(client: TestClient) -> N
         and "Data sources" in page.text
         and 'data-tab="traefik"' in page.text
     )
-    assert 'href="/sources"' in client.get("/").text  # in the navigation
-    for old in ("/proxy-hosts", "/portainer"):
-        text = client.get(old).text
-        assert "/sources#" in text
+    # Not a page of its own in the navigation any more: its parts are reached from the list
+    # they fill (Import from Proxmox on Nodes & guests, the Import tab on Proxy hosts).
+    assert 'href="/sources#proxmox"' in client.get("/nodes").text
+    assert "/sources#" in client.get("/proxy-hosts").text
+    # Containers links a stack to a service through Data sources (its script builds the link)
+    assert "/sources#portainer" in client.get("/static/portainer.js").text
     assert "resync-btn" not in client.get("/proxy-hosts").text
     assert 'id="adopt"' not in client.get("/portainer").text
 
@@ -315,7 +317,7 @@ def test_format_has_its_own_page(client: TestClient) -> None:
         assert needle in page.text
     sources = client.get("/sources").text
     assert 'href="/sources/format"' in sources and 'id="fmt-run"' not in sources
-    assert 'href="/sources/format"' in client.get("/").text  # in the navigation
+    assert 'href="/sources/format"' in client.get("/proxy-hosts").text  # a tab of Proxy hosts
 
 
 def test_cli_formats_routes_and_pulls(tm: Any) -> None:

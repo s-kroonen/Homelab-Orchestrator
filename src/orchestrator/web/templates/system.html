@@ -1,402 +1,53 @@
 {% extends "base.html" %}
 {% block title %}homelab-orchestrator — system{% endblock %}
+{% block crumbs %}Settings / <span class="here">System</span>{% endblock %}
 {% block content %}
-  <section>
-    <h2>This orchestrator</h2>
-    <div class="banner warn" id="migrate-banner" hidden>
-      <strong>The database needs upgrading.</strong>
-      <span id="migrate-text"></span>
-      <button id="migrate-btn">Back up and upgrade</button>
-    </div>
-    <div class="banner warn" id="restore-banner" hidden>
-      <strong>A restore is staged.</strong>
-      <span id="restore-text"></span>
-      <button class="danger" id="restore-apply-btn">Restart and restore</button>
-      <button class="secondary" id="restore-cancel-btn">Cancel</button>
-    </div>
-    <dl class="kv" id="info-kv"><div><dt>Loading…</dt><dd></dd></div></dl>
-    <p class="msg" id="info-msg"></p>
-  </section>
+<div class="page-header">
+  <h1>System</h1>
+  <div class="actions"><button type="button" class="secondary" id="restart-btn" title="Stops the process; Docker's restart policy starts it again">Restart…</button></div>
+</div>
+<p class="page-sub">This orchestrator itself: its version and updates, the time zone schedules run in, restarting it. Its own backups are on <a href="/backup-policies?tab=orchestrator">Backups → Orchestrator</a>.</p>
 
-  <section>
-    <h2>Time and schedules</h2>
-    <p class="msg">
-      Times on every page are shown in this timezone, and backup schedules (the cron times) run in
-      it too: <code>0 3 * * *</code> means 03:00 here. Changing it re-registers the schedules.
-    </p>
-    <div class="row">
-      <input id="tz-input" list="tz-list" size="28" placeholder="Europe/Amsterdam" autocomplete="off">
-      <datalist id="tz-list"></datalist>
-      <button id="tz-save">Save</button>
-      <button class="secondary" id="tz-browser" type="button">Use this browser's</button>
-      <button class="secondary" id="tz-default" type="button">Back to default</button>
-      <span class="msg" id="tz-msg"></span>
-    </div>
-    <p class="msg" id="tz-now"></p>
-  </section>
+<div id="banners"></div>
 
-  <section>
-    <h2>Update</h2>
-    <p class="msg" id="update-text">Not checked yet.</p>
-    <div class="row">
-      <button class="secondary" id="update-check-btn">Check for a newer build</button>
-      <button id="update-btn" hidden>Back up and update</button>
-      <a class="msg" id="update-link" href="#" target="_blank" rel="noopener" hidden>what changed</a>
-    </div>
-    <pre class="manual" id="update-manual" hidden></pre>
-    <p class="msg" id="update-msg"></p>
-    <p class="msg" id="updater-state"></p>
-
-    <div id="update-progress" class="progress" hidden>
-      <div class="banner" id="update-banner"></div>
-      <ol class="steps" id="update-steps"></ol>
-      <div class="row">
-        <button class="secondary small" id="update-log-btn" type="button">Show the updater's log</button>
-        <button class="secondary small" id="rollback-btn" type="button" hidden
-          title="Starts the previous build again and restores the backup taken before the update">Go back to the previous build</button>
+<div class="grid-2">
+  <section class="card col-main" aria-labelledby="h-update" style="flex-basis: 460px">
+    <div class="card-head"><h2 id="h-update">Update</h2><span id="update-pill"></span><span style="flex: 1"></span><span class="age" id="update-age"></span></div>
+    <dl class="kv" id="update-kv"></dl>
+    <div class="sys-actions" id="update-actions"></div>
+    <pre class="sys-pre" id="update-manual" hidden></pre>
+    <div id="update-progress" hidden>
+      <div class="sys-run" id="update-banner"></div>
+      <ol class="sys-steps" id="update-steps"></ol>
+      <div class="sys-actions">
+        <button class="secondary small" id="rollback-btn" type="button" hidden title="Starts the previous build again and restores the backup taken before the update">Go back to the previous build</button>
       </div>
-      <pre class="manual" id="update-log" hidden></pre>
     </div>
+    <pre class="sys-pre" id="update-log" hidden></pre>
   </section>
 
-  <section>
-    <h2>Backups</h2>
-    <p class="msg">
-      The database and <code>services.yaml</code>, as one file. A backup is taken automatically before
-      a schema upgrade, before an update and before a restore, and on a schedule. The
-      <code>.env</code> file is not included: it lives on the host and holds secrets.
-    </p>
-    <div class="row">
-      <input id="backup-note" placeholder="note (optional)" size="28">
-      <button id="backup-btn">Back up now</button>
-      <span class="msg" id="backup-msg"></span>
+  <section class="card col-main" aria-labelledby="h-time" style="flex-basis: 380px">
+    <div class="card-head"><h2 id="h-time">Time and schedules</h2></div>
+    <p class="faint" style="margin: 0 0 10px; font-size: 13px">Times on every page are shown in this zone, and backup schedules run in it: <code>0 3 * * *</code> means 03:00 here. Changing it re-registers the schedules.</p>
+    <div class="sys-actions">
+      <input id="tz-input" list="tz-list" placeholder="Europe/Amsterdam" autocomplete="off" aria-label="Time zone" style="flex: 1 1 200px">
+      <datalist id="tz-list"></datalist>
+      <button type="button" id="tz-save">Save</button>
     </div>
-    <div class="table-scroll">
-    <table>
-      <thead><tr><th>Created</th><th>Why</th><th>Size</th><th>Version</th><th>Note</th><th></th></tr></thead>
-      <tbody id="backups-body"><tr><td colspan="6">Loading…</td></tr></tbody>
-    </table>
+    <div class="sys-actions">
+      <button class="secondary small" id="tz-browser" type="button">Use this browser's</button>
+      <button class="ghost small" id="tz-default" type="button">Back to default</button>
     </div>
+    <p class="faint" id="tz-now" style="margin: 8px 0 0; font-size: 13px"></p>
   </section>
+</div>
 
-  <section>
-    <h2>Maintenance</h2>
-    <div class="row">
-      <button class="secondary" id="restart-btn" title="Stops the process; Docker's restart policy starts it again">Restart the orchestrator</button>
-      <a class="btn secondary" href="/infra">Connectivity checks</a>
-      <span class="msg" id="restart-msg"></span>
-    </div>
-  </section>
-{% endblock %}
-{% block extra_head %}
-<style>
-  dl.kv { display: grid; grid-template-columns: max-content 1fr; gap: 0.25rem 1.25rem; font-size: 0.85rem; margin: 0 0 1rem; }
-  dl.kv > div { display: contents; }
-  dl.kv dt { color: #9aa4b2; }
-  dl.kv dd { margin: 0; overflow-wrap: anywhere; }
-  .banner { padding: 0.6rem 0.8rem; border-radius: 0.4rem; margin-bottom: 0.9rem; font-size: 0.85rem; display: flex; gap: 0.75rem; align-items: center; flex-wrap: wrap; }
-  .banner.warn { background: #3b2e14; border: 1px solid #e5a63e; }
-  .progress { margin-top: 0.9rem; }
-  .banner.ok { background: #113b23; border: 1px solid #3ecf6d; }
-  .banner.bad { background: #3b1414; border: 1px solid #e5534b; }
-  .banner.busy { background: #142a3b; border: 1px solid #5ba8e5; }
-  ol.steps { list-style: none; padding: 0; margin: 0 0 0.7rem; font-size: 0.85rem; }
-  ol.steps li { padding: 0.15rem 0; }
-  ol.steps li::before { display: inline-block; width: 1.3rem; }
-  ol.steps li.OK::before { content: "✓"; color: #3ecf6d; }
-  ol.steps li.FAIL::before { content: "✗"; color: #e5534b; }
-  ol.steps li.SKIP::before { content: "–"; color: #9aa4b2; }
-  ol.steps li.WARN::before { content: "!"; color: #e5a63e; font-weight: 700; }
-  ol.steps .detail { color: #9aa4b2; }
-  pre.manual { background: #11151d; padding: 0.6rem 0.8rem; border-radius: 0.4rem; font-size: 0.8rem; overflow-x: auto; }
-</style>
+<section class="card" aria-labelledby="h-this">
+  <div class="card-head"><h2 id="h-this">This orchestrator</h2><span id="mode-pill"></span><span class="faint" id="mode-text" style="font-size: 13px"></span></div>
+  <dl class="kv kv-2" id="info-kv"></dl>
+</section>
+<script type="application/json" id="initial">{{ initial | tojson }}</script>
 {% endblock %}
 {% block scripts %}
-<script>
-  const $ = (id) => document.getElementById(id);
-  function setMsg(id, text, kind) { const el = $(id); el.textContent = text; el.className = "msg" + (kind ? " " + kind : ""); }
-  function bytes(n) {
-    if (n == null) return "—";
-    const u = ["B", "KB", "MB", "GB"]; let i = 0;
-    while (n >= 1024 && i < u.length - 1) { n /= 1024; i++; }
-    return (i ? n.toFixed(1) : n) + " " + u[i];
-  }
-  function duration(s) {
-    const d = Math.floor(s / 86400), h = Math.floor(s % 86400 / 3600), m = Math.floor(s % 3600 / 60);
-    return (d ? d + "d " : "") + (h || d ? h + "h " : "") + m + "m";
-  }
-  function when(iso) { return fmtTime(iso); }
-
-  async function loadTimezone() {
-    try {
-      const [d, zones] = await Promise.all([
-        apiFetch("GET", "/api/display", undefined, { suppressToast: true }),
-        apiFetch("GET", "/api/display/timezones", undefined, { suppressToast: true }),
-      ]);
-      $("tz-list").replaceChildren(...zones.map((z) => { const o = document.createElement("option"); o.value = z; return o; }));
-      $("tz-input").value = d.timezone;
-      $("tz-input").dataset.default = d.default;
-      showNow(d.timezone);
-    } catch (err) { setMsg("tz-msg", err.message, "error"); }
-  }
-  function showNow(zone) {
-    $("tz-now").textContent = "It is now " + fmtTime(new Date().toISOString()) + " in " + zone + ".";
-  }
-  async function saveTimezone(value) {
-    try {
-      const d = await apiFetch("PUT", "/api/display", { timezone: value });
-      OrchTime.set(d.timezone);
-      $("tz-input").value = d.timezone;
-      showNow(d.timezone);
-      setMsg("tz-msg", "Saved. Backup schedules now run in " + d.timezone + ".", "ok");
-    } catch (err) { setMsg("tz-msg", err.message, "error"); }
-  }
-  $("tz-save").addEventListener("click", () => saveTimezone($("tz-input").value.trim()));
-  $("tz-browser").addEventListener("click", () => {
-    $("tz-input").value = Intl.DateTimeFormat().resolvedOptions().timeZone;
-  });
-  $("tz-default").addEventListener("click", () => saveTimezone(""));
-  loadTimezone();
-
-  // After a restart/update: wait for the service to stop answering, then answer again.
-  async function waitForRestart(msgId) {
-    setMsg(msgId, "Restarting… this page reloads when it is back.", "");
-    let sawDown = false;
-    const started = Date.now();
-    while (Date.now() - started < 240000) {
-      await new Promise((r) => setTimeout(r, 2000));
-      try {
-        const r = await fetch("/healthz", { cache: "no-store" });
-        if (r.ok && (sawDown || Date.now() - started > 15000)) { location.reload(); return; }
-      } catch (_e) { sawDown = true; }
-    }
-    setMsg(msgId, "It has not come back after 4 minutes - check the container on the host.", "error");
-  }
-
-  async function loadInfo() {
-    let i;
-    try { i = await apiFetch("GET", "/api/system/info", undefined, { suppressToast: true }); }
-    catch (err) { setMsg("info-msg", err.message, "error"); return; }
-    const rows = [
-      ["Version", i.version + (i.git_sha ? " (" + i.git_sha.slice(0, 7) + ")" : "")],
-      ["Image", i.image ? i.image : "not reported (set ORCHESTRATOR_IMAGE in .env)"],
-      ["Uptime", duration(i.uptime_s)],
-      ["Mode", i.dry_run ? "DRY RUN (nothing is changed on real systems)" : "live"],
-      ["Database", i.database + " (" + bytes(i.database_bytes) + ")"],
-      ["Schema", (i.schema.current || "none") + (i.schema.pending ? "  ->  needs " + i.schema.head : "  (up to date)")],
-      ["Registry", i.registry + (i.registry_exists ? "" : "  (missing)")],
-      ["Self-backups", i.self_backup.enabled ? "every " + i.self_backup.interval_hours + "h, keep " + i.self_backup.keep : "off"],
-      ["Runtime", "Python " + i.python + ", " + i.platform],
-    ];
-    $("info-kv").replaceChildren(...rows.map(([k, v]) => {
-      const d = document.createElement("div");
-      const dt = document.createElement("dt"); dt.textContent = k;
-      const dd = document.createElement("dd"); dd.textContent = v;
-      d.append(dt, dd); return d;
-    }));
-    $("migrate-banner").hidden = !i.schema.pending;
-    $("migrate-text").textContent = i.schema.pending
-      ? `It is on ${i.schema.current || "no revision"}; this version needs ${i.schema.head}. ` +
-        (i.run_migrations_on_start ? "It upgrades by itself at the next start." : "RUN_MIGRATIONS_ON_START is off, so do it here.")
-      : "";
-    const p = i.pending_restore;
-    $("restore-banner").hidden = !p;
-    if (p) $("restore-text").textContent = `Restoring ${p.backup} replaces the database` + (p.has_registry ? " and services.yaml" : "") + " when the orchestrator restarts. What is there now is backed up first.";
-  }
-
-  async function loadBackups() {
-    const body = $("backups-body");
-    let list;
-    try { list = await apiFetch("GET", "/api/system/backups", undefined, { suppressToast: true }); }
-    catch (err) { body.innerHTML = ""; const tr = document.createElement("tr"); const td = document.createElement("td"); td.colSpan = 6; td.textContent = err.message; tr.append(td); body.append(tr); return; }
-    body.innerHTML = "";
-    if (!list.length) { body.innerHTML = '<tr><td colspan="6">No backups yet.</td></tr>'; return; }
-    for (const b of list) {
-      const tr = document.createElement("tr");
-      for (const text of [when(b.created_at), b.reason || "—", bytes(b.size_bytes), (b.version || "—") + (b.git_sha ? " " + b.git_sha.slice(0, 7) : ""), b.note || ""]) {
-        const td = document.createElement("td"); td.textContent = text; tr.append(td);
-      }
-      const act = document.createElement("td");
-      const dl = document.createElement("a");
-      dl.className = "btn secondary small"; dl.textContent = "Download";
-      dl.href = "/api/system/backups/" + encodeURIComponent(b.name) + "/download";
-      const restore = document.createElement("button");
-      restore.className = "secondary small"; restore.textContent = "Restore";
-      restore.addEventListener("click", async () => {
-        if (!confirm(`Restore ${b.name}?\n\nIt replaces the database${b.has_registry ? " and services.yaml" : ""} the next time the orchestrator restarts. Anything newer than this backup is lost (a backup of the current state is taken first).`)) return;
-        try {
-          await apiFetch("POST", "/api/system/backups/" + encodeURIComponent(b.name) + "/restore", undefined, { suppressToast: true });
-          setMsg("backup-msg", "Restore staged. Use Restart and restore at the top.", "ok");
-          loadInfo();
-        } catch (err) { setMsg("backup-msg", err.message, "error"); }
-      });
-      const del = document.createElement("button");
-      del.className = "danger small"; del.textContent = "Delete";
-      del.addEventListener("click", async () => {
-        if (!confirm(`Delete ${b.name}?`)) return;
-        try { await apiFetch("DELETE", "/api/system/backups/" + encodeURIComponent(b.name), undefined, { suppressToast: true }); loadBackups(); }
-        catch (err) { setMsg("backup-msg", err.message, "error"); }
-      });
-      act.append(dl, " ", restore, " ", del);
-      tr.append(act);
-      body.append(tr);
-    }
-  }
-
-  $("backup-btn").addEventListener("click", async () => {
-    setMsg("backup-msg", "Backing up…", "");
-    try {
-      const b = await apiFetch("POST", "/api/system/backups", { note: $("backup-note").value }, { suppressToast: true });
-      $("backup-note").value = "";
-      setMsg("backup-msg", `Saved ${b.name} (${bytes(b.size_bytes)}).`, "ok");
-      loadBackups();
-    } catch (err) { setMsg("backup-msg", err.message, "error"); }
-  });
-
-  $("migrate-btn").addEventListener("click", async () => {
-    try {
-      const r = await apiFetch("POST", "/api/system/migrate", undefined, { suppressToast: true });
-      setMsg("info-msg", r.message + (r.backup ? " Backup: " + r.backup : ""), "ok");
-      loadInfo(); loadBackups();
-    } catch (err) { setMsg("info-msg", err.message, "error"); }
-  });
-
-  async function restart(msgId) {
-    try { await apiFetch("POST", "/api/system/restart", undefined, { suppressToast: true }); }
-    catch (err) { setMsg(msgId, err.message, "error"); return; }
-    waitForRestart(msgId);
-  }
-  $("restart-btn").addEventListener("click", () => {
-    if (confirm("Restart the orchestrator now? Pages and wakes in flight are interrupted for a few seconds.")) restart("restart-msg");
-  });
-  $("restore-apply-btn").addEventListener("click", () => {
-    if (confirm("Restart now and apply the staged restore?")) restart("info-msg");
-  });
-  $("restore-cancel-btn").addEventListener("click", async () => {
-    try { await apiFetch("DELETE", "/api/system/restore", undefined, { suppressToast: true }); loadInfo(); }
-    catch (err) { setMsg("info-msg", err.message, "error"); }
-  });
-
-  let updateInfo = null;
-  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-  const FINISHED = ["succeeded", "rolled_back", "failed"];
-  let following = null;
-
-  function renderRun(st) {
-    const box = $("update-progress");
-    if (!st) { box.hidden = true; return; }
-    box.hidden = false;
-    const b = $("update-banner");
-    const running = st.state === "running";
-    b.className = "banner " + (running ? "busy" : st.state === "succeeded" ? "ok" : "bad");
-    const what = st.action === "rollback" ? "Rollback" : "Update";
-    const head = running ? what + " in progress - " + (st.step || "starting")
-      : st.state === "succeeded" ? what + " done: " + st.message
-      : st.state === "rolled_back" ? what + " FAILED, the previous version was put back: " + st.reason
-      : what + " FAILED: " + st.message + (st.reason ? " (" + st.reason + ")" : "");
-    b.textContent = head + (st.finished_at ? "  [" + when(st.finished_at) + "]" : "");
-    $("update-steps").replaceChildren(...(st.steps || []).map((s) => {
-      const li = document.createElement("li"); li.className = s.result;
-      li.append(document.createTextNode(s.name.replace(/_/g, " ")));
-      if (s.detail) { const d = document.createElement("span"); d.className = "detail"; d.textContent = "  " + s.detail; li.append(d); }
-      return li;
-    }));
-    $("rollback-btn").hidden = !(FINISHED.includes(st.state) && st.action === "update" && st.state === "succeeded" && st.from_image !== st.to_image);
-  }
-
-  // Follow a run to its end. The orchestrator restarts in the middle, so failed polls are
-  // expected: keep going until the updater's own status says it is over.
-  async function follow(requestId) {
-    if (following) return;
-    following = requestId;
-    const started = Date.now();
-    let sawDown = false;
-    while (Date.now() - started < 25 * 60 * 1000) {
-      await sleep(2000);
-      let o;
-      try { o = await apiFetch("GET", "/api/system/update/status", undefined, { suppressToast: true }); }
-      catch (_e) { sawDown = true; setMsg("update-msg", "The orchestrator is restarting…", ""); continue; }
-      const st = o.status;
-      if (st && (!requestId || st.id === requestId)) {
-        renderRun(st);
-        if (FINISHED.includes(st.state)) {
-          following = null;
-          setMsg("update-msg", "", "");
-          if (st.state === "succeeded" && st.from_image !== st.to_image) {
-            setMsg("update-msg", "Reloading with the new version…", "ok");
-            await sleep(2500); location.reload();
-          }
-          return;
-        }
-      }
-    }
-    following = null;
-    setMsg("update-msg", "The updater has not reported back in 25 minutes - check it on the Docker host.", "error");
-  }
-
-  async function loadUpdaterState() {
-    let o;
-    try { o = await apiFetch("GET", "/api/system/update/status", undefined, { suppressToast: true }); }
-    catch (_e) { return; }
-    $("updater-state").textContent = o.online
-      ? "Updater: running - it checks that the new version comes up and puts the old one back if not."
-      : "Updater: not running. Install it with  sh scripts/install.sh  in the project directory (or the one-line install in docs/system.md) for one-click updates with automatic rollback.";
-    if (o.status) renderRun(o.status);
-    if (o.running && o.status) follow(o.status.id);
-  }
-
-  async function checkUpdate(refresh) {
-    setMsg("update-msg", "", "");
-    $("update-text").textContent = "Asking GitHub…";
-    try { updateInfo = await apiFetch("GET", "/api/system/update" + (refresh ? "?refresh=true" : ""), undefined, { suppressToast: true }); }
-    catch (err) { $("update-text").textContent = err.message; return; }
-    $("update-text").textContent = updateInfo.message;
-    $("update-link").hidden = !updateInfo.url;
-    if (updateInfo.url) $("update-link").href = updateInfo.url;
-    $("update-btn").hidden = !updateInfo.configured;
-    $("update-btn").className = updateInfo.available ? "" : "secondary";
-    $("update-btn").textContent = updateInfo.available ? "Back up and update" : "Back up and update anyway";
-    const manual = $("update-manual");
-    manual.hidden = updateInfo.configured;
-    manual.textContent = updateInfo.configured ? "" :
-      "Updating from this page is not set up (see docs/system.md). On the Docker host:\n\n  " + updateInfo.manual_steps.join("\n  ");
-  }
-  $("update-check-btn").addEventListener("click", () => checkUpdate(true));
-  $("update-btn").addEventListener("click", async () => {
-    const safe = updateInfo && updateInfo.method === "updater"
-      ? "Take a backup, then update? If the new version does not come up healthy, the old one is put back."
-      : "Take a backup, then update and restart the orchestrator?";
-    if (!confirm(safe)) return;
-    setMsg("update-msg", "Backing up and starting the update…", "");
-    let r;
-    try { r = await apiFetch("POST", "/api/system/update", undefined, { suppressToast: true }); }
-    catch (err) {
-      // The container may be replaced mid-request: that is the update working.
-      waitForRestart("update-msg"); return;
-    }
-    if (!r.ran || !r.ok) {
-      setMsg("update-msg", r.message + (r.output ? " " + r.output : ""), "error");
-      return;
-    }
-    if (r.method === "updater") { setMsg("update-msg", r.message, ""); follow(r.request_id); return; }
-    waitForRestart("update-msg");
-  });
-  $("rollback-btn").addEventListener("click", async () => {
-    if (!confirm("Go back to the previous build and restore the data backup taken before the update? Changes made since the update are lost (a backup of the current data is taken first).")) return;
-    try {
-      const r = await apiFetch("POST", "/api/system/update/rollback", {}, { suppressToast: true });
-      setMsg("update-msg", r.message + " Safety backup: " + r.safety_backup, "");
-      follow(r.request_id);
-    } catch (err) { setMsg("update-msg", err.message, "error"); }
-  });
-  $("update-log-btn").addEventListener("click", async () => {
-    const pre = $("update-log");
-    if (!pre.hidden) { pre.hidden = true; return; }
-    try { pre.textContent = (await apiFetch("GET", "/api/system/update/log", undefined, { suppressToast: true })).log || "(empty)"; }
-    catch (err) { pre.textContent = err.message; }
-    pre.hidden = false;
-  });
-
-  loadInfo(); loadBackups(); checkUpdate(false); loadUpdaterState();
-</script>
+<script src="{{ asset('system.js') }}"></script>
 {% endblock %}

@@ -9,12 +9,10 @@ change is audited (the fields that changed, never their values).
 
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import HTMLResponse, PlainTextResponse, RedirectResponse
-from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, Field
 from sqlmodel import Session, select
 
@@ -28,6 +26,7 @@ from orchestrator.connections.store import path_for
 from orchestrator.db.models import Service
 from orchestrator.web.auth import CurrentAdmin, get_current_admin, login_redirect, require_admin
 from orchestrator.web.deps import AdaptersDep, SessionDep, SettingsDep
+from orchestrator.web.templating import templates
 
 api = APIRouter(
     prefix="/api/connections", tags=["connections"], dependencies=[Depends(require_admin)]
@@ -37,7 +36,7 @@ router = APIRouter()
 router.include_router(api)
 router.include_router(pages)
 
-_templates = Jinja2Templates(directory=str(Path(__file__).parent.parent / "templates"))
+_templates = templates
 
 
 class ConnectionIn(BaseModel):
@@ -134,18 +133,20 @@ def _view(settings: Settings) -> dict[str, Any]:
 
 @pages.get("/connections", response_model=None)
 async def connections_page_moved() -> RedirectResponse:
-    """The Connections page is a tab of Connectivity now."""
+    """The Connections page lives under Settings, at /infra/connections."""
     return RedirectResponse("/infra/connections", status.HTTP_307_TEMPORARY_REDIRECT)
 
 
 @pages.get("/infra/connections", response_model=None)
 async def connections_page(
-    request: Request, session: SessionDep
+    request: Request, session: SessionDep, settings: SettingsDep
 ) -> HTMLResponse | RedirectResponse:
     admin = get_current_admin(request, session)
     if admin is None:
         return login_redirect(request)
-    return _templates.TemplateResponse(request, "connections.html", {"admin": admin})
+    return _templates.TemplateResponse(
+        request, "connections.html", {"admin": admin, "initial": _view(settings)}
+    )
 
 
 @pages.get("/infra/connections/{ident}", response_model=None)

@@ -9,8 +9,8 @@ Prometheus or Grafana involved.
 
 ## Primary source: Traefik's access log, through Traefik Manager
 
-`/traffic` (and `/traffic/geo`, see [geoip_traffic.md](geoip_traffic.md))
-are fed by **one** ingestion pipeline: `AccessLogCollector`
+`/traffic` (its charts, and its countries, see
+[geoip_traffic.md](geoip_traffic.md)) is fed by **one** ingestion pipeline: `AccessLogCollector`
 (`orchestrator/scheduler/access_log_collector.py`) tails Traefik's access log
 through Traefik Manager's `GET /api/traefik/logs?lines=N` every
 `ACCESS_LOG_POLL_INTERVAL_S`, dedupes it against a persisted cursor, attributes
@@ -115,21 +115,26 @@ when nothing in a non-empty tail parses, and when nothing matches.
 
 ## The `/traffic` page
 
-- **Time controls** (shared with `/traffic/geo`, `static/timecontrols.js`):
+- **Service select** next to the time controls: scopes the whole page
+  (tiles, charts, table, countries) to one service (`?slug=`).
+- **Time controls** (`static/timecontrols.js`):
   range (last 15 m / 1 h / 6 h / 24 h / 7 d / 14 d), auto-refresh
   (off / 10 s / 30 s / 1 m / 5 m), a ↻ button and "updated Xs ago". The state
   lives in the URL (`?range=1h&refresh=30s`) so reloads and shared links keep
   it; the browser remembers your last choice for bare visits. Refreshing
   re-fetches JSON and redraws in place (never a page reload) and pauses
   while the tab is hidden.
-- **Stat tiles**: requests, 4xx, 5xx (count and share), average latency.
+- **Stat tiles**: requests, server errors (5xx), average latency (and max),
+  visitors (distinct client addresses, with GeoIP on), client errors (4xx).
 - **Requests by status** — stacked columns per bucket, 2xx (blue) / 3xx
   (aqua) / 4xx (yellow) / 5xx (magenta), with the range totals in the legend.
 - **Latency** — average and maximum per bucket (gaps where nothing was timed).
 - Hover (or focus + arrow keys) shows the bucket's time span and values.
 - **By service** — every proxy host with hits, 4xx/5xx (count + rate),
   avg/max latency and a hits sparkline. Click a row to scope the charts to
-  that service (`?slug=`); click it again or the chip's × to clear.
+  that service (`?slug=`); click it again, or pick "All services", to clear.
+- **Countries** and **Top client addresses** beside the table, with
+  `GEOIP_ENABLED` on (see [geoip_traffic.md](geoip_traffic.md)).
 
 Bucket size follows the range: ≤ 1 h → 1 min, 6 h → 5 min, 24 h → 15 min,
 7 d / 14 d → 1 h. Empty buckets are zero-filled.

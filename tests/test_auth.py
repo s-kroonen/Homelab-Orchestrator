@@ -293,3 +293,49 @@ def test_invite_listing_reflects_consumption(app: Any, monkeypatch: pytest.Monke
         after = client.get("/api/auth/invites").json()
     assert after[0]["status"] == ApprovalStatus.CONSUMED.value
     assert after[0]["approved_by"] == "jane"
+
+
+def test_the_passkey_this_browser_uses_is_marked(app: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    with TestClient(app) as client:
+        _register(client, monkeypatch, username="storm", credential_id=b"cred-1")
+        first = {c["label"]: c["this_device"] for c in client.get("/api/auth/credentials").json()}
+        assert first == {"test-device": True}
+
+        _fake_verify_registration(monkeypatch, b"cred-2")
+        client.post("/api/auth/credentials/add/begin")
+        client.post(
+            "/api/auth/credentials/add/complete",
+            json={"device_label": "phone", "credential": _credential(b"cred-2")},
+        )
+        added = {c["label"]: c["this_device"] for c in client.get("/api/auth/credentials").json()}
+        assert added == {"test-device": False, "phone": True}
+
+        client.post("/api/auth/logout")
+        _login(client, monkeypatch, username="storm", credential_id=b"cred-1")
+        again = {c["label"]: c["this_device"] for c in client.get("/api/auth/credentials").json()}
+        assert again == {"test-device": True, "phone": False}
+
+        page = client.get("/admins").text
+        assert '"this_device": true' in page and "/static/admins.js" in page
+
+
+def test_an_open_invite_keeps_its_link_until_used(
+    app: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    with TestClient(app) as client:
+        _register(client, monkeypatch, username="storm", credential_id=b"cred-1")
+        made = client.post("/api/auth/invites", json={"label": "for Jane"}).json()
+        (open_one,) = client.get("/api/auth/invites").json()
+        assert open_one["url"] == made["url"]
+
+        client.post("/api/auth/logout")
+        _register(
+            client,
+            monkeypatch,
+            username="jane",
+            credential_id=b"cred-2",
+            invite_token=made["token"],
+        )
+        (used,) = client.get("/api/auth/invites").json()
+    assert used["status"] == ApprovalStatus.CONSUMED.value
+    assert used["url"] is None

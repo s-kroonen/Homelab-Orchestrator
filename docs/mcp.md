@@ -20,11 +20,13 @@ Everything here is also on the **AI assistants** page (`/assistants`) and in
    sending you back to**, pick a **role** (or tick permissions), optionally *Ask me before every
    change*, and press **Allow**.
 
-The page `/assistants` lists the connection. **Revoke** stops it at once; **Edit** changes its role
-or permissions for the very next call.
+The page `/assistants` (Settings → AI assistants) lists the connection. Its ⋯ menu has **Change
+role…** (a role, or ticked permissions, for the very next call), *Ask before every change*, **Its
+calls** and **Revoke…**, which stops it at once. Requests waiting for you are at the top of the
+page, with Deny and Review and approve.
 
-For a client that cannot do OAuth (a script, the MCP inspector) make a **personal token** on the
-page or with `orchestrator-cli mcp token NAME --role operator`. It is shown once; send it as
+For a client that cannot do OAuth (a script, the MCP inspector) make a **personal token** (**+ New token** on the
+page) or with `orchestrator-cli mcp token NAME --role operator`. It is shown once; send it as
 `Authorization: Bearer <token>`. Tokens in a query string are never accepted.
 
 ## Roles and permissions
@@ -81,7 +83,8 @@ cancels what it had waiting. The assistant can read the outcome with `get_reques
 ## History
 
 Every call is recorded: when, which connection, tool, risk, redacted arguments, result and, for
-requests, who decided. Filter by connection, tool, result and risk on the page or with
+requests, who decided. The page shows the newest under **Recent calls**; **All calls** filters by connection, tool,
+result and risk or with
 `orchestrator-cli mcp history`. Changes also show in **Activity** as `mcp.*` / the usual action
 entries under the actor `mcp:<connection>`.
 

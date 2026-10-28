@@ -204,6 +204,7 @@ def build_map(session: Session, settings: Settings) -> dict[str, Any]:
         entry_hosts.append(
             {
                 "id": f"host:{h.hostname}",
+                "pk": h.id,
                 "hostname": h.hostname,
                 "enabled": h.enabled,
                 "served": bool(host_served.get(h.id or -1, h.enabled)),
@@ -279,9 +280,12 @@ def build_map(session: Session, settings: Settings) -> dict[str, Any]:
                     }
                 )
 
+    placed = {n.id for n in nodes}
     return {
         "generated_at": datetime.now(UTC).isoformat(),
         "nodes": node_out,
+        # Services whose node is not set (or no longer exists): still on the map, in a row of their own.
+        "unplaced": [build(r) for r in roots if r.node_id not in placed],
         "entry": {"id": "entry", "name": "Traefik", "hosts": entry_hosts},
         "backup": {
             "id": "pbs",

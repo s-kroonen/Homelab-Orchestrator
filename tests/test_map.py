@@ -135,6 +135,39 @@ def test_map_page_renders_and_is_in_the_nav(client: TestClient) -> None:
     assert r.status_code == 200
     assert 'id="map-root"' in r.text and "/static/map.js" in r.text
     assert 'href="/map"' in r.text
-    # grouping / ordering controls (by box, group or subnet; by name, status, IP, group)
-    assert 'id="m-group"' in r.text and 'value="ip"' in r.text and 'id="m-sort"' in r.text
-    assert client.get("/static/map.js").status_code == 200
+    # the Map wireframe's controls: find, problems only, lines for the selection or all
+    assert 'id="map-q"' in r.text and 'id="map-problems"' in r.text
+    assert 'data-lines="selected"' in r.text and 'data-lines="all"' in r.text
+    assert 'id="map-side"' in r.text and "page-map" in r.text
+    # painted from the database at once: the map's data is in the page
+    assert '"slug": "portainer"' in r.text and '"edges":' in r.text
+    js = client.get("/static/map.js")
+    assert js.status_code == 200
+    assert "/api/views/map" in js.text and "/api/infra/nodes/status" in js.text
+    assert "location.reload" not in js.text
+
+
+def test_map_view_carries_what_the_sidebar_needs(client: TestClient) -> None:
+    data = client.get("/api/views/map").json()
+    assert data["map"]["counts"]["services"] == 2
+    rows = {r["slug"]: r for r in data["view"]["rows"]}
+    assert rows["portainer"]["state"]["label"] == "unknown"
+    assert rows["portainer"]["id"] is not None
+    assert [n["name"] for n in data["nodes"]] == ["pve1"]
+    assert [p["name"] for p in data["policies"]] == ["daily"]
+    assert set(data["policies"][0]) == {"name", "next_run", "restore_power_state"}
+    hosts = {h["hostname"]: h for h in data["map"]["entry"]["hosts"]}
+    assert isinstance(hosts["portainer.example.com"]["pk"], int)
+
+
+def test_services_without_a_node_are_on_the_map(client: TestClient) -> None:
+    with Session(get_engine()) as s:
+        s.add(Service(slug="loose", name="Loose"))
+        s.commit()
+    data = client.get("/api/map").json()
+    assert [x["slug"] for x in data["unplaced"]] == ["loose"]
+    assert all(
+        x["slug"] != "loose"
+        for n in data["nodes"]
+        for x in n["loose"] + [y for g in n["guests"] for y in g["services"]]
+    )

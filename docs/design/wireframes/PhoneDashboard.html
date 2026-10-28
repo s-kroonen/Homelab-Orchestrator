@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Phone dashboard (wireframe)</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#0d1015}
+a{color:#8fb3ff;text-decoration:none}a:hover{color:#b8d0ff}
+*{box-sizing:border-box}
+.pill{display:inline-flex;align-items:center;gap:6px;padding:3px 9px;border-radius:999px;font-size:12px;font-weight:600;white-space:nowrap}
+.ok{background:#11331f;color:#5fe08b}.warn{background:#3a2c10;color:#f0b44c}.fail{background:#3d1717;color:#ff8a82}.off{background:#232834;color:#b3bccb}.pending{background:#162a45;color:#8fb3ff}
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;height:44px;padding:0 14px;border-radius:10px;border:1px solid #2c3340;background:#1a1f29;color:#e6e9ef;font:600 14px Inter,system-ui,sans-serif;cursor:pointer;white-space:nowrap}
+.btn.primary{background:#4f7fe0;border-color:#4f7fe0;color:#fff}
+</style>
+</head>
+<body>
+
+
+<div style="width: 390px; height: 1300px; background: #0d1015; color: #e6e9ef; font-family: Inter, system-ui, sans-serif; font-size: 15px; line-height: 1.45; display: flex; flex-direction: column">
+  <header style="display: flex; align-items: center; gap: 8px; padding: 10px 12px; border-bottom: 1px solid #222833">
+    <button class="btn" type="button" aria-label="Menu" style="width: 44px; padding: 0; border-color: transparent; background: transparent">
+      <svg width="20" height="20" viewbox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16"></path></svg>
+    </button>
+    <h1 style="margin: 0; font-size: 18px; flex: 1">Dashboard</h1>
+    <span class="pill ok">● Live</span>
+    <button class="btn" type="button" aria-label="Search" style="width: 44px; padding: 0; border-color: transparent; background: transparent">
+      <svg width="20" height="20" viewbox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="11" cy="11" r="7"></circle><path d="M20 20l-3.5-3.5"></path></svg>
+    </button>
+  </header>
+
+  <main style="flex: 1; overflow: hidden; padding: 16px; display: flex; flex-direction: column; gap: 14px">
+    <div style="color: #9aa4b2">3 things need attention.</div>
+    
+      <article style="background: #141922; border: 1px solid #232a36; border-radius: 14px; padding: 14px; display: flex; flex-direction: column; gap: 10px">
+        <div style="display: flex; align-items: center; gap: 8px">
+          <span class="pill fail">Failed</span>
+          <span style="margin-left: auto; font-size: 12px; color: #8a94a5">12 min</span>
+        </div>
+        <div style="font-weight: 600">nextcloud is down</div>
+        <div style="font-size: 13.5px; color: #9aa4b2">https answered 502 twice. The guest is running.</div>
+        <div style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px">
+          <button class="btn primary" type="button">Check now</button>
+          <a class="btn" href="#">Open</a>
+        </div>
+      </article>
+    
+      <article style="background: #141922; border: 1px solid #232a36; border-radius: 14px; padding: 14px; display: flex; flex-direction: column; gap: 10px">
+        <div style="display: flex; align-items: center; gap: 8px">
+          <span class="pill warn">Changed</span>
+          <span style="margin-left: auto; font-size: 12px; color: #8a94a5">1 h</span>
+        </div>
+        <div style="font-weight: 600">truenas changed outside</div>
+        <div style="font-size: 13.5px; color: #9aa4b2">nas.example.lan is off in Traefik Manager.</div>
+        <div style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px">
+          <button class="btn primary" type="button">Put it back</button>
+          <a class="btn" href="#">Open</a>
+        </div>
+      </article>
+    
+      <article style="background: #141922; border: 1px solid #232a36; border-radius: 14px; padding: 14px; display: flex; flex-direction: column; gap: 10px">
+        <div style="display: flex; align-items: center; gap: 8px">
+          <span class="pill warn">Backup</span>
+          <span style="margin-left: auto; font-size: 12px; color: #8a94a5">03:12</span>
+        </div>
+        <div style="font-weight: 600">mailcow backup failed</div>
+        <div style="font-size: 13.5px; color: #9aa4b2">PBS datastore is 91% full.</div>
+        <div style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px">
+          <button class="btn primary" type="button">Open run</button>
+          <a class="btn" href="#">Open</a>
+        </div>
+      </article>
+    
+
+    <h2 style="margin: 6px 0 0; font-size: 15px">Nodes</h2>
+    
+      <div style="display: flex; align-items: center; gap: 10px; background: #141922; border: 1px solid #232a36; border-radius: 14px; padding: 10px 12px">
+        <span class="pill ok">on</span>
+        <div style="flex: 1; min-width: 0"><div style="font-weight: 600">node-a</div><div style="font-size: 12px; color: #9aa4b2">14 services · always on</div></div>
+        <button class="btn" type="button">Check</button>
+      </div>
+    
+      <div style="display: flex; align-items: center; gap: 10px; background: #141922; border: 1px solid #232a36; border-radius: 14px; padding: 10px 12px">
+        <span class="pill off">off</span>
+        <div style="flex: 1; min-width: 0"><div style="font-weight: 600">node-b</div><div style="font-size: 12px; color: #9aa4b2">6 services · wakes on demand</div></div>
+        <button class="btn" type="button">Wake</button>
+      </div>
+    
+
+    <h2 style="margin: 6px 0 0; font-size: 15px">Recent</h2>
+    
+      <div style="display: flex; gap: 10px; font-size: 13.5px; padding: 4px 0">
+        <span style="color: #8a94a5; flex: 0 0 42px">14:58</span><span>jellyfin woke node-b (41 s)</span>
+      </div>
+    
+      <div style="display: flex; gap: 10px; font-size: 13.5px; padding: 4px 0">
+        <span style="color: #8a94a5; flex: 0 0 42px">14:31</span><span>nextcloud failed: 502</span>
+      </div>
+    
+      <div style="display: flex; gap: 10px; font-size: 13.5px; padding: 4px 0">
+        <span style="color: #8a94a5; flex: 0 0 42px">13:02</span><span>Deployed site-main</span>
+      </div>
+    
+  </main>
+
+  <nav aria-label="Main" style="display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); border-top: 1px solid #222833; background: #11151c; padding: 6px 4px 18px">
+    
+      <a href="#" style="display:flex;align-items:center;justify-content:center;height:48px;border-radius:10px;font-size:13px;font-weight:600;color:#b3bccb;background:#1d2430;color:#ffffff">Dashboard</a>
+    
+      <a href="#" style="display:flex;align-items:center;justify-content:center;height:48px;border-radius:10px;font-size:13px;font-weight:600;color:#b3bccb">Services</a>
+    
+      <a href="#" style="display:flex;align-items:center;justify-content:center;height:48px;border-radius:10px;font-size:13px;font-weight:600;color:#b3bccb">Activity</a>
+    
+      <a href="#" style="display:flex;align-items:center;justify-content:center;height:48px;border-radius:10px;font-size:13px;font-weight:600;color:#b3bccb">More</a>
+    
+  </nav>
+</div>
+
+</body>
+</html>
