@@ -186,10 +186,10 @@
       const [cls, label] = RES[r.status] || ["off", r.status];
       const text = r.status === "failed" ? r.error || "failed"
         : [r.woke.length ? "woke " + r.woke.join(", ") : "", r.size_bytes ? fmt.bytes(r.size_bytes) : "", r.verified ? "verified" : r.status === "succeeded" ? "not verified" : "", r.took_s ? Math.max(1, Math.round(r.took_s / 60)) + " min" : "", fmt.ago(r.started_at)].filter(Boolean).join(" · ");
-      box.append(el("div", { class: "event-row", style: { gridTemplateColumns: "auto minmax(8rem, auto) minmax(0, 1fr) auto" } },
+      box.append(el("div", { class: "event-row run-row" },
         el("span", { class: "pill " + cls }, label),
         el("a", { href: "/services/" + enc(r.service) + "?tab=related", style: { fontWeight: "600" } }, r.service),
-        el("span", { class: r.status === "failed" ? "" : "faint", style: { overflowWrap: "anywhere" } }, text),
+        el("span", { class: "run-text" + (r.status === "failed" ? "" : " faint") }, text),
         r.status === "failed"
           ? el("button", { type: "button", class: "small", onclick: () => O.bulk("services", "backup", [r.service]).then(() => view.refresh(), () => {}) }, "Retry")
           : el("a", { class: "btn ghost small", href: "/services/" + enc(r.service) + "?tab=related" }, "Open")));

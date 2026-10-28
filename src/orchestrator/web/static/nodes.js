@@ -63,9 +63,7 @@
           el("h2", { class: "mono", style: { fontSize: "17px", fontFamily: "var(--mono)" } }, n.name),
           el("span", { class: "pill " + st.cls, title: st.why || null }, st.label),
           el("span", { class: "faint", style: { fontSize: "12.5px" } }, n.always_on ? "always on" : canWake ? "wakes on demand" : "no power target"),
-          el("span", { style: { flex: "1" } }),
-          primary,
-          menuButton(() => [
+          el("span", { class: "node-acts" }, primary, menuButton(() => [
             { label: "Edit…", onClick: () => nodeDrawer({ node: n, onSaved: refresh }) },
             { label: "Check now", onClick: () => { status.refresh(); guestsRegion.refresh(); } },
             canWake ? { label: "Wake", onClick: () => nodePower(n, "wake", refresh) } : null,
@@ -74,7 +72,7 @@
             { label: n.wake_on_hit_enabled ? "Turn wake on hit off" : "Turn wake on hit on", onClick: () => bulk("nodes", n.wake_on_hit_enabled ? "wake_on_hit_off" : "wake_on_hit_on", [n.name]).then(refresh, () => {}) },
             "-",
             { label: "Delete…", danger: true, onClick: () => deleteNode(n, refresh).catch(() => {}) },
-          ], "Actions for " + n.name)),
+          ], "Actions for " + n.name))),
         el("div", { class: "node-facts" },
           fact("Address", n.address, true),
           fact("Proxmox", proxmoxText(n)),
