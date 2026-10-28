@@ -12,9 +12,10 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.responses import HTMLResponse, RedirectResponse
 from pydantic import BaseModel, ConfigDict, Field
-from sqlmodel import col, select
+from sqlmodel import Session, col, select
 
 from orchestrator.audit import log as audit
+from orchestrator.config import Settings
 from orchestrator.db.models import McpGrant
 from orchestrator.mcp import approvals, store
 from orchestrator.mcp.scopes import ROLE_BLURBS, ROLES, SCOPES, parse_scope, role_of
@@ -22,6 +23,9 @@ from orchestrator.mcp.tools import TOOLS, ToolError
 from orchestrator.web.auth import CurrentAdmin, get_current_admin, login_redirect, require_admin
 from orchestrator.web.deps import AdaptersDep, SessionDep, SettingsDep
 from orchestrator.web.templating import templates
+
+#: How many calls the page's "Recent calls" shows before "All calls".
+RECENT_CALLS = 8
 
 api = APIRouter(
     prefix="/api/assistants", tags=["assistants"], dependencies=[Depends(require_admin)]
@@ -71,8 +75,7 @@ def _scopes_from(role: str | None, scopes: list[str] | None) -> list[str]:
     return chosen
 
 
-@api.get("/overview")
-async def overview(settings: SettingsDep) -> dict[str, Any]:
+def overview_view(settings: Settings) -> dict[str, Any]:
     base = store.origin(settings)
     return {
         "enabled": settings.mcp_enabled,
@@ -101,10 +104,19 @@ async def overview(settings: SettingsDep) -> dict[str, Any]:
     }
 
 
-@api.get("/grants")
-async def list_grants(session: SessionDep) -> list[dict[str, Any]]:
+@api.get("/overview")
+async def overview(settings: SettingsDep) -> dict[str, Any]:
+    return overview_view(settings)
+
+
+def _grants(session: Session) -> list[dict[str, Any]]:
     rows = session.exec(select(McpGrant).order_by(col(McpGrant.created_at).desc())).all()
     return [store.grant_view(g) for g in rows]
+
+
+@api.get("/grants")
+async def list_grants(session: SessionDep) -> list[dict[str, Any]]:
+    return _grants(session)
 
 
 @api.post("/grants", status_code=status.HTTP_201_CREATED)
@@ -205,13 +217,15 @@ async def history(
     )
 
 
+def _requests(session: Session, settings: Settings) -> list[dict[str, Any]]:
+    return [
+        approvals.request_view(session, settings, row.token) for row in approvals.waiting(session)
+    ]
+
+
 @api.get("/requests")
 async def list_requests(session: SessionDep, settings: SettingsDep) -> list[dict[str, Any]]:
-    out = []
-    for row in approvals.waiting(session):
-        view = approvals.request_view(session, settings, row.token)
-        out.append(view)
-    return out
+    return _requests(session, settings)
 
 
 def _request(session: SessionDep, token: str) -> Any:
@@ -259,11 +273,23 @@ async def deny_request(
 
 
 @pages.get("/assistants", response_model=None)
-async def assistants_page(request: Request, session: SessionDep) -> HTMLResponse | RedirectResponse:
+async def assistants_page(
+    request: Request, session: SessionDep, settings: SettingsDep
+) -> HTMLResponse | RedirectResponse:
+    """What waits for you, the connections, how to connect, recent calls (the Assistants
+    wireframe)."""
     admin = get_current_admin(request, session)
     if admin is None:
         return login_redirect(request)
-    return _templates.TemplateResponse(request, "assistants.html", {"admin": admin})
+    initial = {
+        "overview": overview_view(settings),
+        "grants": _grants(session),
+        "requests": _requests(session, settings),
+        "calls": store.history(session, limit=RECENT_CALLS),
+    }
+    return _templates.TemplateResponse(
+        request, "assistants.html", {"admin": admin, "initial": initial}
+    )
 
 
 @pages.get("/assistants/requests/{token}", response_model=None)
