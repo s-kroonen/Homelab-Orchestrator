@@ -41,19 +41,20 @@ REASON_TARGET = "backup target"
 BLOCKER_NO_POWER_TARGET = "node has no power target — cannot be woken"
 
 
-def _wake_switch_blocker(svc: Service, node: Node) -> str | None:
-    """Why a backup that FOLLOWS the wake-on-hit switches may not wake this."""
-    if not svc.wake_on_hit_enabled:
-        return (
-            f"wake on hit is switched off for service {svc.slug!r} and this backup policy "
-            "follows it (set the policy's wake mode to 'always' to override)"
-        )
-    if not node.wake_on_hit_enabled:
-        return (
-            f"wake on hit is switched off for node {node.name!r} and this backup policy "
-            "follows it (set the policy's wake mode to 'always' to override)"
-        )
-    return None
+def _wake_switch_blocker(node: Node) -> str | None:
+    """Why a backup that FOLLOWS the wake-on-hit switches may not wake this node.
+
+    Only the node's switch counts. A service's switch is about *visitors*: it stops a background
+    client (a phone syncing, a crawler) from waking that one service. A backup is not a visitor,
+    so a service whose switch is off is still woken for its backup, or as a backup's
+    prerequisite, as long as its node may be woken. An always-on node is never woken at all, so
+    its switch never blocks anything."""
+    if node.always_on or node.wake_on_hit_enabled:
+        return None
+    return (
+        f"wake on hit is switched off for node {node.name!r} and this backup policy "
+        "follows it (set the policy's wake mode to 'always' to override)"
+    )
 
 
 @dataclass(frozen=True)
@@ -165,7 +166,7 @@ def _step_for(
         if wake_is_unsupported(node):
             blocker = BLOCKER_NO_POWER_TARGET
         elif mode is BackupWakeMode.FOLLOW:
-            blocker = _wake_switch_blocker(svc, node)
+            blocker = _wake_switch_blocker(node)
     return PlanStep(
         slug=slug,
         name=svc.name,

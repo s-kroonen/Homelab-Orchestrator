@@ -213,10 +213,13 @@ manages idle shutdown on your side (the orchestrator only puts back what a *back
 
 Set per backup policy (Backup policies -> Edit, or `orchestrator-cli policy update NAME`):
 
-* **Wake switches** (`wake_mode`): `follow` (default) - a backup does not wake a service or
-  node whose *wake on hit* switch is off, and says so in the plan and the run;
-  `always` - wake it anyway, the backup is your own request; `never` - wake nothing and use
-  whatever is up.
+* **Wake switches** (`wake_mode`): `follow` (default) - a backup does not wake a *node* whose
+  *wake on hit* switch is off, and says so in the plan and the run; `always` - wake it anyway,
+  the backup is your own request; `never` - wake nothing and use whatever is up.
+  A *service's* wake-on-hit switch never stops a backup: it is there so a background client (a
+  phone syncing, a crawler) does not wake that service, and a backup is not a visitor. So a
+  storage VM with wake on hit off is still woken as a policy prerequisite, on a node that may
+  be woken. An always-on node is never woken, so its switch never blocks anything either.
 * **Tries** (`max_attempts`, default 3): a scheduled run that is *blocked* (something could
   not be woken, or the switch above) or whose target is *not healthy after boot* is tried
   again after `BACKUP_RETRY_DELAY_S` (default 5 min), up to this many times. You get a

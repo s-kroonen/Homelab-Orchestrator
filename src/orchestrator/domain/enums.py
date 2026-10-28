@@ -55,10 +55,11 @@ class WakeTrigger(StrEnum):
 
 
 class BackupWakeMode(StrEnum):
-    """How a backup policy treats the wake-on-hit switches (``Service`` /
-    ``Node.wake_on_hit_enabled``) when it needs something woken."""
+    """How a backup policy treats the nodes' wake-on-hit switch (``Node.wake_on_hit_enabled``)
+    when it needs something woken. A service's own switch is about visitors and never stops a
+    backup (see ``registry/backup_plan.py``)."""
 
-    FOLLOW = "follow"  # honour them: a switched-off node/service is not woken
+    FOLLOW = "follow"  # honour it: a node whose switch is off is not woken
     ALWAYS = "always"  # wake it anyway - the backup is the operator's own request
     NEVER = "never"  # wake nothing; back up whatever is up
 

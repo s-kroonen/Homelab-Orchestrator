@@ -98,17 +98,33 @@ def _pipe(world: World, state: HealthState = HealthState.HEALTHY) -> Any:
 # -- wake mode -----------------------------------------------------------------
 
 
-def test_follow_mode_blocks_a_target_whose_wake_on_hit_is_off(
+def test_follow_mode_wakes_a_service_whose_own_wake_on_hit_is_off(
     session: Session, topo: dict[str, Any]
 ) -> None:
+    """A service's switch keeps visitors from waking it; a backup is not a visitor."""
     topo["app"].wake_on_hit_enabled = False
-    session.add(topo["app"])
+    topo["truenas"].wake_on_hit_enabled = False  # the policy's prerequisite, too
+    for row in (topo["app"], topo["truenas"]):
+        session.add(row)
     session.commit()
 
     plan = resolve_backup_plan(session, topo["app"], topo["policy"])
 
     assert plan.wake_mode == "follow"
-    assert any("wake on hit is switched off for service 'app'" in b for b in plan.blockers)
+    assert plan.blockers == []
+
+
+def test_follow_mode_never_blocks_on_an_always_on_node(
+    session: Session, topo: dict[str, Any]
+) -> None:
+    topo["compute"].always_on = True
+    topo["compute"].wake_on_hit_enabled = False
+    session.add(topo["compute"])
+    session.commit()
+
+    plan = resolve_backup_plan(session, topo["app"], topo["policy"])
+
+    assert plan.blockers == []
 
 
 def test_follow_mode_blocks_when_the_node_is_switched_off(
@@ -150,15 +166,31 @@ def test_never_mode_plans_no_wake_at_all(session: Session, topo: dict[str, Any])
 async def test_follow_mode_fails_the_run_at_the_wake_step(
     session: Session, topo: dict[str, Any]
 ) -> None:
-    topo["app"].wake_on_hit_enabled = False
-    session.add(topo["app"])
+    topo["compute"].wake_on_hit_enabled = False
+    session.add(topo["compute"])
     session.commit()
     world = _world(topo)
 
-    with pytest.raises(BackupError, match="wake on hit is switched off"):
+    with pytest.raises(BackupError, match="wake on hit is switched off for node 'compute'"):
         await _pipeline(world).run_for_service(session, "app", actor="t")
 
     assert world.count("power_on:compute") == 0
+
+
+async def test_follow_mode_wakes_a_prerequisite_whose_service_switch_is_off(
+    session: Session, topo: dict[str, Any]
+) -> None:
+    """The storage VM keeps wake on hit off against background clients; its node may be woken.
+    The backup wakes it and goes through."""
+    topo["truenas"].wake_on_hit_enabled = False
+    session.add(topo["truenas"])
+    session.commit()
+    world = _world(topo)
+
+    run = await _pipeline(world).run_for_service(session, "app", actor="t")
+
+    assert run.status is PipelineStatus.SUCCEEDED
+    assert world.count("power_on:storage") == 1
 
 
 # -- retries and notifications ---------------------------------------------------
