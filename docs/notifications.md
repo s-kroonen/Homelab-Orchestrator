@@ -52,12 +52,23 @@ With **no rules**, `failed`, `down`, `recovered`, `flapping`, `backup_failed`, `
 least severity (`info` < `warn` < `error` < `critical`) and channels. An empty list
 means "any". Once any rule exists, an event is sent only if some enabled rule matches;
 the rest stay in the feed marked "no rule wants this". Rules live in the database
-(not `services.yaml`) and are part of the System page's backups.
+(not `services.yaml`) and are part of the orchestrator's own backups (Backups → Orchestrator).
 
 ## The feed
 
 Everything the engine decided, sent or not, kept `NOTIFY_RETENTION_DAYS` (30) days.
 `orchestrator-cli notify feed` prints it; `notify rules` lists the rules.
+
+## The page
+
+Settings → Notifications (`/notifications`) has, on the left, the **Rules** (+ Add rule and Edit
+open a drawer; the switch turns a rule on or off; ⋯ has the rest) and **Recent alerts**, the
+newest twelve, with what was sent where ("Show folded and unsent" hides what was folded into
+another alert or that no rule wanted; Activity → Alerts has the whole feed). On the right,
+**Channels** says which of ntfy, e-mail, webhook and push are set up (they are set up on
+Connections → Alerts), and **This device** turns alerts on or off for the browser you are using,
+installs the dashboard as an app, sends a test, and lists the devices with alerts on.
+**Send a test** in the header sends one to every channel.
 
 ## Where an alert takes you
 

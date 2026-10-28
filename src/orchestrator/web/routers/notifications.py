@@ -27,6 +27,8 @@ from orchestrator.web.deps import AdaptersDep, SessionDep, SettingsDep
 from orchestrator.web.templating import templates
 
 CHANNEL_NAMES = ("ntfy", "email", "webhook")
+#: How many alerts the page's "Recent alerts" shows; the rest are in Activity.
+RECENT = 12
 
 api = APIRouter(
     prefix="/api/notifications", tags=["notifications"], dependencies=[Depends(require_admin)]
@@ -50,19 +52,20 @@ def _engine(request: Request) -> NotificationEngine:
 async def notifications_page(
     request: Request, session: SessionDep
 ) -> HTMLResponse | RedirectResponse:
+    """Rules, recent alerts, channels and this device (the Notifications wireframe)."""
     admin = get_current_admin(request, session)
     if admin is None:
         return login_redirect(request)
+    initial = {
+        "rules": _rules(session),
+        "events": _events(session, limit=RECENT),
+        "levels": list(LEVELS),
+        "events_known": [e for e in EVENTS if e != "test"],
+        "severities": list(SEVERITIES),
+        "channel_names": list(CHANNEL_NAMES),
+    }
     return _templates.TemplateResponse(
-        request,
-        "notifications.html",
-        {
-            "admin": admin,
-            "levels": LEVELS,
-            "events": EVENTS,
-            "severities": SEVERITIES,
-            "channel_names": CHANNEL_NAMES,
-        },
+        request, "notifications.html", {"admin": admin, "initial": initial}
     )
 
 
@@ -117,9 +120,9 @@ async def send_test(
     return summarize_delivery(row)
 
 
-@api.get("/events")
-async def list_events(
-    session: SessionDep,
+def _events(
+    session: Session,
+    *,
     limit: int = 100,
     level: str | None = None,
     target: str | None = None,
@@ -137,6 +140,20 @@ async def list_events(
         stmt = stmt.where(NotificationEvent.suppressed == False)  # noqa: E712
     rows = session.exec(stmt.limit(max(1, min(limit, 500)))).all()
     return [summarize_delivery(r) for r in rows]
+
+
+@api.get("/events")
+async def list_events(
+    session: SessionDep,
+    limit: int = 100,
+    level: str | None = None,
+    target: str | None = None,
+    event: str | None = None,
+    suppressed: bool = True,
+) -> list[dict[str, Any]]:
+    return _events(
+        session, limit=limit, level=level, target=target, event=event, suppressed=suppressed
+    )
 
 
 # -- rules ---------------------------------------------------------------------
@@ -203,11 +220,15 @@ def _rule_dict(rule: NotificationRule) -> dict[str, Any]:
     }
 
 
-@api.get("/rules")
-async def list_rules(session: SessionDep) -> list[dict[str, Any]]:
+def _rules(session: Session) -> list[dict[str, Any]]:
     return [
         _rule_dict(r) for r in session.exec(select(NotificationRule).order_by(NotificationRule.id))
     ]
+
+
+@api.get("/rules")
+async def list_rules(session: SessionDep) -> list[dict[str, Any]]:
+    return _rules(session)
 
 
 def _name_free(session: Session, name: str, *, except_id: int | None = None) -> None:

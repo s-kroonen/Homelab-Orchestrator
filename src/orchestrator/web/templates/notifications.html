@@ -1,318 +1,44 @@
 {% extends "base.html" %}
 {% block title %}homelab-orchestrator — notifications{% endblock %}
+{% block crumbs %}Settings / <span class="here">Notifications</span>{% endblock %}
 {% block content %}
-  <section id="device-section">
-    <h2>This device</h2>
-    <p class="msg">
-      Install the dashboard as an app and turn on notifications, and alerts reach this phone or
-      computer even when the dashboard is closed. It needs the dashboard's <strong>https</strong>
-      address (a plain <code>http://</code> LAN address cannot do push), and on an iPhone the app
-      has to be added to the Home Screen first. Set <code>NOTIFIER_ADAPTER=auto</code> in
-      <code>.env</code> so alerts are actually sent to channels.
-    </p>
-    <dl class="kv" id="device-kv"></dl>
-    <div class="row">
-      <button id="dev-install" hidden>Install the app</button>
-      <button id="dev-enable">Turn on notifications on this device</button>
-      <button class="secondary" id="dev-local" title="Shows a notification from this browser only; no server, no push service">Show a test notification here</button>
-      <button class="secondary" id="dev-push" title="The server pushes a real notification to this device through the browser vendor's push service">Send a test through the server</button>
-      <button class="secondary" id="dev-disable" hidden>Turn off on this device</button>
-      <span class="msg" id="dev-msg"></span>
-    </div>
-    <h3>Devices with notifications on</h3>
-    <div class="table-scroll">
-    <table>
-      <thead><tr><th>Device</th><th>By</th><th>Since</th><th>Last result</th><th></th></tr></thead>
-      <tbody id="dev-body"><tr><td colspan="5">Loading…</td></tr></tbody>
-    </table>
-    </div>
-  </section>
+<div class="page-header">
+  <h1>Notifications</h1>
+  <div class="actions">
+    <button type="button" class="secondary" id="test-btn">Send a test</button>
+    <button type="button" id="new-rule">+ Add rule</button>
+  </div>
+</div>
+<p class="page-sub">Who hears about what, and where it goes. Channels (ntfy, e-mail, a webhook) are set up on <a href="/infra/connections">Connections</a>.</p>
 
-  <section>
-    <h2>Channels</h2>
-    <p class="msg" id="channels-text">Loading…</p>
-    <div class="row">
-      <button class="secondary" id="test-btn">Send a test notification</button>
-      <span class="msg" id="test-msg"></span>
-    </div>
-  </section>
-
-  <section>
-    <h2>Rules</h2>
-    <p class="msg">
-      Who hears about what. With <strong>no rules</strong>, failed / down / recovered (and
-      flapping and exhausted recoveries) go to every channel. Add rules to narrow it down or
-      to route by level, service, group or node. An empty list in a rule means "any".
-    </p>
-    <div class="table-scroll">
-    <table>
-      <thead><tr><th>Name</th><th>Levels</th><th>Scope</th><th>Events</th><th>From</th><th>Channels</th><th>On</th><th></th></tr></thead>
-      <tbody id="rules-body"><tr><td colspan="8">Loading…</td></tr></tbody>
-    </table>
-    </div>
-    <details class="rule-form" id="rule-form">
-      <summary id="rule-form-title">Add a rule</summary>
-      <div class="grid">
-        <label for="r-name">Name</label>
-        <input id="r-name" placeholder="e.g. Critical stuff to my phone">
-        <label>Levels</label>
-        <div class="checks" id="r-levels">
-          {% for l in levels %}<label class="inline"><input type="checkbox" value="{{ l }}"> {{ l }}</label>{% endfor %}
-        </div>
-        <label>Events</label>
-        <div class="checks" id="r-events">
-          {% for e in events if e != "test" %}<label class="inline"><input type="checkbox" value="{{ e }}"> {{ e }}</label>{% endfor %}
-        </div>
-        <label for="r-min">At least</label>
-        <select id="r-min">{% for s in severities %}<option value="{{ s }}">{{ s }}</option>{% endfor %}</select>
-        <label for="r-slugs">Only these services</label>
-        <input id="r-slugs" placeholder="slugs, comma separated (blank = any)">
-        <label for="r-groups">Only these groups</label>
-        <input id="r-groups" placeholder="groups, comma separated">
-        <label for="r-nodes">Only these nodes</label>
-        <input id="r-nodes" placeholder="node names, comma separated">
-        <label>Send to</label>
-        <div class="checks" id="r-channels">
-          {% for c in channel_names %}<label class="inline"><input type="checkbox" value="{{ c }}"> {{ c }}</label>{% endfor %}
-          <span class="muted">(none ticked = every channel)</span>
-        </div>
-        <label for="r-enabled">Enabled</label>
-        <span><input id="r-enabled" type="checkbox" checked></span>
-      </div>
-      <div class="row">
-        <button id="r-save">Save rule</button>
-        <button class="secondary" id="r-cancel" type="button">Cancel</button>
-        <span class="msg" id="r-msg"></span>
-      </div>
-    </details>
-  </section>
-
-  <section>
-    <h2>Feed</h2>
-    <div class="row">
-      <select id="f-level"><option value="">all levels</option>{% for l in levels %}<option value="{{ l }}">{{ l }}</option>{% endfor %}</select>
-      <input id="f-target" placeholder="target (slug / node)" size="18">
-      <label class="inline"><input type="checkbox" id="f-suppressed" checked> show folded / unsent</label>
-      <button class="secondary" id="f-refresh">Refresh</button>
-    </div>
-    <div class="table-scroll">
-    <table>
-      <thead><tr><th>When</th><th>Level</th><th>Target</th><th>Event</th><th>What</th><th>Sent</th></tr></thead>
-      <tbody id="feed-body"><tr><td colspan="6">Loading…</td></tr></tbody>
-    </table>
-    </div>
-  </section>
-{% endblock %}
-{% block extra_head %}
-<style>
-  .checks { display: flex; flex-wrap: wrap; gap: 0.3rem 1rem; }
-  details.rule-form { margin-top: 0.75rem; }
-  details.rule-form summary { cursor: pointer; color: #5b8def; }
-  tr.suppressed td { color: #7b8494; }
-  dl.kv { display: grid; grid-template-columns: max-content 1fr; gap: 0.25rem 1.25rem; font-size: 0.85rem; margin: 0 0 1rem; }
-  dl.kv > div { display: contents; }
-  dl.kv dt { color: #9aa4b2; }
-  dl.kv dd { margin: 0; overflow-wrap: anywhere; }
-  .sent-ok { color: #3ecf6d; } .sent-bad { color: #e5534b; }
-</style>
+<div class="grid-2">
+  <div class="col-main" style="display: flex; flex-direction: column; gap: 20px; min-width: 0">
+    <section class="card flush" aria-labelledby="h-rules">
+      <div class="card-head" style="padding-bottom: 10px"><h2 id="h-rules">Rules</h2><span class="faint" style="font-size: 12.5px">who hears about what · without rules, failed, down and recovered go to every channel</span></div>
+      <div id="rules"></div>
+    </section>
+    <section class="card flush" aria-labelledby="h-recent">
+      <div class="card-head" style="padding-bottom: 6px"><h2 id="h-recent">Recent alerts</h2><span style="flex: 1"></span>
+        <button type="button" class="chip" id="show-folded" aria-pressed="true">Show folded and unsent</button><span class="age" id="recent-age"></span></div>
+      <div id="recent"></div>
+      <p class="card-foot"><a href="/activity?kind=alert">All alerts in Activity →</a></p>
+    </section>
+  </div>
+  <div class="col-side" style="display: flex; flex-direction: column; gap: 20px; min-width: 0">
+    <section class="card" aria-labelledby="h-channels">
+      <div class="card-head"><h2 id="h-channels">Channels</h2></div>
+      <div id="channels"><p class="faint">Checking…</p></div>
+      <p style="margin: 10px 0 0; font-size: 13px"><a href="/infra/connections">Set up channels on Connections →</a></p>
+    </section>
+    <section class="card" aria-labelledby="h-device">
+      <div class="card-head"><h2 id="h-device">This device</h2><span id="dev-pill"></span></div>
+      <div id="device"><p class="faint">Checking this browser…</p></div>
+      <div class="notif-devices" id="devices"></div>
+    </section>
+  </div>
+</div>
+<script type="application/json" id="initial">{{ initial | tojson }}</script>
 {% endblock %}
 {% block scripts %}
-<script>
-  const $ = (id) => document.getElementById(id);
-  function setMsg(id, text, kind) { const el = $(id); el.textContent = text; el.className = "msg" + (kind ? " " + kind : ""); }
-  const csv = (s) => s.split(",").map((x) => x.trim()).filter(Boolean);
-  const ticked = (id) => [...$(id).querySelectorAll("input:checked")].map((c) => c.value);
-  function tick(id, values) { for (const c of $(id).querySelectorAll("input")) c.checked = values.includes(c.value); }
-  function when(iso) { return fmtTime(iso); }
-  function td(text, cls) { const e = document.createElement("td"); e.textContent = text; if (cls) e.className = cls; return e; }
-
-  // -- this device (PWA + Web Push) ------------------------------------------------
-  async function refreshDevice() {
-    const s = await OrchPush.status();
-    const rows = [
-      ["Secure address (https)", s.secure ? "yes" : "no - push needs https or localhost"],
-      ["Browser can do push", s.supported ? "yes" : "no"],
-      ["Installed as an app", s.installed ? "yes" : s.canInstall ? "not yet - the button below installs it" : "no"],
-      ["Permission", s.permission],
-      ["Notifications on for this device", s.subscribed ? "yes" : "no"],
-    ];
-    if (s.needsHomeScreen) rows.push(["iPhone / iPad", "Add this page to the Home Screen first (Share → Add to Home Screen), then open it from there"]);
-    $("device-kv").replaceChildren(...rows.flatMap(([k, v]) => {
-      const row = document.createElement("div");
-      const dt = document.createElement("dt"); dt.textContent = k;
-      const dd = document.createElement("dd"); dd.textContent = v;
-      row.append(dt, dd); return [row];
-    }));
-    $("dev-install").hidden = !s.canInstall;
-    $("dev-enable").hidden = s.subscribed;
-    $("dev-disable").hidden = !s.subscribed;
-    $("dev-push").disabled = !s.subscribed;
-    $("dev-enable").disabled = !(s.supported && s.secure);
-    return s;
-  }
-  async function loadDevices() {
-    let list;
-    try { list = await apiFetch("GET", "/api/push/subscriptions", undefined, { suppressToast: true }); }
-    catch (err) { $("dev-body").replaceChildren(); return; }
-    const mine = (await OrchPush.status()).endpoint;
-    if (!list.length) { const tr = document.createElement("tr"); const t = td("No device yet."); t.colSpan = 5; tr.append(t); $("dev-body").replaceChildren(tr); return; }
-    $("dev-body").replaceChildren(...list.map((d) => {
-      const tr = document.createElement("tr");
-      const name = td(d.label || d.user_agent || ("device " + d.id) + (d.endpoint === mine ? "  (this one)" : ""));
-      if (d.endpoint === mine && d.label) name.textContent = d.label + "  (this one)";
-      const res = d.last_error ? td("✗ " + d.last_error, "sent-bad") : d.last_ok_at ? td("✓ " + when(d.last_ok_at), "sent-ok") : td("not used yet");
-      const act = document.createElement("td");
-      const rm = document.createElement("button"); rm.className = "secondary small"; rm.textContent = "Remove";
-      rm.addEventListener("click", async () => {
-        try { await apiFetch("DELETE", "/api/push/subscriptions/" + d.id); } finally { await refreshDevice(); await loadDevices(); }
-      });
-      act.append(rm);
-      tr.append(name, td(d.username), td(when(d.created_at)), res, act);
-      return tr;
-    }));
-  }
-  $("dev-install").addEventListener("click", async () => {
-    try { await OrchPush.install(); } catch (e) { setMsg("dev-msg", e.message, "error"); }
-    refreshDevice();
-  });
-  $("dev-enable").addEventListener("click", async () => {
-    setMsg("dev-msg", "Asking the browser…", "");
-    try {
-      const label = prompt("Name this device", OrchPush.guessLabel());
-      if (label === null) { setMsg("dev-msg", "", ""); return; }
-      await OrchPush.enable(label.trim());
-      setMsg("dev-msg", "Turned on. Use 'Send a test through the server' to check it.", "ok");
-    } catch (e) { setMsg("dev-msg", e.message, "error"); }
-    await refreshDevice(); await loadDevices();
-  });
-  $("dev-disable").addEventListener("click", async () => {
-    try { await OrchPush.disable(); setMsg("dev-msg", "Turned off on this device.", "ok"); }
-    catch (e) { setMsg("dev-msg", e.message, "error"); }
-    await refreshDevice(); await loadDevices();
-  });
-  $("dev-local").addEventListener("click", async () => {
-    try { await OrchPush.testLocal(); setMsg("dev-msg", "Shown. If nothing appeared, check the OS notification settings for this browser.", "ok"); }
-    catch (e) { setMsg("dev-msg", e.message, "error"); }
-  });
-  $("dev-push").addEventListener("click", async () => {
-    setMsg("dev-msg", "Sending…", "");
-    try {
-      const me = (await OrchPush.status()).endpoint;
-      const r = await apiFetch("POST", "/api/push/test", { endpoint: me }, { suppressToast: true });
-      setMsg("dev-msg", Object.entries(r.results).map(([k, v]) => k + ": " + v).join("; "), r.ok ? "ok" : "error");
-    } catch (e) { setMsg("dev-msg", e.message, "error"); }
-    loadDevices();
-  });
-  document.addEventListener("orch:installable", refreshDevice);
-  document.addEventListener("orch:installed", refreshDevice);
-  OrchPush.ready.then(() => { refreshDevice(); loadDevices(); });
-
-  async function loadChannels() {
-    try {
-      const c = await apiFetch("GET", "/api/notifications/channels", undefined, { suppressToast: true });
-      $("channels-text").textContent = c.channels.length
-        ? "Active: " + c.channels.join(", ") + "."
-        : c.hint;
-    } catch (err) { $("channels-text").textContent = err.message; }
-  }
-  $("test-btn").addEventListener("click", async () => {
-    setMsg("test-msg", "Sending…", "");
-    try {
-      const r = await apiFetch("POST", "/api/notifications/test", {}, { suppressToast: true });
-      const parts = Object.entries(r.delivered).map(([k, v]) => k + ": " + v);
-      setMsg("test-msg", parts.length ? parts.join(" | ") : (r.suppressed_reason || "nothing was sent"), parts.some((p) => !p.endsWith(": ok")) || !parts.length ? "error" : "ok");
-      loadFeed();
-    } catch (err) { setMsg("test-msg", err.message, "error"); }
-  });
-
-  let editing = null;
-  function resetForm() {
-    editing = null;
-    $("r-name").value = ""; $("r-slugs").value = ""; $("r-groups").value = ""; $("r-nodes").value = "";
-    tick("r-levels", []); tick("r-events", []); tick("r-channels", []);
-    $("r-min").value = "info"; $("r-enabled").checked = true;
-    $("rule-form-title").textContent = "Add a rule"; setMsg("r-msg", "", "");
-  }
-  $("r-cancel").addEventListener("click", () => { resetForm(); $("rule-form").open = false; });
-  $("r-save").addEventListener("click", async () => {
-    const body = {
-      name: $("r-name").value, enabled: $("r-enabled").checked,
-      levels: ticked("r-levels"), events: ticked("r-events"), min_severity: $("r-min").value,
-      scope: { slugs: csv($("r-slugs").value), groups: csv($("r-groups").value), nodes: csv($("r-nodes").value) },
-      channels: ticked("r-channels"),
-    };
-    try {
-      if (editing) await apiFetch("PUT", "/api/notifications/rules/" + editing, body, { suppressToast: true });
-      else await apiFetch("POST", "/api/notifications/rules", body, { suppressToast: true });
-      resetForm(); $("rule-form").open = false; loadRules();
-    } catch (err) { setMsg("r-msg", err.message, "error"); }
-  });
-
-  async function loadRules() {
-    const body = $("rules-body");
-    let rules;
-    try { rules = await apiFetch("GET", "/api/notifications/rules", undefined, { suppressToast: true }); }
-    catch (err) { body.innerHTML = ""; const tr = document.createElement("tr"); const c = td(err.message); c.colSpan = 8; tr.append(c); body.append(tr); return; }
-    body.innerHTML = "";
-    if (!rules.length) { body.innerHTML = '<tr><td colspan="8" class="muted">No rules - the defaults apply.</td></tr>'; return; }
-    for (const r of rules) {
-      const tr = document.createElement("tr");
-      const scope = Object.entries(r.scope).map(([k, v]) => k + ": " + v.join(", ")).join("; ");
-      tr.append(td(r.name), td(r.levels.join(", ") || "any"), td(scope || "any"), td(r.events.join(", ") || "any"),
-        td(r.min_severity), td(r.channels.join(", ") || "all"), td(r.enabled ? "yes" : "no"));
-      const act = document.createElement("td");
-      const edit = document.createElement("button"); edit.className = "secondary small"; edit.textContent = "Edit";
-      edit.addEventListener("click", () => {
-        editing = r.id; $("r-name").value = r.name; tick("r-levels", r.levels); tick("r-events", r.events);
-        $("r-min").value = r.min_severity; $("r-slugs").value = (r.scope.slugs || []).join(", ");
-        $("r-groups").value = (r.scope.groups || []).join(", "); $("r-nodes").value = (r.scope.nodes || []).join(", ");
-        tick("r-channels", r.channels); $("r-enabled").checked = r.enabled;
-        $("rule-form-title").textContent = "Edit rule"; $("rule-form").open = true;
-        $("rule-form").scrollIntoView({ behavior: "smooth" });
-      });
-      const del = document.createElement("button"); del.className = "danger small"; del.textContent = "Delete";
-      del.addEventListener("click", async () => {
-        if (!confirm("Delete rule " + r.name + "?")) return;
-        try { await apiFetch("DELETE", "/api/notifications/rules/" + r.id, undefined, { suppressToast: true }); loadRules(); }
-        catch (err) { setMsg("r-msg", err.message, "error"); }
-      });
-      act.append(edit, " ", del); tr.append(act); body.append(tr);
-    }
-  }
-
-  async function loadFeed() {
-    const q = new URLSearchParams({ limit: "150" });
-    if ($("f-level").value) q.set("level", $("f-level").value);
-    if ($("f-target").value.trim()) q.set("target", $("f-target").value.trim());
-    if (!$("f-suppressed").checked) q.set("suppressed", "false");
-    const body = $("feed-body");
-    let rows;
-    try { rows = await apiFetch("GET", "/api/notifications/events?" + q, undefined, { suppressToast: true }); }
-    catch (err) { body.innerHTML = ""; const tr = document.createElement("tr"); const c = td(err.message); c.colSpan = 6; tr.append(c); body.append(tr); return; }
-    body.innerHTML = "";
-    if (!rows.length) { body.innerHTML = '<tr><td colspan="6" class="muted">Nothing yet.</td></tr>'; return; }
-    for (const e of rows) {
-      const tr = document.createElement("tr");
-      if (e.suppressed) tr.className = "suppressed";
-      const sent = document.createElement("td");
-      const parts = Object.entries(e.delivered || {});
-      if (e.suppressed) sent.textContent = e.suppressed_reason;
-      else if (!parts.length) sent.textContent = "-";
-      else for (const [k, v] of parts) { const s = document.createElement("span"); const skipped = v.startsWith("skipped"); s.className = v === "ok" ? "sent-ok" : skipped ? "muted" : "sent-bad"; s.textContent = k + (v === "ok" ? " ✓ " : skipped ? " – " : " ✗ "); s.title = v; sent.append(s); }
-      const what = td(e.title); what.title = e.body;
-      const target = td("");
-      if (e.link) { const a = document.createElement("a"); a.href = e.link; a.textContent = e.target; a.title = "Open " + e.target; target.append(a); }
-      else target.textContent = e.target;
-      tr.append(td(when(e.at)), td(e.level), target, td(e.event + (e.severity ? " (" + e.severity + ")" : "")), what, sent);
-      body.append(tr);
-    }
-  }
-  for (const id of ["f-level", "f-suppressed"]) $(id).addEventListener("change", loadFeed);
-  $("f-refresh").addEventListener("click", loadFeed);
-  $("f-target").addEventListener("keydown", (ev) => { if (ev.key === "Enter") loadFeed(); });
-
-  loadChannels(); loadRules(); loadFeed();
-  if (window.OrchLive) OrchLive.on("alert", loadFeed, { wait: 500 });
-  setInterval(loadFeed, OrchLive && OrchLive.connected ? 300000 : 30000);
-</script>
+<script src="{{ asset('notifications.js') }}"></script>
 {% endblock %}
