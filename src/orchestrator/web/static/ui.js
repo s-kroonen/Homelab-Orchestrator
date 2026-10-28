@@ -198,6 +198,7 @@
   //   onSave: async (values) => {...} (throw an apiFetch error: fieldErrors land under the field),
   //   onTest: async (values) => "message" (optional), testLabel,
   //   onDelete: async () => {...} (optional, shown left in the footer),
+  //   wide: true (for a log or a long text: nearly the whole width),
   // })
   let openDrawer = null;
   function drawer(opts) {
@@ -213,7 +214,7 @@
     const test = opts.onTest ? el("button", { type: "button", class: "secondary" }, opts.testLabel || "Test") : null;
     const del = opts.onDelete ? el("button", { type: "button", class: "danger" }, opts.deleteLabel || "Delete") : null;
     const closeBtn = el("button", { type: "button", class: "icon", "aria-label": "Close" }, "✕");
-    const form = el("form", { class: "drawer", role: "dialog", "aria-modal": "true", "aria-labelledby": "drawer-title", novalidate: true },
+    const form = el("form", { class: "drawer" + (opts.wide ? " wide" : ""), role: "dialog", "aria-modal": "true", "aria-labelledby": "drawer-title", novalidate: true },
       el("div", { class: "drawer-head" },
         el("div", {}, el("h2", { id: "drawer-title" }, opts.title || "Edit"), opts.sub ? el("div", { class: "sub" }, opts.sub) : null),
         closeBtn),
@@ -483,7 +484,8 @@
   //   sort: {key, dir: 1|-1}, noun: ["service", "services"], urlState: true, children: (r) => parentKey,
   //   groupBy: [{key: "node", label: "Node", of: (r) => "node-a"}] (adds a "Group by" select),
   //   plain: true (inside a card already: no card, filter box or footer of its own),
-  // }) -> {setRows(rows), get selected(), clearSelection()}
+  //   detail: (r) => Node | null (an extra full-width row under that row: an expanded item),
+  // }) -> {setRows(rows), get selected(), clearSelection(), render()}
   function table(container, opts) {
     const o = Object.assign({ urlState: true, noun: ["item", "items"] }, opts);
     const params = new URLSearchParams(location.search);
@@ -651,6 +653,8 @@
         });
         if (o.menu) tr.append(el("td", { class: "menu-cell" }, menuButton(() => o.menu(r), "Actions for " + (o.name ? o.name(r) : k))));
         tbody.append(tr);
+        const more = o.detail ? o.detail(r) : null;
+        if (more) { tr.classList.add("expanded"); tbody.append(el("tr", { class: "detail-row" }, el("td", { colspan: span }, more))); }
       }
       if (!rows.length) {
         const filtered = state.q || state.chip;

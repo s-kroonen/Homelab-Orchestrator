@@ -28,7 +28,7 @@
     });
     if (!ok) return;
     for (const r of rows) {
-      try { await api.del("/api/archive/" + r.id, undefined, { suppressToast: true }); } catch (e) { toast(e.message, "error"); }
+      try { await api.del("/api/archive/" + r.id, { suppressToast: true }); } catch (e) { toast(e.message, "error"); }
     }
     t.clearSelection(); view.refresh();
   }

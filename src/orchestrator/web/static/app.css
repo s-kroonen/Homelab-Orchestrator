@@ -940,3 +940,29 @@ button.switch:hover { filter: none; }
 .ai-args pre { margin: 4px 0 0; padding: 8px; background: var(--inset); border-radius: 6px; font-size: 11.5px; white-space: pre-wrap; }
 .ai-h { margin: 18px 0 8px; font-size: 12px; letter-spacing: .08em; text-transform: uppercase; color: var(--faint); }
 .ai-tools { display: grid; gap: 10px; font-size: 13px; }
+
+/* an expanded table row (UI.table detail), a wide drawer */
+table.dt tbody tr.expanded td { background: var(--accent-soft); }
+table.dt tbody tr.detail-row td { padding: 0; background: var(--inset); }
+table.dt tbody tr.detail-row:hover td { background: var(--inset); }
+.drawer.wide { width: min(960px, 100vw); }
+
+/* Containers: a stack's containers, the log viewer */
+.ct-detail { padding: 6px 14px 12px 46px; }
+.ct-meta { font-size: 12.5px; color: var(--muted); margin: 6px 0 8px; overflow-wrap: anywhere; }
+.ct-row { display: grid; grid-template-columns: minmax(120px, 1.1fr) minmax(0, 1.4fr) auto minmax(0, 1fr) minmax(0, .8fr) auto; gap: 6px 14px; align-items: center; padding: 7px 0; border-top: 1px solid var(--line); font-size: 13px; }
+.ct-row:first-of-type { border-top: 0; }
+.ct-row .mono { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ct-row .acts { display: flex; gap: 2px; justify-content: flex-end; }
+@media (max-width: 860px) { .ct-detail { padding-left: 14px; } .ct-row { grid-template-columns: minmax(0, 1fr) auto; } .ct-row > :nth-child(2), .ct-row > :nth-child(4), .ct-row > :nth-child(5) { grid-column: 1 / -1; } }
+.ct-toggle { padding: 0; height: auto; background: none; border: 0; color: var(--text); font-weight: 600; text-align: left; white-space: normal; }
+.ct-toggle:hover { filter: none; text-decoration: underline; }
+.ct-toggle .tw { display: inline-block; width: 1em; color: var(--faint); }
+.log-tools { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 8px; }
+.log-tools input[type=search] { flex: 1 1 160px; }
+pre.log { margin: 0; padding: 10px 12px; height: calc(100vh - 240px); overflow: auto; background: var(--inset); border: 1px solid var(--line); border-radius: 8px; font: 12px/1.4 var(--mono); white-space: pre; }
+pre.log.wrap { white-space: pre-wrap; overflow-wrap: anywhere; }
+pre.log .err { color: var(--fail); } pre.log .ts { color: var(--faint); }
+.var-row { display: flex; gap: 6px; margin-bottom: 6px; }
+.var-row input { flex: 1; min-width: 0; }
+.log-tools select { width: auto; }

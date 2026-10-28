@@ -642,7 +642,9 @@ def test_the_api_and_page_need_a_login() -> None:
 
 def test_the_page_renders_and_is_in_the_nav(client: TestClient) -> None:
     r = client.get("/portainer")
-    assert r.status_code == 200 and 'id="stack-body"' in r.text and "/static/portainer.js" in r.text
+    assert r.status_code == 200 and 'id="stacks"' in r.text and "/static/portainer.js" in r.text
+    js = client.get("/static/portainer.js").text
+    assert "/api/portainer/stacks" in js and "detail: detailOf" in js
     assert 'href="/portainer"' in r.text
     assert client.get("/static/portainer.js").status_code == 200
 

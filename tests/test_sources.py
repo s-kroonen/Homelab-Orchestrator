@@ -300,9 +300,9 @@ def test_the_page_renders_and_the_old_pages_point_at_it(client: TestClient) -> N
     # Not a page of its own in the navigation any more: its parts are reached from the list
     # they fill (Import from Proxmox on Nodes & guests, the Import tab on Proxy hosts).
     assert 'href="/sources#proxmox"' in client.get("/nodes").text
-    for old in ("/proxy-hosts", "/portainer"):
-        text = client.get(old).text
-        assert "/sources#" in text
+    assert "/sources#" in client.get("/proxy-hosts").text
+    # Containers links a stack to a service through Data sources (its script builds the link)
+    assert "/sources#portainer" in client.get("/static/portainer.js").text
     assert "resync-btn" not in client.get("/proxy-hosts").text
     assert 'id="adopt"' not in client.get("/portainer").text
 

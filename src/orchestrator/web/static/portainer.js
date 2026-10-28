@@ -1,327 +1,333 @@
-/* The Portainer page: stacks (with what is linked to them), containers, and a log viewer.
- * Built with textContent only; nothing from Portainer is ever put in as HTML. */
+/* Containers (templates/portainer.html), to the Containers wireframe: the stacks in Portainer as a
+ * table (filter, chips, environment, row menu, Start / Stop / Restart for a selection); click a
+ * stack to see its containers inside (Logs, Restart, ⋯), + New stack and the logs in drawers.
+ * Everything is read live from Portainer through /api/portainer/*; nothing from Portainer is ever
+ * put in as HTML. */
 (function () {
   "use strict";
-  const $ = (id) => document.getElementById(id);
-  const state = { stacks: [], selected: null, logTarget: null, timer: null, lines: [] };
+  const { $, el, clear, fill, api, fmt, region, table, drawer, confirm } = window.UI;
+  const toast = (m, k) => window.toast(m, k);
+  const enc = encodeURIComponent;
+  const params = new URLSearchParams(location.search);
+  const S = { instance: params.get("instance") || "", env: params.get("env") || "", open: new Set(), detail: new Map(), stats: new Map(), instances: [] };
+  const keyOf = (s) => s.endpoint_id + "/" + s.name;
+  const u = (path) => (S.instance ? path + (path.includes("?") ? "&" : "?") + "instance=" + enc(S.instance) : path);
+  const stackUrl = (s, rest) => u("/api/stacks/" + s.endpoint_id + "/" + enc(s.name) + (rest || ""));
 
-  function el(tag, cls, text) {
-    const e = document.createElement(tag);
-    if (cls) e.className = cls;
-    if (text !== undefined) e.textContent = text;
-    return e;
+  // --- what a stack is ---------------------------------------------------------------------------
+  function stateOf(s) {
+    const total = s.containers_total || 0, run = s.containers_running || 0;
+    if (total && run === total) return { cls: "ok", label: "running" };
+    if (run > 0) return { cls: "warn", label: "partly running" };
+    if (s.status === "active" && !total) return { cls: "off", label: "no containers" };
+    return { cls: "off", label: "stopped" };
   }
-  const badge = (text, kind) => el("span", "badge " + kind, text);
-  function stateBadge(s) {
-    return badge(s, s === "running" || s === "active" || s === "up" ? "healthy"
-      : s === "exited" || s === "inactive" || s === "down" || s === "dead" ? "failed" : "unknown");
-  }
-  function link(url, label) {
-    const a = el("a", "", label);
-    a.href = url; a.target = "_blank"; a.rel = "noopener";
-    return a;
-  }
-  const linked = (slugs) => {
-    const td = el("td");
-    if (!slugs || !slugs.length) { td.append(el("span", "muted", "not linked")); return td; }
-    slugs.forEach((s, i) => { if (i) td.append(document.createTextNode(", ")); const a = el("a", "", s); a.href = "/services/" + encodeURIComponent(s); td.append(a); });
-    return td;
-  };
-  const err = (e) => (e && e.message) || String(e);
-  // Which Portainer connection (Connections page) this page is looking at.
-  const inst = () => ($("p-inst") ? $("p-inst").value : "");
-  function u(path) {
-    const i = inst();
-    return i ? path + (path.includes("?") ? "&" : "?") + "instance=" + encodeURIComponent(i) : path;
-  }
+  const gitText = (g) => (g ? "git " + ((g.reference || "").replace("refs/heads/", "") || "?") + (g.hash ? " @ " + g.hash.slice(0, 7) : "") : "");
+  const sourceText = (s) => (s.git ? gitText(s.git) : !s.managed ? "compose project" : s.kind || "");
+  const linkedTo = (slugs) => slugs.map((x, i) => [i ? ", " : "", el("a", { href: "/services/" + enc(x) }, x)]);
+  const cpill = (st) => el("span", { class: "pill " + (st === "running" ? "ok" : st === "restarting" || st === "paused" ? "warn" : st === "dead" ? "fail" : "off") }, st);
 
-  // -- stacks ----------------------------------------------------------------------------
-  function gitText(g) {
-    if (!g) return "";
-    const ref = (g.reference || "").replace("refs/heads/", "");
-    return (ref ? ref : "") + (g.hash ? " @ " + g.hash.slice(0, 7) : "");
-  }
-  function renderStacks() {
-    const q = $("p-search").value.trim().toLowerCase();
-    const rows = state.stacks.filter((s) => !q || s.name.toLowerCase().includes(q));
-    const body = $("stack-body");
-    if (!rows.length) { const tr = el("tr"); const td = el("td", "muted", "No stacks."); td.colSpan = 9; tr.append(td); body.replaceChildren(tr); return; }
-    body.replaceChildren(...rows.map((s) => {
-      const tr = el("tr", "pick" + (state.selected && state.selected.name === s.name && state.selected.endpoint_id === s.endpoint_id ? " sel" : ""));
-      const name = el("td"); name.append(el("strong", "", s.name));
-      if (!s.managed) name.append(document.createTextNode(" "), el("span", "chip", "compose project, not in Portainer's stack list"));
-      const kind = el("td"); kind.append(el("span", "chip", s.kind || "unknown"));
-      const status = el("td"); status.append(stateBadge(s.status));
-      const git = el("td", "", gitText(s.git)); if (s.git) git.title = s.git.url + (s.git.has_credentials ? " (uses credentials)" : "");
-      const act = el("td"); if (s.open_url) act.append(link(s.open_url, "Open in Portainer"));
-      tr.append(name, el("td", "", String(s.endpoint_id)), status, kind,
-        el("td", "", `${s.containers_running ?? 0} / ${s.containers_total ?? 0} running`),
-        git, el("td", "", s.updated_at ? fmtTime(s.updated_at) : ""), linked(s.linked_services), act);
-      tr.addEventListener("click", (ev) => { if (ev.target.tagName !== "A") select(s); });
-      return tr;
-    }));
-  }
-
-  async function loadStacks() {
-    $("p-errors").textContent = "";
-    const env = $("p-env").value;
-    try {
-      const r = await apiFetch("GET", u("/api/portainer/stacks" + (env ? "?endpoint=" + env : "")), undefined, { suppressToast: true });
-      state.stacks = r.stacks;
-      renderStacks();
-      const problems = Object.entries(r.errors || {}).map(([k, v]) => `environment ${k} (${v})`);
-      $("p-errors").textContent = problems.length
-        ? `${problems.length} environment(s) are unreachable, so they and their stacks are not shown: ${problems.join("; ")}`
-        : "";
-    } catch (e) {
-      state.stacks = []; renderStacks();
-      $("p-errors").textContent = err(e);
+  // --- actions -----------------------------------------------------------------------------------
+  async function stackAction(rows, verb) {
+    if (verb !== "start" && !await confirm({ title: (verb === "stop" ? "Stop " : "Restart ") + (rows.length === 1 ? rows[0].name : rows.length + " stacks") + "?",
+      body: verb === "stop" ? "Their containers stop; services that use them stop answering." : "Their containers restart; anyone using them is cut off for a moment.",
+      affectedLabel: rows.length > 1 ? "Stacks" : null, affected: rows.length > 1 ? rows.map((r) => r.name) : null, action: verb === "stop" ? "Stop" : "Restart", danger: verb === "stop" })) return;
+    for (const s of rows) {
+      try { const r = await api.post(stackUrl(s, "/" + verb), undefined, { suppressToast: true }); toast(r.message || s.name + ": " + verb + " sent", "ok"); }
+      catch (e) { toast(s.name + ": " + e.message, "error"); }
     }
+    t.clearSelection();
+    setTimeout(() => { for (const s of rows) S.detail.delete(keyOf(s)); view.refresh(); }, 800);
   }
-
-  async function loadStatus() {
-    try {
-      const s = await apiFetch("GET", u("/api/portainer/status"), undefined, { suppressToast: true });
-      $("p-status").textContent = s.detail;
-      if (s.url) { $("p-open").href = s.url; $("p-open").hidden = false; }
-      if (!s.ok) return false;
-      const envs = await apiFetch("GET", u("/api/portainer/environments"), undefined, { suppressToast: true });
-      const sel = $("p-env");
-      // a down environment is not offered: its stacks are not shown, so there is nothing to pick
-      sel.replaceChildren(new Option("all", ""), ...envs.filter((e) => e.status !== "down").map((e) => new Option(`${e.name} (${e.type}, ${e.status})`, String(e.id))));
-      return true;
-    } catch (e) { $("p-status").textContent = err(e); return false; }
-  }
-
-  // -- one stack ----------------------------------------------------------------------------
-  async function select(s) {
-    state.selected = s;
-    renderStacks();
-    $("detail").hidden = false;
-    $("d-title").textContent = s.name;
-    $("d-meta").textContent = "Loading…";
-    try {
-      const d = await apiFetch("GET", u(`/api/portainer/endpoints/${s.endpoint_id}/stacks/${encodeURIComponent(s.name)}`), undefined, { suppressToast: true });
-      const bits = [`${d.type} stack`, d.status, `kind: ${d.kind}`, d.managed ? "" : "not created through Portainer",
-        d.auto_update ? "auto-update on" : "", d.has_webhook ? "has a deploy webhook (id hidden)" : "",
-        d.git ? `from ${d.git.url} (${gitText(d.git)})` : "", d.updated_by ? `last updated by ${d.updated_by}` : ""].filter(Boolean);
-      $("d-meta").textContent = bits.join(" · ");
-      $("d-env").textContent = d.env_names && d.env_names.length
-        ? "Environment variables (names only, values are never read out): " + d.env_names.join(", ") : "";
-      $("d-cmds").textContent = (d.host_commands || []).join("\n");
-      state.detail = d;
-      $("d-adopt").hidden = !!(d.linked_services && d.linked_services.length);
-      $("d-msg").textContent = "";
-      $("cont-body").replaceChildren(...d.containers.map((c) => {
-        const tr = el("tr");
-        const name = el("td"); name.append(el("strong", "", c.name)); if (c.service) name.append(document.createTextNode(" "), el("span", "chip", c.service));
-        const st = el("td"); st.append(stateBadge(c.state));
-        const hl = el("td"); if (c.health) hl.append(badge(c.health, c.health === "healthy" ? "healthy" : c.health === "unhealthy" ? "failed" : "unknown"));
-        const ports = c.ports.filter((p) => p.public).map((p) => `${p.public}→${p.private}/${p.proto}`).join(", ");
-        const act = el("td");
-        const logs = el("button", "secondary small", "Logs"); logs.type = "button";
-        logs.addEventListener("click", () => openLogs(s.endpoint_id, c));
-        act.append(logs);
-        for (const verb of ["start", "stop", "restart"]) {
-          const b = el("button", "secondary small", verb[0].toUpperCase() + verb.slice(1)); b.type = "button";
-          b.addEventListener("click", () => containerAction(s, c, verb));
-          act.append(document.createTextNode(" "), b);
-        }
-        if (c.open_url) act.append(document.createTextNode(" "), link(c.open_url, "Portainer"));
-        tr.append(name, st, hl, el("td", "", c.image), el("td", "", ports), linked(c.linked_services), act);
-        return tr;
-      }));
-      $("d-meta").title = "";
-    } catch (e) { $("d-meta").textContent = err(e); $("cont-body").replaceChildren(); }
-    $("detail").scrollIntoView({ behavior: "smooth", block: "nearest" });
-  }
-
-  // -- logs -----------------------------------------------------------------------------------
-  function renderLogs() {
-    const f = $("l-filter").value.toLowerCase();
-    const out = $("l-out");
-    const stick = out.scrollTop + out.clientHeight >= out.scrollHeight - 24;
-    const frag = document.createDocumentFragment();
-    for (const l of state.lines) {
-      if (f && !l.text.toLowerCase().includes(f)) continue;
-      const row = el("div", l.stream === "stderr" ? "err" : "");
-      if (l.ts && $("l-ts").checked) row.append(el("span", "ts", fmtTime(l.ts) + "  "));
-      row.append(document.createTextNode(l.text));
-      frag.append(row);
-    }
-    out.replaceChildren(frag);
-    if (stick) out.scrollTop = out.scrollHeight;
-    out.classList.toggle("wrap", $("l-wrap").checked);
-  }
-  async function loadLogs() {
-    const t = state.logTarget;
-    if (!t) return;
-    const url = u(`/api/portainer/endpoints/${t.endpoint}/containers/${encodeURIComponent(t.name)}/logs?tail=${$("l-tail").value}&timestamps=true`);
-    try {
-      const r = await apiFetch("GET", url, undefined, { suppressToast: true });
-      state.lines = r.lines;
-      $("l-msg").textContent = `${r.count} line(s)`;
-      renderLogs();
-    } catch (e) { $("l-msg").textContent = err(e); }
-  }
-  function openLogs(endpoint, c) {
-    state.logTarget = { endpoint, name: c.name };
-    $("logs").hidden = false;
-    $("l-name").textContent = c.name;
-    loadLogs();
-    $("logs").scrollIntoView({ behavior: "smooth", block: "nearest" });
-  }
-  function setFollow() {
-    clearInterval(state.timer);
-    if ($("l-follow").checked) state.timer = setInterval(loadLogs, 3000);
-  }
-  $("l-follow").addEventListener("change", setFollow);
-  $("l-reload").addEventListener("click", loadLogs);
-  $("l-tail").addEventListener("change", loadLogs);
-  for (const id of ["l-ts", "l-wrap", "l-filter"]) $(id).addEventListener("input", renderLogs);
-  $("l-download").addEventListener("click", () => {
-    const text = state.lines.map((l) => (l.ts ? l.ts + " " : "") + l.text).join("\n") + "\n";
-    const a = el("a"); a.href = URL.createObjectURL(new Blob([text], { type: "text/plain" }));
-    a.download = (state.logTarget ? state.logTarget.name : "container") + ".log"; a.click(); URL.revokeObjectURL(a.href);
-  });
-
-
-  // -- control ----------------------------------------------------------------------------------
   async function containerAction(s, c, verb) {
-    if (verb !== "start" && !confirm(`${verb} container ${c.name}?`)) return;
-    try {
-      const r = await apiFetch("POST", u(`/api/containers/${s.endpoint_id}/${encodeURIComponent(c.name)}/${verb}`), undefined, { suppressToast: true });
-      $("d-msg").textContent = r.message; $("d-msg").className = "msg ok";
-    } catch (e) { $("d-msg").textContent = err(e); $("d-msg").className = "msg error"; }
-    setTimeout(() => select(s), 800);
+    if (verb !== "start" && !await confirm({ title: (verb === "stop" ? "Stop " : "Restart ") + c.name + "?", action: verb === "stop" ? "Stop" : "Restart", danger: verb === "stop" })) return;
+    try { const r = await api.post(u("/api/containers/" + s.endpoint_id + "/" + enc(c.name) + "/" + verb), undefined, { suppressToast: true }); toast(r.message || c.name + ": " + verb + " sent", "ok"); }
+    catch (e) { toast(e.message, "error"); }
+    setTimeout(() => { S.detail.delete(keyOf(s)); loadDetail(s); view.refresh(); }, 800);
   }
-  for (const b of document.querySelectorAll("[data-stack-action]")) {
-    b.addEventListener("click", async () => {
-      const s = state.selected; if (!s) return;
-      const verb = b.dataset.stackAction;
-      if (verb !== "start" && !confirm(`${verb} stack ${s.name}?`)) return;
-      try {
-        const r = await apiFetch("POST", u(`/api/stacks/${s.endpoint_id}/${encodeURIComponent(s.name)}/${verb}`), undefined, { suppressToast: true });
-        $("d-msg").textContent = r.message; $("d-msg").className = "msg ok";
-      } catch (e) { $("d-msg").textContent = err(e); $("d-msg").className = "msg error"; }
-      setTimeout(async () => { await loadStacks(); select(s); }, 800);
+  async function deleteStack(s) {
+    const d = S.detail.get(keyOf(s)) || s;
+    const linked = d.linked_services || [];
+    const down = el("input", { type: "checkbox" }); const keep = el("input", { type: "checkbox" });
+    const ok = await confirm({
+      title: "Delete stack " + s.name + "?",
+      body: el("div", {}, el("p", {}, "Deletes it in Portainer (its volumes are kept) and then the link here. Its containers stop."),
+        el("p", {}, linked.length ? "Linked here as " + linked.join(", ") + ": their sub-services are removed with it unless you keep them." : "Nothing here is linked to it."),
+        el("label", { class: "inline" }, down, " switch linked services off first, in the right order"), el("br"),
+        linked.length ? el("label", { class: "inline" }, keep, " keep the sub-services (only clear the link)") : null),
+      typeName: s.name, action: "Delete the stack",
     });
-  }
-
-  // -- panels: only one of adopt / create / delete is open at a time ------------------------------
-  function openPanel(id) {
-    for (const p of ["create", "delete"]) $(p).hidden = p !== id;
-    $(id).scrollIntoView({ behavior: "smooth", block: "nearest" });
-  }
-  const closePanels = () => { for (const p of ["create", "delete"]) $(p).hidden = true; };
-  const option = (value, text) => new Option(text, value);
-
-  // -- create ----------------------------------------------------------------------------------------
-  let previewed = null;
-  function addVar(name, value) {
-    const row = el("div", "var-row");
-    const k = el("input"); k.type = "text"; k.placeholder = "NAME"; k.value = name || ""; k.autocomplete = "off";
-    const v = el("input"); v.type = "password"; v.placeholder = "value (not kept)"; v.value = value || ""; v.autocomplete = "new-password";
-    const rm = el("button", "secondary small", "Remove"); rm.type = "button"; rm.addEventListener("click", () => { row.remove(); invalidate(); });
-    k.addEventListener("input", invalidate); v.addEventListener("input", invalidate);
-    row.append(k, v, rm); $("c-vars").append(row);
-  }
-  function invalidate() { previewed = null; $("c-go").disabled = true; $("c-request").hidden = true; }
-  function createBody() {
-    const env = {};
-    for (const row of $("c-vars").children) {
-      const [k, v] = row.querySelectorAll("input");
-      if (k.value.trim()) env[k.value.trim()] = v.value;
-    }
-    const git = $("c-source").value === "git";
-    return { endpoint_id: parseInt($("c-env").value, 10), name: $("c-name").value.trim(), source: $("c-source").value,
-      repository_url: git ? $("c-url").value.trim() : "", reference: $("c-ref").value.trim(), compose_path: $("c-path").value.trim(),
-      git_credential_id: git && $("c-cred").value ? parseInt($("c-cred").value, 10) : null,
-      git_username: git ? $("c-user").value : "", git_password: git ? $("c-pass").value : "",
-      auto_update: git && $("c-auto").checked, compose_text: git ? "" : $("c-compose").value, env };
-  }
-  async function openCreate() {
-    let envs = [];
-    try { envs = await apiFetch("GET", u("/api/portainer/environments"), undefined, { suppressToast: true }); } catch (e) { /* the panel still opens */ }
-    const docker = envs.filter((e) => ["docker", "agent", "edge"].includes(e.type));
-    $("c-env").replaceChildren(...docker.map((e) => option(String(e.id), `${e.name} (${e.status})`)));
-    let parents = [];
-    try { parents = (await apiFetch("GET", "/api/stacks/parents", undefined, { suppressToast: true })).parents; } catch (e) { /* none to offer */ }
-    $("c-parent").replaceChildren(...parents.map((p) => option(p.slug, `${p.name} (${p.guest})`)));
-    if (!$("c-vars").children.length) addVar();
-    invalidate(); $("c-msg").textContent = ""; openPanel("create");
-  }
-  $("p-new").addEventListener("click", openCreate);
-  $("c-cancel").addEventListener("click", closePanels);
-  $("c-addvar").addEventListener("click", () => addVar());
-  $("c-source").addEventListener("change", () => { const git = $("c-source").value === "git"; $("c-git").hidden = !git; $("c-text").hidden = git; invalidate(); });
-  for (const id of ["c-env", "c-name", "c-url", "c-ref", "c-path", "c-cred", "c-user", "c-pass", "c-auto", "c-compose"]) $(id).addEventListener("input", invalidate);
-  $("c-preview").addEventListener("click", async () => {
+    if (!ok) return;
     try {
-      previewed = await apiFetch("POST", u("/api/stacks/preview"), createBody(), { suppressToast: true });
-      $("c-request").textContent = JSON.stringify(previewed, null, 2); $("c-request").hidden = false;
-      $("c-go").disabled = false; $("c-msg").textContent = "This is what will be sent to Portainer. Secrets are masked."; $("c-msg").className = "msg";
-    } catch (e) { invalidate(); $("c-msg").textContent = err(e); $("c-msg").className = "msg error"; }
-  });
-  $("c-go").addEventListener("click", async () => {
-    if (!previewed) return;
-    const body = { spec: createBody(), confirm: true, instance: inst() };
-    if ($("c-adopt").checked && $("c-slug").value.trim()) {
-      body.adopt = { endpoint_id: body.spec.endpoint_id, stack: body.spec.name, slug: $("c-slug").value.trim(), parent: $("c-parent").value, instance: inst() };
-    }
-    $("c-go").disabled = true; $("c-msg").textContent = "Creating…";
-    try {
-      const r = await apiFetch("POST", "/api/stacks", body, { suppressToast: true });
-      $("c-msg").textContent = `Created ${r.stack.name} in Portainer.` + (r.warnings.length ? " " + r.warnings.join(" ") : "") + (r.adopted ? " Linked as " + r.adopted.services.join(", ") + "." : " Adopt it to link it here.");
-      $("c-msg").className = "msg ok";
-      for (const row of $("c-vars").children) row.querySelectorAll("input")[1].value = "";
-      $("c-pass").value = "";
-      loadStacks();
-    } catch (e) { $("c-msg").textContent = err(e); $("c-msg").className = "msg error"; $("c-go").disabled = false; }
-  });
-
-  // -- delete -----------------------------------------------------------------------------------------
-  $("d-delete").addEventListener("click", () => {
-    const s = state.selected; if (!s) return;
-    $("x-stack").textContent = s.name; $("x-name").value = ""; $("x-msg").textContent = ""; $("x-down").checked = false; $("x-keep").checked = false;
-    const linkedTo = (state.detail && state.detail.linked_services) || [];
-    $("x-linked").textContent = linkedTo.length ? "Linked here as: " + linkedTo.join(", ") + ". Their sub-services are removed with it unless you keep them." : "Nothing here is linked to it.";
-    openPanel("delete");
-  });
-  $("x-cancel").addEventListener("click", closePanels);
-  $("x-go").addEventListener("click", async () => {
-    const s = state.selected; if (!s) return;
-    try {
-      const r = await apiFetch("DELETE", u(`/api/stacks/${s.endpoint_id}/${encodeURIComponent(s.name)}`),
-        { confirm_name: $("x-name").value, take_down: $("x-down").checked, remove_services: !$("x-keep").checked }, { suppressToast: true });
-      const bits = [`Deleted ${r.stack} (volumes kept).`];
+      const r = await window.apiFetch("DELETE", stackUrl(s), { confirm_name: s.name, take_down: down.checked, remove_services: !keep.checked }, { suppressToast: true });
+      const bits = ["Deleted " + r.stack + " (volumes kept)."];
       if (r.taken_down.length) bits.push("Switched off: " + r.taken_down.join(", ") + ".");
       if (r.removed_services.length) bits.push("Removed here: " + r.removed_services.join(", ") + ".");
       if (r.unlinked_hosts.length) bits.push("Proxy hosts now unlinked: " + r.unlinked_hosts.join(", ") + ".");
       if (r.warnings.length) bits.push(r.warnings.join(" "));
-      $("x-msg").textContent = bits.join(" "); $("x-msg").className = "msg ok";
-      state.selected = null; $("detail").hidden = true;
-      loadStacks();
-    } catch (e) { $("x-msg").textContent = err(e); $("x-msg").className = "msg error"; }
+      toast(bits.join(" "), "ok");
+    } catch (e) { toast(e.message, "error"); }
+    S.open.delete(keyOf(s)); view.refresh();
+  }
+
+  // --- one stack, expanded -----------------------------------------------------------------------
+  async function loadDetail(s) {
+    const k = keyOf(s);
+    try {
+      const d = await api.get(u("/api/portainer/endpoints/" + s.endpoint_id + "/stacks/" + enc(s.name)), { suppressToast: true });
+      S.detail.set(k, d);
+      t.render();
+      await Promise.all(d.containers.filter((c) => c.state === "running").map((c) =>
+        api.get(u("/api/portainer/endpoints/" + s.endpoint_id + "/containers/" + enc(c.name) + "/stats"), { suppressToast: true })
+          .then((st) => S.stats.set(s.endpoint_id + "/" + c.name, st), () => {})));
+      t.render();
+    } catch (e) { S.detail.set(k, { error: e.message }); t.render(); }
+  }
+  function toggle(s) {
+    const k = keyOf(s);
+    if (S.open.has(k)) S.open.delete(k); else { S.open.add(k); if (!S.detail.has(k)) loadDetail(s); }
+    t.render();
+  }
+  function detailOf(s) {
+    const k = keyOf(s);
+    if (!S.open.has(k)) return null;
+    const d = S.detail.get(k);
+    if (!d) return el("div", { class: "ct-detail faint" }, "Loading its containers…");
+    if (d.error) return el("div", { class: "ct-detail" }, el("span", { class: "pill fail" }, "error"), " " + d.error);
+    const meta = [d.type + " stack", d.managed ? "" : "not created through Portainer", d.auto_update ? "auto-update on" : "", d.has_webhook ? "has a deploy webhook (id hidden)" : "",
+      d.git ? "from " + d.git.url + (d.git.has_credentials ? " (uses credentials)" : "") : "", d.updated_by ? "last updated by " + d.updated_by : ""].filter(Boolean).join(" · ");
+    return el("div", { class: "ct-detail" },
+      el("div", { class: "ct-meta" }, meta, d.env_names && d.env_names.length ? el("div", {}, "Environment variables (names only; values are never read out): " + d.env_names.join(", ")) : null),
+      d.containers.length ? d.containers.map((c) => {
+        const st = S.stats.get(s.endpoint_id + "/" + c.name);
+        const ports = c.ports.filter((p) => p.public).map((p) => (p.ip && p.ip !== "0.0.0.0" ? p.ip + ":" : "") + p.public + "→" + p.private + (p.proto !== "tcp" ? "/" + p.proto : "")).join(", ");
+        return el("div", { class: "ct-row" },
+          el("span", { class: "mono", title: c.name }, c.name, c.service && c.service !== c.name ? el("span", { class: "faint" }, " · " + c.service) : null),
+          el("span", { class: "mono faint", title: c.image }, c.image),
+          el("span", {}, cpill(c.state), c.health ? [" ", el("span", { class: "pill " + (c.health === "healthy" ? "ok" : c.health === "unhealthy" ? "fail" : "off") }, c.health)] : null),
+          el("span", { class: "mono", style: { fontSize: "12px" } }, ports || "—"),
+          el("span", { class: "faint" }, st ? Math.round(st.cpu_percent) + "% · " + fmt.bytes(st.mem_bytes) : c.status_text || ""),
+          el("span", { class: "acts" },
+            el("button", { type: "button", class: "ghost small", onclick: () => logs(s, c) }, "Logs"),
+            el("button", { type: "button", class: "ghost small", onclick: () => containerAction(s, c, "restart") }, "Restart"),
+            window.UI.menuButton(() => [
+              { label: "Start", onClick: () => containerAction(s, c, "start") },
+              { label: "Stop", onClick: () => containerAction(s, c, "stop") },
+              { label: "Restart", onClick: () => containerAction(s, c, "restart") },
+              c.open_url ? { label: "Open in Portainer ↗", href: c.open_url } : null,
+              c.linked_services && c.linked_services.length ? { label: "Open " + c.linked_services[0], href: "/services/" + enc(c.linked_services[0]) } : null,
+            ].filter(Boolean), "Actions for " + c.name)));
+      }) : el("p", { class: "faint" }, "No containers."),
+      d.host_commands && d.host_commands.length ? el("details", { class: "ct-meta" }, el("summary", {}, "The same by hand, on the Docker host"), el("pre", { class: "sys-pre" }, d.host_commands.join("\n"))) : null);
+  }
+
+  // --- logs ---------------------------------------------------------------------------------------
+  function logs(s, c) {
+    let lines = []; let timer = 0;
+    const out = el("pre", { class: "log", "aria-live": "off" });
+    const tail = el("select", { "aria-label": "Lines" }, [100, 200, 500, 1000, 2000].map((n) => el("option", { value: String(n), selected: n === 200 }, n + " lines")));
+    const follow = el("input", { type: "checkbox" }); const ts = el("input", { type: "checkbox", checked: true }); const wrap = el("input", { type: "checkbox" });
+    const filter = el("input", { type: "search", placeholder: "filter lines", "aria-label": "Filter lines" });
+    const count = el("span", { class: "faint", style: { fontSize: "12.5px" } });
+    function draw() {
+      const f = filter.value.toLowerCase();
+      const stick = out.scrollTop + out.clientHeight >= out.scrollHeight - 24;
+      fill(out, lines.filter((l) => !f || l.text.toLowerCase().includes(f)).map((l) =>
+        el("div", { class: l.stream === "stderr" ? "err" : null }, l.ts && ts.checked ? el("span", { class: "ts" }, fmt.time(l.ts) + "  ") : null, l.text)));
+      if (stick) out.scrollTop = out.scrollHeight;
+      out.classList.toggle("wrap", wrap.checked);
+    }
+    async function load() {
+      try {
+        const r = await api.get(u("/api/portainer/endpoints/" + s.endpoint_id + "/containers/" + enc(c.name) + "/logs?tail=" + tail.value + "&timestamps=true"), { suppressToast: true });
+        lines = r.lines; count.textContent = r.count + " lines"; draw();
+      } catch (e) { count.textContent = e.message; }
+    }
+    function download() {
+      const text = lines.map((l) => (l.ts ? l.ts + " " : "") + l.text).join("\n") + "\n";
+      const a = el("a", { href: URL.createObjectURL(new Blob([text], { type: "text/plain" })), download: c.name + ".log" });
+      a.click(); URL.revokeObjectURL(a.href);
+    }
+    follow.addEventListener("change", () => { clearInterval(timer); if (follow.checked) timer = setInterval(load, 3000); });
+    tail.addEventListener("change", load);
+    for (const x of [ts, wrap, filter]) x.addEventListener("input", draw);
+    drawer({
+      title: "Logs of " + c.name, sub: s.name + " · " + c.image, wide: true, saveLabel: "Done",
+      async onSave() { /* nothing to save */ },
+      onClose: () => clearInterval(timer),
+      fields: [{ type: "custom", render: () => el("div", {},
+        el("div", { class: "log-tools" }, tail, el("label", { class: "inline" }, follow, " follow"), el("label", { class: "inline" }, ts, " timestamps"),
+          el("label", { class: "inline" }, wrap, " wrap"), filter,
+          el("button", { type: "button", class: "secondary small", onclick: load }, "Reload"),
+          el("button", { type: "button", class: "secondary small", onclick: download }, "Download"), count),
+        out) }],
+    });
+    load();
+  }
+
+  // --- new stack ------------------------------------------------------------------------------------
+  async function newStack() {
+    let envs = []; let parents = [];
+    try { envs = await api.get(u("/api/portainer/environments"), { suppressToast: true }); } catch (_e) { /* still open the drawer */ }
+    try { parents = (await api.get("/api/stacks/parents", { suppressToast: true })).parents; } catch (_e) { /* none to offer */ }
+    const docker = envs.filter((e) => ["docker", "agent", "edge"].includes(e.type));
+    const vars = el("div");
+    const addVar = () => vars.append(el("div", { class: "var-row" }, el("input", { type: "text", placeholder: "NAME", autocomplete: "off", "aria-label": "Name" }),
+      el("input", { type: "password", placeholder: "value (not kept)", autocomplete: "new-password", "aria-label": "Value" }),
+      el("button", { type: "button", class: "ghost small", onclick: (e) => e.currentTarget.parentElement.remove() }, "Remove")));
+    addVar();
+    let previewed = null;
+    const previewBox = el("pre", { class: "sys-pre", hidden: true });
+    const bodyOf = (v) => {
+      const env = {};
+      for (const row of vars.children) { const [k, val] = row.querySelectorAll("input"); if (k.value.trim()) env[k.value.trim()] = val.value; }
+      const git = v.source === "git";
+      return { endpoint_id: Number(v.endpoint), name: (v.name || "").trim(), source: v.source,
+        repository_url: git ? (v.url || "").trim() : "", reference: (v.ref || "").trim(), compose_path: (v.path || "").trim(),
+        git_credential_id: git && v.cred ? Number(v.cred) : null, git_username: git ? v.user || "" : "", git_password: git ? v.pass || "" : "",
+        auto_update: git && !!v.auto, compose_text: git ? "" : v.compose || "", env };
+    };
+    drawer({
+      title: "New stack",
+      sub: "Sent to Portainer, which creates and owns it. Variable values and the Git password go straight to Portainer and are not kept, logged or shown again.",
+      values: { endpoint: docker[0] ? String(docker[0].id) : "", name: "", source: "git", url: "", ref: "refs/heads/main", path: "docker-compose.yml", cred: "", user: "", pass: "", auto: false, compose: "", adopt: false, slug: "", parent: parents[0] ? parents[0].slug : "" },
+      saveLabel: "Create in Portainer", testLabel: "Preview the request",
+      note: "Preview first: it shows exactly what is sent.",
+      fields: [
+        { key: "endpoint", label: "Environment", type: "select", required: true, options: docker.map((e) => ({ value: String(e.id), label: e.name + " (" + e.status + ")" })) },
+        { key: "name", label: "Stack name", required: true, mono: true },
+        { key: "source", label: "Source", type: "select", options: [{ value: "git", label: "a Git repository" }, { value: "string", label: "compose text" }] },
+        { key: "url", label: "Repository URL", mono: true, placeholder: "https://git.example.lan/group/app.git", show: (v) => v.source === "git" },
+        { key: "ref", label: "Reference", mono: true, show: (v) => v.source === "git" },
+        { key: "path", label: "Compose file", mono: true, show: (v) => v.source === "git" },
+        { key: "cred", label: "Saved credential", type: "number", help: "A Git credential Portainer already has (its id); or a username and password below.", show: (v) => v.source === "git" },
+        { key: "user", label: "Username", show: (v) => v.source === "git" },
+        { key: "pass", label: "Password", type: "password", show: (v) => v.source === "git" },
+        { key: "auto", label: "Let Portainer poll the repository (auto update)", type: "checkbox", show: (v) => v.source === "git" },
+        { key: "compose", label: "Compose text", type: "textarea", rows: 10, mono: true, show: (v) => v.source === "string" },
+        { type: "section", label: "Environment variables" },
+        { type: "custom", render: () => el("div", {}, vars, el("button", { type: "button", class: "secondary small", onclick: addVar }, "Add a variable")) },
+        { type: "section", label: "Link it here" },
+        { key: "adopt", label: "Also link it as a sub-service", type: "checkbox" },
+        { key: "slug", label: "Slug", mono: true, show: (v) => v.adopt },
+        { key: "parent", label: "Under", type: "select", show: (v) => v.adopt, options: parents.map((p) => ({ value: p.slug, label: p.name + " (" + p.guest + ")" })) },
+        { type: "custom", render: () => previewBox },
+      ],
+      async onTest(v) {
+        const body = bodyOf(v);
+        const req = await api.post(u("/api/stacks/preview"), body, { suppressToast: true });
+        previewed = JSON.stringify(body);
+        previewBox.textContent = JSON.stringify(req, null, 2);
+        previewBox.hidden = false;
+        previewBox.scrollIntoView({ block: "nearest" });
+        return "Above: exactly what is sent to Portainer, secrets masked.";
+      },
+      async onSave(v) {
+        const spec = bodyOf(v);
+        if (previewed !== JSON.stringify(spec)) throw new Error("Preview the request first: it shows exactly what is sent to Portainer.");
+        const body = { spec, confirm: true, instance: S.instance };
+        if (v.adopt && (v.slug || "").trim()) body.adopt = { endpoint_id: spec.endpoint_id, stack: spec.name, slug: v.slug.trim(), parent: v.parent, instance: S.instance };
+        const r = await api.post("/api/stacks", body, { suppressToast: true });
+        toast("Created " + r.stack.name + " in Portainer." + (r.warnings.length ? " " + r.warnings.join(" ") : "") + (r.adopted ? " Linked as " + r.adopted.services.join(", ") + "." : ""), "ok");
+        view.refresh();
+      },
+    });
+  }
+  $("#new-stack").addEventListener("click", newStack);
+
+  // --- the table ------------------------------------------------------------------------------------
+  const age = el("span", { class: "age" });
+  const instSel = el("select", { "aria-label": "Portainer", hidden: true });
+  const envSel = el("select", { "aria-label": "Environment" }, el("option", { value: "" }, "Environment: all"));
+  const t = table($("#stacks"), {
+    rows: [], key: keyOf, name: (s) => s.name, noun: ["stack", "stacks"],
+    placeholder: "Filter by stack, container, image…",
+    search: (s) => [s.name, sourceText(s), (s.linked_services || []).join(" "), ((S.detail.get(keyOf(s)) || {}).containers || []).map((c) => c.name + " " + c.image).join(" ")].join(" "),
+    sort: { key: "name", dir: 1 },
+    toolbarExtra: el("span", { style: { display: "inline-flex", gap: "8px" } }, instSel, envSel),
+    age,
+    columns: [
+      { key: "name", label: "Stack", sort: (s) => s.name.toLowerCase(),
+        render: (s) => [el("button", { type: "button", class: "ct-toggle", "aria-expanded": String(S.open.has(keyOf(s))), onclick: () => toggle(s) },
+          el("span", { class: "tw", "aria-hidden": "true" }, S.open.has(keyOf(s)) ? "▾" : "▸"), s.name),
+          el("span", { class: "sub" }, (S.envs && S.envs[s.endpoint_id]) || "environment " + s.endpoint_id, !s.managed ? [" · ", el("span", { class: "tag" }, "not in Portainer's stack list")] : null)] },
+      { key: "state", label: "State", sort: (s) => stateOf(s).label, render: (s) => { const x = stateOf(s); return el("span", { class: "pill " + x.cls }, x.label); } },
+      { key: "containers", label: "Containers", sort: (s) => s.containers_running || 0, render: (s) => (s.containers_running || 0) + " / " + (s.containers_total || 0) + " running" },
+      { key: "source", label: "Source", phone: false, render: (s) => el("span", { class: "mono", style: { fontSize: "12px" }, title: s.git ? s.git.url : null }, sourceText(s)) },
+      { key: "updated", label: "Updated", sort: (s) => s.updated_at || "", render: (s) => s.updated_at ? el("span", { class: "faint", title: fmt.time(s.updated_at) }, fmt.ago(s.updated_at)) : "—" },
+      { key: "service", label: "Service", render: (s) => (s.linked_services || []).length ? linkedTo(s.linked_services) : [el("span", { class: "faint" }, "not linked"), " · ", el("a", { href: "/sources#portainer" }, "Link…")] },
+    ],
+    chips: [
+      { key: "running", label: "Running", test: (s) => stateOf(s).label === "running" },
+      { key: "stopped", label: "Stopped", test: (s) => stateOf(s).label === "stopped" },
+      { key: "partly", label: "Partly running", test: (s) => stateOf(s).label === "partly running" },
+      { key: "unlinked", label: "Not linked", test: (s) => !(s.linked_services || []).length },
+    ],
+    detail: detailOf,
+    menu: (s) => [
+      { label: S.open.has(keyOf(s)) ? "Hide its containers" : "Show its containers", onClick: () => toggle(s) },
+      { label: "Start", onClick: () => stackAction([s], "start") },
+      { label: "Stop", onClick: () => stackAction([s], "stop") },
+      { label: "Restart", onClick: () => stackAction([s], "restart") },
+      (s.linked_services || []).length ? { label: "Open " + s.linked_services[0], href: "/services/" + enc(s.linked_services[0]) } : { label: "Link to a service…", href: "/sources#portainer" },
+      s.open_url ? { label: "Open in Portainer ↗", href: s.open_url } : null,
+      "-",
+      { label: "Delete…", danger: true, onClick: () => deleteStack(s) },
+    ].filter(Boolean),
+    bulk: (rows) => [
+      { label: "Start", onClick: () => stackAction(rows, "start") },
+      { label: "Stop", onClick: () => stackAction(rows, "stop") },
+      { label: "Restart", onClick: () => stackAction(rows, "restart") },
+    ],
+    empty: { title: "No stacks", text: "Portainer has no stacks here yet.", action: el("button", { type: "button", class: "small", onclick: newStack }, "+ New stack") },
   });
 
-  // -- wiring ---------------------------------------------------------------------------------
-  $("p-env").addEventListener("change", loadStacks);
-  async function loadInstances() {
-    try {
-      const list = await apiFetch("GET", "/api/portainer/instances", undefined, { suppressToast: true });
-      const sel = $("p-inst");
-      const asked = new URLSearchParams(location.search).get("instance") || "";
-      const pick = list.some((i) => i.id === asked) ? asked : (list.find((i) => i.default) || list[0] || {}).id;
-      sel.replaceChildren(...list.map((i) => { const o = el("option", "", i.name + (i.default ? " (default)" : "") + (i.configured ? "" : " - not set up")); o.value = i.id; o.selected = i.id === pick; return o; }));
-      $("p-inst-wrap").hidden = list.length < 2;
-    } catch (e) { /* the page works with the default one */ }
+  // --- loading -------------------------------------------------------------------------------------
+  async function load() {
+    const status = await api.get(u("/api/portainer/status"), { suppressToast: true });
+    const banners = [];
+    if (status.url) { $("#open-portainer").href = status.url; $("#open-portainer").hidden = false; }
+    if (!status.ok) {
+      banners.push(el("div", { class: "banner sys-banner" }, el("span", { class: "pill " + (status.configured ? "fail" : "off") }, status.configured ? "down" : "not set up"), " ",
+        el("strong", {}, "Portainer" + (S.instances.length > 1 ? " " + (S.instances.find((i) => i.id === status.instance) || {}).name : "")), " " + status.detail + " ",
+        el("a", { class: "btn secondary small", href: "/infra/connections" }, status.configured ? "Check connection" : "Set it up")));
+      return { stacks: [], banners };
+    }
+    const envs = await api.get(u("/api/portainer/environments"), { suppressToast: true }).catch(() => []);
+    S.envs = Object.fromEntries(envs.map((e) => [e.id, e.name]));
+    const keep = envSel.value || S.env;
+    fill(envSel, el("option", { value: "" }, "Environment: all"), envs.filter((e) => e.status !== "down").map((e) => el("option", { value: String(e.id) }, e.name + " (" + e.type + ")")));
+    envSel.value = keep;
+    const r = await api.get(u("/api/portainer/stacks" + (envSel.value ? "?endpoint=" + envSel.value : "")), { suppressToast: true });
+    const down = Object.values(r.errors || {});
+    if (down.length) banners.push(el("div", { class: "banner sys-banner" }, el("span", { class: "pill warn" }, "hidden"), " ",
+      down.length === 1 ? "One environment is not answering, so its stacks are not shown: " : down.length + " environments are not answering, so their stacks are not shown: ", down.join("; ")));
+    return { stacks: r.stacks, banners };
   }
-  $("p-inst").addEventListener("change", async () => {
-    state.selected = null; $("detail").hidden = true;
-    if (await loadStatus()) loadStacks(); else { state.stacks = []; renderStacks(); }
+  const view = region(el("div"), { // the table is the visible part; the section only loads
+    load,
+    render: (d) => {
+      fill($("#banners"), d.banners);
+      t.setRows(d.stacks);
+      for (const s of d.stacks) if (S.open.has(keyOf(s)) && !S.detail.has(keyOf(s))) loadDetail(s);
+    },
+    every: 60000, poll: true, age,
   });
-  $("p-search").addEventListener("input", renderStacks);
-  $("p-refresh").addEventListener("click", async () => { await loadStacks(); if (state.selected) select(state.selected); });
-  (async () => { await loadInstances(); if (await loadStatus()) loadStacks(); else renderStacks(); })();
+  envSel.addEventListener("change", () => { S.env = envSel.value; writeUrl(); view.refresh(); });
+  instSel.addEventListener("change", () => { S.instance = instSel.value; S.open.clear(); S.detail.clear(); writeUrl(); view.refresh(); });
+  function writeUrl() {
+    const p = new URLSearchParams(location.search);
+    S.instance ? p.set("instance", S.instance) : p.delete("instance");
+    S.env ? p.set("env", S.env) : p.delete("env");
+    history.replaceState(null, "", location.pathname + (p.toString() ? "?" + p : ""));
+  }
+  api.get("/api/portainer/instances", { suppressToast: true }).then((list) => {
+    S.instances = list;
+    if (list.length < 2) return;
+    const pick = list.some((i) => i.id === S.instance) ? S.instance : (list.find((i) => i.default) || list[0]).id;
+    fill(instSel, list.map((i) => el("option", { value: i.id, selected: i.id === pick }, "Portainer: " + i.name + (i.configured ? "" : " (not set up)"))));
+    instSel.hidden = false;
+    if (pick !== S.instance) { S.instance = pick; view.refresh(); }
+  }, () => {});
+  void clear;
 })();
