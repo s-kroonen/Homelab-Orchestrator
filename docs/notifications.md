@@ -34,7 +34,10 @@ or not) and every service and sub-service, and announces CHANGES:
   (30 min) = one "flapping" alert, then quiet until it settles.
 * UNKNOWN ("we could not look") is never announced.
 
-Pipelines add **backup_failed** and **wake_failed**; the recovery loop adds
+Pipelines add **backup_failed** and **wake_failed** (default), **backup_retry** (default) and
+**backup_skipped** (a backup that was not taken because the service was unhealthy, had no
+required check or was off and may not be woken - see [backup_wake.md](backup_wake.md); in
+the feed, sent only when a rule asks for it); the recovery loop adds
 **recovery_attempt / recovery_succeeded / recovery_exhausted** and **restore_proposed**. Stacks
 linked to Portainer add **switch_failed**, **outside_change** (a linked thing was changed outside
 the orchestrator), and for deploys **deploy_blocked**, **deploy_failed**, **deploy_succeeded**

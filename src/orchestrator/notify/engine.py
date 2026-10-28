@@ -52,6 +52,7 @@ EVENTS = (
     "dump_succeeded",
     "backup_failed",
     "backup_retry",
+    "backup_skipped",
     "wake_failed",
     "power_restore_failed",
     "update_succeeded",

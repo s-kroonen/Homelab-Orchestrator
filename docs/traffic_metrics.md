@@ -302,7 +302,22 @@ proxy host's chain:
 |---|---|---|
 | `ProxyHost.wake_on_hit` | **False** | Per-route opt-in: does traffic to *this* hostname count as a wake trigger at all. |
 | `Service.wake_on_hit_enabled` | **True** | Safety rail: this specific service can be auto-woken this way. |
-| `Node.wake_on_hit_enabled` | **True** | Safety rail: this physical node can be auto-woken this way at all — if `False`, nothing wakes it through this path, regardless of any service's or proxy host's own setting. |
+| `Node.wake_on_hit_enabled` | **True** | Safety rail: traffic may *turn this node on* — if `False`, a hit never powers it on, whatever the service's or proxy host's own setting. While the node is on (or it is always on) a hit only starts the guest, so this switch does not matter then. |
+
+The decision is one function, `pipelines.wake.traffic_blocker`, shared by both collectors,
+the maintenance page and the Services list's *Wake on hit* column (which says why not, or
+*while on* when only the node switch stops it). It also covers:
+
+* **A sub-service** goes by its root's node (it has none of its own).
+* **A node with no power target** that is off: blocked, decided before a run is made, so a
+  background client hitting it all day leaves no failed runs behind (one debug log line each).
+* **A service switched off in the registry** (or under a switched-off parent): blocked.
+* **A stale "on"**: the node switch is checked against the kept power state. If the node was
+  in fact off, the wake pipeline itself refuses to power it on for a traffic wake
+  (`actor` `traefik_hit` or `maintenance-page`) and the run fails with that reason. A wake
+  by a person (button, API, CLI) is never stopped by the switch.
+* **After the node boots**, a guest that Proxmox starts at boot is left to Proxmox; see
+  [boot_order.md](boot_order.md).
 
 **Why these defaults:** `ProxyHost.wake_on_hit` defaults to `False` because
 this behaviour did not exist before — defaulting it on would silently

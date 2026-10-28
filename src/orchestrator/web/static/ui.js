@@ -79,6 +79,9 @@
       if (s < 5400) return Math.round(s / 60) + " min ago";
       return Math.round(s / 3600) + " h ago";
     },
+    // A duration: "45 s", "3 min".
+    secs: (s) => (s >= 90 ? Math.round(s / 60) + " min" : Math.round(s) + " s"),
+    nth: (n) => n + (n % 100 >= 11 && n % 100 <= 13 ? "th" : { 1: "st", 2: "nd", 3: "rd" }[n % 10] || "th"),
     bytes(n) {
       if (n == null || isNaN(n)) return "";
       const u = ["B", "KB", "MB", "GB", "TB", "PB"];

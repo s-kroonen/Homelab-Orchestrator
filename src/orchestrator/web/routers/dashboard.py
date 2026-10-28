@@ -374,11 +374,45 @@ def service_detail(session: Session, svc: Service) -> dict[str, Any]:
         # discovering it when something is actually down — see
         # docs/architecture.md.
         "wake_unsupported": wake_is_unsupported(node),
+        "wake": _wake_view(session, svc),
         "probes": [_probe_dict(p) for p in _service_probes(session, svc)],
         "proxy_hosts": [_proxy_host_dict(p) for p in _service_proxy_hosts(session, svc)],
         "created_at": svc.created_at.isoformat(),
         "updated_at": svc.updated_at.isoformat(),
     }
+
+
+def _wake_view(session: Session, svc: Service) -> dict[str, Any]:
+    """Whether traffic may wake it (and why not), its guest's start-at-boot setting, and how
+    long a wake would take from where things are now. See docs/boot_order.md."""
+    from orchestrator.pipelines.wake import known_on, node_of, traffic_blocker
+    from orchestrator.registry import boot
+    from orchestrator.registry.tree import effective_guest
+
+    node = node_of(session, svc)
+    out: dict[str, Any] = {"traffic_blocker": traffic_blocker(session, svc), "boot": None}
+    if node is None:
+        out["estimate"] = None
+        return out
+    vmid = effective_guest(session, svc).guest_id
+    row = boot.setting_for(session, node.name, vmid) if vmid is not None else None
+    if row is not None:
+        slot = next((s for s in boot.sequence(session, node) if s.vmid == vmid), None)
+        out["boot"] = {
+            "onboot": row.onboot,
+            "order": row.order,
+            "up_s": row.up_s,
+            "read_at": row.read_at.isoformat() if row.read_at else None,
+            "position": slot.position if slot else None,
+            "starts_after_s": slot.starts_after_s if slot else None,
+        }
+    on = known_on(session, node)
+    out["estimate"] = boot.estimate(session, svc, node, vmid, node_on=on).as_dict()
+    if not node.always_on:
+        out["estimate_off"] = (
+            boot.estimate(session, svc, node, vmid, node_on=False).as_dict() if on else None
+        )
+    return out
 
 
 def _get_service(session: Session, slug: str) -> Service:

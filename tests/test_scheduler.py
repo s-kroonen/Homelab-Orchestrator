@@ -34,7 +34,7 @@ from orchestrator.db.models import (
     PipelineRun,
     Service,
 )
-from orchestrator.domain.enums import AuditResult, GuestKind, HealthState, PipelineStatus
+from orchestrator.domain.enums import GuestKind, HealthState, PipelineStatus
 from orchestrator.domain.schemas import ServiceVerdict
 from orchestrator.pipelines.backup import BackupPipeline
 from orchestrator.scheduler import BackupScheduler, job_id, next_fire_time, resolve_targets
@@ -342,6 +342,9 @@ class StubHealthEngine:
     def __init__(self, state: HealthState = HealthState.HEALTHY) -> None:
         self.state = state
 
+    def can_verify(self, session: Session, service: Any) -> bool:
+        return True
+
     async def scan(self, session: Session, service: Service) -> ServiceVerdict:
         return ServiceVerdict(state=self.state, reason="stub", probe_results=[])
 
@@ -395,13 +398,13 @@ async def test_failed_backup_never_prunes(session: Session) -> None:
 
     outcomes = await sched.run_policy("nightly")
 
-    assert outcomes["alpha"]["backup"] == "failed"
+    assert outcomes["alpha"]["backup"] == "skipped"
     assert "retention" not in outcomes["alpha"]
     assert pbs.prune_calls == []
     assert pbs.protect_calls == []
     session.expire_all()
-    failed = session.exec(select(AuditEntry).where(AuditEntry.action == "backup.failed")).one()
-    assert failed.actor == "scheduler" and failed.result is AuditResult.ERROR
+    skipped = session.exec(select(AuditEntry).where(AuditEntry.action == "backup.skipped")).one()
+    assert skipped.actor == "scheduler" and skipped.details["why"] == "unhealthy"
 
 
 async def test_run_policy_for_vanished_policy_is_a_no_op(session: Session) -> None:

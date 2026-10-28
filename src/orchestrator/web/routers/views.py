@@ -29,6 +29,7 @@ from orchestrator.db.models import (
     ServiceState,
 )
 from orchestrator.domain.enums import BackupMode, GuestKind, PipelineKind, PipelineStatus
+from orchestrator.pipelines.wake import traffic_blocker
 from orchestrator.registry.probe_specs import PROBE_SPECS
 from orchestrator.registry.topology import build_map
 from orchestrator.registry.tree import TreeIndex
@@ -159,10 +160,11 @@ def service_rows(session: Session) -> list[dict[str, Any]]:
             backup = {"main": "with parent", "sub": "", "cls": "off"}
         elif svc.backup_policy_id is None:
             backup = {"main": "no policy", "sub": "", "cls": "warn"}
-        elif backup_failed and run is not None:
+        elif run is not None and (backup_failed or run.status is PipelineStatus.SKIPPED):
             backup = {
                 "main": policies.get(svc.backup_policy_id, "?"),
-                "sub": "failed",
+                "sub": "failed" if backup_failed else "skipped",
+                "why": run.error or "",
                 "at": (run.finished_at or run.started_at).isoformat(),
                 "cls": "warn",
             }
@@ -179,19 +181,19 @@ def service_rows(session: Session) -> list[dict[str, Any]]:
                 "sub": "never backed up",
                 "cls": "warn",
             }
-        node_wakes = node.wake_on_hit_enabled if node is not None else False
         wake_why = ""
+        blocked = traffic_blocker(session, svc, node=node, served=tree.is_served(svc))
         if parent is not None and not svc.wake_on_hit_enabled:
             wake = "via parent"
-        elif svc.wake_on_hit_enabled and node_wakes:
-            wake = "yes (button)" if svc.wake_trigger.value == "button" else "yes"
-        else:
+        elif blocked is not None:
             wake = "no"
-            wake_why = (
-                "off for this service"
-                if not svc.wake_on_hit_enabled
-                else f"off for its node {node.name if node else '?'}"
-            )
+            wake_why = blocked
+        elif node is not None and not node.always_on and not node.wake_on_hit_enabled:
+            # On now, so a hit starts the guest; once the node is off, traffic will not wake it.
+            wake = "while on"
+            wake_why = f"its node {node.name} has wake on hit off: traffic does not turn it on"
+        else:
+            wake = "yes (button)" if svc.wake_trigger.value == "button" else "yes"
         rows.append(
             {
                 "id": svc.id,
@@ -260,6 +262,22 @@ async def services_page(request: Request, session: SessionDep) -> HTMLResponse |
 # --- nodes ------------------------------------------------------------------------------------
 
 
+def _node_boot(session: Session, node: Node) -> dict[str, Any]:
+    """What Proxmox does when the node boots, from the kept copy of its settings."""
+    from orchestrator.db.models import NodeState
+    from orchestrator.registry import boot as boot_mod
+
+    state = session.get(NodeState, node.id) if node.id is not None else None
+    took, learned = boot_mod.node_boot_s(session, node)
+    return {
+        "delay_s": state.onboot_delay_s if state else None,
+        "read_at": state.boot_read_at.isoformat() if state and state.boot_read_at else None,
+        "sequence": [x.as_dict() for x in boot_mod.sequence(session, node)],
+        "boot_s": took,
+        "boot_learned": learned,
+    }
+
+
 def nodes_view(session: Session) -> dict[str, Any]:
     services = list(session.exec(select(Service)).all())
     tree = TreeIndex(services)
@@ -277,6 +295,7 @@ def nodes_view(session: Session) -> dict[str, Any]:
                 "wake_on_hit_enabled": n.wake_on_hit_enabled,
                 "services": len(mine),
                 "service_slugs": sorted(s.slug for s in mine if tree.parent(s) is None),
+                "boot": _node_boot(session, n),
             }
         )
     return {"nodes": out, "services": [{"slug": s.slug, "name": s.name} for s in services]}
@@ -583,6 +602,21 @@ def _attention(session: Session, rows: list[dict[str, Any]]) -> list[dict[str, A
                     "action": "run",
                 }
             )
+        else:
+            run = runs.get(ids.get(r["slug"]) or -1)
+            if run is not None and run.status is PipelineStatus.SKIPPED:
+                items.append(
+                    {
+                        "kind": "backup",
+                        "cls": "warn",
+                        "label": "Backup",
+                        "slug": r["slug"],
+                        "title": f"{r['name']} backup skipped",
+                        "text": run.error or "its last backup was skipped",
+                        "at": (run.finished_at or run.started_at).isoformat(),
+                        "action": "run",
+                    }
+                )
     return items
 
 

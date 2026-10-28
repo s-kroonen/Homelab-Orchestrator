@@ -20,6 +20,7 @@ from orchestrator.config import Settings
 _SERVICE_SPOT = {
     "backup_failed": "backups",
     "backup_retry": "backups",
+    "backup_skipped": "backups",
     "restore_succeeded": "backups",
     "restore_failed": "backups",
     "restore_proposed": "backups",

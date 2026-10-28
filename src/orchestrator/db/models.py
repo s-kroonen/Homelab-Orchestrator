@@ -554,6 +554,28 @@ class NodeState(SQLModel, table=True):
         default_factory=list,
         sa_column=Column(JSON),
     )
+    #: The node's *Start on boot delay* in Proxmox (seconds before it starts the onboot guests),
+    #: as last read while the node was on. None: not set, or never read.
+    onboot_delay_s: int | None = None
+    boot_read_at: datetime | None = None
+
+
+class GuestBootSetting(SQLModel, table=True):
+    """A guest's boot settings in Proxmox (*Start at boot*, *Start/Shutdown order*), as last
+    read while its node was on. Proxmox owns them; this is a copy so a plan for a node that is
+    off right now can still say what will start by itself and in which order. Refreshed when
+    the guests are listed and after a node comes online; written through to Proxmox when edited
+    on Nodes & guests. See docs/boot_order.md."""
+
+    __tablename__ = "guest_boot_setting"
+
+    node: str = Field(primary_key=True)
+    vmid: int = Field(primary_key=True)
+    onboot: bool = False
+    order: int | None = None
+    up_s: int | None = None
+    down_s: int | None = None
+    read_at: datetime | None = None
 
 
 class PipelineRun(SQLModel, table=True):

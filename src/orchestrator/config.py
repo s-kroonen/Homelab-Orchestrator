@@ -373,6 +373,10 @@ class Settings(BaseSettings):
     # Just the Proxmox "start" task, not the guest finishing its own boot —
     # that's what wake_timeout_s's health polling is for.
     wake_guest_start_timeout_s: int = 120
+    # After the orchestrator powers a node on, a guest Proxmox starts at boot is left to
+    # Proxmox: the wake waits for it in its boot order, plus this much, before starting it
+    # itself. See docs/boot_order.md.
+    wake_autostart_grace_s: int = 60
     # After a wake run ends (success or failure), the next hit to /wake or the
     # maintenance page reuses it rather than starting a fresh one. Without
     # this, a wake that fails fast gets re-triggered on literally every

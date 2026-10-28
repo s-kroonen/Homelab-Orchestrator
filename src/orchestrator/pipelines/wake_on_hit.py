@@ -6,8 +6,10 @@ went up) and the :class:`~orchestrator.scheduler.access_log_collector.AccessLogC
 access-log lines for the host). The caller decides *whether there was new traffic*; this module
 decides whether that traffic may wake anything:
 
-* ``ProxyHost.wake_on_hit`` (per route, default off) AND ``Service.wake_on_hit_enabled`` AND
-  ``Node.wake_on_hit_enabled`` - the three-way gate of docs/traffic_metrics.md;
+* ``ProxyHost.wake_on_hit`` (per route, default off) AND whatever
+  :func:`~orchestrator.pipelines.wake.traffic_blocker` says: the service's own switch, and -
+  only when its node is off - a way to turn the node on and the node's switch (the gate of
+  docs/traffic_metrics.md). A sub-service wakes through its root's node;
 * only a service whose ``wake_trigger`` is ``call`` (a Start-button service is never woken by
   traffic alone);
 * only when it looks down (:func:`is_down`).
@@ -21,10 +23,10 @@ from __future__ import annotations
 
 from sqlmodel import Session
 
-from orchestrator.db.models import Node, ProxyHost, Service, ServiceState
+from orchestrator.db.models import ProxyHost, Service, ServiceState
 from orchestrator.domain.enums import HealthState, WakeTrigger
 from orchestrator.logging_setup import get_logger
-from orchestrator.pipelines.wake import WakeError, WakePipeline
+from orchestrator.pipelines.wake import WakeError, WakePipeline, traffic_blocker
 from orchestrator.web.wake_support import fire_background
 
 log = get_logger(__name__)
@@ -61,16 +63,23 @@ def maybe_wake(
     if not proxy_host.wake_on_hit or proxy_host.service_id is None:
         return None
     service = session.get(Service, proxy_host.service_id)
-    if service is None or service.id is None or not service.wake_on_hit_enabled:
+    if service is None or service.id is None:
         return None
     if service.wake_trigger is not WakeTrigger.CALL:
         return None
-    if service.node_id is None:
-        return None
-    node = session.get(Node, service.node_id)
-    if node is None or not node.wake_on_hit_enabled:
-        return None
     if not is_down(session, service):
+        return None
+    blocked = traffic_blocker(session, service)
+    if blocked is not None:
+        # Decided here, before a run exists: a hit that may not wake anything leaves no failed
+        # run behind, only this line (at debug: background clients hit all day).
+        log.debug(
+            "wake_on_hit.blocked",
+            source=source,
+            service=service.slug,
+            proxy_host=proxy_host.hostname,
+            why=blocked,
+        )
         return None
 
     try:

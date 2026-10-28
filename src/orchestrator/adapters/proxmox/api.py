@@ -12,12 +12,14 @@ from orchestrator.adapters.proxmox.base import (
     ClusterNode,
     ClusterStatus,
     Guest,
+    GuestBoot,
     GuestNetwork,
     NodeHealth,
     ProxmoxAdapter,
     TaskHandle,
     TaskStatus,
     VersionInfo,
+    parse_startup,
 )
 from orchestrator.adapters.proxmox.net import (
     parse_agent_interfaces,
@@ -236,6 +238,32 @@ class LiveProxmoxAdapter(ProxmoxAdapter):
             return GuestNetwork(macs=macs)
         ips = parse_agent_interfaces(payload, macs)
         return GuestNetwork(macs=macs, ips=ips, source="guest_agent" if ips else None)
+
+    async def guest_boot(self, node: str, vmid: int, kind: GuestKind) -> GuestBoot:
+        endpoint = self._endpoint_for(kind)
+        cfg = await self._client.request("GET", f"/nodes/{node}/{endpoint}/{vmid}/config") or {}
+        order, up, down = parse_startup(cfg.get("startup"))
+        return GuestBoot(onboot=str(cfg.get("onboot", 0)) == "1", order=order, up_s=up, down_s=down)
+
+    async def set_guest_boot(self, node: str, vmid: int, kind: GuestKind, boot: GuestBoot) -> None:
+        endpoint = self._endpoint_for(kind)
+        data: dict[str, Any] = {"onboot": 1 if boot.onboot else 0}
+        if boot.startup:
+            data["startup"] = boot.startup
+        else:
+            data["delete"] = "startup"
+        await self._client.request("PUT", f"/nodes/{node}/{endpoint}/{vmid}/config", data=data)
+        log.info(
+            "proxmox.set_guest_boot", node=node, vmid=vmid, onboot=boot.onboot, startup=boot.startup
+        )
+
+    async def node_onboot_delay(self, node: str) -> int | None:
+        cfg = await self._client.request("GET", f"/nodes/{node}/config") or {}
+        raw = cfg.get("startall-onboot-delay")
+        try:
+            return int(raw) if raw is not None else None
+        except (TypeError, ValueError):
+            return None
 
     async def start_guest(self, node: str, vmid: int, kind: GuestKind) -> TaskHandle:
         endpoint = self._endpoint_for(kind)

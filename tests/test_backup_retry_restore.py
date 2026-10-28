@@ -230,7 +230,7 @@ async def test_a_definitive_failure_is_not_retried(
 
     outcomes = await _scheduler(world, HealthState.FAILED).run_policy("nightly")
 
-    assert all(o["backup"] == "failed" and o["retry"] is False for o in outcomes.values())
+    assert all(o["backup"] == "skipped" and o["retry"] is False for o in outcomes.values())
     session.expire_all()
     runs = session.exec(select(PipelineRun).where(PipelineRun.kind == PipelineKind.BACKUP)).all()
     assert len(runs) == 3  # FAILED is a verdict, not a blocker: one try each
@@ -248,9 +248,10 @@ async def test_a_service_that_is_not_healthy_after_boot_is_retried(
 
     outcomes = await _scheduler(world, HealthState.UNKNOWN).run_policy("nightly")
 
-    assert all(o["attempt"] == 2 for o in outcomes.values())
-    assert announced.kinds().count("backup_retry") == 3
-    assert announced.kinds().count("backup_failed") == 3
+    # UNKNOWN is a skip that is tried again: logged on the first try, announced once at the end
+    assert all(o["attempt"] == 2 and o["backup"] == "skipped" for o in outcomes.values())
+    assert announced.kinds().count("backup_skipped") == 3
+    assert "backup_failed" not in announced.kinds()
 
 
 # -- putting things back ---------------------------------------------------------

@@ -19,8 +19,9 @@ from sqlmodel import Session, col, desc, select
 
 from orchestrator.adapters.errors import AdapterError
 from orchestrator.db.models import BackupPolicy, BackupRecord, PipelineRun, Service
-from orchestrator.pipelines.backup import BackupError, BackupPipeline
-from orchestrator.registry.backup_plan import resolve_backup_plan
+from orchestrator.pipelines.backup import BackupError, BackupPipeline, BackupSkipped
+from orchestrator.registry import boot
+from orchestrator.registry.backup_plan import BackupPlan, resolve_backup_plan
 from orchestrator.web.auth import require_admin
 from orchestrator.web.deps import AdaptersDep, SessionDep, SettingsDep
 
@@ -74,7 +75,58 @@ async def backup_plan(
             if service.backup_policy_id
             else None
         )
-    return resolve_backup_plan(session, service, pol).as_dict()
+    plan = resolve_backup_plan(session, service, pol)
+    return {
+        **plan.as_dict(),
+        "skips": would_skip(session, service, plan),
+        "timeline": boot.backup_timeline(session, plan.steps),
+    }
+
+
+def would_skip(session: Session, service: Service, plan: BackupPlan) -> list[dict[str, str]]:
+    """Why a backup of ``service`` would be skipped (``pipelines/backup.py`` ``_precheck``),
+    as far as the registry can tell without asking anything: no required check, or its node
+    is off and the backup may not wake it. Health is not in here: that is decided at the time."""
+    from orchestrator.health.engine import can_verify
+    from orchestrator.pipelines.backup import BackupPipeline
+    from orchestrator.pipelines.wake import known_on, node_of
+
+    out: list[dict[str, str]] = []
+    unverified = [
+        s.slug
+        for s in [service, *BackupPipeline._required_subs(session, service)]
+        if not can_verify(session, s)
+    ]
+    if unverified:
+        out.append(
+            {
+                "why": "no_checks",
+                "text": "no required check on "
+                + ", ".join(unverified)
+                + ": nothing could say it is healthy, so every backup is skipped",
+            }
+        )
+    target = next((s for s in plan.steps if s.is_target), None)
+    if target is None or target.blocker:
+        node = node_of(session, service)
+        why = (
+            target.blocker
+            if target is not None and target.blocker
+            else (
+                "this policy wakes nothing (wake mode never)"
+                if plan.wake_mode == "never"
+                else "this policy does not wake its target (Wake before backup is off)"
+            )
+        )
+        state = "on now" if node is not None and known_on(session, node) else "off now"
+        out.append(
+            {
+                "why": "unwakeable",
+                "text": f"skipped whenever {node.name if node else 'its node'} is off: {why}"
+                f" ({state})",
+            }
+        )
+    return out
 
 
 @router.post("/backup/{slug}")
@@ -114,6 +166,9 @@ async def run_backup(
     )
     try:
         run = await pipeline.run_for_service(session, slug, actor=actor, verify=verify, wake=wake)
+    except BackupSkipped as exc:
+        # 409: nothing broke, but the service is not in a state a backup may be taken in.
+        raise HTTPException(status_code=409, detail=f"Backup skipped: {exc}") from exc
     except BackupError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except AdapterError as exc:

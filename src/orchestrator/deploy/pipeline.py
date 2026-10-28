@@ -48,7 +48,7 @@ from orchestrator.pipelines.restore import (
     create_proposal,
     latest_verified_backup,
 )
-from orchestrator.pipelines.steps import BackupError, StepRecorder
+from orchestrator.pipelines.steps import BackupError, BackupSkipped, StepRecorder
 from orchestrator.registry.switch import SwitchRefused, busy_reason, switch_service
 from orchestrator.registry.tree import TreeIndex
 
@@ -453,7 +453,8 @@ class DeployPipeline:
             rec.record(
                 "guard_backup", "failed", started_at=started, detail={"error": str(exc), "why": why}
             )
-            raise DeployBlocked(f"the backup that was needed first failed: {exc}") from exc
+            verb = "was skipped" if isinstance(exc, BackupSkipped) else "failed"
+            raise DeployBlocked(f"the backup that was needed first {verb}: {exc}") from exc
         rec.record(
             "guard_backup",
             "ok",

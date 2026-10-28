@@ -47,6 +47,7 @@
     const runs = V.last_runs;
     const ok = runs.filter((r) => r.status === "succeeded");
     const failed = runs.filter((r) => r.status === "failed");
+    const skipped = runs.filter((r) => r.status === "skipped");
     const next = V.policies.filter((p) => p.next_run).sort((a, b) => a.next_run.localeCompare(b.next_run))[0];
     const tile = (label, value, sub, extra) => el("div", { class: "stat-tile" }, el("div", { class: "stat-label" }, label), el("div", { class: "stat-value" }, value), extra || null, sub ? el("div", { class: "stat-sub" }, sub) : null);
     const ds = datastore;
@@ -54,6 +55,7 @@
     fill($("#tiles"),
       tile("Last 24 hours", runs.length ? ok.length + " of " + runs.length + " ok" : "no backups",
         failed.length ? [el("span", { style: { color: "var(--warn)" } }, failed.map((r) => r.service).slice(0, 3).join(", ") + " failed"), " · ", el("a", { href: "#last-card" }, "see why")]
+          : skipped.length ? [el("span", { style: { color: "var(--warn)" } }, skipped.length + " skipped"), " · ", el("a", { href: "#last-card" }, "see why")]
           : runs.length ? "all went through" : "nothing ran in the last day"),
       tile("Datastore " + (ds ? ds.name : "") + " on PBS", frac == null ? (ds ? "not reachable" : "…") : Math.round(frac * 100) + "% full",
         frac == null ? (ds && ds.error ? ds.error : "") : fmt.bytes(ds.available_bytes) + " free",
@@ -179,18 +181,19 @@
   // --- last 24 hours and what is left out --------------------------------------------------------
   function drawLast() {
     const box = clear($("#last"));
-    const runs = V.last_runs.slice().sort((a, b) => (a.status === "failed" ? -1 : 0) - (b.status === "failed" ? -1 : 0) || a.service.localeCompare(b.service));
+    const rank = (r) => (r.status === "failed" ? 0 : r.status === "skipped" ? 1 : 2);
+    const runs = V.last_runs.slice().sort((a, b) => rank(a) - rank(b) || a.service.localeCompare(b.service));
     if (!runs.length) { box.append(el("p", { class: "muted", style: { margin: "0 0 10px" } }, "Nothing was backed up in the last 24 hours.")); return; }
     const RES = { succeeded: ["ok", "ok"], failed: ["fail", "failed"], running: ["pending", "running"], skipped: ["warn", "skipped"], queued: ["pending", "queued"] };
     for (const r of runs) {
       const [cls, label] = RES[r.status] || ["off", r.status];
-      const text = r.status === "failed" ? r.error || "failed"
+      const text = r.status === "failed" || r.status === "skipped" ? r.error || r.status
         : [r.woke.length ? "woke " + r.woke.join(", ") : "", r.size_bytes ? fmt.bytes(r.size_bytes) : "", r.verified ? "verified" : r.status === "succeeded" ? "not verified" : "", r.took_s ? Math.max(1, Math.round(r.took_s / 60)) + " min" : "", fmt.ago(r.started_at)].filter(Boolean).join(" · ");
       box.append(el("div", { class: "event-row run-row" },
         el("span", { class: "pill " + cls }, label),
         el("a", { href: "/services/" + enc(r.service) + "?tab=related", style: { fontWeight: "600" } }, r.service),
-        el("span", { class: "run-text" + (r.status === "failed" ? "" : " faint") }, text),
-        r.status === "failed"
+        el("span", { class: "run-text" + (r.status === "failed" || r.status === "skipped" ? "" : " faint") }, text),
+        r.status === "failed" || r.status === "skipped"
           ? el("button", { type: "button", class: "small", onclick: () => O.bulk("services", "backup", [r.service]).then(() => view.refresh(), () => {}) }, "Retry")
           : el("a", { class: "btn ghost small", href: "/services/" + enc(r.service) + "?tab=related" }, "Open")));
     }

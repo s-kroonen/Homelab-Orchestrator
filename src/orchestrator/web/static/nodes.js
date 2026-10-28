@@ -4,7 +4,7 @@
  * each in its own section so a node that does not answer holds nothing else back. */
 (function () {
   "use strict";
-  const { $, el, clear, api, region, table, menuButton, confirm } = window.UI;
+  const { $, el, clear, api, fmt, region, table, menuButton, confirm, drawer } = window.UI;
   const { nodeDrawer, nodePower, deleteNode, serviceDrawer, bulk } = window.Objects;
   let view = JSON.parse($("#initial").textContent);
   let svcView = JSON.parse($("#services-initial").textContent);
@@ -34,6 +34,14 @@
     if (h.reachable) return [h.version, h.uptime_s ? "up " + upFor(h.uptime_s) : "", h.latency_ms != null ? Math.round(h.latency_ms) + " ms" : ""].filter(Boolean).join(" · ");
     if (!h.checked) return h.error || "not checked";
     return "not answering" + (l.state === "off" ? " (off)" : "");
+  }
+  const fmtSecs = fmt.secs;
+  function bootText(node) {
+    const b = node.boot || {};
+    if (!b.read_at) return el("span", { class: "faint" }, "not read yet: it is read while the node is on");
+    const n = b.sequence.length;
+    return [n ? n + " guest" + (n === 1 ? "" : "s") + " start by themselves" : "no guest starts by itself",
+      b.delay_s ? " · after " + fmtSecs(b.delay_s) : ""].join("");
   }
   function guestText(node) {
     if (!guests) return "…";
@@ -79,7 +87,9 @@
           fact("Power target", n.always_on ? "always on" : n.power_mgr_target, !n.always_on),
           fact("Guests", guestText(n)),
           fact("Services", el("a", { href: "/services?group=node&q=" + encodeURIComponent(n.name) }, String(n.services))),
-          fact("Wake on hit", n.wake_on_hit_enabled ? "yes" : "no")),
+          fact("Wake on hit", n.always_on ? "not needed (always on)" : !n.power_mgr_target ? "no power target" : n.wake_on_hit_enabled ? "yes" : "no"),
+          fact("When it boots", bootText(n)),
+          n.always_on ? null : fact("Boot takes", "about " + fmtSecs(n.boot.boot_s) + (n.boot.boot_learned ? " (its last wakes)" : " (a guess until it has been woken)"))),
         n.notes ? el("p", { class: "faint", style: { margin: "12px 0 0", fontSize: "13px" } }, n.notes) : null));
     }
   }
@@ -93,6 +103,30 @@
       view: svcView,
       prefill: { name: g.name, node_id: node ? node.id : null, guest_kind: g.kind === "lxc" ? "lxc" : "vm", guest_id: g.vmid },
       onSaved: () => { servicesRegion.refresh(); guestsRegion.refresh(); nodesRegion.refresh(); },
+    });
+  }
+  const nth = fmt.nth;
+  function bootDrawer(g) {
+    const b = g.boot || { onboot: false, order: null, up_s: null, down_s: null };
+    const num = (v) => (v === "" || v == null ? null : Number(v));
+    drawer({
+      title: "Boot settings of " + g.name,
+      sub: (g.kind === "lxc" ? "CT " : "VM ") + g.vmid + " on " + g.node + ". Written to Proxmox (its Options → Start at boot and Start/Shutdown order); the node must be on.",
+      values: { onboot: !!b.onboot, order: b.order == null ? "" : String(b.order), up_s: b.up_s == null ? "" : String(b.up_s), down_s: b.down_s == null ? "" : String(b.down_s) },
+      saveLabel: "Save in Proxmox",
+      fields: [
+        { key: "onboot", label: "Start at boot: Proxmox starts it when " + g.node + " boots", type: "checkbox",
+          help: "Then a wake or a backup that powers " + g.node + " on waits for Proxmox to start it, instead of starting it. Without it, it is started when needed." },
+        { key: "order", label: "Order", type: "number", placeholder: "none", show: (v) => v.onboot, help: "Lower starts first. Guests without an order start after the ordered ones." },
+        { key: "up_s", label: "Wait after starting it (s)", type: "number", placeholder: "0", show: (v) => v.onboot, help: "Proxmox waits this long before it starts the next guest." },
+        { key: "down_s", label: "Shutdown timeout (s)", type: "number", placeholder: "Proxmox default", help: "How long Proxmox waits for it to shut down." },
+      ],
+      async onSave(v) {
+        await api.put("/api/infra/guests/" + encodeURIComponent(g.node) + "/" + g.vmid + "/boot",
+          { onboot: !!v.onboot, order: v.onboot ? num(v.order) : null, up_s: v.onboot ? num(v.up_s) : null, down_s: num(v.down_s) }, { suppressToast: true });
+        window.toast("Saved " + g.name + "'s boot settings in Proxmox", "ok");
+        guestsRegion.refresh(); nodesRegion.refresh();
+      },
     });
   }
   async function power(g, action) {
@@ -123,9 +157,13 @@
     columns: [
       { key: "vmid", label: "VMID", sort: (g) => g.vmid, render: (g) => el("span", { class: "mono" }, String(g.vmid)) },
       { key: "name", label: "Name", sort: (g) => g.name, render: (g) => el("strong", {}, g.name) },
-      { key: "kind", label: "Kind", sort: true, render: (g) => g.kind === "lxc" ? "LXC" : "VM" },
+      { key: "kind", label: "Kind", sort: true, render: (g) => (g.kind === "ct" || g.kind === "lxc" ? "LXC" : g.kind === "vm" ? "VM" : g.kind) },
       { key: "node", label: "Node", sort: true },
       { key: "status", label: "Status", sort: true, phone: false, render: (g) => el("span", { class: "pill " + (g.status === "running" ? "ok" : "off") }, g.status) },
+      { key: "boot", label: "Starts with node", sort: (g) => (g.boot && g.boot.onboot ? g.boot.position || 99 : 999), phone: "Starts with node",
+        render: (g) => !g.boot ? el("span", { class: "faint" }, "not read yet")
+          : !g.boot.onboot ? el("span", { class: "faint" }, "no: started when needed")
+          : [el("span", {}, "yes, " + nth(g.boot.position || 0)), el("span", { class: "sub" }, [g.boot.order != null ? "order " + g.boot.order : "no order", g.boot.up_s ? "waits " + g.boot.up_s + " s" : "", g.boot.starts_after_s != null ? "starts ~" + fmtSecs(g.boot.starts_after_s) + " after boot" : ""].filter(Boolean).join(" · "))] },
       { key: "service", label: "Service", sort: (g) => g.service_slug || "~",
         render: (g) => g.service_slug ? el("a", { href: "/services/" + encodeURIComponent(g.service_slug) }, g.service_slug)
           : el("button", { type: "button", class: "ghost small", style: { color: "var(--link)", padding: "0" }, onclick: () => makeService(g) }, "Make a service…") },
@@ -138,6 +176,7 @@
     ],
     menu: (g) => [
       g.service_slug ? { label: "Open " + g.service_slug, href: "/services/" + encodeURIComponent(g.service_slug) } : { label: "Make a service…", onClick: () => makeService(g) },
+      { label: "Boot settings…", onClick: () => bootDrawer(g) },
       g.status === "running" ? { label: "Stop…", onClick: () => power(g, "stop") } : { label: "Start", onClick: () => power(g, "start") },
     ],
     empty: { title: "No guests", text: "Proxmox did not list any guests, or it cannot be reached. See Settings → Connections." },
@@ -157,7 +196,12 @@
   });
   const guestsRegion = region(el("div"), {
     load: () => api.get("/api/infra/proxmox/guests", { suppressToast: true }),
-    render: (d) => { guests = d; t.setRows(d); $("#guest-count").textContent = d.length; drawCards(); },
+    render: (d) => {
+      guests = d; t.setRows(d); $("#guest-count").textContent = d.length; drawCards();
+      // Loading the guests reads the boot settings of nodes that are on: show them on the cards.
+      const unread = new Set(view.nodes.filter((n) => !(n.boot || {}).read_at).map((n) => n.name));
+      if (d.some((g) => g.boot && g.boot.read_at && unread.has(g.node))) nodesRegion.refresh();
+    },
     topics: ["run", "health", "registry"], wait: 3000, every: 30000, poll: true, age: guestAge,
   });
   const servicesRegion = region(el("div"), {

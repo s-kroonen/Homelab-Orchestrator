@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import shutil
 from pathlib import Path
+from typing import Any
 
 import pytest
 from sqlmodel import Session, select
@@ -13,10 +14,12 @@ from orchestrator.adapters.pbs.base import DatastoreStatus, Snapshot
 from orchestrator.adapters.pbs.dry_run import DryRunPbsAdapter
 from orchestrator.adapters.proxmox.dry_run import DryRunProxmoxAdapter
 from orchestrator.config import get_settings
-from orchestrator.db.models import AuditEntry, BackupRecord, PipelineRun
-from orchestrator.domain.enums import HealthState, PipelineStatus
+from orchestrator.db.models import AuditEntry, BackupRecord, PipelineRun, Service
+from orchestrator.db.models import Probe as ProbeRow
+from orchestrator.domain.enums import HealthState, PipelineStatus, ProbeKind
 from orchestrator.domain.schemas import ServiceVerdict
-from orchestrator.pipelines.backup import BackupError, BackupPipeline
+from orchestrator.health.engine import HealthEngine
+from orchestrator.pipelines.backup import BackupError, BackupPipeline, BackupSkipped
 from orchestrator.registry.loader import reconcile_yaml_into_db
 
 EXAMPLE = Path(__file__).parent.parent / "config" / "services.example.yaml"
@@ -54,6 +57,9 @@ class StubHealthEngine:
         self.state = state
         self.reason = reason
         self.scanned: list[str] = []
+
+    def can_verify(self, session: Session, service: Any) -> bool:
+        return True
 
     async def scan(self, session: Session, service) -> ServiceVerdict:
         self.scanned.append(service.slug)
@@ -289,11 +295,12 @@ async def test_exclusion_without_a_reason_still_refuses(loaded_session: Session)
 
 async def test_gate_refuses_a_failed_service(loaded_session: Session) -> None:
     """FAILED means the service is definitively broken — capturing that state
-    over a known-good backup is the exact disaster this prevents."""
+    over a known-good backup is the exact disaster this prevents. It is skipped,
+    not failed: the backup did nothing wrong."""
     pbs = DryRunPbsAdapter(simulated_snapshots=[_snapshot()])
     health = StubHealthEngine(HealthState.FAILED, "mariadb-integrity: table is corrupt")
 
-    with pytest.raises(BackupError, match="FAILED"):
+    with pytest.raises(BackupSkipped, match="FAILED"):
         await _pipeline(DryRunProxmoxAdapter(), pbs, health=health).run_for_service(
             loaded_session, "example-media"
         )
@@ -301,7 +308,7 @@ async def test_gate_refuses_a_failed_service(loaded_session: Session) -> None:
     # No dump was taken and no record was written.
     assert loaded_session.exec(select(BackupRecord)).all() == []
     run = loaded_session.exec(select(PipelineRun)).one()
-    assert run.status is PipelineStatus.FAILED
+    assert run.status is PipelineStatus.SKIPPED
     names = [s["name"] for s in run.steps]
     assert "vzdump_started" not in names  # aborted BEFORE touching Proxmox
     gate = next(s for s in run.steps if s["name"] == "integrity_gate")
@@ -376,3 +383,24 @@ async def test_gate_runs_before_the_dump_not_after(loaded_session: Session) -> N
     )
     names = [s["name"] for s in run.steps]
     assert names.index("integrity_gate") < names.index("vzdump_started")
+
+
+def test_can_verify_needs_an_enabled_required_probe(loaded_session: Session) -> None:
+    """What the backup asks before it wakes anything: could a scan ever say HEALTHY?"""
+    engine = HealthEngine(settings=get_settings())
+    svc = loaded_session.exec(select(Service)).first()
+    assert svc is not None
+    for p in loaded_session.exec(select(ProbeRow).where(ProbeRow.service_id == svc.id)).all():
+        loaded_session.delete(p)
+    loaded_session.commit()
+    assert engine.can_verify(loaded_session, svc) is False
+    loaded_session.add(
+        ProbeRow(service_id=svc.id, name="t", kind=ProbeKind.TCP, required=True, enabled=False)
+    )
+    loaded_session.commit()
+    assert engine.can_verify(loaded_session, svc) is False  # disabled does not count
+    row = loaded_session.exec(select(ProbeRow).where(ProbeRow.service_id == svc.id)).one()
+    row.enabled = True
+    loaded_session.add(row)
+    loaded_session.commit()
+    assert engine.can_verify(loaded_session, svc) is True

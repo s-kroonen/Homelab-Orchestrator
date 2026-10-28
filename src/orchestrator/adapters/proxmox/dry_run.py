@@ -11,6 +11,7 @@ from orchestrator.adapters.proxmox.base import (
     ClusterNode,
     ClusterStatus,
     Guest,
+    GuestBoot,
     GuestNetwork,
     NodeHealth,
     ProxmoxAdapter,
@@ -47,6 +48,10 @@ class DryRunProxmoxAdapter(ProxmoxAdapter):
         #: vmid -> what guest_network() answers. Unset -> no MACs, no IPs.
         self.simulated_networks: dict[int, GuestNetwork] = {}
         self.guest_network_calls: list[tuple[str, int, GuestKind]] = []
+        #: vmid -> boot settings. Tests set them; set_guest_boot() records into it (a dry run
+        #: changes nothing in Proxmox, but the page shows what was asked).
+        self.simulated_boot: dict[int, GuestBoot] = {}
+        self.simulated_onboot_delay: dict[str, int] = {}
 
     async def start(self) -> None:
         log.info("proxmox.dry_run.start")
@@ -81,6 +86,22 @@ class DryRunProxmoxAdapter(ProxmoxAdapter):
         log.info("proxmox.dry_run.guest_network", node=node, vmid=vmid, kind=kind.value)
         self.guest_network_calls.append((node, vmid, kind))
         return self.simulated_networks.get(vmid, GuestNetwork())
+
+    async def guest_boot(self, node: str, vmid: int, kind: GuestKind) -> GuestBoot:
+        return self.simulated_boot.get(vmid, GuestBoot())
+
+    async def set_guest_boot(self, node: str, vmid: int, kind: GuestKind, boot: GuestBoot) -> None:
+        log.info(
+            "proxmox.dry_run.set_guest_boot",
+            node=node,
+            vmid=vmid,
+            onboot=boot.onboot,
+            startup=boot.startup,
+        )
+        self.simulated_boot[vmid] = boot
+
+    async def node_onboot_delay(self, node: str) -> int | None:
+        return self.simulated_onboot_delay.get(node)
 
     async def start_guest(self, node: str, vmid: int, kind: GuestKind) -> TaskHandle:
         return self._record_task("proxmox.dry_run.start_guest", node, vmid=vmid, kind=kind.value)

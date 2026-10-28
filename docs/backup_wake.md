@@ -70,7 +70,10 @@ curl -b cookie 'https://orch/api/backup/plan?slug=example-media'
 ```
 
 The API answers `{slug, policy, steps: [{slug, name, node, reason, node_power,
-blocker}], blockers, will_wake}`. A **blocker** means the node has no
+blocker}], blockers, will_wake, skips, timeline}`. `skips` lists what would make a backup
+be skipped (see *Skipped, not failed* below); `timeline` is how long the wake phase is likely
+to take, step by step, and the boot order of every node it would power on, with the guests
+it needs marked (see [boot_order.md](boot_order.md)). A **blocker** means the node has no
 `power_mgr_target` and is not `always_on`, so the orchestrator has no way to turn
 it on. The service page's **Backups** tab shows the same list as the *Backup plan*
 panel, with blockers in red, and the policy form warns before you save.
@@ -116,6 +119,30 @@ fail up front, before earlier entries power anything on, with:
 Note that a *target* that needs waking must become HEALTHY as part of the wake. A
 service that is already running and unhealthy is not waked at all; the gate then
 judges it (FAILED vs UNKNOWN) as before.
+
+### Skipped, not failed
+
+Some backups cannot be taken, and nothing went wrong: the service is unhealthy, nothing can
+check it, or it is off and this backup may not wake it. Those runs end **skipped** (a
+`skipped` step with the reason, the run status `skipped`, `backup.skipped` in the audit log
+and the Activity feed, a `backup_skipped` notification - not sent by default). The last
+backup is kept, and nothing is pruned. They are decided as early as possible:
+
+| Why (`why`) | When | Tried again? |
+|---|---|---|
+| `no_checks` | the service, or a sub-service its backup waits for, has no enabled **required** probe, so the gate could only ever say UNKNOWN. Decided before anything is woken. | no |
+| `unwakeable` | its node is off (or its guest stopped) and the backup may not wake it: no power target, the node's wake on hit switch is off under wake mode `follow`, wake mode `never`, or *Wake before backup* off. Decided before anything is woken. | no |
+| `unhealthy` | the gate scanned it and it is FAILED. A restore candidate. | no |
+| `unknown` | the gate scanned it and could not tell (a probe that could not run). | yes, while tries are left |
+| `sub_unhealthy` | a required sub-service is FAILED or UNKNOWN. | only when UNKNOWN |
+
+A *prerequisite* (the storage VM) that cannot be woken is not a skip: it **fails** the run,
+because every backup of the policy is stuck behind it. A guest that was started and did not
+come up (DOWN) also fails, and is retried.
+
+`POST /api/backup/SLUG` answers **409** `Backup skipped: …` for a skip (400 for a failure);
+`orchestrator-cli backup SLUG` prints *Backup skipped* and exits 3. A scheduled policy run
+records `"backup": "skipped"` for that service and carries on with the rest.
 
 ### The gate always requires a running guest
 
@@ -220,12 +247,17 @@ Set per backup policy (Backup policies -> Edit, or `orchestrator-cli policy upda
   phone syncing, a crawler) does not wake that service, and a backup is not a visitor. So a
   storage VM with wake on hit off is still woken as a policy prerequisite, on a node that may
   be woken. An always-on node is never woken, so its switch never blocks anything either.
-* **Tries** (`max_attempts`, default 3): a scheduled run that is *blocked* (something could
-  not be woken, or the switch above) or whose target is *not healthy after boot* is tried
-  again after `BACKUP_RETRY_DELAY_S` (default 5 min), up to this many times. You get a
-  `backup_retry` notification for each try that will be repeated and one `backup_failed`
-  ("after 3 tries") when it gives up - then it waits for the next scheduled run. A service
-  that is definitively FAILED, a failed dump or a failed verify are never retried.
+* **Tries** (`max_attempts`, default 3): a scheduled run that is *blocked* (a prerequisite
+  could not be woken) or whose target is *not healthy after boot* is tried again after
+  `BACKUP_RETRY_DELAY_S` (default 5 min), up to this many times. You get a `backup_retry`
+  notification for each failed try that will be repeated and one `backup_failed` ("after 3
+  tries") when it gives up - then it waits for the next scheduled run. A health check that
+  could not run (UNKNOWN) is a skip that is tried again: logged on each try, one
+  `backup_skipped` at the end. A service that is definitively FAILED, has no required check
+  or may not be woken is skipped once; a failed dump or a failed verify are never retried.
+* **Boot order**: after the backup powers a node on, guests that Proxmox starts at boot are
+  left to Proxmox (the run waits for them in their place in the boot order); the others are
+  started. See [boot_order.md](boot_order.md).
 * **Put it back afterwards** (`restore_power_state`, default on): the backup remembers what
   it found. Guests it had to start are stopped again; a node it powered on is powered off
   (graceful) after `BACKUP_POWER_OFF_GRACE_S`. A node that was already on stays on. A node is

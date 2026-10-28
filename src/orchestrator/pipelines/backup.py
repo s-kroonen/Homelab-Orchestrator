@@ -45,7 +45,12 @@ from orchestrator.health.engine import HealthEngine
 from orchestrator.logging_setup import get_logger, new_correlation_id
 from orchestrator.notify.hooks import announce
 from orchestrator.pipelines.backup_wake import BackupWaker, WakeContext
-from orchestrator.pipelines.steps import BackupError, RetryableBackupError, StepRecorder
+from orchestrator.pipelines.steps import (
+    BackupError,
+    BackupSkipped,
+    RetryableBackupError,
+    StepRecorder,
+)
 from orchestrator.pipelines.wake import WakePipeline
 from orchestrator.registry.backup_plan import (
     BackupPlan,
@@ -54,7 +59,7 @@ from orchestrator.registry.backup_plan import (
 )
 from orchestrator.registry.tree import TreeIndex, effective_guest
 
-__all__ = ["BackupError", "BackupPipeline", "StepRecorder", "WakeContext"]
+__all__ = ["BackupError", "BackupPipeline", "BackupSkipped", "StepRecorder", "WakeContext"]
 
 log = get_logger(__name__)
 
@@ -150,6 +155,7 @@ class BackupPipeline:
 
         wake_ctx = WakeContext()
         try:
+            await self._precheck(session, steps, service, policy, gate=gate, wake=wake)
             await self._wake_phase(
                 session,
                 steps,
@@ -189,6 +195,45 @@ class BackupPipeline:
             session.commit()
             return run
 
+        except BackupSkipped as exc:
+            will_retry = exc.retryable and attempt < attempts
+            await self._release_wake(
+                session, steps, wake_ctx, restore=True, policy=policy, defer_to=prepared
+            )
+            steps.record("skipped", "skipped", detail={"reason": str(exc), "why": exc.why})
+            self._finish(session, run, PipelineStatus.SKIPPED, error=str(exc))
+            log.info(
+                "backup.skipped", service=slug, why=exc.why, will_retry=will_retry, reason=str(exc)
+            )
+            audit.record(
+                session,
+                actor=actor,
+                action="backup.skipped",
+                target=f"service:{slug}",
+                correlation_id=correlation_id,
+                details={
+                    "run_id": run.id,
+                    "why": exc.why,
+                    "reason": str(exc),
+                    "attempt": attempt,
+                    "attempts": attempts,
+                    "will_retry": will_retry,
+                },
+            )
+            session.commit()
+            if not will_retry:
+                await announce(
+                    session,
+                    level="service",
+                    key=service.slug,
+                    name=service.name,
+                    event="backup_skipped",
+                    severity="info",
+                    title=f"Backup of {service.name} skipped",
+                    body=str(exc)[:1500],
+                    scope={"slug": service.slug, "group": service.group},
+                )
+            raise
         except (BackupError, AdapterError) as exc:
             # AdapterUnreachable / TaskTimeout are *indeterminate*, not proof of
             # a bad backup — label them so phase 4's gate logic and the operator
@@ -280,6 +325,90 @@ class BackupPipeline:
             body=f"{str(exc)[:1300]}{gave_up if attempt >= attempts and attempts > 1 else ''}",
             scope=scope,
         )
+
+    # -- before anything is woken ---------------------------------------------
+
+    async def _precheck(
+        self,
+        session: Session,
+        steps: StepRecorder,
+        service: Service,
+        policy: BackupPolicy | None,
+        *,
+        gate: bool,
+        wake: bool,
+    ) -> None:
+        """Skip a backup that cannot be taken, before anything is woken for it:
+
+        * nothing could verify it: no enabled, required check (on it or on a sub-service its
+          backup waits for). The gate only lets a backup through once a check said healthy;
+        * it is off and this backup may not wake it: its node is off (or its guest stopped)
+          and the policy wakes nothing, or what would wake it is blocked (no power target, the
+          node's wake on hit off). A prerequisite that cannot be woken is not a skip: that
+          fails the run, since every backup of the policy is stuck behind it.
+        """
+        if gate and not self._has_required_check(session, service):
+            steps.record("checks", "none", detail={"service": service.slug})
+            raise BackupSkipped(
+                f"{service.slug!r} has no required check, so nothing can verify it is healthy "
+                f"before a backup. Add a required probe (or make one required) on its "
+                f"Configuration tab; until then it is skipped and the last backup is kept.",
+                why="no_checks",
+            )
+        if not wake:
+            return
+        plan = resolve_backup_plan(session, service, policy)
+        target = next((s for s in plan.steps if s.is_target), None)
+        if target is not None and target.blocker is None:
+            return  # the backup wakes it if it has to
+        if await self._target_up(session, service):
+            return
+        why = (
+            target.blocker
+            if target is not None
+            else "this policy does not wake its target"
+            + (
+                " (wake mode never)"
+                if plan.wake_mode == "never"
+                else " (Wake before backup is off)"
+            )
+        )
+        node = self._node_of(session, service)
+        steps.record("target", "off", detail={"node": node.name if node else "", "why": why})
+        raise BackupSkipped(
+            f"{service.slug!r} is off and may not be woken for its backup: {why}. Skipped; the "
+            f"last backup is kept.",
+            why="unwakeable",
+        )
+
+    def _has_required_check(self, session: Session, service: Service) -> bool:
+        subs = self._required_subs(session, service)
+        return all(self._health.can_verify(session, s) for s in [service, *subs])
+
+    @staticmethod
+    def _node_of(session: Session, service: Service) -> Node | None:
+        from orchestrator.pipelines.wake import node_of
+
+        return node_of(session, service)
+
+    async def _target_up(self, session: Session, service: Service) -> bool:
+        """Its node online and its guest (if any) running. Never raises: not knowing counts as
+        up, so a blip does not turn into a skip - the gate after it still decides."""
+        node = self._node_of(session, service)
+        if node is None:
+            return False
+        try:
+            cluster = await self._proxmox.cluster_status()
+            if not any(n.name == node.name and n.online for n in cluster.nodes):
+                return False
+            eg = effective_guest(session, service)
+            if eg.kind is GuestKind.NONE or eg.guest_id is None:
+                return True
+            guests = await self._proxmox.list_guests(node.name)
+        except AdapterError:
+            return True
+        guest = next((g for g in guests if g.vmid == eg.guest_id), None)
+        return bool(guest and guest.status == "running")
 
     # -- wake phase ----------------------------------------------------------
 
@@ -513,16 +642,19 @@ class BackupPipeline:
                 f"the guest) so the backup brings it up first."
             )
         if verdict.state is HealthState.FAILED:
-            raise BackupError(
+            raise BackupSkipped(
                 f"integrity gate refused {service.slug!r}: the service is FAILED — "
-                f"{verdict.reason}. The last known-good backup is untouched. "
-                f"This service is a restore candidate."
+                f"{verdict.reason}. Skipped: the last known-good backup is untouched. This "
+                f"service is a restore candidate.",
+                why="unhealthy",
             )
-        raise RetryableBackupError(
-            f"integrity gate refused {service.slug!r}: health could not be "
-            f"established (UNKNOWN) — {verdict.reason}. Failing closed: no backup "
-            f"was taken and the last known-good backup is untouched. This is not "
-            f"evidence of corruption, only that the check could not run."
+        raise BackupSkipped(
+            f"integrity gate refused {service.slug!r}: health could not be established "
+            f"(UNKNOWN) — {verdict.reason}. Skipped (failing closed): the last known-good "
+            f"backup is untouched. This is not evidence of corruption, only that the check "
+            f"could not run.",
+            retryable=True,
+            why="unknown",
         )
 
     # -- sub-services ----------------------------------------------------------
@@ -617,13 +749,18 @@ class BackupPipeline:
                 HealthState.DOWN: "is not running",
                 HealthState.UNKNOWN: "could not be verified (UNKNOWN)",
             }.get(verdict.state, verdict.state.value)
-            raise (
-                RetryableBackupError if verdict.state is not HealthState.FAILED else BackupError
-            )(
+            message = (
                 f"integrity gate refused {service.slug!r}: its required sub-service "
                 f"{sub.slug!r} {how} - {verdict.reason}. No backup was taken and the last "
                 f"known-good backup is untouched. (Set {sub.slug!r} to backup_gate: ignore "
                 f"if a backup should not wait for it.)"
+            )
+            if verdict.state is HealthState.DOWN:
+                raise RetryableBackupError(message)  # it was started and did not come up
+            raise BackupSkipped(
+                message,
+                retryable=verdict.state is HealthState.UNKNOWN,
+                why="sub_unhealthy",
             )
 
     async def _dump_and_locate(

@@ -15,7 +15,7 @@
   let limit = 100;
   const MAIN = [["backup", "Backups"], ["wake", "Wakes"], ["deploy", "Deploys"], ["admin", "Changes"], ["alert", "Alerts"]];
   const MORE = [["restore", "restores"], ["switch", "on / off"], ["dump", "dumps"], ["format", "route formats"]];
-  const RUN_CLS = { succeeded: "ok", failed: "fail", running: "pending", pending: "pending", cancelled: "off", partial: "warn" };
+  const RUN_CLS = { succeeded: "ok", failed: "fail", running: "pending", pending: "pending", cancelled: "off", partial: "warn", skipped: "warn" };
   const SEV_CLS = { info: "ok", warn: "warn", error: "fail", critical: "fail" };
   const ALERT_OK = new Set(["recovered", "recovery_succeeded", "restore_succeeded", "dump_succeeded", "deploy_succeeded", "update_succeeded"]);
   const OF = { backup: "Backup of", wake: "Woke", restore: "Restore of", switch: "Switched", deploy: "Deploy of", dump: "Dump of", format: "Route format of" };
@@ -69,7 +69,7 @@
       const what = ev.kind === "wake" && ev.status === "running" ? "Waking" : OF[ev.kind] || ev.kind;
       const verb = ev.status === "succeeded" || what === "Waking" ? "" : ev.status === "failed" ? " failed" : " " + ev.status;
       const lead = ev.service ? [what + " ", svcLink(ev.service), verb] : [what.replace(/ of$/, "") + verb];
-      return { cls: RUN_CLS[ev.status] || "off", tag: ev.kind, strong: ev.status === "failed",
+      return { cls: RUN_CLS[ev.status] || "off", tag: ev.kind, strong: ev.status === "failed" || ev.status === "skipped",
         text: [lead, el("span", { class: "faint" }, [ev.error ? " · " + ev.error : "", ev.actor ? " · by " + ev.actor : ""].join(""))] };
     }
     if (ev.type === "alert") {
@@ -103,7 +103,7 @@
   // --- a run, in the drawer -----------------------------------------------------------------------------
   const STEP_CLS = { ok: "ok", failed: "fail", indeterminate: "warn", skipped: "off", running: "pending" };
   function retryOf(ev) {
-    if (!ev.service || ev.status !== "failed") return null;
+    if (!ev.service || (ev.status !== "failed" && ev.status !== "skipped")) return null;
     const action = { backup: "backup", wake: "wake" }[ev.kind];
     if (!action) return null;
     return async () => { try { await O.bulk("services", action, [ev.service]); toast("Started again", "ok"); } catch (_e) { /* toast */ } feed.refresh(); };

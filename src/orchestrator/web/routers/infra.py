@@ -468,11 +468,37 @@ def _service_for_guest(session: Session, node: str, vmid: int) -> Service | None
     ).first()
 
 
+#: How old the copy of a node's boot settings may be before listing the guests reads them again.
+_BOOT_FRESH_S = 600
+
+
+def _boot_view(row: Any, slot: Any) -> dict[str, Any] | None:
+    if row is None:
+        return None
+    return {
+        "onboot": row.onboot,
+        "order": row.order,
+        "up_s": row.up_s,
+        "down_s": row.down_s,
+        "read_at": row.read_at.isoformat() if row.read_at else None,
+        "position": slot.position if slot else None,
+        "starts_after_s": slot.starts_after_s if slot else None,
+    }
+
+
 @router.get("/proxmox/guests")
 async def list_guests(
     adapters: AdaptersDep, session: SessionDep, node: str | None = None
 ) -> list[dict[str, Any]]:
+    """Every guest Proxmox lists, with the service it is (if any) and its boot settings: start
+    at boot, order, and where it falls in its node's boot sequence. The boot settings of a node
+    that is on are read again when the kept copy is older than ten minutes."""
     guests = await adapters.proxmox.list_guests(node)
+    await _refresh_boot(session, adapters.proxmox, guests)
+    from orchestrator.registry import boot as boot_mod
+
+    nodes = {n.name: n for n in session.exec(select(Node)).all()}
+    slots = {name: {s.vmid: s for s in boot_mod.sequence(session, n)} for name, n in nodes.items()}
     out = []
     for g in guests:
         svc = _service_for_guest(session, g.node, g.vmid)
@@ -486,9 +512,105 @@ async def list_guests(
                 # Registered as a service? Power actions then go through the
                 # service's own endpoint (and its mid-backup guardrail).
                 "service_slug": svc.slug if svc else None,
+                "boot": _boot_view(
+                    boot_mod.setting_for(session, g.node, g.vmid), slots.get(g.node, {}).get(g.vmid)
+                ),
             }
         )
     return out
+
+
+async def _refresh_boot(session: Session, proxmox: Any, guests: list[Any]) -> None:
+    """Read the boot settings again for each online node whose copy is stale. Never raises."""
+    from datetime import UTC, datetime
+
+    from orchestrator.db.models import NodeState
+    from orchestrator.registry import boot as boot_mod
+
+    try:
+        cluster = await proxmox.cluster_status()
+    except AdapterError:
+        return
+    online = {n.name for n in cluster.nodes if n.online}
+    now = datetime.now(UTC)
+    for node in session.exec(select(Node)).all():
+        if node.name not in online:
+            continue
+        state = session.get(NodeState, node.id) if node.id is not None else None
+        read = state.boot_read_at if state else None
+        if (
+            read is not None
+            and (now - (read if read.tzinfo else read.replace(tzinfo=UTC))).total_seconds()
+            < _BOOT_FRESH_S
+        ):
+            continue
+        await boot_mod.refresh_node(
+            session, proxmox, node, [g for g in guests if g.node == node.name]
+        )
+
+
+class GuestBootIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    onboot: bool
+    order: int | None = None
+    up_s: int | None = None
+    down_s: int | None = None
+
+
+@router.put("/guests/{node}/{vmid}/boot")
+async def set_guest_boot(
+    node: str,
+    vmid: int,
+    body: GuestBootIn,
+    session: SessionDep,
+    adapters: AdaptersDep,
+    admin: CurrentAdmin,
+) -> dict[str, Any]:
+    """Change a guest's *Start at boot* and *Start/Shutdown order* in Proxmox (its node must be
+    on), and keep the copy. Audited as ``infra.guest_boot``."""
+    from orchestrator.adapters.proxmox.base import GuestBoot
+    from orchestrator.registry import boot as boot_mod
+
+    for name, value in (("order", body.order), ("up_s", body.up_s), ("down_s", body.down_s)):
+        if value is not None and value < 0:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, f"{name} cannot be negative")
+    try:
+        guests = await adapters.proxmox.list_guests(node)
+    except AdapterError as exc:
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc)) from exc
+    guest = next((g for g in guests if g.vmid == vmid and g.node == node), None)
+    if guest is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, f"no guest {vmid} on node {node!r}")
+    boot = GuestBoot(onboot=body.onboot, order=body.order, up_s=body.up_s, down_s=body.down_s)
+    try:
+        await adapters.proxmox.set_guest_boot(node, vmid, guest.kind, boot)
+    except AdapterError as exc:
+        raise HTTPException(
+            status.HTTP_502_BAD_GATEWAY,
+            f"Proxmox did not take it ({exc}). A guest's settings can only be changed while "
+            "its node is on.",
+        ) from exc
+    boot_mod.store(session, node, vmid, boot)
+    audit.record(
+        session,
+        actor=admin.username,
+        action="infra.guest_boot",
+        target=f"guest:{node}/{vmid}",
+        details={"onboot": boot.onboot, "startup": boot.startup, "name": guest.name},
+    )
+    session.commit()
+    node_row = session.exec(select(Node).where(Node.name == node)).one_or_none()
+    slot = (
+        next((x for x in boot_mod.sequence(session, node_row) if x.vmid == vmid), None)
+        if node_row
+        else None
+    )
+    return {
+        "node": node,
+        "vmid": vmid,
+        "boot": _boot_view(boot_mod.setting_for(session, node, vmid), slot),
+    }
 
 
 class GuestPowerIn(BaseModel):

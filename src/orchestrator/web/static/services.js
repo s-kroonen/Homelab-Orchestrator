@@ -27,8 +27,8 @@
       { key: "runs_on", label: "Runs on", sort: (r) => r.runs_on.main, render: (r) => two(r.runs_on.main, r.runs_on.sub, r.runs_on.href) },
       { key: "check", label: "Last check", render: (r) => two(r.check.text, r.check.at ? fmt.ago(r.check.at) : "") },
       { key: "backup", label: "Backup", sort: (r) => r.backup.main,
-        render: (r) => two(r.backup.main, [r.backup.sub, r.backup.at ? fmt.ago(r.backup.at) : ""].filter(Boolean).join(" · ")) },
-      { key: "wake_on_hit", label: "Wake on hit", sort: true, render: (r) => el("span", { title: r.wake_on_hit_why || null }, r.wake_on_hit) },
+        render: (r) => { const c = two(r.backup.main, [r.backup.sub, r.backup.at ? fmt.ago(r.backup.at) : ""].filter(Boolean).join(" · ")); if (r.backup.why && c[1]) c[1].title = r.backup.why; return c; } },
+      { key: "wake_on_hit", label: "Wake on hit", sort: true, render: (r) => two(r.wake_on_hit, r.wake_on_hit_why) },
     ],
     chips: [
       { key: "failed", label: "Failed", test: (r) => r.state.cls === "fail" },

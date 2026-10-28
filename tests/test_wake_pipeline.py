@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import shutil
 from pathlib import Path
+from typing import Any
 
 import pytest
 from sqlmodel import Session, select
@@ -56,6 +57,9 @@ class StubHealthEngine:
         self._i = 0
         self.reason = reason
         self.scanned: list[str] = []
+
+    def can_verify(self, session: Session, service: Any) -> bool:
+        return True
 
     async def scan(self, session: Session, service) -> ServiceVerdict:
         self.scanned.append(service.slug)
@@ -132,6 +136,7 @@ async def test_successful_wake_powers_on_starts_the_guest_and_waits_for_health(
         "hold_asserted",
         "node_power_on",
         "node_online",
+        "boot_settings",  # read again right after the node came online
         "guest_start",
         "health_poll",
         "hold_released",

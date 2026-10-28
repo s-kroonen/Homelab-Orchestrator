@@ -58,7 +58,7 @@ from orchestrator.db.models import Probe as ProbeRow
 from orchestrator.db.session import build_engine, get_engine
 from orchestrator.health.engine import HealthEngine
 from orchestrator.logging_setup import configure_logging
-from orchestrator.pipelines.backup import BackupError, BackupPipeline
+from orchestrator.pipelines.backup import BackupError, BackupPipeline, BackupSkipped
 from orchestrator.pipelines.wake import WakeError, WakePipeline
 from orchestrator.registry.loader import reconcile_yaml_into_db
 
@@ -536,6 +536,9 @@ def backup_run(slug: str, no_verify: bool, no_gate: bool, no_wake: bool) -> None
 
     try:
         _run(_go())
+    except BackupSkipped as exc:
+        click.secho(f"\nBackup skipped: {exc}", fg="yellow", bold=True)
+        raise SystemExit(3) from exc
     except (BackupError, AdapterError) as exc:
         click.secho(f"\nBackup failed: {exc}", fg="red", bold=True)
         raise SystemExit(1) from exc
