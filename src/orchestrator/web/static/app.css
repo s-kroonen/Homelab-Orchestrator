@@ -966,3 +966,18 @@ pre.log .err { color: var(--fail); } pre.log .ts { color: var(--faint); }
 .var-row { display: flex; gap: 6px; margin-bottom: 6px; }
 .var-row input { flex: 1; min-width: 0; }
 .log-tools select { width: auto; }
+
+/* Activity: the filter bars, days, a run's steps */
+.act-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 14px 18px 0; }
+.act-bar input[type=search] { flex: 0 1 320px; min-width: 0; }
+.act-chips { display: contents; }
+.act-selects { padding-top: 10px; padding-bottom: 12px; border-bottom: 1px solid var(--line); }
+.act-selects select { width: auto; }
+.act-selects .count { margin-left: auto; font-size: 12.5px; color: var(--faint); }
+.act-day { padding: 12px 18px 4px; font-size: 11.5px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; color: var(--faint); }
+#feed .event-row { padding-left: 18px; padding-right: 18px; grid-template-columns: 4.5rem auto minmax(0, 1fr) auto; }
+#feed .event-row.clickable { cursor: pointer; }
+#feed .event-row.clickable:hover { background: var(--hover); }
+@media (max-width: 40rem) { #feed .event-row { grid-template-columns: auto minmax(0, 1fr); } }
+.run-steps { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; font-size: 13.5px; }
+.run-steps .faint { font-size: 12.5px; }

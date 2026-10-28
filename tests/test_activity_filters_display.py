@@ -3,6 +3,7 @@ timezone setting."""
 
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -187,11 +188,11 @@ def test_activity_api_and_page_take_the_filters(client: TestClient) -> None:
 
     page = client.get("/activity", params={"guest": "eve/101", "problems": "true"})
     assert page.status_code == 200
-    assert "Plex is FAILED" in page.text and "eve is DOWN" not in page.text
-    assert '<option value="eve/101" selected>' in page.text
-    assert '<time data-ts="' in page.text
-    assert "Nothing matches these filters" not in page.text
-    assert "Nothing matches" in client.get("/activity", params={"service": "ghost"}).text
+    data = _initial(page.text)
+    titles = [e.get("title") for e in data["events"]]
+    assert "Plex is FAILED" in titles and "eve is DOWN" not in titles
+    assert data["filters"]["guest"] == "eve/101" and data["filters"]["problems"] is True
+    assert _initial(client.get("/activity", params={"service": "ghost"}).text)["events"] == []
 
 
 # -- timezone ----------------------------------------------------------------
@@ -234,3 +235,11 @@ def test_display_api_needs_a_login(seeded: Any) -> None:
     with TestClient(create_app()) as anon:
         assert anon.get("/api/display").status_code == 401
         assert anon.put("/api/display", json={"timezone": "UTC"}).status_code == 401
+
+
+def _initial(html: str) -> dict[str, Any]:
+    """The data a page embeds for its first paint."""
+    start = html.index('<script type="application/json" id="initial">') + len(
+        '<script type="application/json" id="initial">'
+    )
+    return json.loads(html[start : html.index("</script>", start)])

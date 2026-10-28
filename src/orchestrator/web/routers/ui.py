@@ -400,7 +400,9 @@ async def activity_page(
     since_hours: str | None = Query(None),
     q: str | None = Query(None),
 ) -> HTMLResponse | RedirectResponse:
-    """History of wakes, backups, admin actions and alerts — see ``routers/activity.py``."""
+    """One feed of runs, changes and alerts, newest first, filtered on the server (the Activity
+    wireframe). The filters are the URL's, so a link can open it filtered; the page then filters
+    and refreshes in place. See ``routers/activity.py``."""
     admin = get_current_admin(request, session)
     if admin is None:
         return login_redirect(request)
@@ -428,23 +430,20 @@ async def activity_page(
         since_hours=hours,
         q=q,
     )
-    return _templates.TemplateResponse(
-        request,
-        "activity.html",
-        {
-            "admin": admin,
-            "events": events,
-            "f": {
-                "service": service,
-                "group": group,
-                "node": node,
-                "guest": guest,
-                "kind": kind,
-                "problems": problems,
-                "since_hours": hours,
-                "q": q or "",
-            },
-            "options": filter_options(session),
-            "filtered": any((service, group, node, guest, kind, problems, hours, q)),
+    initial = {
+        "events": events,
+        "filters": {
+            "service": service or "",
+            "group": group or "",
+            "node": node or "",
+            "guest": guest or "",
+            "kind": kind or "",
+            "problems": problems,
+            "since_hours": hours,
+            "q": q or "",
         },
+        "options": filter_options(session),
+    }
+    return _templates.TemplateResponse(
+        request, "activity.html", {"admin": admin, "initial": initial}
     )
