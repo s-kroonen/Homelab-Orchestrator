@@ -1,0 +1,161 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Sub-services in lists</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#0d1015}
+a{color:#8fb3ff;text-decoration:none}a:hover{color:#b8d0ff}
+*{box-sizing:border-box}
+.pill{display:inline-flex;align-items:center;gap:6px;padding:3px 9px;border-radius:999px;font-size:12px;font-weight:600;white-space:nowrap}
+.ok{background:#11331f;color:#5fe08b}.warn{background:#3a2c10;color:#f0b44c}.fail{background:#3d1717;color:#ff8a82}.off{background:#232834;color:#b3bccb}.pending{background:#162a45;color:#8fb3ff}
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;height:32px;padding:0 12px;border-radius:8px;border:1px solid #2c3340;background:#1a1f29;color:#e6e9ef;font:600 13px Inter,system-ui,sans-serif;cursor:pointer;white-space:nowrap}
+.btn.primary{background:#4f7fe0;border-color:#4f7fe0;color:#fff}.btn.ghost{background:transparent;border-color:transparent;color:#b3bccb}.btn.small{height:28px;padding:0 10px;font-size:12.5px}.btn.danger{background:transparent;color:#ff8a82}
+.mono{font-family:'JetBrains Mono',ui-monospace,monospace;font-size:12.5px}
+.tag{display:inline-block;padding:1px 6px;border:1px solid #2f3747;border-radius:5px;font-size:11px;color:#b3bccb}
+.card{background:#141922;border:1px solid #232a36;border-radius:12px}
+.card-h{display:flex;flex-wrap:wrap;align-items:center;gap:10px;padding:14px 18px}
+.card-h h2{margin:0;font-size:16px}
+.sub{font-size:12.5px;color:#9aa4b2}
+.faint{color:#8a94a5}
+.age{font-size:12px;color:#8a94a5;margin-left:auto}
+.chip{display:inline-flex;align-items:center;gap:6px;height:30px;padding:0 12px;border-radius:999px;border:1px solid #2c3340;background:#141922;color:#c9d1dc;font-size:13px;font-weight:500}
+.chip.on{background:#16233a;border-color:#4f7fe0;color:#dbe6ff}
+.chip .n{color:#8a94a5}
+.input{display:flex;align-items:center;height:34px;padding:0 10px;border-radius:8px;border:1px solid #2c3340;background:#0f131a;color:#8a94a5;font-size:13.5px}
+.select{display:inline-flex;align-items:center;gap:8px;height:32px;padding:0 10px;border-radius:8px;border:1px solid #2c3340;background:#0f131a;color:#c9d1dc;font-size:13px}
+table{width:100%;border-collapse:collapse}
+th{font-size:12px;font-weight:600;color:#9aa4b2;text-align:left;padding:10px 14px;border-bottom:1px solid #232a36;white-space:nowrap}
+td{padding:10px 14px;border-bottom:1px solid #1d232e;vertical-align:middle}
+tr.selrow td{background:#16233a}
+.kv{display:grid;grid-template-columns:150px 1fr;gap:8px 14px;margin:0;padding:0 18px 16px}
+.kv dt{color:#8a94a5}.kv dd{margin:0}
+.tabs{display:flex;gap:4px;border-bottom:1px solid #232a36}
+.tabs span{padding:8px 12px;color:#9aa4b2;font-weight:600;font-size:13.5px;border-bottom:2px solid transparent}
+.tabs span.on{color:#e6e9ef;border-bottom-color:#4f7fe0}
+.banner{display:flex;flex-wrap:wrap;align-items:center;gap:12px;padding:12px 16px;border-radius:10px}
+.banner.warn{background:#2a2211;border:1px solid #5a4416;color:#e6e9ef}
+.banner.fail{background:#2a1515;border:1px solid #5a2626;color:#e6e9ef}
+.drawer{position:absolute;top:0;right:0;bottom:0;width:500px;background:#11151c;border-left:1px solid #2c3340;box-shadow:-16px 0 40px rgba(0,0,0,.5);display:flex;flex-direction:column}
+.drawer-h{padding:18px 22px;border-bottom:1px solid #232a36}
+.drawer-b{padding:18px 22px;display:flex;flex-direction:column;gap:14px;flex:1;overflow:hidden}
+.drawer-f{padding:14px 22px;border-top:1px solid #232a36;display:flex;gap:10px;justify-content:flex-end;align-items:center}
+.field label{display:block;font-size:12.5px;font-weight:600;color:#c9d1dc;margin-bottom:6px}
+.field .help{font-size:12px;color:#8a94a5;margin-top:4px}
+.scrim{position:absolute;inset:0;background:rgba(5,8,12,.55)}
+.ev{display:grid;grid-template-columns:62px 92px minmax(0,1fr) auto;gap:12px;align-items:center;padding:9px 18px;border-bottom:1px solid #1d232e}
+.day{padding:10px 18px 6px;font-size:11.5px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:#8a94a5}
+.toggle{display:inline-block;width:32px;height:18px;border-radius:999px;background:#4f7fe0;position:relative;vertical-align:middle}
+.toggle::after{content:"";position:absolute;top:2px;right:2px;width:14px;height:14px;border-radius:50%;background:#fff}
+.toggle.offt{background:#2c3340}.toggle.offt::after{right:auto;left:2px;background:#8a94a5}
+
+.logs{background:#0a0d12;border:1px solid #1d232e;border-radius:8px;padding:10px 12px;font-family:'JetBrains Mono',ui-monospace,monospace;font-size:12px;line-height:1.55;color:#c9d1dc;white-space:pre;overflow:hidden}
+.logs .t{color:#6f7a8b}.logs .e{color:#ff8a82}.logs .w{color:#f0b44c}
+.dl{display:grid;grid-template-columns:130px 1fr;gap:6px 12px;font-size:13px;margin:0}
+.dl dt{color:#8a94a5}.dl dd{margin:0;min-width:0;overflow-wrap:anywhere}
+.ta{background:#0f131a;border:1px solid #2c3340;border-radius:8px;padding:10px 12px;font-family:'JetBrains Mono',ui-monospace,monospace;font-size:12.5px;line-height:1.7;color:#e6e9ef;white-space:pre}
+.note{font-size:12.5px;color:#8a94a5;padding:10px 18px}
+.dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:2px}
+.dot.ok{background:#5fe08b}.dot.fail{background:#ff8a82}.dot.off{background:#6f7a8b}.dot.warn{background:#f0b44c}
+.kids td{background:#0f131a}
+.panel-t{font-size:11.5px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:#8a94a5;margin:0 0 8px}
+.mapbox{border:1px solid #2c3340;border-radius:10px;padding:10px 12px;background:#141922;min-width:180px}
+</style>
+</helmet>
+<div style="position: relative; display: flex; flex-wrap: wrap; min-height: 1040px; background: #0d1015; color: #e6e9ef; font-family: Inter, system-ui, sans-serif; font-size: 14px; line-height: 1.45; overflow: hidden">
+  <nav aria-label="Main" style="flex: 0 0 232px; background: #11151c; border-right: 1px solid #222833; padding: 20px 14px; display: flex; flex-direction: column; gap: 18px">
+    <div style="font-weight: 700; font-size: 15px; padding: 0 10px">homelab-orchestrator</div>
+    <sc-for list="{{nav}}" as="g" hint-placeholder-count="5">
+      <div style="display: flex; flex-direction: column; gap: 2px">
+        <div style="font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: #8a94a5; padding: 0 10px 4px">{{g.heading}}</div>
+        <sc-for list="{{g.items}}" as="it" hint-placeholder-count="3">
+          <a href="#" style="{{it.style}}">{{it.label}}</a>
+        </sc-for>
+      </div>
+    </sc-for>
+  </nav>
+  <div style="flex: 999 1 560px; min-width: 0; display: flex; flex-direction: column">
+    <header style="display: flex; flex-wrap: wrap; align-items: center; gap: 12px; padding: 12px 32px; border-bottom: 1px solid #222833">
+      <div style="font-size: 13px; color: #8a94a5"><span style="color: #e6e9ef">Sub-services in lists</span></div>
+      <div class="input" style="margin-left: auto; width: 300px">⌕ Search services, nodes, hosts</div>
+      <span class="pill ok">● Live</span>
+      <button class="btn ghost" type="button">admin ▾</button>
+    </header>
+    <main style="padding: 24px 32px 48px; max-width: 1280px; width: 100%; display: flex; flex-direction: column; gap: 18px">
+      <div>
+        <h1 style="margin: 0; font-size: 24px; font-weight: 700">Sub-services in lists</h1>
+        <div style="color: #9aa4b2; margin-top: 4px">Lists show the parent only. Its state takes in its sub-services, and a ▸ opens them in place. Three places, same rule.</div>
+      </div>
+      <section class="card">
+        <div class="card-h"><h2>Services list</h2><span class="sub">sub-services are no longer rows of their own; filter chips still find them ("Failed" shows Docker host, opened)</span></div>
+        <table>
+          <thead><tr><th style="width: 32px"></th><th>Service</th><th>State</th><th>Runs on</th><th>Last check</th><th>Backup</th><th>Wake on hit</th></tr></thead>
+          <tbody>
+            <tr><td><input type="checkbox"></td><td><strong>Example Cloud</strong><div class="sub mono">example-cloud</div></td><td><span class="pill ok">healthy</span></td><td>node-b<div class="sub">vm 101 · running</div></td><td>40 s ago</td><td>nightly<div class="sub">ok · 6 h ago</div></td><td>yes</td></tr>
+            <tr class="selrow"><td><input type="checkbox"></td><td><strong>▾ Docker host</strong> <span class="pill off" style="padding: 1px 7px">3</span><div class="sub mono">docker-host</div></td><td><span class="pill warn">degraded</span><div class="sub">Monitoring failed</div></td><td>node-a<div class="sub">vm 102 · running</div></td><td>40 s ago</td><td>nightly<div class="sub">ok · 6 h ago</div></td><td>yes</td></tr>
+            <tr class="kids"><td></td><td style="padding-left: 30px"><a href="#">Shop</a> <span class="faint" style="font-size: 12px">stack · 3 containers</span></td><td><span class="pill ok">healthy</span></td><td colspan="4" class="faint" style="font-size: 12.5px">backup waits for it · <a href="#">Manage stack →</a></td></tr>
+            <tr class="kids"><td></td><td style="padding-left: 30px"><a href="#">Monitoring</a> <span class="faint" style="font-size: 12px">stack · 4 containers</span></td><td><span class="pill fail">failed</span></td><td colspan="4" class="faint" style="font-size: 12.5px">grafana exited (1) 12 min ago · <a href="#">Manage stack →</a></td></tr>
+            <tr class="kids"><td></td><td style="padding-left: 30px"><a href="#">Agent</a> <span class="faint" style="font-size: 12px">container</span></td><td><span class="pill ok">healthy</span></td><td colspan="4"></td></tr>
+          </tbody>
+        </table>
+      </section>
+      <div style="display: flex; flex-wrap: wrap; gap: 18px; align-items: flex-start">
+        <section class="card" style="flex: 1 1 520px">
+          <div class="card-h"><h2>Dashboard</h2><span class="sub">attention item names the sub-service; the node group shows the parent</span></div>
+          <div style="padding: 0 18px 16px; display: flex; flex-direction: column; gap: 10px">
+            <div style="display: flex; gap: 10px; align-items: center; padding: 10px 12px; border: 1px solid #5a4416; background: #2a2211; border-radius: 10px">
+              <span class="pill warn">Degraded</span>
+              <div style="flex: 1"><strong>Docker host</strong>: sub-service Monitoring failed<div class="sub">grafana exited (1) · 12 min ago</div></div>
+              <a class="btn small" href="#">Manage stack</a>
+            </div>
+            <div class="panel-t" style="margin-top: 6px">node-a</div>
+            <div style="display: flex; flex-wrap: wrap; gap: 8px">
+              <span class="chip"><span class="dot warn"></span>Docker host ▸ 3</span><span class="chip"><span class="dot ok"></span>Gateway</span><span class="chip"><span class="dot ok"></span>Home Automation</span>
+            </div>
+            <div class="sub">▸ opens a small list of its sub-services with their state and links, like the Services list.</div>
+          </div>
+        </section>
+        <section class="card" style="flex: 1 1 520px">
+          <div class="card-h"><h2>Map</h2><span class="sub">one box per service; sub-services fold into it</span></div>
+          <div style="padding: 0 18px 16px; display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-start">
+            <div class="mapbox" style="border-color: #5a4416">
+              <div style="display: flex; align-items: center; gap: 8px"><span class="dot warn"></span><strong>Docker host</strong><span class="faint" style="margin-left: auto; font-size: 12px">vm 102</span></div>
+              <div class="sub" style="margin-top: 4px">▾ 3 sub-services · 1 failing</div>
+              <div style="margin-top: 6px; display: flex; flex-direction: column; gap: 4px; font-size: 12.5px">
+                <div><span class="dot ok"></span> Shop <span class="faint">stack</span></div>
+                <div><span class="dot fail"></span> Monitoring <span class="faint">stack</span></div>
+                <div><span class="dot ok"></span> Agent</div>
+              </div>
+            </div>
+            <div class="mapbox"><div style="display: flex; align-items: center; gap: 8px"><span class="dot ok"></span><strong>Gateway</strong><span class="faint" style="margin-left: auto; font-size: 12px">vm 100</span></div><div class="sub" style="margin-top: 4px">no sub-services</div></div>
+            <div class="sub" style="flex: 1 1 100%">Selecting Docker host opens the sidebar as today, with its sub-services listed under it. Closed by default; open state is remembered per browser.</div>
+          </div>
+        </section>
+      </div>
+    </main>
+  </div>
+
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":1040}}'>
+class Component extends DCLogic {
+  renderVals() {
+    const cur = "Services";
+    const base = 'display:block;padding:6px 10px;border-radius:7px;font-size:14px;color:#c9d1dc';
+    const on = base + ';background:#1d2430;color:#ffffff;font-weight:600;box-shadow:inset 3px 0 0 #4f7fe0';
+    const groups = [["Overview", ["Dashboard", "Map"]], ["Services", ["Services"]], ["Infrastructure", ["Nodes & guests", "Proxy hosts", "Containers", "Backups"]], ["Activity", ["Activity", "Traffic"]], ["Settings", ["Connections", "Notifications", "AI assistants", "Admins & devices", "System", "Archive"]]];
+    return {
+      nav: groups.map(([heading, items]) => ({ heading, items: items.map((label) => ({ label, style: label === cur ? on : base })) })),
+    };
+  }
+}
+</script>
+</body>
+</html>
