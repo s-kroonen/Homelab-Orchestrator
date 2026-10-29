@@ -455,6 +455,7 @@
         loadedAt = Date.now();
       } catch (e) {
         failed = true;
+        if (o.onError) o.onError(e);
         if (!data) clear(node).append(el("div", { class: "region-error" }, "Could not load: " + ((e && e.message) || e), " ",
           el("button", { type: "button", class: "small secondary", onclick: () => refresh() }, "Try again")));
         if (!loadedAt) loadedAt = Date.now();

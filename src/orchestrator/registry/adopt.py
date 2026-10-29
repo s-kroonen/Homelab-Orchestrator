@@ -1,8 +1,10 @@
 """Adopting a Portainer stack: turn what Portainer already runs into a sub-service.
 
 Portainer owns the stack. Adopting reads it (its containers, their published ports) and
-proposes the orchestrator's side: a sub-service linked to the stack, a child per container, the
-proxy hosts that point at it, probes, and a deploy method. Nothing is copied from Portainer
+proposes the orchestrator's side: one sub-service linked to the stack, with a check per container
+(``container:<name>``; a database container is one its root's backup waits for), the proxy hosts
+that point at it, probes, and a deploy method. A stack is one sub-service: its containers are not
+services of their own (see ``registry/stack_fold.py``). Nothing is copied from Portainer
 (no compose file, no Git URL, no environment): the link is the endpoint number and the stack
 name, exactly as a service links to a guest by its VMID.
 
@@ -30,6 +32,7 @@ from orchestrator.db.models import ProxyHost, Service
 from orchestrator.deploy import webhook as hook
 from orchestrator.deploy.policy import PRESETS, normalize_deploy, preset
 from orchestrator.registry.host_cascade import host_served
+from orchestrator.registry.stack_fold import container_probe_name
 from orchestrator.registry.traefik_probes import sync_traefik_probe
 
 _DB_IMAGES = (
@@ -246,8 +249,8 @@ async def suggest(
         )  # fmt: skip
     for child in out.children:
         out.probes.append(
-            {"service": child["slug"], "kind": "portainer", "name": "portainer",
-             "required": child["likely_db"],
+            {"service": "stack", "kind": "portainer", "name": container_probe_name(child["container"]),
+             "required": True, "backup_waits": child["likely_db"],
              "config": {"endpoint": endpoint_id, "container": child["container"], **instance_extra(adapters, adapter.instance_id)}}
         )  # fmt: skip
     return out
@@ -258,8 +261,10 @@ async def suggest(
 
 @dataclass
 class ChildPlan:
+    """One container to check on the stack (``container:<name>``)."""
+
     container: str
-    slug: str
+    slug: str = ""
     name: str = ""
     backup_gate: str = "ignore"
 
@@ -407,19 +412,6 @@ async def adopt(
             )
         )  # fmt: skip
         created.append(plan.slug)
-        for child in plan.children:
-            await _call(
-                api.create_service(
-                    api.ServiceCreate(
-                        slug=child.slug, name=child.name or child.container, group=plan.group,
-                        parent=plan.slug, backup_gate=child.backup_gate,
-                        controller={"type": "portainer", "endpoint": plan.endpoint_id, "container": child.container, **extra},
-                    ),
-                    session,
-                    actor_obj,
-                )
-            )  # fmt: skip
-            created.append(child.slug)
         stack_svc = session.exec(select(Service).where(Service.slug == plan.slug)).one()
         for ph in hosts:
             moved.append((ph, ph.service_id))
@@ -427,8 +419,9 @@ async def adopt(
             result.hosts.append(ph.hostname)
         session.commit()
 
-        if plan.probes:
-            result.probes = await _add_probes(session, api, actor_obj, plan, hosts, boxes, extra)
+        # The container checks stand in for the per-container sub-services, so they are
+        # added either way; "probes" is about the stack's own (running, its address).
+        result.probes = await _add_probes(session, api, actor_obj, plan, hosts, boxes, extra)
         if deploy_block:
             await _call(
                 api.update_service(
@@ -480,34 +473,45 @@ async def _add_probes(
     count = 0
     extra = extra or {}
 
-    async def add(slug: str, name: str, kind: str, required: bool, config: dict[str, Any]) -> None:
+    async def add(
+        slug: str,
+        name: str,
+        kind: str,
+        required: bool,
+        config: dict[str, Any],
+        backup_waits: bool = False,
+    ) -> None:
         nonlocal count
         await _call(
             api.create_probe(
                 slug,
-                api.ProbeCreate(name=name, kind=kind, required=required, config=config),
+                api.ProbeCreate(
+                    name=name, kind=kind, required=required, config=config,
+                    backup_waits=backup_waits,
+                ),
                 session,
                 actor,
             )
-        )
+        )  # fmt: skip
         count += 1
 
-    await add(
-        plan.slug,
-        "portainer",
-        "portainer",
-        True,
-        {"endpoint": plan.endpoint_id, "stack": plan.stack, **extra},
-    )
-    if hosts:
+    if plan.probes:
+        await add(
+            plan.slug,
+            "portainer",
+            "portainer",
+            True,
+            {"endpoint": plan.endpoint_id, "stack": plan.stack, **extra},
+        )
+    if plan.probes and hosts:
         await add(
             plan.slug, "http", "http", True,
             {"url": f"https://{hosts[0].hostname}", "expect_status": [200, 204, 301, 302, 303, 307, 308, 401]},
         )  # fmt: skip
-    db_names = {c.name for c in boxes if _is_db(c)}
     for child in plan.children:
         await add(
-            child.slug, "portainer", "portainer", child.container in db_names,
+            plan.slug, container_probe_name(child.container), "portainer", True,
             {"endpoint": plan.endpoint_id, "container": child.container, **extra},
+            backup_waits=child.backup_gate == "required",
         )  # fmt: skip
     return count

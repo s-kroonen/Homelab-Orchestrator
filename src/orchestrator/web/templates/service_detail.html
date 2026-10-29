@@ -14,6 +14,7 @@
 <div class="tabs" role="tablist" aria-label="Service" id="svc-tabs">
   <button role="tab" data-tab="overview">Overview</button>
   <button role="tab" data-tab="configuration">Configuration <span class="n" id="n-probes"></span></button>
+  <button role="tab" data-tab="subs" id="tab-subs" hidden>Sub-services <span class="n" id="n-subs"></span></button>
   <button role="tab" data-tab="related">Related <span class="n" id="n-related"></span></button>
   <button role="tab" data-tab="history">History</button>
 </div>
@@ -44,6 +45,17 @@
     <div class="card-head"><h2 id="h-probes">Probes</h2><span class="faint" style="font-size:13px">checked in this order; required ones decide the state and gate backups</span><span style="flex:1"></span><span id="probe-tools"></span></div>
     <div id="probes" style="margin-top: 4px"></div>
   </section>
+</div>
+
+<div role="tabpanel" data-tab="subs" hidden>
+  <div class="banner warn" id="subs-banner" hidden></div>
+  <section class="card flush" aria-labelledby="h-subs-t">
+    <div class="card-head"><h2 id="h-subs-t">Sub-services</h2><span class="faint card-sub" id="subs-intro"></span><span style="flex:1"></span>
+      <a class="btn secondary small" href="/sources#portainer" id="subs-adopt">Adopt a stack…</a>
+      <button type="button" class="ghost small" id="subs-add">+ Add</button></div>
+    <div id="subs-table"></div>
+  </section>
+  <p class="faint" style="font-size: 12.5px">Click a name for its own page (checks, configuration, history). <strong>Manage stack</strong> opens the stack page: its containers, logs, environment and Portainer settings. This service shows <em>degraded</em> while a sub-service is failing; a backup still waits only for what is marked so.</p>
 </div>
 
 <div role="tabpanel" data-tab="related" hidden>

@@ -31,7 +31,9 @@ class ChildIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     container: str
-    slug: str
+    #: Unused: a container is a check on the stack, not a sub-service. Kept so older
+    #: clients that still send one are not refused.
+    slug: str = ""
     name: str = ""
     backup_gate: Literal["ignore", "required"] = "ignore"
 
@@ -243,7 +245,7 @@ async def delete(
 async def stack_action(
     endpoint_id: int,
     name: str,
-    action: Literal["start", "stop", "restart"],
+    action: Literal["start", "stop", "restart", "redeploy"],
     session: SessionDep,
     adapters: AdaptersDep,
     admin: CurrentAdmin,
@@ -269,7 +271,7 @@ async def stack_action(
 async def container_action(
     endpoint_id: int,
     ref: str,
-    action: Literal["start", "stop", "restart"],
+    action: Literal["start", "stop", "restart", "kill", "recreate"],
     session: SessionDep,
     adapters: AdaptersDep,
     admin: CurrentAdmin,
@@ -286,6 +288,116 @@ async def container_action(
             action=action,
             instance=instance,
         )
+    except StackError as exc:
+        raise fail(exc) from exc
+    return {"message": message}
+
+
+# -- the stack page: what is linked, environment, Git settings ------------------------------------
+
+
+class RevealIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    name: str
+
+
+class EnvVarIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    name: str
+    #: None keeps the current value (a hidden secret need not be revealed to keep it).
+    value: str | None = None
+
+
+class EnvIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    vars: list[EnvVarIn]
+
+
+class GitIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    reference: str
+    #: "5m", or None / "" for no polling.
+    auto_update_interval: str | None = None
+
+
+@router.get("/stacks/{endpoint_id}/{name}/link")
+async def stack_link(
+    endpoint_id: int,
+    name: str,
+    session: SessionDep,
+    adapters: AdaptersDep,
+    instance: str | None = None,
+) -> dict[str, Any]:
+    try:
+        return {"link": stack_ops.link_view(session, adapters, endpoint_id, name, instance)}
+    except StackError as exc:
+        raise fail(exc) from exc
+
+
+@router.get("/stacks/{endpoint_id}/{name}/env")
+async def stack_env(
+    endpoint_id: int, name: str, adapters: AdaptersDep, instance: str | None = None
+) -> dict[str, Any]:
+    try:
+        return await stack_ops.env_view(adapters, endpoint_id, name, instance)
+    except StackError as exc:
+        raise fail(exc) from exc
+
+
+@router.post("/stacks/{endpoint_id}/{name}/env/reveal")
+async def stack_env_reveal(
+    endpoint_id: int,
+    name: str,
+    body: RevealIn,
+    session: SessionDep,
+    adapters: AdaptersDep,
+    admin: CurrentAdmin,
+    instance: str | None = None,
+) -> dict[str, Any]:
+    try:
+        value = await stack_ops.reveal_env(
+            session, adapters, admin.username, endpoint_id, name, body.name, instance
+        )
+    except StackError as exc:
+        raise fail(exc) from exc
+    return {"name": body.name, "value": value}
+
+
+@router.put("/stacks/{endpoint_id}/{name}/env")
+async def stack_env_set(
+    endpoint_id: int,
+    name: str,
+    body: EnvIn,
+    session: SessionDep,
+    adapters: AdaptersDep,
+    admin: CurrentAdmin,
+    instance: str | None = None,
+) -> dict[str, Any]:
+    try:
+        change = await stack_ops.set_env(
+            session, adapters, admin.username, endpoint_id, name,
+            [(v.name.strip(), v.value) for v in body.vars], instance,
+        )  # fmt: skip
+    except StackError as exc:
+        raise fail(exc) from exc
+    return {"change": change, "redeployed": any(change.values())}
+
+
+@router.put("/stacks/{endpoint_id}/{name}/git")
+async def stack_git_set(
+    endpoint_id: int,
+    name: str,
+    body: GitIn,
+    session: SessionDep,
+    adapters: AdaptersDep,
+    admin: CurrentAdmin,
+    instance: str | None = None,
+) -> dict[str, Any]:
+    try:
+        message = await stack_ops.set_git(
+            session, adapters, admin.username, endpoint_id, name,
+            reference=body.reference, auto_update_interval=body.auto_update_interval, instance=instance,
+        )  # fmt: skip
     except StackError as exc:
         raise fail(exc) from exc
     return {"message": message}

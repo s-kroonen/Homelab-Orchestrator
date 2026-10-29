@@ -125,7 +125,11 @@ Something that is off on purpose (a node asleep, its services) is **off**, never
 | Map: one row per node, shared backups, selection sidebar | [PNG](wireframes/Map.png) · [HTML](wireframes/Map.html) |
 | Traffic: one page, countries included | [PNG](wireframes/Traffic.png) · [HTML](wireframes/Traffic.html) |
 | Activity: one feed, run details in the drawer | [PNG](wireframes/Activity.png) · [HTML](wireframes/Activity.html) |
-| Containers: stacks with their containers | [PNG](wireframes/Containers.png) · [HTML](wireframes/Containers.html) |
+| Containers: every stack, opens its stack page | [PNG](wireframes/Containers.png) · [HTML](wireframes/Containers.html) |
+| Stack: containers, details and logs | [PNG](wireframes/Stack.png) · [HTML](wireframes/Stack.html) |
+| Stack: environment (edit, redeploy) and settings | [PNG](wireframes/StackEnv.png) · [HTML](wireframes/StackEnv.html) |
+| Service: Sub-services tab (parent) | [PNG](wireframes/ServiceSubs.png) · [HTML](wireframes/ServiceSubs.html) |
+| Sub-services in lists (Services, Dashboard, Map) | [PNG](wireframes/SubRollup.png) · [HTML](wireframes/SubRollup.html) |
 | Settings: Notifications (rules, channels, this device) | [PNG](wireframes/Notifications.png) · [HTML](wireframes/Notifications.html) |
 | Settings: AI assistants (waiting, connections, calls) | [PNG](wireframes/Assistants.png) · [HTML](wireframes/Assistants.html) |
 | Settings: System (update, time, this orchestrator) | [PNG](wireframes/System.png) · [HTML](wireframes/System.html) |

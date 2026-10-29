@@ -83,7 +83,7 @@ def _print_suggestion(s: dict[str, Any]) -> None:
     click.echo("containers :")
     for c in s["children"]:
         tag = "  [database: backup waits for it]" if c["likely_db"] else ""
-        click.echo(f"  {c['container']:<36} -> {c['slug']}{tag}")
+        click.echo(f"  {c['container']:<36} -> check container:{c['container']}{tag}")
     click.echo(
         "proxy hosts pointing at it:" if s["hosts"] else "proxy hosts : none match its ports"
     )
@@ -125,7 +125,7 @@ def stack_suggest(endpoint: int, name: str, parent: str | None, as_json: bool) -
 @click.option("--slug", default=None, help="Default: the suggested slug.")
 @click.option("--parent", default=None, help="The service (guest) it lives under.")
 @click.option("--group", default="")
-@click.option("--no-children", is_flag=True, help="Do not add a sub-service per container.")
+@click.option("--no-children", is_flag=True, help="Do not add a check per container.")
 @click.option("--host", "hosts", multiple=True, help="Link this proxy host (repeatable).")
 @click.option("--all-hosts", is_flag=True, help="Link every unlinked proxy host that points at it.")
 @click.option("--no-probes", is_flag=True)

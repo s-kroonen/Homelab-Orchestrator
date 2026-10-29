@@ -248,6 +248,10 @@ class Probe(SQLModel, table=True):
     #: survive a disable -> enable. The auto-managed ``traefik:<hostname>`` probe
     #: follows its proxy host's ``enabled`` flag.
     enabled: bool = Field(default=True)
+    #: On a sub-service: a backup of its root waits for this check to pass, even when the
+    #: sub-service as a whole is not ``backup_gate: required`` (a stack whose database
+    #: container must be up, but whose web container may be down). See docs/service_tree.md.
+    backup_waits: bool = Field(default=False)
 
 
 class ProxyHost(SQLModel, table=True):

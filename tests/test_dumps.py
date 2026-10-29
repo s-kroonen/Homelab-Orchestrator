@@ -38,11 +38,7 @@ services:
     name: dev.xymbols
     parent: portainer-vm
     controller: {type: portainer, endpoint: 1, stack: dev-xymbols}
-  - slug: dev-xymbols-db
-    name: database
-    parent: dev-xymbols
-    controller: {type: portainer, endpoint: 1, container: dev-xymbols-db-1}
-    dump: {type: postgres, database: app, keep: 2}
+    dump: {type: postgres, database: app, keep: 2, container: dev-xymbols-db-1}
   - slug: no-dump
     name: nothing
     parent: portainer-vm
@@ -75,7 +71,7 @@ def _portainer(c: TestClient) -> Any:
     return c.app.state.adapters.portainer  # type: ignore[attr-defined]
 
 
-def _run(c: TestClient, slug: str = "dev-xymbols-db") -> dict[str, Any]:
+def _run(c: TestClient, slug: str = "dev-xymbols") -> dict[str, Any]:
     r = c.post(f"/api/services/{slug}/dump/run")
     assert r.status_code == 202, r.text
     import time
@@ -159,7 +155,7 @@ def test_a_dump_is_compressed_verified_and_recorded(client: TestClient, tmp_path
     run = _run(client)
     assert run["status"] == "succeeded", run
     assert [s["name"] for s in run["steps"]] == ["check", "dump", "verify", "record", "prune"]
-    info = client.get("/api/services/dev-xymbols-db/dump").json()
+    info = client.get("/api/services/dev-xymbols/dump").json()
     rec = info["records"][0]
     assert rec["verified"] and rec["size_bytes"] > 0 and rec["file"].endswith(".sql.gz")
     path = tmp_path / "dumps" / rec["path"]
@@ -178,7 +174,7 @@ def test_a_failing_tool_is_a_failed_dump_with_its_own_message(
     p.exec_exit, p.exec_stderr, p.exec_output = 1, "pg_dump: error: connection refused", b"x"
     run = _run(client)
     assert run["status"] == "failed" and "connection refused" in run["error"]
-    assert client.get("/api/services/dev-xymbols-db/dump").json()["records"] == []
+    assert client.get("/api/services/dev-xymbols/dump").json()["records"] == []
     assert not list((tmp_path / "dumps").rglob("*.gz*"))  # nothing half-written is left
 
 
@@ -186,7 +182,7 @@ def test_a_dump_cut_off_half_way_is_not_a_backup(client: TestClient) -> None:
     _portainer(client).exec_output = b"-- dump\nCREATE TABLE t (id int);\n"  # no end marker
     run = _run(client)
     assert run["status"] == "failed" and "cut off" in run["error"]
-    assert client.get("/api/services/dev-xymbols-db/dump").json()["records"] == []
+    assert client.get("/api/services/dev-xymbols/dump").json()["records"] == []
 
 
 def test_verify_catches_corruption_and_tiny_files(tmp_path: Path) -> None:
@@ -229,7 +225,7 @@ def test_refusals(client: TestClient) -> None:
     assert client.post("/api/services/ghost/dump/run").status_code == 404
     assert client.post("/api/services/no-dump/dump/run").status_code == 404
     with Session(get_engine()) as s:
-        svc = s.exec(select(Service).where(Service.slug == "dev-xymbols-db")).one()
+        svc = s.exec(select(Service).where(Service.slug == "dev-xymbols")).one()
         s.add(
             PipelineRun(
                 kind=_dump_kind(),
@@ -239,7 +235,7 @@ def test_refusals(client: TestClient) -> None:
             )
         )
         s.commit()
-    assert client.post("/api/services/dev-xymbols-db/dump/run").status_code == 409
+    assert client.post("/api/services/dev-xymbols/dump/run").status_code == 409
 
 
 def _dump_kind() -> Any:
@@ -254,13 +250,13 @@ def _dump_kind() -> Any:
 def test_only_the_newest_few_are_kept_but_protected_ones_stay(client: TestClient) -> None:
     first = _run(client)
     assert first["status"] == "succeeded"
-    oldest = client.get("/api/services/dev-xymbols-db/dump").json()["records"][0]
+    oldest = client.get("/api/services/dev-xymbols/dump").json()["records"][0]
     assert client.post(f"/api/dumps/{oldest['id']}/protect", json={"protected": True}).json()[
         "protected"
     ]
     for _ in range(3):
         assert _run(client)["status"] == "succeeded"
-    ids = [r["id"] for r in client.get("/api/services/dev-xymbols-db/dump").json()["records"]]
+    ids = [r["id"] for r in client.get("/api/services/dev-xymbols/dump").json()["records"]]
     assert oldest["id"] in ids and len(ids) == 3  # keep 2 + the protected one
     assert client.delete(f"/api/dumps/{oldest['id']}").status_code == 409
     client.post(f"/api/dumps/{oldest['id']}/protect", json={"protected": False})
@@ -275,7 +271,7 @@ def test_old_dumps_go_by_age_but_the_newest_good_one_never_does(
 
     assert _run(client)["status"] == "succeeded"
     with Session(get_engine()) as s:
-        svc = s.exec(select(Service).where(Service.slug == "dev-xymbols-db")).one()
+        svc = s.exec(select(Service).where(Service.slug == "dev-xymbols")).one()
         row = s.exec(select(DumpRecord)).one()
         row.created_at = datetime.now(UTC) - timedelta(days=90)
         s.add(row)
@@ -300,15 +296,15 @@ def test_a_path_outside_the_dump_directory_is_never_served(client: TestClient) -
 
 def test_dump_config_is_validated_when_saved(client: TestClient) -> None:
     ok = client.put(
-        "/api/registry/services/dev-xymbols-db",
-        json={"dump": {"type": "mariadb", "schedule": "0 3 * * *"}},
+        "/api/registry/services/dev-xymbols",
+        json={
+            "dump": {"type": "mariadb", "schedule": "0 3 * * *", "container": "dev-xymbols-db-1"}
+        },
     )
     assert ok.status_code == 200, ok.text
     assert ok.json()["dump"]["type"] == "mariadb" and ok.json()["dump"]["keep"] == 7
     assert (
-        client.put(
-            "/api/registry/services/dev-xymbols-db", json={"dump": {"type": "x"}}
-        ).status_code
+        client.put("/api/registry/services/dev-xymbols", json={"dump": {"type": "x"}}).status_code
         == 400
     )
     # a service with no container to run in cannot have one
@@ -319,24 +315,29 @@ def test_dump_config_is_validated_when_saved(client: TestClient) -> None:
         == 400
     )
     overview = client.get("/api/dumps").json()
-    assert [o["service"] for o in overview] == ["dev-xymbols-db"] and overview[0][
+    assert [o["service"] for o in overview] == ["dev-xymbols"] and overview[0][
         "schedule"
     ] == "0 3 * * *"
 
 
 def test_the_schedule_becomes_a_job(client: TestClient) -> None:
     client.put(
-        "/api/registry/services/dev-xymbols-db",
-        json={"dump": {"type": "postgres", "schedule": "0 3 * * *"}},
+        "/api/registry/services/dev-xymbols",
+        json={
+            "dump": {"type": "postgres", "schedule": "0 3 * * *", "container": "dev-xymbols-db-1"}
+        },
     )
     sched = client.app.state.scheduler  # type: ignore[attr-defined]
     if sched is None:
         pytest.skip("scheduler disabled in this environment")
     sched.sync_dump_jobs()
-    assert sched._scheduler.get_job("dump:dev-xymbols-db") is not None
-    client.put("/api/registry/services/dev-xymbols-db", json={"dump": {"type": "postgres"}})
+    assert sched._scheduler.get_job("dump:dev-xymbols") is not None
+    client.put(
+        "/api/registry/services/dev-xymbols",
+        json={"dump": {"type": "postgres", "container": "dev-xymbols-db-1"}},
+    )
     sched.sync_dump_jobs()
-    assert sched._scheduler.get_job("dump:dev-xymbols-db") is None
+    assert sched._scheduler.get_job("dump:dev-xymbols") is None
 
 
 def test_a_dump_is_audited(client: TestClient) -> None:
@@ -362,15 +363,15 @@ def test_cli_sets_shows_and_clears_the_config(
     config_module.reset_settings_cache()
     runner = CliRunner()
     out = runner.invoke(
-        cli, ["dump", "set", "dev-xymbols-db", "--schedule", "0 3 * * *", "--keep", "4"]
+        cli, ["dump", "set", "dev-xymbols", "--schedule", "0 3 * * *", "--keep", "4"]
     )
     assert out.exit_code == 0, out.output
     assert "0 3 * * *" in out.output and "newest 4" in out.output
-    assert "postgres" in runner.invoke(cli, ["dump", "show", "dev-xymbols-db"]).output
+    assert "postgres" in runner.invoke(cli, ["dump", "show", "dev-xymbols"]).output
     bad = runner.invoke(cli, ["dump", "set", "no-dump", "--type", "postgres"])
     assert bad.exit_code != 0 and "container" in bad.output
-    assert runner.invoke(cli, ["dump", "clear", "dev-xymbols-db"]).exit_code == 0
-    assert "no dump" in runner.invoke(cli, ["dump", "show", "dev-xymbols-db"]).output
+    assert runner.invoke(cli, ["dump", "clear", "dev-xymbols"]).exit_code == 0
+    assert "no dump" in runner.invoke(cli, ["dump", "show", "dev-xymbols"]).output
 
 
 def test_cli_runs_and_lists(client: TestClient) -> None:
@@ -379,11 +380,11 @@ def test_cli_runs_and_lists(client: TestClient) -> None:
     from orchestrator.cli import cli
 
     runner = CliRunner()
-    done = runner.invoke(cli, ["dump", "run", "dev-xymbols-db"])
+    done = runner.invoke(cli, ["dump", "run", "dev-xymbols"])
     assert done.exit_code == 0, done.output
     assert "succeeded" in done.output
-    listed = runner.invoke(cli, ["dump", "list", "dev-xymbols-db"])
-    assert "dev-xymbols-db" in listed.output and ".sql.gz" in listed.output
+    listed = runner.invoke(cli, ["dump", "list", "dev-xymbols"])
+    assert "dev-xymbols" in listed.output and ".sql.gz" in listed.output
 
 
 def test_an_assistant_can_look_and_start_a_dump_but_only_with_the_backup_permission(
@@ -406,9 +407,9 @@ def test_an_assistant_can_look_and_start_a_dump_but_only_with_the_backup_permiss
         return r.json()["result"]  # type: ignore[no-any-return]
 
     assert call("list_dumps", {})["isError"] is False
-    assert call("run_dump", {"slug": "dev-xymbols-db"})["isError"] is True  # needs backup
+    assert call("run_dump", {"slug": "dev-xymbols"})["isError"] is True  # needs backup
     gid = client.get("/api/assistants/grants").json()[0]["id"]
     client.patch(f"/api/assistants/grants/{gid}", json={"scopes": ["read", "backup"]})
-    out = call("run_dump", {"slug": "dev-xymbols-db"})
+    out = call("run_dump", {"slug": "dev-xymbols"})
     assert out["isError"] is False, out
     assert "run_id" in out["content"][0]["text"]

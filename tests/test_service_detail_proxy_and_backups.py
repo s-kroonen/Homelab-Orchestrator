@@ -130,7 +130,8 @@ def test_service_page_renders_tablist_and_four_panels_with_counts(client: TestCl
     for tab in ("overview", "configuration", "related", "history"):
         assert f'<button role="tab" data-tab="{tab}">' in html
         assert f'<div role="tabpanel" data-tab="{tab}" hidden>' in html
-    assert html.count('role="tab" ') == 4
+    # plus Sub-services, shown when there are any (or for a root, to add one)
+    assert html.count('role="tab" ') == 5 and 'data-tab="subs" id="tab-subs" hidden' in html
     # The counts come from the data in the page.
     view = client.get(f"/api/views/service/{svc['slug']}").json()
     assert len(view["service"]["probes"]) == 2 and len(view["service"]["proxy_hosts"]) == 1

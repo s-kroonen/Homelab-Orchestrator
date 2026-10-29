@@ -409,5 +409,20 @@
       d.href ? el("a", { href: d.href, class: "faint", style: { fontSize: "12px" } }, "open") : null);
   }
 
-  window.Objects = { bulk, slugify, serviceDrawer, serviceActions, deleteService, nodeDrawer, nodePower, deleteNode, proxyHostDrawer, deleteProxyHosts, catalogFor, describeEvent, eventRow };
+  // --- sub-services under a parent (Services list, Dashboard, Map) --------------------------------
+  // subs: [{slug, name, cls, label, kind, containers, stack: {href}|null, depth}] (views._sub_brief)
+  function subKind(x) {
+    if (x.kind === "stack") return "stack" + (x.containers ? " · " + x.containers + " container" + (x.containers === 1 ? "" : "s") : "");
+    return x.kind || "";
+  }
+  function subList(subs, opts) {
+    const o = opts || {};
+    return el("div", { class: "sub-list" + (o.compact ? " compact" : "") }, subs.map((x) => el("div", { class: "sub-item", style: x.depth > 1 ? { paddingLeft: (x.depth - 1) * 14 + "px" } : null },
+      el("span", { class: "pill " + x.cls }, x.label),
+      el("a", { href: "/services/" + encodeURIComponent(x.slug), class: "sub-name" }, x.name),
+      el("span", { class: "faint" }, subKind(x)),
+      x.stack ? el("a", { href: x.stack.href, class: "sub-stack" }, "Manage stack →") : el("span"))));
+  }
+
+  window.Objects = { subList, subKind, bulk, slugify, serviceDrawer, serviceActions, deleteService, nodeDrawer, nodePower, deleteNode, proxyHostDrawer, deleteProxyHosts, catalogFor, describeEvent, eventRow };
 })();

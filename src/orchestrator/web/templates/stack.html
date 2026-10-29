@@ -1,0 +1,71 @@
+{% extends "base.html" %}
+{% block title %}homelab-orchestrator — {{ name }}{% endblock %}
+{% block crumbs %}Infrastructure / <a href="/portainer">Containers</a> / <span class="here">{{ name }}</span>{% endblock %}
+{% block content %}
+<div class="page-header svc-head">
+  <h1 id="stk-name">{{ name }}</h1>
+  <span class="pill off" id="stk-state">…</span>
+  <span class="tag">stack</span>
+  <div class="actions" id="stk-actions"></div>
+</div>
+<p class="page-sub" id="stk-sub"></p>
+<div id="stk-banners"></div>
+
+<div class="tabs" role="tablist" aria-label="Stack" id="stk-tabs">
+  <button role="tab" data-tab="containers">Containers <span class="n" id="n-containers"></span></button>
+  <button role="tab" data-tab="logs">Logs</button>
+  <button role="tab" data-tab="environment">Environment <span class="n" id="n-env"></span></button>
+  <button role="tab" data-tab="settings">Settings</button>
+  <button role="tab" data-tab="history">History</button>
+</div>
+
+<div role="tabpanel" data-tab="containers" hidden>
+  <section class="card flush" aria-labelledby="h-ct">
+    <div class="card-head"><h2 id="h-ct">Containers</h2><span class="faint card-sub" id="ct-intro"></span><span style="flex:1"></span><span class="age" id="ct-age"></span></div>
+    <div id="containers"></div>
+    <p class="faint" style="font-size: 12.5px; padding: 0 18px 14px; margin: 0">Click a row for its details and live logs. Row menu: start, stop, restart, kill, recreate (pull its image), inspect, and its check: required, optional or off, and whether a backup waits for it. Container actions are recorded in Activity.</p>
+  </section>
+  <section class="card" aria-labelledby="h-recent">
+    <div class="card-head"><h2 id="h-recent">Recent</h2><span style="flex:1"></span><a href="?tab=history" id="to-history">History tab →</a></div>
+    <div id="recent"></div>
+  </section>
+</div>
+
+<div role="tabpanel" data-tab="logs" hidden>
+  <section class="card flush" aria-labelledby="h-logs">
+    <div class="card-head"><h2 id="h-logs">Logs</h2><span class="faint card-sub">Every container in one view, newest at the bottom.</span></div>
+    <div id="all-logs" style="padding: 0 18px 16px"></div>
+  </section>
+</div>
+
+<div role="tabpanel" data-tab="environment" hidden>
+  <section class="card flush" aria-labelledby="h-env">
+    <div class="card-head"><h2 id="h-env">Stack environment</h2><span class="faint card-sub">Kept in Portainer and given to the compose file. Changing it redeploys the stack.</span><span style="flex:1"></span><button type="button" class="secondary small" id="env-edit" hidden>Edit…</button></div>
+    <div id="env"></div>
+    <p class="faint" style="font-size: 12.5px; padding: 0 18px 14px; margin: 0">Values whose name looks secret (PASSWORD, SECRET, TOKEN, KEY, DSN…) stay hidden until you click show; showing one is recorded in Activity, by name. Variables a container sets itself are listed with that container, names only.</p>
+  </section>
+</div>
+
+<div role="tabpanel" data-tab="settings" hidden>
+  <section class="card" aria-labelledby="h-pset">
+    <div class="card-head"><h2 id="h-pset">Stack settings in Portainer</h2><span style="flex:1"></span><button type="button" class="secondary small" id="git-edit" hidden>Edit…</button></div>
+    <div id="pset"></div>
+  </section>
+  <section class="card" aria-labelledby="h-oset">
+    <div class="card-head"><h2 id="h-oset">In the orchestrator</h2></div>
+    <div id="oset"></div>
+  </section>
+</div>
+
+<div role="tabpanel" data-tab="history" hidden>
+  <section class="card flush" aria-labelledby="h-hist">
+    <div class="card-head"><h2 id="h-hist">History</h2><span style="flex:1"></span><a id="hist-all" href="/activity">All of it in Activity →</a></div>
+    <div id="history"></div>
+  </section>
+</div>
+<script type="application/json" id="initial">{{ initial | tojson }}</script>
+{% endblock %}
+{% block scripts %}
+<script src="{{ asset('objects.js') }}"></script>
+<script src="{{ asset('stack.js') }}"></script>
+{% endblock %}

@@ -132,6 +132,8 @@ def write_yaml_file(path: Path, registry: RegistryFile) -> str:
             # ``enabled: true`` is the default - only a switched-off probe says so.
             if probe.get("enabled", True):
                 probe.pop("enabled", None)
+            if not probe.get("backup_waits", False):
+                probe.pop("backup_waits", None)
     buf = io.BytesIO()
     _yaml.dump(body, buf)
     data = buf.getvalue()
@@ -238,6 +240,7 @@ def _spec_from_db(session: Session) -> RegistryFile:
                         order=p.order,
                         config=p.config,
                         enabled=p.enabled,
+                        backup_waits=p.backup_waits,
                     )
                     for p in probes
                 ],
@@ -542,6 +545,7 @@ def apply_service_spec(
                 order=pspec.order,
                 config=pspec.config,
                 enabled=pspec.enabled and pspec.name not in parked,
+                backup_waits=pspec.backup_waits,
             )
         )
     for phspec in spec.proxy_hosts:

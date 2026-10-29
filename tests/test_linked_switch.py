@@ -39,6 +39,8 @@ services:
     name: database
     parent: dev-xymbols
     controller: {type: portainer, endpoint: 1, container: dev-xymbols-db-1}
+    # its own recovery keeps it a sub-service (a stack's other containers are folded into it)
+    recovery: {enabled: true, max_attempts: 2}
   - slug: lonely
     name: nothing linked
     parent: portainer-vm

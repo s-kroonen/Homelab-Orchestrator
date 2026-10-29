@@ -197,6 +197,8 @@ class ProbeCreate(_Body):
     config: dict[str, Any] = Field(default_factory=dict)
     #: False = created switched off (not run, never in the verdict).
     enabled: bool = True
+    #: On a sub-service: its root's backup waits for this check.
+    backup_waits: bool = False
 
 
 class ProbeUpdate(_Body):
@@ -207,6 +209,7 @@ class ProbeUpdate(_Body):
     order: int | None = None
     config: dict[str, Any] | None = None
     enabled: bool | None = None
+    backup_waits: bool | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -250,6 +253,7 @@ def _probe_dict(probe: Probe) -> dict[str, Any]:
         "order": probe.order,
         "config": probe.config,
         "enabled": probe.enabled,
+        "backup_waits": probe.backup_waits,
     }
 
 
@@ -1388,6 +1392,7 @@ async def create_probe(
         order=order,
         config=body.config,
         enabled=body.enabled,
+        backup_waits=body.backup_waits,
     )
     session.add(probe)
     session.flush()
@@ -1425,7 +1430,7 @@ def apply_probe_update(
         _check_probe_name_free(session, probe.service_id, changes["name"], exclude_id=probe.id)
     if "kind" in changes:
         changes["kind"] = _parse_probe_kind(changes["kind"] or "")
-    for key in ("required", "timeout_s", "order", "enabled"):
+    for key in ("required", "timeout_s", "order", "enabled", "backup_waits"):
         if key in changes and changes[key] is None:
             raise _bad_request(f"{key} must not be null")
     if "timeout_s" in changes and changes["timeout_s"] <= 0:

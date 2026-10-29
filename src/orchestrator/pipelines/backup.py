@@ -22,6 +22,7 @@ from __future__ import annotations
 import asyncio
 import time
 from datetime import UTC, datetime
+from typing import Any
 
 from sqlmodel import Session, select
 
@@ -31,7 +32,14 @@ from orchestrator.adapters.power.base import PowerAdapter
 from orchestrator.adapters.proxmox.base import ProxmoxAdapter
 from orchestrator.audit import log as audit
 from orchestrator.config import Settings
-from orchestrator.db.models import BackupPolicy, BackupRecord, Node, PipelineRun, Service
+from orchestrator.db.models import (
+    BackupPolicy,
+    BackupRecord,
+    Node,
+    PipelineRun,
+    Probe,
+    Service,
+)
 from orchestrator.domain.enums import (
     AuditResult,
     BackupGate,
@@ -41,6 +49,7 @@ from orchestrator.domain.enums import (
     PipelineKind,
     PipelineStatus,
 )
+from orchestrator.domain.schemas import ServiceVerdict
 from orchestrator.health.engine import HealthEngine
 from orchestrator.logging_setup import get_logger, new_correlation_id
 from orchestrator.notify.hooks import announce
@@ -670,14 +679,52 @@ class BackupPipeline:
             if d.backup_gate is BackupGate.REQUIRED and tree.is_served(d)
         ]
 
+    @staticmethod
+    def _waited_checks(session: Session, service: Service) -> list[tuple[Service, set[str]]]:
+        """Sub-services that are not ``backup_gate: required`` but have checks a backup
+        waits for (``Probe.backup_waits``: a stack's database container), served all the
+        way up, with the names of those checks."""
+        tree = TreeIndex.build(session)
+        out: list[tuple[Service, set[str]]] = []
+        for d in tree.descendants(service):
+            if d.backup_gate is BackupGate.REQUIRED or not tree.is_served(d):
+                continue
+            rows = session.exec(select(Probe).where(Probe.service_id == d.id)).all()
+            names = {p.name for p in rows if p.backup_waits and p.enabled}
+            if names:
+                out.append((d, names))
+        return out
+
+    @staticmethod
+    def _passes(verdict: ServiceVerdict, names: set[str] | None) -> bool:
+        """The whole verdict HEALTHY (``names`` None), or each named check healthy."""
+        if names is None:
+            return verdict.state is HealthState.HEALTHY
+        if verdict.state is HealthState.DOWN:
+            return False
+        got = {r.probe_name: r.state for r in verdict.probe_results}
+        return all(got.get(n) is HealthState.HEALTHY for n in names)
+
+    def _gated_subs(
+        self, session: Session, service: Service
+    ) -> list[tuple[Service, set[str] | None]]:
+        """Everything below ``service`` its backup waits for: whole sub-services (None) and
+        single checks on the others."""
+        whole: list[tuple[Service, set[str] | None]] = [
+            (s, None) for s in self._required_subs(session, service)
+        ]
+        return whole + [(s, n) for s, n in self._waited_checks(session, service)]
+
     async def _start_required_subs(
         self, session: Session, steps: StepRecorder, service: Service, *, start: bool
     ) -> None:
-        """Bring up the required sub-services that have a controller and are not
+        """Bring up the sub-services a backup waits for that have a controller and are not
         running (the guest is up by now), then give them time to turn HEALTHY."""
-        subs = self._required_subs(session, service)
-        if not subs:
+        gated = self._gated_subs(session, service)
+        if not gated:
             return
+        waits = {s.slug: names for s, names in gated}
+        subs = [s for s, _ in gated]
         from orchestrator.controllers import ControllerError, build_controller
 
         deadline = time.monotonic() + self._settings.wake_timeout_s
@@ -720,7 +767,7 @@ class BackupPipeline:
             # Wait for it to be judged HEALTHY (a container needs a moment).
             while True:
                 verdict = await self._health.scan(session, sub)
-                if verdict.state is HealthState.HEALTHY or time.monotonic() >= deadline:
+                if self._passes(verdict, waits[sub.slug]) or time.monotonic() >= deadline:
                     break
                 await asyncio.sleep(self._settings.wake_poll_interval_s)
 
@@ -731,13 +778,17 @@ class BackupPipeline:
         HEALTHY. One that is not refuses the whole backup, like the root's own gate."""
         if not gate:
             return
-        for sub in self._required_subs(session, service):
+        for sub, names in self._gated_subs(session, service):
             started = datetime.now(UTC)
             verdict = await self._health.scan(session, sub)
-            detail = {"verdict": verdict.state.value, "reason": verdict.reason}
-            if verdict.state is HealthState.HEALTHY:
+            detail: dict[str, Any] = {"verdict": verdict.state.value, "reason": verdict.reason}
+            if names is not None:
+                detail["checks"] = sorted(names)
+            if self._passes(verdict, names):
                 steps.record(f"sub_gate:{sub.slug}", "ok", started_at=started, detail=detail)
                 continue
+            if names is not None:
+                await self._refuse_checks(steps, service, sub, names, verdict, started, detail)
             steps.record(
                 f"sub_gate:{sub.slug}",
                 "failed" if verdict.state is HealthState.FAILED else "indeterminate",
@@ -762,6 +813,38 @@ class BackupPipeline:
                 retryable=verdict.state is HealthState.UNKNOWN,
                 why="sub_unhealthy",
             )
+
+    @staticmethod
+    async def _refuse_checks(
+        steps: StepRecorder,
+        service: Service,
+        sub: Service,
+        names: set[str],
+        verdict: ServiceVerdict,
+        started: datetime,
+        detail: dict[str, Any],
+    ) -> None:
+        """A check a backup waits for (``backup_waits``) on ``sub`` did not pass."""
+        got = {r.probe_name: r for r in verdict.probe_results}
+        bad = sorted(
+            n for n in names if (r := got.get(n)) is None or r.state is not HealthState.HEALTHY
+        )
+        failed = any(got[n].state is HealthState.FAILED for n in bad if n in got)
+        steps.record(
+            f"sub_gate:{sub.slug}",
+            "failed" if failed else "indeterminate",
+            started_at=started,
+            detail={**detail, "not_ok": bad},
+        )
+        why = "; ".join(f"{n}: {got[n].message}" if n in got else f"{n}: did not run" for n in bad)
+        message = (
+            f"integrity gate refused {service.slug!r}: {sub.slug!r} has checks its backup waits "
+            f"for that did not pass - {why}. No backup was taken and the last known-good backup "
+            f"is untouched. (Untick 'backup waits' on a check if a backup should not wait for it.)"
+        )
+        if verdict.state is HealthState.DOWN:
+            raise RetryableBackupError(message)
+        raise BackupSkipped(message, retryable=not failed, why="sub_unhealthy")
 
     async def _dump_and_locate(
         self,

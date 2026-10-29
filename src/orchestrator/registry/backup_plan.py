@@ -223,6 +223,23 @@ def resolve_backup_plan(
         for d in tree.descendants(service)
         if d.backup_gate is BackupGate.REQUIRED and tree.is_served(d)
     ]
+    from orchestrator.db.models import Probe
+
+    for d in tree.descendants(service):
+        if d.backup_gate is BackupGate.REQUIRED or not tree.is_served(d):
+            continue
+        rows = session.exec(select(Probe).where(Probe.service_id == d.id)).all()
+        checks = sorted(p.name for p in rows if p.backup_waits and p.enabled)
+        if checks:
+            subs.append(
+                {
+                    "slug": d.slug,
+                    "name": d.name,
+                    "controller": str((d.controller or {}).get("type", "")),
+                    "can_start": bool(d.controller),
+                    "checks": checks,
+                }
+            )
     return BackupPlan(
         slug=service.slug,
         policy=policy.name if policy else None,

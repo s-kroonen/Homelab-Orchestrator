@@ -5,6 +5,10 @@ the link and policies it adds. Creating is a two-step action (a preview of the e
 the secrets masked, then a confirmed create); deleting asks for the stack's name and refuses while
 something linked to it is still switched on. Environment values and Git passwords go straight to
 Portainer and are never stored, logged or audited here.
+
+The stack page (``/portainer/<environment>/<stack>``) also reads and changes a stack's
+environment: values whose name looks secret are only sent when someone reveals one (audited by
+name), and a change redeploys the stack (audited by names: added, changed, removed).
 """
 
 from __future__ import annotations
@@ -62,12 +66,22 @@ async def control(
     action: str,
     instance: str | None = None,
 ) -> str:
-    """start | stop | restart one stack or one container, audited."""
-    if action not in {"start", "stop", "restart"}:
+    """start | stop | restart | redeploy one stack, or start | stop | restart | kill | recreate
+    one container, audited."""
+    allowed = {"start", "stop", "restart"} | (
+        {"redeploy"} if kind == "stack" else {"kill", "recreate"}
+    )
+    if action not in allowed:
         raise StackError(f"unknown action {action!r}", 400)
     adapter = _adapter(adapters, instance)
     try:
-        if kind == "stack":
+        if kind == "stack" and action == "redeploy":
+            stack = await _stack(adapter, endpoint_id, ref)
+            await adapter.redeploy_stack(stack, pull_image=True)
+            message = (
+                f"stack {stack.name} redeployed from {stack.git.reference if stack.git else 'Git'}"
+            )
+        elif kind == "stack":
             stack = await _stack(adapter, endpoint_id, ref)
             if action in {"stop", "restart"}:
                 await adapter.stop_stack(stack)
@@ -291,3 +305,258 @@ async def _remove(api: Any, session: Session, slug: str, actor: str) -> None:
         await api.delete_service(slug, session, SimpleNamespace(username=actor), cascade=True)
     except HTTPException as exc:
         raise StackError(str(exc.detail), exc.status_code) from exc
+
+
+# -- the stack page: environment and Git settings ---------------------------------------------------
+
+_SECRET = (
+    "PASS",
+    "SECRET",
+    "TOKEN",
+    "KEY",
+    "PRIVATE",
+    "CREDENTIAL",
+    "DSN",
+    "AUTH",
+    "COOKIE",
+    "SALT",
+)
+
+
+def looks_secret(name: str) -> bool:
+    """A variable whose value is hidden until someone reveals it."""
+    upper = name.upper()
+    return any(word in upper for word in _SECRET)
+
+
+async def env_view(
+    adapters: AdapterBundle, endpoint_id: int, name: str, instance: str | None = None
+) -> dict[str, Any]:
+    """The stack's environment for the page: each variable's name, its value unless it looks
+    secret, and which containers have it."""
+    adapter = _adapter(adapters, instance)
+    stack = await _stack(adapter, endpoint_id, name)
+    if stack.id is None:
+        return {
+            "editable": False,
+            "vars": [],
+            "why": "Portainer did not create this stack, so it has no environment of its own.",
+        }
+    try:
+        env = await adapter.stack_env(stack)
+        boxes = await adapter.list_containers(endpoint_id, stack=stack.name)
+        details = [await adapter.get_container(endpoint_id, c.name) for c in boxes]
+    except AdapterError as exc:
+        raise StackError(str(exc), 502) from exc
+    used: dict[str, list[str]] = {}
+    for d in details:
+        if d is None:
+            continue
+        for n in d.env_names:
+            used.setdefault(n, []).append(d.container.name)
+    return {
+        "editable": True,
+        "vars": [
+            {
+                "name": n,
+                "secret": looks_secret(n),
+                "value": None if looks_secret(n) else v,
+                "used_by": used.get(n, []),
+            }
+            for n, v in env
+        ],
+        "why": "",
+    }
+
+
+async def reveal_env(
+    session: Session,
+    adapters: AdapterBundle,
+    actor: str,
+    endpoint_id: int,
+    name: str,
+    var: str,
+    instance: str | None = None,
+) -> str:
+    """One variable's value, on purpose. Audited (the name, never the value)."""
+    adapter = _adapter(adapters, instance)
+    stack = await _stack(adapter, endpoint_id, name)
+    try:
+        env = dict(await adapter.stack_env(stack))
+    except AdapterError as exc:
+        raise StackError(str(exc), 502) from exc
+    if var not in env:
+        raise StackError(f"stack {name!r} has no variable {var!r}", 404)
+    audit.record(
+        session,
+        actor=actor,
+        action="stack.env_revealed",
+        target=f"portainer:{endpoint_id}/{stack.name}",
+        details={"variable": var},
+    )
+    session.commit()
+    return env[var]
+
+
+async def set_env(
+    session: Session,
+    adapters: AdapterBundle,
+    actor: str,
+    endpoint_id: int,
+    name: str,
+    wanted: list[tuple[str, str | None]],
+    instance: str | None = None,
+) -> dict[str, list[str]]:
+    """Replace the stack's environment with ``wanted`` (a value None keeps the current one, so a
+    hidden secret need not be revealed to keep it) and redeploy. Audited by names."""
+    adapter = _adapter(adapters, instance)
+    stack = await _stack(adapter, endpoint_id, name)
+    if stack.id is None:
+        raise StackError(
+            "Portainer did not create this stack, so its environment is not Portainer's to change",
+            409,
+        )
+    seen: set[str] = set()
+    for var, _ in wanted:
+        if not var or not var.replace("_", "").isalnum() or var[0].isdigit():
+            raise StackError(f"{var!r} is not a variable name (letters, digits and _)", 400)
+        if var in seen:
+            raise StackError(f"{var} is listed twice", 400)
+        seen.add(var)
+    try:
+        current = dict(await adapter.stack_env(stack))
+    except AdapterError as exc:
+        raise StackError(str(exc), 502) from exc
+    new: list[tuple[str, str]] = []
+    for var, value in wanted:
+        if value is None:
+            if var not in current:
+                raise StackError(f"{var} has no value to keep", 400)
+            value = current[var]
+        new.append((var, value))
+    after = dict(new)
+    change = {
+        "added": sorted(set(after) - set(current)),
+        "changed": sorted(k for k in after if k in current and after[k] != current[k]),
+        "removed": sorted(set(current) - set(after)),
+    }
+    if not any(change.values()):
+        return change
+    try:
+        await adapter.set_stack_env(stack, new, pull_image=False)
+    except AdapterError as exc:
+        audit.record(
+            session,
+            actor=actor,
+            action="stack.env_changed",
+            target=f"portainer:{endpoint_id}/{stack.name}",
+            result=AuditResult.ERROR,
+            details={**change, "error": str(exc)},
+        )
+        session.commit()
+        raise StackError(str(exc), 502) from exc
+    audit.record(
+        session,
+        actor=actor,
+        action="stack.env_changed",
+        target=f"portainer:{endpoint_id}/{stack.name}",
+        details=change,
+    )
+    session.commit()
+    return change
+
+
+async def set_git(
+    session: Session,
+    adapters: AdapterBundle,
+    actor: str,
+    endpoint_id: int,
+    name: str,
+    *,
+    reference: str,
+    auto_update_interval: str | None,
+    instance: str | None = None,
+) -> str:
+    """A Git stack's branch / tag and Portainer's own polling. Audited."""
+    import re
+
+    if auto_update_interval and not re.fullmatch(r"\d+[smh]", auto_update_interval):
+        raise StackError("the interval is a number and s, m or h, like 5m", 400)
+    if not reference.strip():
+        raise StackError("the branch or tag is needed (refs/heads/main)", 400)
+    adapter = _adapter(adapters, instance)
+    stack = await _stack(adapter, endpoint_id, name)
+    try:
+        await adapter.set_git_settings(
+            stack, reference=reference.strip(), auto_update_interval=auto_update_interval or None
+        )
+    except AdapterError as exc:
+        raise StackError(str(exc), 502) from exc
+    audit.record(
+        session,
+        actor=actor,
+        action="stack.git_settings",
+        target=f"portainer:{endpoint_id}/{stack.name}",
+        details={"reference": reference.strip(), "auto_update": auto_update_interval or "off"},
+    )
+    session.commit()
+    return f"{stack.name}: {reference.strip()}, " + (
+        f"Portainer checks every {auto_update_interval}" if auto_update_interval else "no polling"
+    )
+
+
+def link_view(
+    session: Session,
+    adapters: AdapterBundle,
+    endpoint_id: int,
+    name: str,
+    instance: str | None = None,
+) -> dict[str, Any] | None:
+    """What the orchestrator keeps about a stack (the sub-service linked to it, its container
+    checks and their last results), from the database only. None when nothing links to it."""
+    from orchestrator.db.models import Probe, ServiceState
+    from orchestrator.registry.stack_fold import container_of
+
+    adapter = _adapter(adapters, instance)
+    found = linked_services(
+        session, endpoint_id, name, instance=adapter.instance_id, default=adapters.default_portainer
+    )
+    if not found:
+        return None
+    svc = found[0]
+    tree = TreeIndex.build(session)
+    parent = tree.parent(svc)
+    state = session.get(ServiceState, svc.id)
+    results = {str(r.get("probe_name")): r for r in (state.last_probe_results if state else [])}
+    checks = []
+    for p in session.exec(select(Probe).where(Probe.service_id == svc.id).order_by(Probe.order)):
+        r = results.get(p.name) or {}
+        checks.append(
+            {
+                "id": p.id,
+                "name": p.name,
+                "container": container_of(p),
+                "required": p.required,
+                "enabled": p.enabled,
+                "backup_waits": p.backup_waits,
+                "state": "skipped" if not p.enabled else r.get("state") or "not run",
+                "message": r.get("message") or "",
+            }
+        )
+    deploy = svc.deploy or {}
+    return {
+        "slug": svc.slug,
+        "name": svc.name or svc.slug,
+        "parent": {"slug": parent.slug, "name": parent.name or parent.slug} if parent else None,
+        "verdict": state.last_verdict.value if state else "unknown",
+        "enabled": svc.enabled,
+        "backup_gate": svc.backup_gate.value,
+        "deploy": {
+            "enabled": bool(deploy) and bool(deploy.get("enabled", True)),
+            "pull_image": bool(deploy.get("pull_image", True)),
+            "prune": bool(deploy.get("prune", False)),
+            "webhook": bool((deploy.get("trigger") or {}).get("webhook")),
+        },
+        "checks": checks,
+        "others": [s.slug for s in found[1:]],
+    }

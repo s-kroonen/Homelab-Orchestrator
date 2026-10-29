@@ -132,6 +132,9 @@ def _stack_view(
     if containers is not None:
         data["containers_total"] = len(containers)
         data["containers_running"] = sum(1 for c in containers if c.state == "running")
+        data["container_states"] = [
+            {"name": c.name, "state": c.state, "health": c.health} for c in containers
+        ]
     return data
 
 
@@ -247,9 +250,29 @@ async def stacks(
             if (c.stack or "").lower() == s.name.lower()
         ]
         rows.append(_stack_view(s, base, links, mine, kind, adapter.instance_id))
+    # Containers outside any compose project: one "(no stack)" row per environment.
+    loose = []
+    for eid, boxes in sorted(containers.items()):
+        mine = [c for c in boxes if not c.stack]
+        if mine:
+            loose.append(
+                {
+                    "endpoint_id": eid,
+                    "instance": adapter.instance_id,
+                    "containers_total": len(mine),
+                    "containers_running": sum(1 for c in mine if c.state == "running"),
+                    "container_states": [
+                        {"name": c.name, "state": c.state, "health": c.health} for c in mine
+                    ],
+                    "linked_services": sorted(
+                        {x for c in mine for x in links.get(("container", eid, c.name.lower()), [])}
+                    ),
+                }
+            )
     return {
         "instance": adapter.instance_id,
         "stacks": rows,
+        "loose": loose,
         "errors": {str(k): _why(names.get(k), v) for k, v in listing.errors.items()},
         "skipped": sorted(listing.errors),
     }
@@ -337,6 +360,26 @@ async def container_detail(
     return view
 
 
+@api.get("/endpoints/{endpoint_id}/containers/{ref}/inspect")
+async def container_inspect(
+    endpoint_id: int,
+    ref: str,
+    adapters: AdaptersDep,
+    instance: str | None = Query(None, description="Portainer connection id; blank = the default"),
+) -> dict[str, Any]:
+    """Docker's own description of the container, environment values masked."""
+    adapter = _adapter(adapters, instance)
+    try:
+        raw = await adapter.inspect(endpoint_id, ref)
+    except AdapterError as exc:
+        raise _fail(exc) from exc
+    if raw is None:
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND, f"no container {ref!r} on environment {endpoint_id}"
+        )
+    return raw
+
+
 @api.get("/endpoints/{endpoint_id}/containers/{ref}/logs")
 async def container_logs(
     endpoint_id: int,
@@ -378,3 +421,26 @@ async def portainer_page(request: Request, session: SessionDep) -> HTMLResponse 
     if admin is None:
         return login_redirect(request)
     return _templates.TemplateResponse(request, "portainer.html", {"admin": admin})
+
+
+@pages.get("/portainer/{endpoint_id}/{name}", response_model=None)
+async def stack_page(
+    endpoint_id: int,
+    name: str,
+    request: Request,
+    session: SessionDep,
+    instance: str = Query("", description="Portainer connection id; blank = the default"),
+) -> HTMLResponse | RedirectResponse:
+    """One stack: its containers (details, logs, actions), all logs, its environment, its
+    Portainer settings and its history (the Stack and StackEnv wireframes). Everything about
+    the stack is read live by the page; this only hands it which stack."""
+    admin = get_current_admin(request, session)
+    if admin is None:
+        return login_redirect(request)
+    loose = name == "-"  # the containers of this environment that are in no stack
+    initial = {"endpoint": endpoint_id, "name": "" if loose else name, "instance": instance}
+    return _templates.TemplateResponse(
+        request,
+        "stack.html",
+        {"admin": admin, "initial": initial, "name": "(no stack)" if loose else name},
+    )

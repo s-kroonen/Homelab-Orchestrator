@@ -13,6 +13,8 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
+from orchestrator.adapters.errors import AdapterRequestError
+
 
 @dataclass(frozen=True)
 class PortainerCheck:
@@ -70,6 +72,8 @@ class Stack:
     managed: bool = True
     git: GitInfo | None = None
     auto_update: bool = False
+    #: How often Portainer polls the repository ("5m"), blank when it does not.
+    auto_update_interval: str = ""
     #: Portainer has a deploy webhook for this stack (the id itself is never exposed).
     has_webhook: bool = False
     #: Names only. Values are never read out of the client.
@@ -255,8 +259,9 @@ class PortainerAdapter(ABC):
 
     @abstractmethod
     async def container_action(self, endpoint_id: int, ref: str, verb: str) -> str:
-        """``start`` | ``stop`` | ``restart`` one container (by id or name). Returns a short
-        message; raises when it is not found or Portainer refuses."""
+        """``start`` | ``stop`` | ``restart`` | ``kill`` | ``recreate`` (pull its image and
+        create it again) one container (by id or name). Returns a short message; raises when
+        it is not found or Portainer refuses."""
 
     @abstractmethod
     async def exec_stream(
@@ -300,3 +305,34 @@ class PortainerAdapter(ABC):
 
     @abstractmethod
     async def stats(self, endpoint_id: int, ref: str) -> ContainerStats: ...
+
+    # -- the stack page: environment, Git settings, container inspect ---------------------------
+    # Not abstract: an adapter without them (a test double) refuses, it does not break.
+
+    async def stack_env(self, stack: Stack) -> list[tuple[str, str]]:
+        """The stack's environment, values included. Only the stack page asks for it, and it
+        never returns a secret-looking value unless one is revealed on purpose (audited)."""
+        raise AdapterRequestError("reading a stack's environment is not supported here")
+
+    async def set_stack_env(
+        self,
+        stack: Stack,
+        env: list[tuple[str, str]],
+        *,
+        pull_image: bool = True,
+        prune: bool = False,
+    ) -> None:
+        """Replace the stack's environment and redeploy it (Portainer only applies a new
+        environment by redeploying). Refuses when ``PORTAINER_READ_ONLY=true``."""
+        raise AdapterRequestError("changing a stack's environment is not supported here")
+
+    async def set_git_settings(
+        self, stack: Stack, *, reference: str, auto_update_interval: str | None
+    ) -> None:
+        """Change a Git stack's branch / tag and Portainer's own polling (None: off). The
+        environment is sent back unchanged."""
+        raise AdapterRequestError("changing a stack's Git settings is not supported here")
+
+    async def inspect(self, endpoint_id: int, ref: str) -> dict[str, Any] | None:
+        """Docker's own description of a container, environment values masked."""
+        raise AdapterRequestError("inspecting a container is not supported here")

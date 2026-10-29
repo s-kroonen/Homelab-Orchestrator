@@ -47,6 +47,31 @@ configured is a note, not a failure.
 
 ## What is shown
 
+The **Containers** page lists every stack on every Portainer connection (one "(no stack)" row per
+environment for containers outside any stack). A row opens the **stack page**
+(`/portainer/<environment>/<stack>`), built to the Stack and StackEnv wireframes:
+
+* **Containers**: one row each (image, state, uptime, ports, CPU and memory, its check on the
+  linked sub-service). Click one for its details (image, start, restart policy, volumes, networks,
+  environment names, Docker healthcheck) and its live logs. Row menu: start, stop, restart,
+  **kill**, **recreate** (pull its image and create it again), **inspect** (`docker inspect`,
+  environment values masked), and its check: required, optional or off, and whether a backup of
+  the parent waits for it (`backup_waits`, see [service_tree.md](service_tree.md)).
+* **Logs**: every container's logs in one view, with a per-container filter.
+* **Environment**: the stack's variables and which containers have them. A value whose name looks
+  secret (PASSWORD, SECRET, TOKEN, KEY, DSN, AUTH, ...) is hidden until you click *show*, which is
+  audited as `stack.env_revealed` (the name, never the value). **Edit** writes the whole list
+  back to Portainer and **redeploys** the stack; a hidden value is kept unless you type a new one
+  in its place. Audited as `stack.env_changed` with the names added, changed and removed.
+* **Settings**: the Git source, branch and Portainer's own polling (editable: `stack.git_settings`),
+  and what the orchestrator keeps: the linked sub-service, its deploy method and what a backup
+  waits for.
+* **History**: the stack's and its sub-service's runs and changes.
+* Header: **Redeploy** (the sub-service's deploy, with its checks, when it has one; else a plain
+  Portainer redeploy), Restart, Stop / Start, Open in Portainer, Delete.
+
+In more detail:
+
 * **Stacks**, per environment: status, **kind** (`image` pulls images, `build` builds from
   source, `mixed`; read from the compose file, which is parsed and dropped), containers running
   of total, the Git repository / branch / deployed commit, last update, and which sub-service
@@ -64,8 +89,10 @@ configured is a note, not a failure.
 Portainer's API returns more than is safe to display. Everything is redacted at the client,
 before any page, API response, log line or CLI output can contain it:
 
-* stack **environment values** - only the variable *names* are kept;
-* a container's **environment** - names only;
+* stack **environment values**, except on the stack page: there a value is shown unless its
+  name looks secret, and a secret one only when someone clicks *show* (audited). Every other
+  page, API response, log line and the CLI keep names only;
+* a container's **environment** - names only (inspect masks every value);
 * **Git credentials**: user:token@ in a repository URL is stripped, the stored authentication is
   dropped, and only "uses credentials" remains;
 * the stack's **webhook id** (it is a capability to redeploy): only "has a deploy webhook".
@@ -91,7 +118,13 @@ while the dashboard is down.
 
 `GET /api/portainer/status | environments | stacks[?endpoint=] |
 endpoints/{id}/stacks/{name} | endpoints/{id}/containers[?stack=&all=] |
-endpoints/{id}/containers/{name-or-id}[/logs?tail=&since=&timestamps= | /stats]`
+endpoints/{id}/containers/{name-or-id}[/logs?tail=&since=&timestamps= | /stats | /inspect]`
+
+The stack page also uses `GET /api/stacks/{env}/{name}/link` (what is linked, from the database),
+`GET .../env`, `POST .../env/reveal {name}`, `PUT .../env {vars: [{name, value|null}]}` (null keeps
+the current value; redeploys), `PUT .../git {reference, auto_update_interval}`,
+`POST /api/stacks/{env}/{name}/redeploy` and `POST /api/containers/{env}/{ref}/kill|recreate`.
+All take `?instance=` for a Portainer connection other than the default.
 
 Portainer problems map to HTTP: not configured 503, key refused or unreachable 502, unknown
 object 404.
