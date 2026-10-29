@@ -335,6 +335,7 @@ async def _run_backup(
         )
 
     monkeypatch.setattr(HealthEngine, "scan", scan)
+    monkeypatch.setattr(HealthEngine, "can_verify", lambda self, session, service: True)
     adapters = client.app.state.adapters  # type: ignore[attr-defined]
     settings = config_module.get_settings().model_copy(
         update={"wake_poll_interval_s": 0.001, "wake_timeout_s": 1}

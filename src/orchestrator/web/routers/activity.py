@@ -208,7 +208,9 @@ def build_feed(
         if cutoff is not None:
             stmt = stmt.where(col(PipelineRun.started_at) >= cutoff)
         if problems:
-            stmt = stmt.where(PipelineRun.status == PipelineStatus.FAILED)
+            stmt = stmt.where(
+                col(PipelineRun.status).in_([PipelineStatus.FAILED, PipelineStatus.SKIPPED])
+            )
         if text:
             stmt = stmt.where(col(PipelineRun.error).contains(text))
         runs = list(session.exec(stmt).all())

@@ -86,6 +86,25 @@ class WakeUnsupportedError(WakeError):
     """
 
 
+def node_of(session: Session, service: Service) -> Node | None:
+    """The node a service runs on: its own, or (a sub-service) its root's."""
+    node_id = (
+        service.node_id
+        if service.node_id is not None
+        else effective_guest(session, service).node_id
+    )
+    return session.get(Node, node_id) if node_id is not None else None
+
+
+def known_on(session: Session, node: Node) -> bool:
+    """The node was last seen on (or never goes off). Cheap and synchronous: the kept power
+    state, not a fresh Proxmox read."""
+    if node.always_on:
+        return True
+    state = session.get(NodeState, node.id) if node.id is not None else None
+    return bool(state and state.power_state is PowerState.ON)
+
+
 def wake_is_unsupported(node: Node | None) -> bool:
     """True when a wake for this node is structurally impossible: no node
     at all, or no way to command it on (``power_mgr_target`` blank and not
@@ -111,6 +130,47 @@ def wake_is_unsupported(node: Node | None) -> bool:
     if node is None:
         return True
     return not node.power_mgr_target and not node.always_on
+
+
+#: Actors whose wake was started by traffic rather than a person: they obey the node's wake on
+#: hit switch when the node is off (``traffic_blocker``), a person's wake does not.
+TRAFFIC_ACTORS = frozenset({"traefik_hit", "maintenance-page"})
+
+
+def traffic_blocker(
+    session: Session,
+    service: Service,
+    *,
+    node: Node | None = None,
+    served: bool | None = None,
+) -> str | None:
+    """Why traffic (a hit on a proxy host, a visitor on the maintenance page) may not wake
+    ``service``, or None when it may. One answer for the collectors, the maintenance page and
+    the Services list:
+
+    * the service, or something above it, is switched off in the registry;
+    * its own wake on hit switch is off;
+    * it has no node;
+    * its node is off and cannot be turned on (no power target), or its node's wake on hit
+      switch is off. A node that is on (or always on) needs no power-on, so its switch does not
+      matter then: only the guest is started.
+
+    ``node`` and ``served`` save the lookups when the caller already has them (a list page).
+    """
+    if not (is_served(session, service) if served is None else served):
+        return "it is switched off in the registry"
+    if not service.wake_on_hit_enabled:
+        return "wake on hit is off for this service"
+    node = node if node is not None else node_of(session, service)
+    if node is None:
+        return "it is not on a node"
+    if known_on(session, node):
+        return None
+    if wake_is_unsupported(node):
+        return f"its node {node.name} is off and has no power target"
+    if not node.wake_on_hit_enabled:
+        return f"its node {node.name} is off and wake on hit is off for that node"
+    return None
 
 
 @dataclass(frozen=True)
@@ -317,7 +377,7 @@ class WakePipeline:
         the caller down the full wake path (that path tolerates the same blip).
         """
         service = session.exec(select(Service).where(Service.slug == slug)).one_or_none()
-        node = session.get(Node, service.node_id) if service and service.node_id else None
+        node = node_of(session, service) if service else None
         if service is None or node is None:
             return False
         try:
@@ -338,7 +398,7 @@ class WakePipeline:
         wakes anything, so it can later put things back. ``None`` when Proxmox
         cannot be asked (then nothing is recorded and nothing is turned off)."""
         service = session.exec(select(Service).where(Service.slug == slug)).one_or_none()
-        node = session.get(Node, service.node_id) if service and service.node_id else None
+        node = node_of(session, service) if service else None
         if service is None or node is None or node.id is None:
             return None
         try:
@@ -418,9 +478,15 @@ class WakePipeline:
         hold_handle: str | None = None
         try:
             hold_handle = await self.assert_hold(session, steps, node, reason=f"wake:{slug}")
-            await self._ensure_node_powered(steps, node)
+            powered_on = await self._ensure_node_powered(
+                steps, node, traffic=actor in TRAFFIC_ACTORS
+            )
             await self._wait_node_online(session, steps, node, deadline)
-            await self._ensure_guest_running(session, steps, service, node)
+            if powered_on:
+                await self._read_boot(session, steps, node)
+            await self._ensure_guest_running(
+                session, steps, service, node, node_booted=powered_on, deadline=deadline
+            )
             await self._ensure_service_running(session, steps, service)
             await self._wait_healthy(session, steps, service, deadline)
 
@@ -528,7 +594,12 @@ class WakePipeline:
             )
             log.warning("wake.hold_release_failed", node=node.name, handle=handle, error=str(exc))
 
-    async def _ensure_node_powered(self, steps: StepRecorder, node: Node) -> None:
+    async def _ensure_node_powered(
+        self, steps: StepRecorder, node: Node, *, traffic: bool = False
+    ) -> bool:
+        """Power the node on unless it is online. True when it was powered on by this run.
+        A wake started by traffic (``traffic``) never powers on a node whose wake on hit switch
+        is off, even when the kept power state said it was on."""
         try:
             cluster = await self._proxmox.cluster_status()
         except AdapterUnreachable as exc:
@@ -541,13 +612,33 @@ class WakePipeline:
         else:
             if self._node_online(cluster, node.name):
                 steps.record("node_power", "already_on", detail={"node": node.name})
-                return
+                return False
+        if wake_is_unsupported(node):
+            raise WakeUnsupportedError(
+                f"node {node.name!r} is off and has no power target, so the orchestrator cannot "
+                f"turn it on. Set its power target (or mark it always on) on Nodes & guests."
+            )
+        if traffic and not node.always_on and not node.wake_on_hit_enabled:
+            steps.record("node_power", "off", detail={"node": node.name, "why": "wake on hit off"})
+            raise WakeError(
+                f"node {node.name!r} is off and wake on hit is off for it, so traffic does not "
+                f"turn it on. Wake the service by hand, or switch wake on hit on for the node."
+            )
         await self._power.wake(node.power_mgr_target, reason=f"wake pipeline for {node.name}")
         steps.record(
             "node_power_on",
             "ok",
             detail={"node": node.name, "power_mgr_target": node.power_mgr_target},
         )
+        return True
+
+    async def _read_boot(self, session: Session, steps: StepRecorder, node: Node) -> None:
+        """Right after a node came online: read its boot settings again (they may have changed
+        while it was off - nobody could ask). Best effort: the kept copy is used otherwise."""
+        from orchestrator.registry import boot
+
+        ok = await boot.refresh_node(session, self._proxmox, node)
+        steps.record("boot_settings", "ok" if ok else "kept", detail={"node": node.name})
 
     async def _wait_node_online(
         self, session: Session, steps: StepRecorder, node: Node, deadline: float
@@ -581,18 +672,29 @@ class WakePipeline:
             await asyncio.sleep(self._settings.wake_poll_interval_s)
 
     async def _ensure_guest_running(
-        self, session: Session, steps: StepRecorder, service: Service, node: Node
+        self,
+        session: Session,
+        steps: StepRecorder,
+        service: Service,
+        node: Node,
+        *,
+        node_booted: bool = False,
+        deadline: float | None = None,
     ) -> None:
+        """Start the service's guest unless it runs. Right after this run powered the node on, a
+        guest Proxmox starts at boot (``onboot``) is left to Proxmox: the run waits for it in its
+        boot order, and only starts it itself if it is not up by when it should have been."""
         # A sub-service wakes its root's guest.
         eg = effective_guest(session, service)
         if eg.kind is GuestKind.NONE or eg.guest_id is None:
             steps.record("guest_start", "skipped", detail={"reason": "service has no guest"})
             return
 
-        guests = await self._proxmox.list_guests(node.name)
-        guest = next((g for g in guests if g.vmid == eg.guest_id), None)
-        if guest is not None and guest.status == "running":
+        if await self._guest_running(node, eg.guest_id):
             steps.record("guest_start", "already_running", detail={"vmid": eg.guest_id})
+            return
+
+        if node_booted and await self._wait_autostart(session, steps, node, eg.guest_id, deadline):
             return
 
         started = datetime.now(UTC)
@@ -601,8 +703,12 @@ class WakePipeline:
             node.name, handle.upid, timeout_s=self._settings.wake_guest_start_timeout_s
         )
         if not status.succeeded:
+            if await self._guest_running(node, eg.guest_id):
+                # Proxmox's own boot sequence got there first: that is what we wanted.
+                steps.record("guest_start", "already_running", detail={"vmid": eg.guest_id})
+                return
             raise WakeError(
-                f"starting guest {service.guest_id} on {node.name!r} failed: "
+                f"starting guest {eg.guest_id} on {node.name!r} failed: "
                 f"{status.exit_status or 'unknown'}. If the cluster is non-quorate "
                 f"(other nodes off), Proxmox refuses guest starts — see "
                 f"docs/proxmox_connectivity.md."
@@ -611,8 +717,47 @@ class WakePipeline:
             "guest_start",
             "ok",
             started_at=started,
-            detail={"vmid": service.guest_id, "upid": handle.upid},
+            detail={"vmid": eg.guest_id, "upid": handle.upid},
         )
+
+    async def _guest_running(self, node: Node, vmid: int) -> bool:
+        guests = await self._proxmox.list_guests(node.name)
+        guest = next((g for g in guests if g.vmid == vmid), None)
+        return guest is not None and guest.status == "running"
+
+    async def _wait_autostart(
+        self, session: Session, steps: StepRecorder, node: Node, vmid: int, deadline: float | None
+    ) -> bool:
+        """The node just booted and Proxmox starts this guest itself: wait for it. True when it
+        came up; False to start it ourselves (it does not start at boot, or it is late)."""
+        from orchestrator.registry import boot
+
+        row = boot.setting_for(session, node.name, vmid)
+        if row is None or not row.onboot:
+            return False
+        slot = next((x for x in boot.sequence(session, node) if x.vmid == vmid), None)
+        expected = (slot.starts_after_s if slot else 0) + boot.GUEST_START_S
+        wait_until = time.monotonic() + expected + self._settings.wake_autostart_grace_s
+        if deadline is not None:
+            wait_until = min(wait_until, deadline)
+        started = datetime.now(UTC)
+        detail = {"vmid": vmid, "position": slot.position if slot else None, "expected_s": expected}
+        while True:
+            try:
+                if await self._guest_running(node, vmid):
+                    steps.record("guest_autostart", "ok", started_at=started, detail=detail)
+                    return True
+            except AdapterUnreachable:
+                pass  # Proxmox may still be settling right after boot
+            if time.monotonic() >= wait_until:
+                steps.record(
+                    "guest_autostart",
+                    "late",
+                    started_at=started,
+                    detail={**detail, "then": "started it"},
+                )
+                return False
+            await asyncio.sleep(self._settings.wake_poll_interval_s)
 
     async def _ensure_service_running(
         self, session: Session, steps: StepRecorder, service: Service
@@ -691,10 +836,13 @@ class WakePipeline:
         if not is_served(session, service):
             raise WakeError(f"service {slug!r} (or a service above it) is disabled in the registry")
 
-        node = session.get(Node, service.node_id) if service.node_id else None
+        node = node_of(session, service)
         if node is None:
             raise WakeError(f"service {slug!r} is not attached to a node")
-        if wake_is_unsupported(node):
+        # A node with no power target can still be "woken" while it is on: only its guest needs
+        # starting. Refused up front only when it was last seen off; _ensure_node_powered
+        # refuses it when it turns out to be off after all.
+        if wake_is_unsupported(node) and not known_on(session, node):
             raise WakeUnsupportedError(
                 f"node {node.name!r} has no power management configured — "
                 f"power_mgr_target is blank and it is not marked always_on, so there is "

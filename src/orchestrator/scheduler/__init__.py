@@ -46,7 +46,7 @@ from orchestrator.db.session import session_scope
 from orchestrator.display import get_timezone
 from orchestrator.domain.enums import AuditResult
 from orchestrator.logging_setup import get_logger
-from orchestrator.pipelines.backup import BackupError, BackupPipeline, WakeContext
+from orchestrator.pipelines.backup import BackupError, BackupPipeline, BackupSkipped, WakeContext
 from orchestrator.scheduler.retention import RetentionError, enforce_retention
 
 log = get_logger(__name__)
@@ -364,6 +364,24 @@ class BackupScheduler:
                 attempt=attempt,
                 attempts=attempts,
             )
+        except BackupSkipped as exc:
+            # Not a failure: it is unhealthy, nothing can check it, or it is off and may not be
+            # woken. The pipeline logged, audited and (unless it retries) announced it.
+            log.info(
+                "scheduler.backup.skipped",
+                policy=policy.name,
+                service=slug,
+                why=exc.why,
+                reason=str(exc),
+                impact="No new backup; retention NOT applied, the last backup is kept.",
+            )
+            return {
+                "backup": "skipped",
+                "why": exc.why,
+                "error": str(exc),
+                "attempt": attempt,
+                "retry": exc.retryable and attempt < attempts,
+            }
         except (BackupError, AdapterError) as exc:
             retryable = isinstance(exc, AdapterUnreachable | TaskTimeout) or bool(
                 getattr(exc, "retryable", False)

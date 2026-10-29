@@ -144,6 +144,7 @@ def stack(raw: dict[str, Any]) -> Stack:
         managed=True,
         git=git,
         auto_update=bool(auto.get("Interval") or auto.get("Webhook")),
+        auto_update_interval=str(auto.get("Interval") or ""),
         has_webhook=bool(auto.get("Webhook")),
         env_names=env_names,
         created_at=iso_from_unix(raw.get("CreationDate")),
@@ -415,3 +416,14 @@ def classify_compose(text: str) -> str:
     if images:
         return "image"
     return "unknown"
+
+
+def mask_inspect(raw: dict[str, Any]) -> dict[str, Any]:
+    """``docker inspect`` output with every environment value replaced by ``***`` (names kept)."""
+    import copy
+
+    out = copy.deepcopy(raw) if isinstance(raw, dict) else {}
+    cfg = out.get("Config") or {}
+    if isinstance(cfg.get("Env"), list):
+        cfg["Env"] = [str(e).split("=", 1)[0] + "=***" for e in cfg["Env"]]
+    return out

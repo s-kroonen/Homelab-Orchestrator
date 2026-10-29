@@ -38,6 +38,22 @@ class RetryableBackupError(BackupError):
     retryable = True
 
 
+class BackupSkipped(BackupError):
+    """The backup was deliberately not taken - not an error in the backup itself: the service
+    is unhealthy, has no required check that could verify it, or is off and may not be woken.
+    The run ends SKIPPED (not FAILED), the reason is logged and audited, and a quiet
+    ``backup_skipped`` event is announced (not sent anywhere unless a rule asks for it).
+
+    ``retryable`` when a later try may find it healthy (an UNKNOWN verdict)."""
+
+    def __init__(self, message: str, *, retryable: bool = False, why: str = "") -> None:
+        super().__init__(message)
+        self.retryable = retryable
+        #: A short machine-readable reason: ``no_checks``, ``unwakeable``, ``unhealthy``,
+        #: ``unknown``, ``sub_unhealthy``.
+        self.why = why
+
+
 class Recorder(Protocol):
     """What the pipelines need from a step sink. :class:`StepRecorder` writes to a
     ``PipelineRun``; a batch with no run of its own (a scheduled policy waking its

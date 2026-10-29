@@ -128,7 +128,7 @@ def test_adopt_creates_the_services_links_the_host_and_adds_probes(client: TestC
     )
     assert r.status_code == 201, r.text
     body = r.json()
-    assert body["services"] == ["dev-xymbols", "dev-xymbols-web", "dev-xymbols-db"]
+    assert body["services"] == ["dev-xymbols"]  # a stack is one sub-service
     assert body["hosts"] == ["dev.xymbols.example"] and body["probes"] == 4
     assert body["webhook_secret"] and len(body["webhook_secret"]) > 20
 
@@ -136,8 +136,7 @@ def test_adopt_creates_the_services_links_the_host_and_adds_probes(client: TestC
         by = {x.slug: x for x in s.exec(select(Service)).all()}
         stack = by["dev-xymbols"]
         assert stack.controller == {"type": "portainer", "endpoint": 1, "stack": "dev-xymbols"}
-        assert by["dev-xymbols-web"].parent_id == stack.id
-        assert by["dev-xymbols-db"].backup_gate.value == "required"
+        assert set(by) == {"portainer-vm", "dev-xymbols"}
         assert stack.deploy["guard"]["pre"]["backup"]["max_age_h"] == 24
         assert stack.deploy["trigger"]["webhook"]["provider"] == "gitlab"
         host = s.exec(select(ProxyHost).where(ProxyHost.hostname == "dev.xymbols.example")).one()
@@ -148,12 +147,12 @@ def test_adopt_creates_the_services_links_the_host_and_adds_probes(client: TestC
             "http",
             "http",
         ) in probes
-        db_probe = next(p for p in s.exec(select(Probe)) if p.service_id == by["dev-xymbols-db"].id)
-        assert db_probe.required is True  # the database matters
-        web_probe = next(
-            p for p in s.exec(select(Probe)) if p.service_id == by["dev-xymbols-web"].id
-        )
-        assert web_probe.required is False
+        mine = {p.name: p for p in s.exec(select(Probe)) if p.service_id == stack.id}
+        db_probe = mine["container:dev-xymbols-db-1"]
+        assert db_probe.config["container"] == "dev-xymbols-db-1"
+        assert db_probe.required and db_probe.backup_waits  # the database matters to a backup
+        web_probe = mine["container:dev-xymbols-web-1"]
+        assert web_probe.required and not web_probe.backup_waits
         assert s.get(Setting, "deploy.webhook.dev-xymbols") is not None
         actions = [a.action for a in s.exec(select(AuditEntry)).all()]
     assert "stack.adopted" in actions and "service.created" in actions
@@ -309,7 +308,7 @@ def test_delete_can_take_it_down_first_and_removes_the_link(client: TestClient) 
     assert r.status_code == 200, r.text
     body = r.json()
     assert "dev-xymbols" in body["taken_down"]
-    assert set(body["removed_services"]) == {"dev-xymbols", "dev-xymbols-web", "dev-xymbols-db"}
+    assert set(body["removed_services"]) == {"dev-xymbols"}
     assert body["unlinked_hosts"] == ["dev.xymbols.example"]
     calls = portainer(client).calls
     assert calls.index("stop dev-xymbols") < calls.index("delete dev-xymbols")  # down, then gone
@@ -429,7 +428,7 @@ def test_cli_suggest_and_adopt(cli_env: None) -> None:
         ],
     )
     assert adopted.exit_code == 0, adopted.output
-    assert "Linked: dev-xymbols, dev-xymbols-db, dev-xymbols-web" in adopted.output
+    assert "Linked: dev-xymbols\n" in adopted.output
     assert "Webhook secret" in adopted.output and "probes added: 4" in adopted.output
     state = run.invoke(cli, ["service", "state", "dev-xymbols"])
     assert state.exit_code == 0 and "stack dev-xymbols" in state.output

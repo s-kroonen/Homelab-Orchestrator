@@ -21,12 +21,16 @@
     "Map.dc.html": {"x": 0, "y": 7415, "w": 1440, "h": 1640, "title": "Map — one row per node: its hosts, its guests, its backups", "expand": "fill"},
     "Traffic.dc.html": {"x": 1520, "y": 7415, "w": 1440, "h": 1140, "title": "Traffic — one page, countries included", "expand": "fill"},
     "Activity.dc.html": {"x": 0, "y": 9455, "w": 1440, "h": 1020, "title": "Activity — one feed, details in the drawer", "expand": "fill"},
-    "Containers.dc.html": {"x": 1520, "y": 9455, "w": 1440, "h": 1060, "title": "Containers — stacks, containers inside", "expand": "fill"},
+    "Containers.dc.html": {"x": 1520, "y": 9455, "w": 1440, "h": 860, "title": "Containers — every stack, opens the stack page", "expand": "fill"},
     "Notifications.dc.html": {"x": 3040, "y": 9455, "w": 1440, "h": 1000, "title": "Settings — Notifications: rules, channels, this device", "expand": "fill"},
     "Assistants.dc.html": {"x": 0, "y": 10955, "w": 1440, "h": 1100, "title": "Settings — AI assistants: waiting, connections, calls", "expand": "fill"},
     "System.dc.html": {"x": 1520, "y": 10955, "w": 1440, "h": 900, "title": "Settings — System: update, time, this orchestrator", "expand": "fill"},
     "Archive.dc.html": {"x": 3040, "y": 10955, "w": 1440, "h": 800, "title": "Settings — Archive: restore what was deleted", "expand": "fill"},
-    "Admins.dc.html": {"x": 0, "y": 12455, "w": 1440, "h": 760, "title": "Settings — Admins & devices: passkeys, invites", "expand": "fill"}
+    "Admins.dc.html": {"x": 0, "y": 12455, "w": 1440, "h": 760, "title": "Settings — Admins & devices: passkeys, invites", "expand": "fill"},
+    "Stack.dc.html": {"x": 0, "y": 13558, "w": 1440, "h": 1240, "title": "Stack — containers, details and logs", "expand": "fill"},
+    "StackEnv.dc.html": {"x": 1520, "y": 13558, "w": 1440, "h": 1060, "title": "Stack — environment (edit, redeploy) and settings", "expand": "fill"},
+    "ServiceSubs.dc.html": {"x": 3040, "y": 13558, "w": 1440, "h": 1000, "title": "Service — Sub-services tab (parent)", "expand": "fill"},
+    "SubRollup.dc.html": {"x": 4560, "y": 13558, "w": 1440, "h": 1040, "title": "Sub-services in lists (Services, Dashboard, Map)", "expand": "fill"}
   },
   "order": [
     "Main.dc.html", "Services.dc.html", "Nodes.dc.html",
@@ -36,7 +40,8 @@
     "PhoneDashboard.dc.html", "PhoneService.dc.html",
     "Map.dc.html", "Traffic.dc.html",
     "Activity.dc.html", "Containers.dc.html", "Notifications.dc.html",
-    "Assistants.dc.html", "System.dc.html", "Archive.dc.html", "Admins.dc.html"
+    "Assistants.dc.html", "System.dc.html", "Archive.dc.html", "Admins.dc.html",
+    "Stack.dc.html", "StackEnv.dc.html", "ServiceSubs.dc.html", "SubRollup.dc.html"
   ],
   "notes": {
     "t1": {"x": 0, "y": -260, "text": "Overview: start from what needs attention", "kind": "title1", "maxW": 4480},

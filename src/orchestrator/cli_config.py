@@ -1395,8 +1395,9 @@ def policy_list(path_override: str | None) -> None:
     type=click.Choice(["follow", "always", "never"]),
     default=None,
     help=(
-        "How the backup treats the wake-on-hit switches: follow = a node/service with "
-        "wake on hit off is not woken (default), always = wake it anyway, never = wake nothing."
+        "How the backup treats the nodes' wake-on-hit switch: follow = a node with wake on "
+        "hit off is not woken (default; a service's own switch never stops a backup), "
+        "always = wake it anyway, never = wake nothing."
     ),
 )
 @click.option(

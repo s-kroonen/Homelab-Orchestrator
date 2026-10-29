@@ -522,7 +522,10 @@ def test_services_list_shows_guest_status_and_wake_on_hit(client: TestClient) ->
         s.add(svc)
         s.commit()
     nas = rows()["nas"]
-    assert nas["wake_on_hit"] == "no" and nas["wake_on_hit_why"] == "off for this service"
+    assert (
+        nas["wake_on_hit"] == "no"
+        and nas["wake_on_hit_why"] == "wake on hit is off for this service"
+    )
 
     with Session(get_engine()) as s:
         svc = s.exec(select(Service).where(Service.slug == "nas")).one()

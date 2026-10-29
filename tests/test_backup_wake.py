@@ -34,9 +34,15 @@ from orchestrator.db.models import (
     PipelineRun,
     Service,
 )
-from orchestrator.domain.enums import GuestKind, HealthState, PipelineKind, PipelineStatus
+from orchestrator.domain.enums import (
+    BackupWakeMode,
+    GuestKind,
+    HealthState,
+    PipelineKind,
+    PipelineStatus,
+)
 from orchestrator.domain.schemas import ServiceVerdict
-from orchestrator.pipelines.backup import BackupError, BackupPipeline
+from orchestrator.pipelines.backup import BackupError, BackupPipeline, BackupSkipped
 from orchestrator.registry.backup_plan import (
     BLOCKER_NO_POWER_TARGET,
     REASON_POLICY,
@@ -139,6 +145,9 @@ class StubHealth:
     def __init__(self, world: World, state: HealthState = HealthState.HEALTHY) -> None:
         self.w = world
         self.state = state
+
+    def can_verify(self, session: Session, service: Any) -> bool:
+        return True
 
     async def scan(self, session: Session, service: Service) -> ServiceVerdict:
         self.w.events.append(f"health:{service.slug}")
@@ -384,7 +393,7 @@ async def test_hold_is_released_even_when_the_gate_refuses(
     # Everything is already up, so no wake runs; the gate itself refuses.
     world = _world(topo, up={"storage", "compute"}, running={100, 101})
 
-    with pytest.raises(BackupError, match="integrity gate refused"):
+    with pytest.raises(BackupSkipped, match="integrity gate refused"):
         await _pipeline(world, HealthState.FAILED).run_for_service(session, "app")
 
     assert world.count("hold:") == world.count("release:")
@@ -736,3 +745,70 @@ async def test_scheduler_without_prerequisites_does_not_touch_power(
 
     assert all(o["backup"] == "succeeded" for o in outcomes.values())
     assert world.count("power_on") == 0 and world.count("hold:") == 0
+
+
+# ---------------------------------------------------------------------------
+# skipped, not failed: the target is off and this backup may not wake it
+# ---------------------------------------------------------------------------
+
+
+async def test_a_target_on_a_node_that_cannot_be_woken_is_skipped_before_anything_wakes(
+    session: Session, topo: dict[str, Any]
+) -> None:
+    topo["compute"].power_mgr_target = ""
+    session.add(topo["compute"])
+    session.commit()
+    world = _world(topo)
+
+    with pytest.raises(BackupSkipped) as err:
+        await _pipeline(world).run_for_service(session, "app")
+
+    assert err.value.why == "unwakeable" and "no power target" in str(err.value)
+    assert not any(e.startswith("power_on") for e in world.events)  # not even the prerequisite
+    assert world.count("hold:") == 0
+    run = session.exec(select(PipelineRun)).one()
+    assert run.status is PipelineStatus.SKIPPED
+    assert [s["name"] for s in run.steps][-2:] == ["target", "skipped"]
+
+
+async def test_a_policy_that_wakes_nothing_skips_a_target_that_is_off(
+    session: Session, topo: dict[str, Any]
+) -> None:
+    topo["policy"].wake_mode = BackupWakeMode.NEVER
+    session.add(topo["policy"])
+    session.commit()
+    world = _world(topo)
+
+    with pytest.raises(BackupSkipped, match="wake mode never"):
+        await _pipeline(world).run_for_service(session, "app")
+
+    assert world.events == [] or not any(e.startswith("power_on") for e in world.events)
+
+
+async def test_a_policy_that_wakes_nothing_still_backs_up_a_target_that_is_on(
+    session: Session, topo: dict[str, Any]
+) -> None:
+    topo["policy"].wake_mode = BackupWakeMode.NEVER
+    session.add(topo["policy"])
+    session.commit()
+    world = _world(topo, up={"storage", "compute"}, running={100, 101})
+
+    run = await _pipeline(world).run_for_service(session, "app")
+
+    assert run.status is PipelineStatus.SUCCEEDED
+
+
+async def test_the_scheduler_counts_a_skip_as_skipped_and_does_not_retry_it(
+    session: Session, topo: dict[str, Any]
+) -> None:
+    topo["compute"].power_mgr_target = ""
+    topo["policy"].max_attempts = 3
+    session.add_all([topo["compute"], topo["policy"]])
+    session.commit()
+    world = _world(topo, up={"storage", "gw"}, running={100, 103})
+
+    outcomes = await _scheduler(world).run_policy("nightly")
+
+    assert outcomes["app"]["backup"] == "skipped" and outcomes["app"]["retry"] is False
+    assert outcomes["app"]["why"] == "unwakeable"
+    assert outcomes["gwsvc"]["backup"] == "succeeded"

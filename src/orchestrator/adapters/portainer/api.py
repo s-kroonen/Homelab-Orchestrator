@@ -382,6 +382,84 @@ class LivePortainerAdapter(PortainerAdapter):
         )
         self.invalidate()
 
+    @staticmethod
+    def _git_auth(raw: dict[str, Any]) -> dict[str, Any]:
+        """The Git credentials Portainer already holds for a stack, to send back as they are."""
+        git = raw.get("GitConfig") or {}
+        auth = git.get("Authentication") or {}
+        out: dict[str, Any] = {"repositoryAuthentication": bool(auth)}
+        if auth.get("GitCredentialID"):
+            out["repositoryGitCredentialID"] = auth["GitCredentialID"]
+        if auth.get("Username"):
+            out["repositoryUsername"] = auth["Username"]
+        if auth.get("Password"):
+            out["repositoryPassword"] = auth["Password"]
+        return out
+
+    async def stack_env(self, stack: Stack) -> list[tuple[str, str]]:
+        raw = await self._raw_stack(self._need_id(stack))
+        return [
+            (str(e.get("name", "")), str(e.get("value", "")))
+            for e in (raw.get("Env") or [])
+            if isinstance(e, dict) and e.get("name")
+        ]
+
+    async def set_stack_env(
+        self,
+        stack: Stack,
+        env: list[tuple[str, str]],
+        *,
+        pull_image: bool = True,
+        prune: bool = False,
+    ) -> None:
+        self._writable()
+        sid = self._need_id(stack)
+        raw = await self._raw_stack(sid)
+        pairs = [{"name": n, "value": v} for n, v in env]
+        params = {"endpointId": stack.endpoint_id}
+        if raw.get("GitConfig"):
+            git = raw.get("GitConfig") or {}
+            body: dict[str, Any] = {
+                "env": pairs,
+                "prune": prune,
+                "pullImage": pull_image,
+                "repositoryReferenceName": git.get("ReferenceName", ""),
+                **self._git_auth(raw),
+            }
+            await self._request(f"/api/stacks/{sid}/git/redeploy", params, method="PUT", json=body)
+        else:
+            text = await self._json(f"/api/stacks/{sid}/file", cache=False)
+            body = {
+                "env": pairs,
+                "prune": prune,
+                "pullImage": pull_image,
+                "stackFileContent": str((text or {}).get("StackFileContent", "")),
+            }
+            await self._request(f"/api/stacks/{sid}", params, method="PUT", json=body)
+        self.invalidate()
+
+    async def set_git_settings(
+        self, stack: Stack, *, reference: str, auto_update_interval: str | None
+    ) -> None:
+        self._writable()
+        sid = self._need_id(stack)
+        raw = await self._raw_stack(sid)
+        if not raw.get("GitConfig"):
+            raise AdapterRequestError(f"{stack.name!r} is not deployed from a Git repository")
+        body: dict[str, Any] = {
+            "env": raw.get("Env") or [],  # sent back unchanged: Portainer replaces it
+            "prune": False,
+            "repositoryReferenceName": reference,
+            "autoUpdate": (
+                {"interval": auto_update_interval, "webhook": ""} if auto_update_interval else None
+            ),
+            **self._git_auth(raw),
+        }
+        await self._request(
+            f"/api/stacks/{sid}/git", {"endpointId": stack.endpoint_id}, method="POST", json=body
+        )
+        self.invalidate()
+
     def _create_request(self, spec: StackCreate) -> tuple[str, dict[str, Any], dict[str, Any]]:
         env = [{"name": n, "value": v} for n, v in spec.env]
         if spec.source == "string":
@@ -463,7 +541,7 @@ class LivePortainerAdapter(PortainerAdapter):
     # -- containers ---------------------------------------------------------------------------
 
     async def container_action(self, endpoint_id: int, ref: str, verb: str) -> str:
-        if verb not in {"start", "stop", "restart"}:
+        if verb not in {"start", "stop", "restart", "kill", "recreate"}:
             raise AdapterRequestError(f"unknown container action {verb!r}")
         self._writable()
         cid = await self._resolve(endpoint_id, ref)
@@ -471,6 +549,14 @@ class LivePortainerAdapter(PortainerAdapter):
             raise AdapterRequestError(
                 f"no container {ref!r} on Portainer environment {endpoint_id}"
             )
+        if verb == "recreate":
+            await self._request(
+                f"/api/docker/{endpoint_id}/containers/{cid}/recreate",
+                method="POST",
+                json={"PullImage": True},
+            )
+            self.invalidate()
+            return f"container {ref} recreated (image pulled)"
         params = {"t": "10"} if verb in {"stop", "restart"} else None
         await self._request(
             f"/api/endpoints/{endpoint_id}/docker/containers/{cid}/{verb}",
@@ -616,6 +702,15 @@ class LivePortainerAdapter(PortainerAdapter):
             f"/api/endpoints/{endpoint_id}/docker/containers/{cid}/logs", params
         )
         return parse.parse_log_stream(response.content, tty=tty, timestamps=timestamps)
+
+    async def inspect(self, endpoint_id: int, ref: str) -> dict[str, Any] | None:
+        cid = await self._resolve(endpoint_id, ref)
+        if cid is None:
+            return None
+        raw = await self._json(
+            f"/api/endpoints/{endpoint_id}/docker/containers/{cid}/json", cache=False
+        )
+        return parse.mask_inspect(raw)
 
     async def stats(self, endpoint_id: int, ref: str) -> ContainerStats:
         cid = await self._resolve(endpoint_id, ref)

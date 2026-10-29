@@ -1151,6 +1151,8 @@ async def test_the_gates_still_apply(session: Session, service: Service, why: st
         node = session.get(Node, svc.node_id)
         assert node is not None
         node.wake_on_hit_enabled = False
+        node.always_on = False  # the node switch only matters for a node that can be off
+        node.power_mgr_target = node.name
         session.add(node)
     session.add(svc)
     _hit_setup(session, service, wake_on_hit=why != "host_off")

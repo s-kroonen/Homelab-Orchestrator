@@ -51,12 +51,24 @@ tr.selrow td{background:#16233a}
 .toggle{display:inline-block;width:32px;height:18px;border-radius:999px;background:#4f7fe0;position:relative;vertical-align:middle}
 .toggle::after{content:"";position:absolute;top:2px;right:2px;width:14px;height:14px;border-radius:50%;background:#fff}
 .toggle.offt{background:#2c3340}.toggle.offt::after{right:auto;left:2px;background:#8a94a5}
+
+.logs{background:#0a0d12;border:1px solid #1d232e;border-radius:8px;padding:10px 12px;font-family:'JetBrains Mono',ui-monospace,monospace;font-size:12px;line-height:1.55;color:#c9d1dc;white-space:pre;overflow:hidden}
+.logs .t{color:#6f7a8b}.logs .e{color:#ff8a82}.logs .w{color:#f0b44c}
+.dl{display:grid;grid-template-columns:130px 1fr;gap:6px 12px;font-size:13px;margin:0}
+.dl dt{color:#8a94a5}.dl dd{margin:0;min-width:0;overflow-wrap:anywhere}
+.ta{background:#0f131a;border:1px solid #2c3340;border-radius:8px;padding:10px 12px;font-family:'JetBrains Mono',ui-monospace,monospace;font-size:12.5px;line-height:1.7;color:#e6e9ef;white-space:pre}
+.note{font-size:12.5px;color:#8a94a5;padding:10px 18px}
+.dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:2px}
+.dot.ok{background:#5fe08b}.dot.fail{background:#ff8a82}.dot.off{background:#6f7a8b}.dot.warn{background:#f0b44c}
+.kids td{background:#0f131a}
+.panel-t{font-size:11.5px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:#8a94a5;margin:0 0 8px}
+.mapbox{border:1px solid #2c3340;border-radius:10px;padding:10px 12px;background:#141922;min-width:180px}
 </style>
 </head>
 <body>
 
 
-<div style="position: relative; display: flex; flex-wrap: wrap; min-height: 1060px; background: #0d1015; color: #e6e9ef; font-family: Inter, system-ui, sans-serif; font-size: 14px; line-height: 1.45; overflow: hidden">
+<div style="position: relative; display: flex; flex-wrap: wrap; min-height: 860px; background: #0d1015; color: #e6e9ef; font-family: Inter, system-ui, sans-serif; font-size: 14px; line-height: 1.45; overflow: hidden">
   <nav aria-label="Main" style="flex: 0 0 232px; background: #11151c; border-right: 1px solid #222833; padding: 20px 14px; display: flex; flex-direction: column; gap: 18px">
     <div style="font-weight: 700; font-size: 15px; padding: 0 10px">homelab-orchestrator</div>
     
@@ -123,12 +135,11 @@ tr.selrow td{background:#16233a}
       <span class="pill ok">● Live</span>
       <button class="btn ghost" type="button">admin ▾</button>
     </header>
-
-    <main style="padding: 28px 32px 48px; max-width: 1280px; width: 100%; display: flex; flex-direction: column; gap: 20px">
+    <main style="padding: 24px 32px 48px; max-width: 1280px; width: 100%; display: flex; flex-direction: column; gap: 18px">
       <div style="display: flex; flex-wrap: wrap; align-items: flex-end; gap: 12px">
         <div style="flex: 1 1 420px">
           <h1 style="margin: 0; font-size: 24px; font-weight: 700">Containers</h1>
-          <div style="color: #9aa4b2; margin-top: 4px">Stacks and their containers in Portainer, read live. Portainer owns them: nothing is copied, and secrets are never shown. <a href="#">How this works</a></div>
+          <div style="color: #9aa4b2; margin-top: 4px">Every stack on every Portainer, read live. Open one to manage its containers, logs, environment and settings. <a href="#">How this works</a></div>
         </div>
         <a class="btn" href="#">Open Portainer ↗</a>
         <button class="btn primary" type="button">+ New stack</button>
@@ -137,76 +148,66 @@ tr.selrow td{background:#16233a}
       <section class="card">
         <div class="card-h" style="padding-bottom: 6px">
           <div class="input" style="flex: 0 1 300px">Filter by stack, container, image…</div>
-          <span class="chip on">All <span class="n">7</span></span><span class="chip">Running <span class="n">5</span></span><span class="chip">Stopped <span class="n">1</span></span><span class="chip">Partly running <span class="n">1</span></span><span class="chip">Not linked <span class="n">3</span></span>
+          <span class="chip on">All <span class="n">5</span></span><span class="chip">Running <span class="n">3</span></span><span class="chip">Stopped <span class="n">1</span></span><span class="chip">Partly running <span class="n">1</span></span><span class="chip">Not linked <span class="n">1</span></span>
           <span class="select" style="margin-left: auto">Environment: all ▾</span>
           <span class="age" style="margin-left: 8px">updated 6 s ago</span>
         </div>
         <table>
-          <thead><tr><th style="width: 32px"></th><th>Stack</th><th>State</th><th>Containers</th><th>Source</th><th>Updated</th><th>Service</th><th></th></tr></thead>
+          <thead><tr><th style="width: 32px"></th><th>Stack</th><th>State</th><th>Containers</th><th>Source</th><th>Updated</th><th>Sub-service</th><th></th></tr></thead>
           <tbody>
-            <tr class="selrow">
-              <td><input type="checkbox"></td>
-              <td><strong>▾ cloud</strong><div class="sub">home · node-b</div></td>
-              <td><span class="pill warn">partly running</span></td>
-              <td>2 / 3 running</td>
-              <td class="mono" style="font-size: 12px">git main @ 4e1a9c2</td>
-              <td class="faint">2 days ago</td>
-              <td><a href="#">Example Cloud</a></td>
-              <td style="text-align: right"><button class="btn ghost small" type="button">⋯</button></td>
-            </tr>
-            <tr><td colspan="8" style="padding: 0; background: #0f131a">
-                <table><tbody>
-                  <tr><td style="padding-left: 46px"><span class="mono">cloud-app</span></td><td class="mono faint" style="font-size: 12px">registry.example.lan/cloud:28.0</td><td><span class="pill ok">running</span></td><td class="faint">6 h</td><td class="mono" style="font-size: 12px">10.0.1.21:8080→80</td><td class="faint">12% · 410 MB</td>
-                    <td style="text-align: right; white-space: nowrap"><a class="btn ghost small" href="#">Logs</a><button class="btn ghost small" type="button">Restart</button><button class="btn ghost small" type="button">⋯</button></td></tr>
-                  <tr><td style="padding-left: 46px"><span class="mono">cloud-db</span></td><td class="mono faint" style="font-size: 12px">postgres:16</td><td><span class="pill ok">running</span></td><td class="faint">6 h</td><td class="mono" style="font-size: 12px">—</td><td class="faint">3% · 220 MB</td>
-                    <td style="text-align: right; white-space: nowrap"><a class="btn ghost small" href="#">Logs</a><button class="btn ghost small" type="button">Restart</button><button class="btn ghost small" type="button">⋯</button></td></tr>
-                  <tr><td style="padding-left: 46px"><span class="mono">cloud-cron</span></td><td class="mono faint" style="font-size: 12px">registry.example.lan/cloud:28.0</td><td><span class="pill off">exited (0)</span></td><td class="faint">12 min</td><td class="mono" style="font-size: 12px">—</td><td class="faint">—</td>
-                    <td style="text-align: right; white-space: nowrap"><a class="btn ghost small" href="#">Logs</a><button class="btn ghost small" type="button">Restart</button><button class="btn ghost small" type="button">⋯</button></td></tr>
-                </tbody></table>
-            </td></tr>
             <tr>
               <td><input type="checkbox"></td>
-              <td><strong>▸ media</strong><div class="sub">home · node-b</div></td>
+              <td><a href="#" style="font-weight: 600; color: #e6e9ef">shop</a><div class="sub">home · Docker host</div></td>
               <td><span class="pill ok">running</span></td>
-              <td>2 / 2 running</td>
+              <td><span class="dot ok"></span><span class="dot ok"></span><span class="dot ok"></span> <span class="faint" style="margin-left: 4px">3 / 3</span></td>
+              <td class="mono" style="font-size: 12px">git main @ 4e1a9c2</td>
+              <td class="faint">2 days ago</td>
+              <td><a href="#">Shop</a></td>
+              <td style="text-align: right; white-space: nowrap"><a class="btn ghost small" href="#">Open →</a><button class="btn ghost small" type="button">⋯</button></td>
+            </tr>
+            <tr>
+              <td><input type="checkbox"></td>
+              <td><a href="#" style="font-weight: 600; color: #e6e9ef">monitoring</a><div class="sub">home · Docker host</div></td>
+              <td><span class="pill warn">partly running</span></td>
+              <td><span class="dot ok"></span><span class="dot ok"></span><span class="dot ok"></span><span class="dot fail"></span> <span class="faint" style="margin-left: 4px">3 / 4</span></td>
+              <td class="mono" style="font-size: 12px">git main @ 77b0d41</td>
+              <td class="faint">5 days ago</td>
+              <td><a href="#">Monitoring</a></td>
+              <td style="text-align: right; white-space: nowrap"><a class="btn ghost small" href="#">Open →</a><button class="btn ghost small" type="button">⋯</button></td>
+            </tr>
+            <tr>
+              <td><input type="checkbox"></td>
+              <td><a href="#" style="font-weight: 600; color: #e6e9ef">media</a><div class="sub">home · node-b docker</div></td>
+              <td><span class="pill ok">running</span></td>
+              <td><span class="dot ok"></span><span class="dot ok"></span> <span class="faint" style="margin-left: 4px">2 / 2</span></td>
               <td class="mono" style="font-size: 12px">image</td>
               <td class="faint">12 Oct</td>
               <td><a href="#">Example Media</a></td>
-              <td style="text-align: right"><button class="btn ghost small" type="button">⋯</button></td>
+              <td style="text-align: right; white-space: nowrap"><a class="btn ghost small" href="#">Open →</a><button class="btn ghost small" type="button">⋯</button></td>
             </tr>
             <tr>
               <td><input type="checkbox"></td>
-              <td><strong>▸ monitoring</strong><div class="sub">home · node-a</div></td>
-              <td><span class="pill ok">running</span></td>
-              <td>4 / 4 running</td>
-              <td class="mono" style="font-size: 12px">git main @ 77b0d41</td>
-              <td class="faint">5 days ago</td>
-              <td><span class="faint">not linked</span> · <a href="#">Link…</a></td>
-              <td style="text-align: right"><button class="btn ghost small" type="button">⋯</button></td>
-            </tr>
-            <tr>
-              <td><input type="checkbox"></td>
-              <td><strong>▸ dev-tools</strong><div class="sub">home · node-a</div></td>
+              <td><a href="#" style="font-weight: 600; color: #e6e9ef">dev-tools</a><div class="sub">home · Docker host</div></td>
               <td><span class="pill off">stopped</span></td>
-              <td>0 / 2 running</td>
+              <td><span class="dot off"></span><span class="dot off"></span> <span class="faint" style="margin-left: 4px">0 / 2</span></td>
               <td class="mono" style="font-size: 12px">build</td>
               <td class="faint">1 Oct</td>
-              <td><span class="faint">not linked</span> · <a href="#">Link…</a></td>
-              <td style="text-align: right"><button class="btn ghost small" type="button">⋯</button></td>
+              <td><span class="faint">not linked</span> · <a href="#">Adopt…</a></td>
+              <td style="text-align: right; white-space: nowrap"><a class="btn ghost small" href="#">Open →</a><button class="btn ghost small" type="button">⋯</button></td>
             </tr>
             <tr>
               <td><input type="checkbox"></td>
-              <td><strong>▸ legacy-tools</strong><div class="sub">home · node-a · <span class="tag">not in Portainer's stack list</span></div></td>
+              <td><a href="#" style="font-weight: 600; color: #e6e9ef">(no stack)</a><div class="sub">home · Docker host · <span class="tag">loose containers</span></div></td>
               <td><span class="pill ok">running</span></td>
-              <td>1 / 1 running</td>
-              <td class="mono" style="font-size: 12px">compose project</td>
+              <td><span class="dot ok"></span> <span class="faint" style="margin-left: 4px">1 / 1</span></td>
+              <td class="mono" style="font-size: 12px">—</td>
               <td class="faint">—</td>
-              <td><span class="faint">not linked</span> · <a href="#">Link…</a></td>
-              <td style="text-align: right"><button class="btn ghost small" type="button">⋯</button></td>
+              <td><a href="#">Agent</a></td>
+              <td style="text-align: right; white-space: nowrap"><a class="btn ghost small" href="#">Open →</a><button class="btn ghost small" type="button">⋯</button></td>
             </tr>
           </tbody>
         </table>
-        <div style="padding: 10px 18px; font-size: 12.5px; color: #8a94a5">Row menu: Start · Stop · Restart · Link to a service… · Open in Portainer · Delete…   Select rows for Start / Stop / Restart together.</div>
+        <div class="note">A row opens the stack page; container-level actions live there. Row menu: Start · Stop · Restart · Redeploy · Adopt as a sub-service… · Open in Portainer ↗ · Delete…   Select rows for Start / Stop / Restart together. Containers outside any stack are grouped per environment as "(no stack)", with the same page minus stack settings and environment.</div>
       </section>
     </main>
   </div>

@@ -89,6 +89,8 @@ class ProbeSpec(BaseModel):
     #: See Probe.enabled. False = switched off (kept, not run). Omitted from
     #: the YAML when true.
     enabled: bool = True
+    #: See Probe.backup_waits. Omitted from the YAML when false.
+    backup_waits: bool = False
 
 
 class ProxyHostSpec(BaseModel):

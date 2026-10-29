@@ -22,9 +22,17 @@ from orchestrator import config as config_module
 from orchestrator.adapters.factory import build_adapters
 from orchestrator.config import get_settings
 from orchestrator.db import session as session_module
-from orchestrator.db.models import AuditEntry, Node, ProxyHost, Service, ServiceState, TrafficSample
+from orchestrator.db.models import (
+    AuditEntry,
+    Node,
+    NodeState,
+    ProxyHost,
+    Service,
+    ServiceState,
+    TrafficSample,
+)
 from orchestrator.db.session import get_engine
-from orchestrator.domain.enums import HealthState
+from orchestrator.domain.enums import HealthState, PowerState
 from orchestrator.registry.traefik_status import RouterMetricSample, parse_router_metrics
 from orchestrator.scheduler.traffic_collector import WAKE_ON_HIT_ACTOR, TrafficCollector
 from orchestrator.web import auth as auth_lib
@@ -355,14 +363,17 @@ def test_wake_on_hit_three_way_gate(
     node_wake: bool,
     expect_fire: bool,
 ) -> None:
-    """A wake-on-hit fires only when ProxyHost.wake_on_hit AND
-    Service.wake_on_hit_enabled AND Node.wake_on_hit_enabled are all True —
-    every other combination of the three must never fire one."""
+    """For a node that can be off (and is): a wake-on-hit fires only when
+    ProxyHost.wake_on_hit AND Service.wake_on_hit_enabled AND
+    Node.wake_on_hit_enabled are all True — every other combination of the
+    three must never fire one."""
     with Session(get_engine()) as s:
         svc = s.exec(select(Service).where(Service.id == service.id)).one()
         node = s.get(Node, svc.node_id)
         svc.wake_on_hit_enabled = service_wake
         node.wake_on_hit_enabled = node_wake
+        node.always_on = False
+        node.power_mgr_target = node.name
         s.add(svc)
         s.add(node)
         # FAILED — unambiguously "down" for wake-on-hit purposes.
@@ -391,6 +402,39 @@ def test_wake_on_hit_three_way_gate(
     assert bool(runs) is expect_fire
     if expect_fire:
         assert runs[0].actor == WAKE_ON_HIT_ACTOR
+
+
+@pytest.mark.parametrize("always_on", [True, False])
+def test_a_node_that_is_on_needs_no_node_switch(
+    client: TestClient, service: Service, monkeypatch: pytest.MonkeyPatch, always_on: bool
+) -> None:
+    """The node's switch is about turning the node on. On an always-on node, or one that is on
+    right now, a hit only starts the guest, so the service's own switch is enough."""
+    with Session(get_engine()) as s:
+        svc = s.exec(select(Service).where(Service.id == service.id)).one()
+        node = s.get(Node, svc.node_id)
+        node.wake_on_hit_enabled = False
+        node.always_on = always_on
+        node.power_mgr_target = node.name
+        s.add(node)
+        if not always_on:
+            s.add(NodeState(node_id=node.id, power_state=PowerState.ON))
+        s.add(ServiceState(service_id=svc.id, last_verdict=HealthState.DOWN))
+        s.commit()
+        ph = _make_proxy_host(s, svc, "a.example.com")
+        ph.wake_on_hit = True
+        s.add(ph)
+        s.commit()
+
+    collector = _collector(monkeypatch)
+    counter = [100]
+    _patch_traefik_transport(monkeypatch, _dynamic_responder("a.example.com", counter))
+    import asyncio
+
+    asyncio.run(collector.poll_once())
+    counter[0] = 150
+    asyncio.run(collector.poll_once())
+    assert len(_wake_runs()) == 1
 
 
 def test_wake_on_hit_skips_when_traffic_has_not_increased(

@@ -158,6 +158,13 @@ class TransportFactory:
         )
 
 
+def can_verify(session: Session, service: Service) -> bool:
+    """Whether ``service`` has an enabled, required probe: without one every verdict is
+    UNKNOWN, so nothing can ever let a backup of it through."""
+    rows = session.exec(select(ProbeRow).where(ProbeRow.service_id == service.id)).all()
+    return any(r.required and r.enabled for r in rows)
+
+
 class HealthEngine:
     """Scans services and persists the verdict."""
 
@@ -179,6 +186,12 @@ class HealthEngine:
         """A fresh guest-state cache, or None when there is no guest gate.
         The HealthScanner makes one per cycle and passes it to every scan."""
         return GuestStateCache(self._proxmox) if self._proxmox is not None else None
+
+    def can_verify(self, session: Session, service: Service) -> bool:
+        """Whether a scan of ``service`` could ever say HEALTHY: it has an enabled, required
+        probe. Without one, :meth:`aggregate` always answers UNKNOWN, so a backup can tell it
+        will be refused before waking anything for it."""
+        return can_verify(session, service)
 
     async def scan(
         self,

@@ -216,9 +216,8 @@
     $("a-group").value = "";
     $("a-children").replaceChildren(...g.children.map((c, i) => {
       const cb = el("input", { type: "checkbox", checked: true, id: "a-c-" + i });
-      const slug = el("input", { type: "text", value: c.slug, id: "a-cs-" + i });
       const gate = el("select", { id: "a-cg-" + i }, option("ignore", "no"), option("required", "yes (a database)")); gate.value = c.backup_gate;
-      return el("tr", null, el("td", null, cb), el("td", null, el("strong", null, c.container), " ", chip(c.image)), el("td", null, slug), el("td", null, gate));
+      return el("tr", null, el("td", null, cb), el("td", null, el("strong", null, c.container), " ", chip(c.image)), el("td", null, gate));
     }));
     $("a-hosts").replaceChildren(...(g.hosts.length ? g.hosts.map((h, i) => {
       const cb = el("input", { type: "checkbox", id: "a-h-" + i, value: h.hostname, checked: !h.linked_to || h.name_matches });
@@ -233,7 +232,7 @@
   $("a-go").addEventListener("click", async () => {
     const g = suggestion; if (!g) return;
     const children = g.children.map((c, i) => ({ c, i })).filter(({ i }) => $("a-c-" + i).checked)
-      .map(({ c, i }) => ({ container: c.container, slug: $("a-cs-" + i).value.trim(), name: c.name, backup_gate: $("a-cg-" + i).value }));
+      .map(({ c, i }) => ({ container: c.container, name: c.name, backup_gate: $("a-cg-" + i).value }));
     const hosts = g.hosts.map((h, i) => ({ h, i })).filter(({ i }) => $("a-h-" + i) && $("a-h-" + i).checked).map(({ h }) => h.hostname);
     const body = { endpoint_id: g.endpoint_id, instance: g.instance || ptInst(), stack: g.stack, slug: $("a-slug").value.trim(), parent: $("a-parent").value,
       group: $("a-group").value.trim(), children, hosts, probes: $("a-probes").checked,

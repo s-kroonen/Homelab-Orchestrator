@@ -565,6 +565,11 @@ ENV_SECTIONS: tuple[EnvSection, ...] = (
             EnvKey("WAKE_POLL_INTERVAL_S"),
             EnvKey("WAKE_GUEST_START_TIMEOUT_S", "Just the Proxmox start task, not guest boot."),
             EnvKey(
+                "WAKE_AUTOSTART_GRACE_S",
+                "After powering a node on, a guest Proxmox starts at boot is waited for in its "
+                "boot order plus this long before the wake starts it itself.",
+            ),
+            EnvKey(
                 "WAKE_RETRY_COOLDOWN_S",
                 "After a wake ends, the next hit reuses it rather than retrying — without "
                 "this, a fast failure gets re-triggered by every visitor request during "

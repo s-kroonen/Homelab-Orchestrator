@@ -29,9 +29,15 @@ a Git-webhook deploy.
 **Adopt** (Portainer page -> a stack -> *Adopt as a sub-service*, or `orchestrator-cli stack
 adopt 1 dev-xymbols`) reads the stack and proposes:
 
-* a sub-service under the guest Portainer runs on (you pick it; one that is called "portainer"
-  is preselected), with a child per container - a database image (postgres, mariadb, redis, ...)
-  is flagged and gets `backup_gate: required`, so a backup of the guest waits for it;
+* **one** sub-service for the whole stack under the guest Portainer runs on (you pick it; one that
+  is called "portainer" is preselected). Its containers are not services of their own: each gets
+  a check on the stack's sub-service, `container:<name>` (a `portainer` probe). A database image
+  (postgres, mariadb, redis, ...) is flagged *backup waits for it* (`backup_waits`), so a backup
+  of the guest waits for that container. Stacks adopted before this had a child per container;
+  they are folded into the stack once, at startup (`stack.folded` in Activity; see
+  [service_tree.md](service_tree.md)): their checks, proxy hosts and a database dump move to the
+  stack (the dump then names its container). A container with its own recovery or deploy
+  settings, or a second dump, stays a sub-service;
 * the proxy hosts whose upstream points at a port the stack publishes;
 * probes: a **`portainer`** probe per stack/container (running, none unhealthy - no SSH needed)
   and an HTTP probe through the first proxy host;
@@ -51,8 +57,10 @@ Portainer (its **volumes are kept**) and then the link. It refuses while a linke
 switched on unless you ask it to take them down first - in the right order. Proxy hosts are never
 deleted, only unlinked.
 
-**Start / stop / restart** a stack or one container: buttons on the Portainer page,
-`stack start|stop|restart ENV NAME`, `stack start-container|...`.
+**Start / stop / restart** a stack or one container: the stack page (Containers -> a stack),
+`stack start|stop|restart ENV NAME`, `stack start-container|...`. The stack page also kills,
+recreates and inspects containers and edits the stack's environment and Git settings
+([portainer.md](portainer.md)).
 
 ### Proxy hosts
 

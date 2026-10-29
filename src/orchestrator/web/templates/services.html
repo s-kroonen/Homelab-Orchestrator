@@ -3,7 +3,7 @@
 {% block crumbs %}<span class="here">Services</span>{% endblock %}
 {% block content %}
 <div class="page-header">
-  <h1>Services <span class="count" id="svc-count">{{ initial.rows | length }}</span></h1>
+  <h1>Services <span class="count" id="svc-count">{{ initial.rows | selectattr("parent", "none") | list | length }}</span></h1>
   <div class="actions">
     <a class="btn secondary" href="/nodes">Import from Proxmox</a>
     <button type="button" id="new-service">+ New service</button>

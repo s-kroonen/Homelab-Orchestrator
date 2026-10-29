@@ -22,7 +22,7 @@
   const hasContainer = () => ctl().type === "portainer" && !!ctl().container;
   const isRoot = () => !S.parent;
   const hasGuest = () => S.guest_kind !== "none" && S.guest_id != null;
-  const mine = () => new Set([S.id].concat((S.children || []).map((c) => c.id)));
+  const mine = () => new Set([S.id].concat((S.children || []).map((c) => c.id), (V.subs || []).map((c) => c.id)));
   const relevant = (d) => d.service_id == null || mine().has(d.service_id);
 
   let historyLoaded = false;
@@ -105,6 +105,7 @@
     else box.append(el("button", { type: "button", onclick: check }, "Check now"));
     if (svcCtl) box.append(el("button", { type: "button", class: "secondary", onclick: () => act("service", "restart") }, "Restart"));
     if (canBackup) box.append(el("button", { type: "button", class: "secondary", onclick: backupNow }, "Back up now"));
+    if (row.stack) box.append(el("a", { class: "btn secondary", href: row.stack.href }, "Manage stack"));
     box.append(menuButton(() => [
       { label: "Edit settings…", onClick: editGeneral },
       svcCtl ? { heading: "This service: " + ctlInfo.service.describe } : null,
@@ -181,24 +182,117 @@
       ["Address", ip.effective_ip ? [el("span", { class: "mono" }, ip.effective_ip), el("span", { class: "faint" }, " · " + (ip.effective_source_label || "") + (ip.ip_discovered_at && ip.effective_source !== "manual" ? " " + fmt.ago(ip.ip_discovered_at) : ""))] : el("span", { class: "faint" }, ip.has_guest ? "not found yet" : "none")],
       ["Proxy hosts", (S.proxy_hosts || []).length ? (S.proxy_hosts || []).map((h) => el("div", {}, el("a", { href: "/proxy-hosts?q=" + enc(h.hostname), class: "mono" }, h.hostname), " ", syncPill(h))) : el("span", { class: "faint" }, "none")],
       ["Backup", S.backup_excluded ? "never (" + (S.backup_excluded_reason || "excluded") + ")" : !isRoot() ? "with " + S.parent : policy ? [policy.name, row.backup && row.backup.sub ? " · " + row.backup.sub + (row.backup.at ? " " + fmt.ago(row.backup.at) : "") : ""] : el("span", { class: "pill warn" }, "no policy")],
-      ["Wake on hit", S.wake_on_hit_enabled ? (S.wake_trigger === "button" ? "yes, with a Start button" : "yes") : "no"],
+      ["Wake on hit", wakeText()],
+      isRoot() && hasGuest() ? ["Starts with its node", bootFact()] : null,
+      ["Waking takes", wakeTime()],
       (S.depends_on || []).length ? ["Depends on", S.depends_on.map((d, i) => [i ? ", " : "", el("a", { href: "/services/" + enc(d) }, d)])] : null,
       S.group ? ["Group", S.group] : null,
     ]), el("button", { type: "button", class: "ghost small", style: { marginTop: "12px", color: "var(--link)", padding: 0 }, onclick: () => T.show("configuration") }, "Edit in Configuration →"));
   }
-  function drawSubs() {
-    const kids = S.children || [];
-    $("#subs-card").hidden = !isRoot() && !kids.length;
-    const box = clear($("#subs"));
-    if (!kids.length) { box.append(el("p", { class: "muted", style: { margin: 0 } }, "None. A sub-service is a part that runs inside this one (a container, an add-on) and follows it.")); return; }
-    for (const c of kids) {
-      const cls = !c.enabled ? "off" : VERDICT_CLS[c.verdict] || "off";
-      box.append(el("div", { class: "event-row", style: { gridTemplateColumns: "auto auto minmax(0,1fr)" } },
-        el("span", { class: "pill " + cls }, c.enabled ? c.verdict : "disabled"),
-        el("a", { href: "/services/" + enc(c.slug), style: { fontWeight: "600" } }, c.name || c.slug),
-        el("span", { class: "faint" }, c.backup_gate === "required" ? "a backup waits for it" : "")));
-    }
+  function wakeText() {
+    const w = S.wake || {};
+    if (!S.wake_on_hit_enabled) return "no";
+    const yes = S.wake_trigger === "button" ? "yes, with a Start button" : "yes";
+    return w.traffic_blocker ? ["not now", el("div", { class: "faint", style: { fontSize: "12.5px" } }, w.traffic_blocker)] : yes;
   }
+  function bootFact() {
+    const b = (S.wake || {}).boot;
+    if (!b) return el("span", { class: "faint" }, "not read yet: read while its node is on (Nodes & guests)");
+    if (!b.onboot) return ["no", el("span", { class: "faint" }, " · a wake starts it")];
+    return el("span", { title: "Proxmox starts it when the node boots, so a wake that powers the node on leaves it to Proxmox." + (b.order != null ? " Order " + b.order + "." : "") },
+      "yes, " + fmt.nth(b.position || 0), b.starts_after_s != null ? el("span", { class: "faint" }, " · ~" + fmt.secs(b.starts_after_s) + " after boot") : null);
+  }
+  function wakeTime() {
+    const w = S.wake || {};
+    const e = w.estimate;
+    if (!e) return el("span", { class: "faint" }, "—");
+    const parts = (x) => x.steps.map((st) => st.what + " (" + fmt.secs(st.seconds) + ")").join(", then ");
+    const off = w.estimate_off;
+    return el("span", { title: "Now: " + parts(e) + (off ? ".\nFrom off: " + parts(off) : "") + "." + (e.learned ? "" : "\nA guess until it has been woken a few times.") },
+      "about " + fmt.secs(e.total_s), off ? el("span", { class: "faint" }, " · from off ~" + fmt.secs(off.total_s)) : null);
+  }
+  // --- overview: a one-line summary; the Sub-services tab has the rest ---------------------------
+  function drawSubs() {
+    const subs = V.subs || [];
+    $("#subs-card").hidden = !isRoot() && !subs.length;
+    const box = clear($("#subs"));
+    if (!subs.length) { box.append(el("p", { class: "muted", style: { margin: 0 } }, "None. A sub-service is a part that runs inside this one (a stack, an add-on) and follows it.")); return; }
+    const failing = subs.filter((x) => x.enabled && (x.label === "failed" || x.label === "stopped"));
+    box.append(el("p", { style: { margin: 0 } }, subs.length + " sub-service" + (subs.length === 1 ? "" : "s") + (failing.length ? ", " : ""),
+      failing.length ? el("span", { style: { color: "var(--warn)" } }, failing.length + " failing (" + failing.map((x) => x.name).join(", ") + ")") : null, " · ",
+      el("a", { href: "?tab=subs", onclick: (e) => { e.preventDefault(); T.show("subs"); } }, "Sub-services tab →")));
+  }
+
+  // --- the Sub-services tab ------------------------------------------------------------------------
+  const stackLive = new Map(); // stack href -> {containers} from Portainer, or {error}
+  function loadStackLive(x) {
+    if (!x.stack || stackLive.has(x.stack.href)) return;
+    stackLive.set(x.stack.href, null);
+    const q = x.stack.instance ? "?instance=" + enc(x.stack.instance) : "";
+    api.get("/api/portainer/endpoints/" + x.stack.endpoint + "/stacks/" + enc(x.stack.name) + q, { suppressToast: true })
+      .then((d) => { stackLive.set(x.stack.href, d); drawSubsTab(); }, (e) => { stackLive.set(x.stack.href, { error: e.message }); drawSubsTab(); });
+  }
+  function whatOf(x) {
+    const c = x.controller || {};
+    if (x.kind === "stack") {
+      const live = stackLive.get(x.stack.href);
+      const cs = live && live.containers;
+      const bad = cs ? cs.filter((k) => k.state !== "running") : [];
+      return [el("span", {}, "stack ", el("a", { href: x.stack.href, class: "mono" }, x.stack.name), x.containers ? " · " + x.containers + " container" + (x.containers === 1 ? "" : "s") : ""),
+        el("span", { class: "sub" }, cs ? [el("span", { class: "dots", "aria-hidden": "true" }, cs.map((k) => el("i", { class: k.state === "running" ? (k.health === "unhealthy" ? "warn" : "ok") : "fail" }))),
+          bad.length ? bad.map((k) => k.name + " " + k.state).join(", ") : "all running"] : live && live.error ? "Portainer: " + live.error : "…")];
+    }
+    if (x.kind === "container") return ["container ", el("span", { class: "mono" }, c.container || "")];
+    return x.kind ? x.kind : el("span", { class: "faint" }, "—");
+  }
+  async function setWaits(x, on) {
+    try { await api.put("/api/registry/services/" + enc(x.slug), { backup_gate: on ? "required" : "ignore" }, { suppressToast: true }); toast(on ? "A backup of " + (S.name || slug) + " now waits for " + x.name : x.name + ": a backup no longer waits for it", "ok"); }
+    catch (e) { toast(e.message, "error"); }
+    view.refresh();
+  }
+  function drawSubsTab() {
+    const subs = V.subs || [];
+    $("#tab-subs").hidden = !subs.length && !isRoot();
+    $("#n-subs").textContent = subs.length ? String(subs.length) : "";
+    $("#subs-intro").textContent = "Parts that run inside " + (S.name || slug) + ". A stack is one sub-service: its containers are on its stack page.";
+    const row = V.row || { state: {} };
+    const failing = subs.filter((x) => x.enabled && (x.label === "failed" || x.label === "stopped"));
+    const ban = $("#subs-banner");
+    ban.hidden = row.state.label !== "degraded";
+    if (!ban.hidden) {
+      const f = failing[0];
+      fill(ban, el("span", { class: "pill warn" }, "degraded"), " ",
+        el("span", { style: { flex: "1 1 300px" } }, (S.name || slug) + " itself is healthy, but ", el("strong", {}, f ? f.name : "a sub-service"), (f ? (f.label === "stopped" ? " is stopped" : " is failing") : " is failing") + (f && f.check && f.check.text ? ": " + f.check.text : "") + ". That is why it shows degraded on the Dashboard, the Services list and the Map."),
+        f && f.stack ? el("a", { class: "btn secondary small", href: f.stack.href }, "Manage stack") : null);
+    }
+    const box = clear($("#subs-table"));
+    if (!subs.length) { box.append(el("div", { class: "dt-empty" }, el("strong", {}, "No sub-services"), el("div", {}, "Adopt a Portainer stack that runs here, or add one by hand."))); return; }
+    subs.forEach(loadStackLive);
+    box.append(el("div", { class: "dt-scroll" }, el("table", { class: "dt" },
+      el("thead", {}, el("tr", {}, ["Sub-service", "What", "State", "Checks", "Backup", "Proxy hosts", ""].map((h) => el("th", {}, h)))),
+      el("tbody", {}, subs.map((x) => el("tr", {},
+        el("td", { class: "first", style: x.depth > (S.parent ? 1 : 0) + 1 ? { paddingLeft: 18 + 14 * (x.depth - 1) + "px" } : null },
+          el("a", { href: "/services/" + enc(x.slug), style: { fontWeight: "600" } }, x.name), el("span", { class: "sub mono" }, x.slug)),
+        el("td", { "data-label": "What" }, whatOf(x)),
+        el("td", { "data-label": "State" }, el("span", { class: "pill " + x.cls, title: x.why || null }, x.label)),
+        el("td", { "data-label": "Checks" }, x.checks.total ? (x.checks.run ? x.checks.ok + " of " + x.checks.total + " ok" : x.checks.total + " not run yet") : el("span", { class: "faint" }, "none")),
+        el("td", { "data-label": "Backup", class: x.backup === "does not wait" ? "faint" : null }, x.backup),
+        el("td", { "data-label": "Proxy hosts", class: "mono", style: { fontSize: "12.5px" } }, x.hosts.length ? x.hosts.join(", ") : el("span", { class: "faint" }, "—")),
+        el("td", { class: "menu-cell", style: { whiteSpace: "nowrap" } },
+          x.stack ? el("a", { class: "btn ghost small", href: x.stack.href }, "Manage stack →") : null,
+          menuButton(() => [
+            { label: "Open", href: "/services/" + enc(x.slug) },
+            x.stack ? { label: "Manage stack", href: x.stack.href } : null,
+            { label: "Check now", onClick: () => O.bulk("services", "resync", [x.slug]).then(() => view.refresh(), () => {}) },
+            x.backup === "waits for it" ? { label: "A backup does not wait for it", onClick: () => setWaits(x, false) } : { label: "A backup waits for it", onClick: () => setWaits(x, true) },
+            "-",
+            { label: "Remove…", danger: true, onClick: () => O.deleteService({ slug: x.slug, name: x.name }, { rows: subs.filter((k) => k.parent === x.slug).map((k) => ({ slug: k.slug, parent: x.slug })) }, () => view.refresh()).catch(() => {}) },
+          ].filter(Boolean), "Actions for " + x.name))))))));
+  }
+  $("#subs-add").addEventListener("click", () => O.serviceDrawer({
+    view: Object.assign({}, V, { rows: [{ slug, name: S.name || slug }] }), prefill: { parent: slug },
+    onSaved: () => view.refresh(),
+  }));
   $("#sub-add").addEventListener("click", () => O.serviceDrawer({
     view: Object.assign({}, V, { rows: [{ slug, name: S.name || slug }] }), prefill: { parent: slug },
     onSaved: () => view.refresh(),
@@ -335,7 +429,7 @@
   function probeValues(p) {
     const c = (p && p.config) || {}; const t = c.transport || {};
     return {
-      name: p ? p.name : "", kind: p ? p.kind : "http", required: p ? p.required : true, enabled: p ? p.enabled !== false : true,
+      name: p ? p.name : "", kind: p ? p.kind : "http", required: p ? p.required : true, enabled: p ? p.enabled !== false : true, backup_waits: !!(p && p.backup_waits),
       timeout_s: p ? p.timeout_s : kindInfo("http").default_timeout_s,
       order: p ? p.order : S.probes.reduce((m, x) => Math.max(m, x.order), -1) + 1,
       url: c.url || "", method: c.method || "GET", expect_status: (c.expect_status || [200]).join(", "), expect_body_contains: c.expect_body_contains || "",
@@ -414,6 +508,7 @@
         { type: "section", label: "How it counts" },
         { key: "required", label: "Required", type: "checkbox", help: "The service counts as failed when this probe fails, and is not backed up." },
         { key: "enabled", label: "Run it", type: "checkbox", help: "Off: not run and never counted; its settings are kept." },
+        { key: "backup_waits", label: "Backup waits for it", type: "checkbox", show: () => !isRoot(), help: "A backup of " + (S.root || "the parent") + " waits for this check to pass." },
         { key: "timeout_s", label: "Timeout (seconds)", type: "number", min: 1 },
         { key: "order", label: "Order", type: "number" },
       ],
@@ -429,7 +524,7 @@
         await api.del("/api/registry/probes/" + editing.id); toast("Deleted " + editing.name, "ok"); view.refresh();
       } : null,
       async onSave(v) {
-        const body = { name: v.name.trim(), kind: v.kind, required: !!v.required, enabled: !!v.enabled, timeout_s: Number(v.timeout_s) || kindInfo(v.kind).default_timeout_s, order: Number(v.order) || 0, config: probeConfig(v, editing) };
+        const body = { name: v.name.trim(), kind: v.kind, required: !!v.required, enabled: !!v.enabled, backup_waits: !isRoot() && !!v.backup_waits, timeout_s: Number(v.timeout_s) || kindInfo(v.kind).default_timeout_s, order: Number(v.order) || 0, config: probeConfig(v, editing) };
         if (editing) await api.put("/api/registry/probes/" + editing.id, body, { suppressToast: true });
         else await api.post(reg + "/probes", body, { suppressToast: true });
         toast((editing ? "Saved " : "Added ") + body.name, "ok");
@@ -828,6 +923,33 @@
     try { plan = await api.get("/api/backup/plan?slug=" + enc(slug), { suppressToast: true }); } catch (_e) { plan = null; }
     drawBackups();
   }
+  // What a backup would wake, in what order and how long; what would make it skip.
+  function planView(p) {
+    const out = el("div", { style: { margin: "0 18px 12px" } });
+    for (const sk of p.skips || []) out.append(el("div", { class: "banner warn", style: { marginBottom: "8px" } }, "A backup would be skipped: " + sk.text + "."));
+    const tl = p.timeline || { steps: [], nodes: [] };
+    const est = Object.fromEntries((tl.steps || []).map((x) => [x.slug, x]));
+    if (!p.steps.length && !(p.required_subs || []).length) return out;
+    const how = (x) => !x ? "" : x.blocked ? "" : x.steps.map((st) => st.what + " (" + fmt.secs(st.seconds) + ")").join(", then ");
+    const det = el("details", { class: "help" },
+      el("summary", {}, "What a backup wakes first (" + p.steps.length + ")" + (tl.total_s ? " · about " + fmt.secs(tl.total_s) + (tl.learned ? "" : ", a guess") : "")),
+      el("ol", { style: { margin: "6px 0 0", paddingLeft: "20px" } }, p.steps.map((st) => el("li", {}, el("span", { class: "mono" }, st.slug), " on " + (st.node || "?") + " ",
+        el("span", { class: "pill " + (st.node_power === "on" || st.node_power === "always_on" ? "ok" : "off") }, st.node_power === "always_on" ? "always on" : st.node_power), " ", el("span", { class: "faint" }, st.reason),
+        est[st.slug] && !est[st.slug].blocked ? el("div", { class: "faint", style: { fontSize: "12.5px" } }, "about " + fmt.secs(est[st.slug].total_s) + ": " + how(est[st.slug])) : null,
+        st.blocker ? el("div", { class: "field-error" }, st.blocker) : null)),
+        (p.required_subs || []).map((x) => el("li", {}, el("span", { class: "mono" }, x.slug), el("span", { class: "faint" }, (x.checks ? " waits for " + x.checks.join(", ") + ";" : "") + (x.can_start ? " sub-service, started through its " + x.controller + " controller if stopped" : " sub-service, must already be healthy"))))),
+      (tl.nodes || []).map((n) => el("div", { style: { marginTop: "10px" } },
+        el("div", { style: { fontWeight: "600", fontSize: "13px" } }, "When " + n.node + " boots" + (n.delay_s ? " (after " + fmt.secs(n.delay_s) + ")" : "")),
+        !n.read_at ? el("div", { class: "faint", style: { fontSize: "12.5px" } }, "Its boot order has not been read yet: it is read while the node is on (Nodes & guests).")
+          : !n.sequence.length ? el("div", { class: "faint", style: { fontSize: "12.5px" } }, "Proxmox starts nothing by itself; the backup starts what it needs.")
+          : el("ol", { style: { margin: "4px 0 0", paddingLeft: "20px", fontSize: "12.5px" } }, n.sequence.map((g) => el("li", { style: g.needed ? { fontWeight: "600" } : null },
+            (g.name || "guest") + " ", el("span", { class: "mono faint" }, String(g.vmid)), el("span", { class: "faint" }, " · ~" + fmt.secs(g.starts_after_s) + " after boot" + (g.needed ? " · this backup needs it" : ""))))))),
+      el("p", { class: "faint", style: { fontSize: "12px", margin: "8px 0 0" } }, "Guests set to start at boot are left to Proxmox after a node comes on; the others are started. Times come from the last wakes, or a guess until there are some."));
+    out.append(det);
+    const pre = p.steps.filter((st) => st.blocker && st.reason !== "backup target");
+    if (pre.length) out.append(el("div", { class: "banner fail", style: { marginTop: "8px" } }, "A backup would fail at the wake step unless these are up: " + pre.map((st) => st.slug + ": " + st.blocker).join("; ") + ". Set the node's power target or mark it always on."));
+    return out;
+  }
   let backupRecords = null;
   function drawBackups() {
     const pol = V.policy;
@@ -839,15 +961,7 @@
     if (isRoot() && hasGuest()) acts.append(menuButton(() => [{ label: "Propose a restore…", onClick: proposeRestore }, { label: "Policies", href: "/backup-policies" }], "Backup actions"));
     const box = clear($("#backups"));
     if (backupSteps && backupSteps.length) box.append(el("div", { style: { padding: "0 18px 10px" } }, stepsList(backupSteps)));
-    if (plan && (plan.steps.length || (plan.required_subs || []).length)) {
-      const det = el("details", { class: "help", style: { margin: "0 18px 12px" } }, el("summary", {}, "What a backup wakes first (" + plan.steps.length + ")"),
-        el("ol", { style: { margin: "6px 0 0", paddingLeft: "20px" } }, plan.steps.map((st) => el("li", {}, el("span", { class: "mono" }, st.slug), " on " + (st.node || "?") + " ",
-          el("span", { class: "pill " + (st.node_power === "on" || st.node_power === "always_on" ? "ok" : "off") }, st.node_power === "always_on" ? "always on" : st.node_power), " ", el("span", { class: "faint" }, st.reason),
-          st.blocker ? el("div", { class: "field-error" }, st.blocker) : null)),
-          (plan.required_subs || []).map((x) => el("li", {}, el("span", { class: "mono" }, x.slug), el("span", { class: "faint" }, x.can_start ? " sub-service, started through its " + x.controller + " controller if stopped" : " sub-service, must already be healthy")))));
-      box.append(det);
-      if (plan.blockers.length) box.append(el("div", { class: "banner fail", style: { margin: "0 18px 12px" } }, "A backup would fail at the wake step unless these are up: " + plan.blockers.join("; ") + ". Set the node's power target or mark it always on."));
-    }
+    if (plan) box.append(planView(plan));
     if (!isRoot()) { box.append(el("p", { class: "muted", style: { padding: "0 18px 14px", margin: 0 } }, "A sub-service is backed up with its parent's guest: see ", el("a", { href: "/services/" + enc(S.root) + "?tab=related" }, S.root), ".")); return; }
     if (backupRecords === null) { box.append(el("div", { class: "skeleton", style: { padding: "0 18px 14px" } }, el("i"), el("i"))); return; }
     if (!backupRecords.length) { box.append(el("p", { class: "muted", style: { padding: "0 18px 14px", margin: 0 } }, S.backup_excluded ? "Never backed up." : "No backups recorded yet.")); return; }
@@ -982,7 +1096,7 @@
     $("#n-related").textContent = n || "";
   }
   function drawAll() {
-    drawHeader(); drawHealth(); drawFacts(); drawSubs(); drawConfig(); drawProbes(); drawHosts(); drawStack(); drawBackups(); drawDumps(); drawCounts();
+    drawHeader(); drawHealth(); drawFacts(); drawSubs(); drawSubsTab(); drawConfig(); drawProbes(); drawHosts(); drawStack(); drawBackups(); drawDumps(); drawCounts();
   }
   async function loadCtl() {
     try { ctlInfo = await api.get(base + "/controller?live=true", { suppressToast: true }); } catch (_e) { ctlInfo = null; }

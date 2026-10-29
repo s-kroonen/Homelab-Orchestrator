@@ -22,6 +22,7 @@ from __future__ import annotations
 import asyncio
 import time
 from datetime import UTC, datetime
+from typing import Any
 
 from sqlmodel import Session, select
 
@@ -31,7 +32,14 @@ from orchestrator.adapters.power.base import PowerAdapter
 from orchestrator.adapters.proxmox.base import ProxmoxAdapter
 from orchestrator.audit import log as audit
 from orchestrator.config import Settings
-from orchestrator.db.models import BackupPolicy, BackupRecord, Node, PipelineRun, Service
+from orchestrator.db.models import (
+    BackupPolicy,
+    BackupRecord,
+    Node,
+    PipelineRun,
+    Probe,
+    Service,
+)
 from orchestrator.domain.enums import (
     AuditResult,
     BackupGate,
@@ -41,11 +49,17 @@ from orchestrator.domain.enums import (
     PipelineKind,
     PipelineStatus,
 )
+from orchestrator.domain.schemas import ServiceVerdict
 from orchestrator.health.engine import HealthEngine
 from orchestrator.logging_setup import get_logger, new_correlation_id
 from orchestrator.notify.hooks import announce
 from orchestrator.pipelines.backup_wake import BackupWaker, WakeContext
-from orchestrator.pipelines.steps import BackupError, RetryableBackupError, StepRecorder
+from orchestrator.pipelines.steps import (
+    BackupError,
+    BackupSkipped,
+    RetryableBackupError,
+    StepRecorder,
+)
 from orchestrator.pipelines.wake import WakePipeline
 from orchestrator.registry.backup_plan import (
     BackupPlan,
@@ -54,7 +68,7 @@ from orchestrator.registry.backup_plan import (
 )
 from orchestrator.registry.tree import TreeIndex, effective_guest
 
-__all__ = ["BackupError", "BackupPipeline", "StepRecorder", "WakeContext"]
+__all__ = ["BackupError", "BackupPipeline", "BackupSkipped", "StepRecorder", "WakeContext"]
 
 log = get_logger(__name__)
 
@@ -150,6 +164,7 @@ class BackupPipeline:
 
         wake_ctx = WakeContext()
         try:
+            await self._precheck(session, steps, service, policy, gate=gate, wake=wake)
             await self._wake_phase(
                 session,
                 steps,
@@ -189,6 +204,45 @@ class BackupPipeline:
             session.commit()
             return run
 
+        except BackupSkipped as exc:
+            will_retry = exc.retryable and attempt < attempts
+            await self._release_wake(
+                session, steps, wake_ctx, restore=True, policy=policy, defer_to=prepared
+            )
+            steps.record("skipped", "skipped", detail={"reason": str(exc), "why": exc.why})
+            self._finish(session, run, PipelineStatus.SKIPPED, error=str(exc))
+            log.info(
+                "backup.skipped", service=slug, why=exc.why, will_retry=will_retry, reason=str(exc)
+            )
+            audit.record(
+                session,
+                actor=actor,
+                action="backup.skipped",
+                target=f"service:{slug}",
+                correlation_id=correlation_id,
+                details={
+                    "run_id": run.id,
+                    "why": exc.why,
+                    "reason": str(exc),
+                    "attempt": attempt,
+                    "attempts": attempts,
+                    "will_retry": will_retry,
+                },
+            )
+            session.commit()
+            if not will_retry:
+                await announce(
+                    session,
+                    level="service",
+                    key=service.slug,
+                    name=service.name,
+                    event="backup_skipped",
+                    severity="info",
+                    title=f"Backup of {service.name} skipped",
+                    body=str(exc)[:1500],
+                    scope={"slug": service.slug, "group": service.group},
+                )
+            raise
         except (BackupError, AdapterError) as exc:
             # AdapterUnreachable / TaskTimeout are *indeterminate*, not proof of
             # a bad backup — label them so phase 4's gate logic and the operator
@@ -280,6 +334,90 @@ class BackupPipeline:
             body=f"{str(exc)[:1300]}{gave_up if attempt >= attempts and attempts > 1 else ''}",
             scope=scope,
         )
+
+    # -- before anything is woken ---------------------------------------------
+
+    async def _precheck(
+        self,
+        session: Session,
+        steps: StepRecorder,
+        service: Service,
+        policy: BackupPolicy | None,
+        *,
+        gate: bool,
+        wake: bool,
+    ) -> None:
+        """Skip a backup that cannot be taken, before anything is woken for it:
+
+        * nothing could verify it: no enabled, required check (on it or on a sub-service its
+          backup waits for). The gate only lets a backup through once a check said healthy;
+        * it is off and this backup may not wake it: its node is off (or its guest stopped)
+          and the policy wakes nothing, or what would wake it is blocked (no power target, the
+          node's wake on hit off). A prerequisite that cannot be woken is not a skip: that
+          fails the run, since every backup of the policy is stuck behind it.
+        """
+        if gate and not self._has_required_check(session, service):
+            steps.record("checks", "none", detail={"service": service.slug})
+            raise BackupSkipped(
+                f"{service.slug!r} has no required check, so nothing can verify it is healthy "
+                f"before a backup. Add a required probe (or make one required) on its "
+                f"Configuration tab; until then it is skipped and the last backup is kept.",
+                why="no_checks",
+            )
+        if not wake:
+            return
+        plan = resolve_backup_plan(session, service, policy)
+        target = next((s for s in plan.steps if s.is_target), None)
+        if target is not None and target.blocker is None:
+            return  # the backup wakes it if it has to
+        if await self._target_up(session, service):
+            return
+        why = (
+            target.blocker
+            if target is not None
+            else "this policy does not wake its target"
+            + (
+                " (wake mode never)"
+                if plan.wake_mode == "never"
+                else " (Wake before backup is off)"
+            )
+        )
+        node = self._node_of(session, service)
+        steps.record("target", "off", detail={"node": node.name if node else "", "why": why})
+        raise BackupSkipped(
+            f"{service.slug!r} is off and may not be woken for its backup: {why}. Skipped; the "
+            f"last backup is kept.",
+            why="unwakeable",
+        )
+
+    def _has_required_check(self, session: Session, service: Service) -> bool:
+        subs = self._required_subs(session, service)
+        return all(self._health.can_verify(session, s) for s in [service, *subs])
+
+    @staticmethod
+    def _node_of(session: Session, service: Service) -> Node | None:
+        from orchestrator.pipelines.wake import node_of
+
+        return node_of(session, service)
+
+    async def _target_up(self, session: Session, service: Service) -> bool:
+        """Its node online and its guest (if any) running. Never raises: not knowing counts as
+        up, so a blip does not turn into a skip - the gate after it still decides."""
+        node = self._node_of(session, service)
+        if node is None:
+            return False
+        try:
+            cluster = await self._proxmox.cluster_status()
+            if not any(n.name == node.name and n.online for n in cluster.nodes):
+                return False
+            eg = effective_guest(session, service)
+            if eg.kind is GuestKind.NONE or eg.guest_id is None:
+                return True
+            guests = await self._proxmox.list_guests(node.name)
+        except AdapterError:
+            return True
+        guest = next((g for g in guests if g.vmid == eg.guest_id), None)
+        return bool(guest and guest.status == "running")
 
     # -- wake phase ----------------------------------------------------------
 
@@ -513,16 +651,19 @@ class BackupPipeline:
                 f"the guest) so the backup brings it up first."
             )
         if verdict.state is HealthState.FAILED:
-            raise BackupError(
+            raise BackupSkipped(
                 f"integrity gate refused {service.slug!r}: the service is FAILED — "
-                f"{verdict.reason}. The last known-good backup is untouched. "
-                f"This service is a restore candidate."
+                f"{verdict.reason}. Skipped: the last known-good backup is untouched. This "
+                f"service is a restore candidate.",
+                why="unhealthy",
             )
-        raise RetryableBackupError(
-            f"integrity gate refused {service.slug!r}: health could not be "
-            f"established (UNKNOWN) — {verdict.reason}. Failing closed: no backup "
-            f"was taken and the last known-good backup is untouched. This is not "
-            f"evidence of corruption, only that the check could not run."
+        raise BackupSkipped(
+            f"integrity gate refused {service.slug!r}: health could not be established "
+            f"(UNKNOWN) — {verdict.reason}. Skipped (failing closed): the last known-good "
+            f"backup is untouched. This is not evidence of corruption, only that the check "
+            f"could not run.",
+            retryable=True,
+            why="unknown",
         )
 
     # -- sub-services ----------------------------------------------------------
@@ -538,14 +679,52 @@ class BackupPipeline:
             if d.backup_gate is BackupGate.REQUIRED and tree.is_served(d)
         ]
 
+    @staticmethod
+    def _waited_checks(session: Session, service: Service) -> list[tuple[Service, set[str]]]:
+        """Sub-services that are not ``backup_gate: required`` but have checks a backup
+        waits for (``Probe.backup_waits``: a stack's database container), served all the
+        way up, with the names of those checks."""
+        tree = TreeIndex.build(session)
+        out: list[tuple[Service, set[str]]] = []
+        for d in tree.descendants(service):
+            if d.backup_gate is BackupGate.REQUIRED or not tree.is_served(d):
+                continue
+            rows = session.exec(select(Probe).where(Probe.service_id == d.id)).all()
+            names = {p.name for p in rows if p.backup_waits and p.enabled}
+            if names:
+                out.append((d, names))
+        return out
+
+    @staticmethod
+    def _passes(verdict: ServiceVerdict, names: set[str] | None) -> bool:
+        """The whole verdict HEALTHY (``names`` None), or each named check healthy."""
+        if names is None:
+            return verdict.state is HealthState.HEALTHY
+        if verdict.state is HealthState.DOWN:
+            return False
+        got = {r.probe_name: r.state for r in verdict.probe_results}
+        return all(got.get(n) is HealthState.HEALTHY for n in names)
+
+    def _gated_subs(
+        self, session: Session, service: Service
+    ) -> list[tuple[Service, set[str] | None]]:
+        """Everything below ``service`` its backup waits for: whole sub-services (None) and
+        single checks on the others."""
+        whole: list[tuple[Service, set[str] | None]] = [
+            (s, None) for s in self._required_subs(session, service)
+        ]
+        return whole + [(s, n) for s, n in self._waited_checks(session, service)]
+
     async def _start_required_subs(
         self, session: Session, steps: StepRecorder, service: Service, *, start: bool
     ) -> None:
-        """Bring up the required sub-services that have a controller and are not
+        """Bring up the sub-services a backup waits for that have a controller and are not
         running (the guest is up by now), then give them time to turn HEALTHY."""
-        subs = self._required_subs(session, service)
-        if not subs:
+        gated = self._gated_subs(session, service)
+        if not gated:
             return
+        waits = {s.slug: names for s, names in gated}
+        subs = [s for s, _ in gated]
         from orchestrator.controllers import ControllerError, build_controller
 
         deadline = time.monotonic() + self._settings.wake_timeout_s
@@ -588,7 +767,7 @@ class BackupPipeline:
             # Wait for it to be judged HEALTHY (a container needs a moment).
             while True:
                 verdict = await self._health.scan(session, sub)
-                if verdict.state is HealthState.HEALTHY or time.monotonic() >= deadline:
+                if self._passes(verdict, waits[sub.slug]) or time.monotonic() >= deadline:
                     break
                 await asyncio.sleep(self._settings.wake_poll_interval_s)
 
@@ -599,13 +778,17 @@ class BackupPipeline:
         HEALTHY. One that is not refuses the whole backup, like the root's own gate."""
         if not gate:
             return
-        for sub in self._required_subs(session, service):
+        for sub, names in self._gated_subs(session, service):
             started = datetime.now(UTC)
             verdict = await self._health.scan(session, sub)
-            detail = {"verdict": verdict.state.value, "reason": verdict.reason}
-            if verdict.state is HealthState.HEALTHY:
+            detail: dict[str, Any] = {"verdict": verdict.state.value, "reason": verdict.reason}
+            if names is not None:
+                detail["checks"] = sorted(names)
+            if self._passes(verdict, names):
                 steps.record(f"sub_gate:{sub.slug}", "ok", started_at=started, detail=detail)
                 continue
+            if names is not None:
+                await self._refuse_checks(steps, service, sub, names, verdict, started, detail)
             steps.record(
                 f"sub_gate:{sub.slug}",
                 "failed" if verdict.state is HealthState.FAILED else "indeterminate",
@@ -617,14 +800,51 @@ class BackupPipeline:
                 HealthState.DOWN: "is not running",
                 HealthState.UNKNOWN: "could not be verified (UNKNOWN)",
             }.get(verdict.state, verdict.state.value)
-            raise (
-                RetryableBackupError if verdict.state is not HealthState.FAILED else BackupError
-            )(
+            message = (
                 f"integrity gate refused {service.slug!r}: its required sub-service "
                 f"{sub.slug!r} {how} - {verdict.reason}. No backup was taken and the last "
                 f"known-good backup is untouched. (Set {sub.slug!r} to backup_gate: ignore "
                 f"if a backup should not wait for it.)"
             )
+            if verdict.state is HealthState.DOWN:
+                raise RetryableBackupError(message)  # it was started and did not come up
+            raise BackupSkipped(
+                message,
+                retryable=verdict.state is HealthState.UNKNOWN,
+                why="sub_unhealthy",
+            )
+
+    @staticmethod
+    async def _refuse_checks(
+        steps: StepRecorder,
+        service: Service,
+        sub: Service,
+        names: set[str],
+        verdict: ServiceVerdict,
+        started: datetime,
+        detail: dict[str, Any],
+    ) -> None:
+        """A check a backup waits for (``backup_waits``) on ``sub`` did not pass."""
+        got = {r.probe_name: r for r in verdict.probe_results}
+        bad = sorted(
+            n for n in names if (r := got.get(n)) is None or r.state is not HealthState.HEALTHY
+        )
+        failed = any(got[n].state is HealthState.FAILED for n in bad if n in got)
+        steps.record(
+            f"sub_gate:{sub.slug}",
+            "failed" if failed else "indeterminate",
+            started_at=started,
+            detail={**detail, "not_ok": bad},
+        )
+        why = "; ".join(f"{n}: {got[n].message}" if n in got else f"{n}: did not run" for n in bad)
+        message = (
+            f"integrity gate refused {service.slug!r}: {sub.slug!r} has checks its backup waits "
+            f"for that did not pass - {why}. No backup was taken and the last known-good backup "
+            f"is untouched. (Untick 'backup waits' on a check if a backup should not wait for it.)"
+        )
+        if verdict.state is HealthState.DOWN:
+            raise RetryableBackupError(message)
+        raise BackupSkipped(message, retryable=not failed, why="sub_unhealthy")
 
     async def _dump_and_locate(
         self,

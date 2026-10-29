@@ -23,13 +23,16 @@ from fastapi.responses import HTMLResponse
 from sqlmodel import Session, desc, select
 
 from orchestrator.adapters.errors import AdapterError
-from orchestrator.db.models import Node, PipelineRun, Service
+from orchestrator.db.models import PipelineRun, Service
 from orchestrator.domain.enums import PipelineKind, PipelineStatus, WakeTrigger
 from orchestrator.logging_setup import get_logger
 from orchestrator.pipelines.wake import (
     WakeError,
     WakePipeline,
     WakeUnsupportedError,
+    known_on,
+    node_of,
+    traffic_blocker,
     wake_is_unsupported,
 )
 from orchestrator.registry.tree import is_served
@@ -58,16 +61,20 @@ def _render(request: Request, **context: object) -> HTMLResponse:
         return HTMLResponse(_FALLBACK_HTML)
 
 
-def wake_disabled_reason(service: Service, node: Node | None) -> str | None:
+def wake_disabled_reason(session: Session, service: Service) -> str | None:
     """Why a visitor's request must NOT start this service (``None`` = it may).
     The maintenance page is the unattended, visitor-triggered wake, so it obeys
-    the same per-service and per-node "wake on hit" switches as the traffic
-    collector; the manual button, the CLI and ``POST /wake`` do not."""
-    if not service.wake_on_hit_enabled:
+    the same rules as the traffic collector (``pipelines.wake.traffic_blocker``);
+    the manual button, the CLI and ``POST /wake`` do not."""
+    why = traffic_blocker(session, service)
+    if why is None:
+        return None
+    if why == "wake on hit is off for this service":
         return f"Automatic start is turned off for {service.name}."
-    if node is not None and not node.wake_on_hit_enabled:
+    node = node_of(session, service)
+    if node is not None and why.endswith("wake on hit is off for that node"):
         return f"Automatic start is turned off for {node.name}, the host that runs {service.name}."
-    return None
+    return f"{service.name} is not started automatically: {why}."
 
 
 def _active_wake_run(session: Session, service: Service) -> PipelineRun | None:
@@ -128,8 +135,8 @@ async def maintenance_page(
     # relying solely on catching WakeUnsupportedError from get_or_start would
     # only show this page on the first visitor's first hit and fall back to
     # the generic "Could not start" page for everyone after.
-    node = session.get(Node, service.node_id) if service.node_id else None
-    if wake_is_unsupported(node):
+    node = node_of(session, service)
+    if wake_is_unsupported(node) and not (node is not None and known_on(session, node)):
         return _render(
             request,
             service_name=service.name,
@@ -147,7 +154,7 @@ async def maintenance_page(
 
     pipeline = WakePipeline(power=adapters.power, proxmox=adapters.proxmox, settings=settings)
     run: PipelineRun | None = None
-    disabled = wake_disabled_reason(service, node)
+    disabled = wake_disabled_reason(session, service)
     if disabled is not None:
         run = _active_wake_run(session, service)
         if run is None:

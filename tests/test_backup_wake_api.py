@@ -194,8 +194,15 @@ def test_plan_endpoint_policy_override_and_errors(client: TestClient) -> None:
     assert client.get("/api/backup/plan").status_code == 422
 
 
+def _required_probe(client: TestClient, slug: str) -> None:
+    body = {"name": "web", "kind": "http", "required": True, "config": {"url": "http://10.0.0.9/"}}
+    r = client.post(f"/api/registry/services/{slug}/probes", json=body)
+    assert r.status_code in (200, 201), r.text
+
+
 def test_manual_backup_wakes_first_and_fails_clearly_when_it_cannot(client: TestClient) -> None:
     _topology(client)
+    _required_probe(client, "app")
     pol = _policy(client, requires=["stuck"])
     client.put("/api/registry/services/app", json={"backup_policy_id": pol["id"]})
 
@@ -212,13 +219,14 @@ def test_manual_backup_wakes_first_and_fails_clearly_when_it_cannot(client: Test
 
 def test_manual_backup_wake_false_skips_the_wake_and_audits(client: TestClient) -> None:
     _topology(client)
+    _required_probe(client, "app")
     pol = _policy(client, requires=["stuck"])
     client.put("/api/registry/services/app", json={"backup_policy_id": pol["id"]})
 
     r = client.post("/api/backup/app?wake=false")
 
-    # no probes -> the gate refuses (400), but the wake phase was skipped, not failed
-    assert r.status_code == 400 and "cannot be woken" not in r.json()["detail"]
+    # the probe cannot answer here -> the gate refuses, but the wake phase was skipped, not failed
+    assert r.status_code in (400, 409) and "cannot be woken" not in r.json()["detail"]
     run = client.get("/api/runs?slug=app&limit=1").json()[0]
     skipped = next(s for s in run["steps"] if s["name"] == "wake_prerequisites")
     assert skipped["status"] == "skipped"
@@ -286,3 +294,59 @@ def test_service_backups_tab_has_the_plan_panel_and_requirements(client: TestCli
     # ...and the Related tab shows the plan and runs the backup, following its steps.
     assert '"/api/backup/plan?slug="' in js and "What a backup wakes first" in js
     assert '"/api/backup/" + enc(slug) + "?verify=true"' in js and "backupSteps" in js
+
+
+def test_a_service_without_a_required_check_is_skipped_before_anything_is_woken(
+    client: TestClient,
+) -> None:
+    _topology(client)
+    pol = _policy(client, requires=["truenas"])
+    client.put("/api/registry/services/app", json={"backup_policy_id": pol["id"]})
+
+    r = client.post("/api/backup/app")
+
+    assert r.status_code == 409
+    assert (
+        r.json()["detail"].startswith("Backup skipped:")
+        and "no required check" in r.json()["detail"]
+    )
+    run = client.get("/api/runs?slug=app&limit=1").json()[0]
+    assert run["status"] == "skipped"
+    names = [s["name"] for s in run["steps"]]
+    assert "checks" in names and not any(n.startswith("wake_") for n in names)
+    with Session(get_engine()) as s:
+        actions = [e.action for e in s.exec(select(AuditEntry)).all()]
+    assert "backup.skipped" in actions
+    attention = client.get("/api/views/dashboard").json()["attention"]
+    item = next(a for a in attention if a["slug"] == "app")
+    assert item["title"].endswith("backup skipped") and "no required check" in item["text"]
+    row = next(
+        r for r in client.get("/api/views/dashboard").json()["view"]["rows"] if r["slug"] == "app"
+    )
+    assert row["backup"]["sub"] == "skipped"
+
+
+def test_the_plan_says_what_would_skip_and_how_long_the_wake_takes(client: TestClient) -> None:
+    _topology(client)
+    pol = _policy(client, requires=["truenas"])
+    client.put("/api/registry/services/app", json={"backup_policy_id": pol["id"]})
+
+    plan = client.get("/api/backup/plan?slug=app").json()
+
+    assert [s["why"] for s in plan["skips"]] == ["no_checks"]
+    tl = plan["timeline"]
+    assert [s["slug"] for s in tl["steps"]] == ["truenas", "app"]
+    truenas = tl["steps"][0]
+    assert truenas["steps"][0]["what"].startswith("power storage on")
+    assert tl["total_s"] == sum(s["total_s"] for s in tl["steps"]) > 0
+    assert tl["learned"] is False
+    assert [n["node"] for n in tl["nodes"]] == ["storage"]
+
+    _required_probe(client, "app")
+    assert client.get("/api/backup/plan?slug=app").json()["skips"] == []
+
+    # a target on a node nothing can wake is skipped whenever that node is off
+    client.put("/api/registry/services/stuck", json={"backup_policy_id": pol["id"]})
+    _required_probe(client, "stuck")
+    skips = client.get("/api/backup/plan?slug=stuck").json()["skips"]
+    assert [s["why"] for s in skips] == ["unwakeable"] and "no power target" in skips[0]["text"]

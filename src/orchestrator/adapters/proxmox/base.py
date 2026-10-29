@@ -114,6 +114,45 @@ class GuestNetwork:
     error: str | None = None
 
 
+@dataclass(frozen=True)
+class GuestBoot:
+    """How Proxmox starts a guest when its node boots: the guest's *Start at boot* (``onboot``)
+    and *Start/Shutdown order* (``startup: order=N,up=S,down=S``).
+
+    When a node boots, Proxmox starts every ``onboot`` guest, lowest ``order`` first (guests
+    without an order after the ordered ones), and waits ``up_s`` seconds after starting each
+    before the next. A guest without ``onboot`` stays off until something starts it.
+    """
+
+    onboot: bool = False
+    order: int | None = None
+    up_s: int | None = None
+    down_s: int | None = None
+
+    @property
+    def startup(self) -> str:
+        """The ``startup`` property as Proxmox writes it ("" when nothing is set)."""
+        parts = [
+            f"{key}={value}"
+            for key, value in (("order", self.order), ("up", self.up_s), ("down", self.down_s))
+            if value is not None
+        ]
+        return ",".join(parts)
+
+
+def parse_startup(value: str | None) -> tuple[int | None, int | None, int | None]:
+    """``"order=2,up=30"`` -> ``(2, 30, None)``. Unknown keys and bad numbers are ignored."""
+    out: dict[str, int] = {}
+    for part in str(value or "").split(","):
+        key, _, raw = part.strip().partition("=")
+        if key in ("order", "up", "down"):
+            try:
+                out[key] = int(raw)
+            except ValueError:
+                continue
+    return out.get("order"), out.get("up"), out.get("down")
+
+
 class ProxmoxAdapter(ABC):
     @abstractmethod
     async def start(self) -> None: ...
@@ -147,6 +186,20 @@ class ProxmoxAdapter(ABC):
         """NIC MACs and (when Proxmox knows them) IPs of one guest. Never raises
         for a permission problem or a missing guest agent — those come back in
         :attr:`GuestNetwork.error` / as an empty ``ips`` list."""
+
+    async def guest_boot(self, node: str, vmid: int, kind: GuestKind) -> GuestBoot:
+        """The guest's boot settings, read from its config. Needs ``node`` online (Proxmox
+        answers a guest's config from its node)."""
+        raise AdapterError("this adapter cannot read guest boot settings")
+
+    async def set_guest_boot(self, node: str, vmid: int, kind: GuestKind, boot: GuestBoot) -> None:
+        """Write the guest's *Start at boot* and *Start/Shutdown order*. Needs ``node`` online."""
+        raise AdapterError("this adapter cannot change guest boot settings")
+
+    async def node_onboot_delay(self, node: str) -> int | None:
+        """The node's *Start on boot delay* (``startall-onboot-delay``): seconds Proxmox waits
+        after the node boots before it starts the ``onboot`` guests. None when not set."""
+        raise AdapterError("this adapter cannot read node boot settings")
 
     @abstractmethod
     async def start_guest(self, node: str, vmid: int, kind: GuestKind) -> TaskHandle: ...

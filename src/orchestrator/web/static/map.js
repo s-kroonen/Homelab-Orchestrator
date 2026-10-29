@@ -86,13 +86,29 @@
         el("span", { class: "mono" }, h.hostname), h.served ? null : el("span", { class: "faint" }, " · off"))));
   }
 
+  // Sub-services fold into their service's box; ▸ opens them (remembered in this browser).
+  const openSubs = new Set((() => { try { return JSON.parse(localStorage.getItem("map.subs") || "[]"); } catch (_e) { return []; } })());
+  const subsBelow = (r) => (r.subs || []).flatMap((x) => [row(x), ...subsBelow(row(x))]);
+  const brief = (x) => ({ slug: x.slug, name: x.name, cls: x.state.cls, label: x.state.label, kind: x.kind, containers: x.containers, stack: x.stack, depth: x.depth });
+  function toggleSubs(slug) {
+    openSubs.has(slug) ? openSubs.delete(slug) : openSubs.add(slug);
+    try { localStorage.setItem("map.subs", JSON.stringify([...openSubs])); } catch (_e) { /* per browser only */ }
+    draw();
+  }
   function svcRow(t) {
     const r = row(t.svc.slug);
-    const kids = t.svc.children.length;
-    return el("button", { type: "button", class: "map-svc", "data-id": "svc:" + t.svc.slug, onclick: () => select("svc:" + t.svc.slug) },
+    const box = el("button", { type: "button", class: "map-svc", "data-id": "svc:" + t.svc.slug, onclick: () => select("svc:" + t.svc.slug) },
       el("span", { class: "vm mono" }, t.guest ? guestLabel(t.guest) : "—"),
-      el("span", { class: "nm" }, r.name, kids ? el("span", { class: "kids", title: kids + " sub-service" + (kids === 1 ? "" : "s") }, " +" + kids) : null),
+      el("span", { class: "nm" }, r.name),
       pill(r.state.cls, r.state.label, r.state.why));
+    const subs = subsBelow(r);
+    if (!subs.length) return box;
+    const failing = (r.sub_failing || []).length;
+    const isOpen = openSubs.has(t.svc.slug);
+    return el("div", { class: "map-svc-wrap" }, box,
+      el("button", { type: "button", class: "map-subs-toggle", "aria-expanded": String(isOpen), onclick: () => toggleSubs(t.svc.slug) },
+        (isOpen ? "▾ " : "▸ ") + subs.length + " sub-service" + (subs.length === 1 ? "" : "s") + (failing ? " · " + failing + " failing" : "")),
+      isOpen ? O.subList(subs.map(brief), { compact: true }) : null);
   }
 
   function nodeCard(n, list) {

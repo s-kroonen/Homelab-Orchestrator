@@ -1,6 +1,7 @@
-/* Containers (templates/portainer.html), to the Containers wireframe: the stacks in Portainer as a
- * table (filter, chips, environment, row menu, Start / Stop / Restart for a selection); click a
- * stack to see its containers inside (Logs, Restart, ⋯), + New stack and the logs in drawers.
+/* Containers (templates/portainer.html), to the Containers wireframe: every stack in Portainer as a
+ * table (filter, chips, environment, row menu, Start / Stop / Restart for a selection). A row opens
+ * the stack page (stack.js), where its containers, logs, environment and settings are managed;
+ * containers outside any stack are one "(no stack)" row per environment. + New stack in a drawer.
  * Everything is read live from Portainer through /api/portainer/*; nothing from Portainer is ever
  * put in as HTML. */
 (function () {
@@ -9,7 +10,7 @@
   const toast = (m, k) => window.toast(m, k);
   const enc = encodeURIComponent;
   const params = new URLSearchParams(location.search);
-  const S = { instance: params.get("instance") || "", env: params.get("env") || "", open: new Set(), detail: new Map(), stats: new Map(), instances: [] };
+  const S = { instance: params.get("instance") || "", env: params.get("env") || "", instances: [] };
   const keyOf = (s) => s.endpoint_id + "/" + s.name;
   const u = (path) => (S.instance ? path + (path.includes("?") ? "&" : "?") + "instance=" + enc(S.instance) : path);
   const stackUrl = (s, rest) => u("/api/stacks/" + s.endpoint_id + "/" + enc(s.name) + (rest || ""));
@@ -25,7 +26,8 @@
   const gitText = (g) => (g ? "git " + ((g.reference || "").replace("refs/heads/", "") || "?") + (g.hash ? " @ " + g.hash.slice(0, 7) : "") : "");
   const sourceText = (s) => (s.git ? gitText(s.git) : !s.managed ? "compose project" : s.kind || "");
   const linkedTo = (slugs) => slugs.map((x, i) => [i ? ", " : "", el("a", { href: "/services/" + enc(x) }, x)]);
-  const cpill = (st) => el("span", { class: "pill " + (st === "running" ? "ok" : st === "restarting" || st === "paused" ? "warn" : st === "dead" ? "fail" : "off") }, st);
+  const pageOf = (s) => "/portainer/" + s.endpoint_id + "/" + (s.loose ? "-" : enc(s.name)) + (S.instance ? "?instance=" + enc(S.instance) : "");
+  const dots = (s) => el("span", { class: "dots", "aria-hidden": "true" }, (s.container_states || []).map((c) => el("i", { class: c.state === "running" ? (c.health === "unhealthy" ? "warn" : "ok") : c.state === "exited" ? "" : "fail", title: c.name + ": " + c.state })));
 
   // --- actions -----------------------------------------------------------------------------------
   async function stackAction(rows, verb) {
@@ -37,17 +39,15 @@
       catch (e) { toast(s.name + ": " + e.message, "error"); }
     }
     t.clearSelection();
-    setTimeout(() => { for (const s of rows) S.detail.delete(keyOf(s)); view.refresh(); }, 800);
+    setTimeout(() => view.refresh(), 800);
   }
-  async function containerAction(s, c, verb) {
-    if (verb !== "start" && !await confirm({ title: (verb === "stop" ? "Stop " : "Restart ") + c.name + "?", action: verb === "stop" ? "Stop" : "Restart", danger: verb === "stop" })) return;
-    try { const r = await api.post(u("/api/containers/" + s.endpoint_id + "/" + enc(c.name) + "/" + verb), undefined, { suppressToast: true }); toast(r.message || c.name + ": " + verb + " sent", "ok"); }
-    catch (e) { toast(e.message, "error"); }
-    setTimeout(() => { S.detail.delete(keyOf(s)); loadDetail(s); view.refresh(); }, 800);
+  async function redeploy(s) {
+    if (!await confirm({ title: "Redeploy " + s.name + "?", body: "Portainer pulls " + gitText(s.git) + " and its images again and recreates the containers. A linked sub-service's deploy (with its checks) is on the stack page.", action: "Redeploy", danger: false })) return;
+    try { const r = await api.post(stackUrl(s, "/redeploy"), undefined, { suppressToast: true }); toast(r.message, "ok"); } catch (e) { toast(e.message, "error"); }
+    setTimeout(() => view.refresh(), 1200);
   }
   async function deleteStack(s) {
-    const d = S.detail.get(keyOf(s)) || s;
-    const linked = d.linked_services || [];
+    const linked = s.linked_services || [];
     const down = el("input", { type: "checkbox" }); const keep = el("input", { type: "checkbox" });
     const ok = await confirm({
       title: "Delete stack " + s.name + "?",
@@ -67,102 +67,7 @@
       if (r.warnings.length) bits.push(r.warnings.join(" "));
       toast(bits.join(" "), "ok");
     } catch (e) { toast(e.message, "error"); }
-    S.open.delete(keyOf(s)); view.refresh();
-  }
-
-  // --- one stack, expanded -----------------------------------------------------------------------
-  async function loadDetail(s) {
-    const k = keyOf(s);
-    try {
-      const d = await api.get(u("/api/portainer/endpoints/" + s.endpoint_id + "/stacks/" + enc(s.name)), { suppressToast: true });
-      S.detail.set(k, d);
-      t.render();
-      await Promise.all(d.containers.filter((c) => c.state === "running").map((c) =>
-        api.get(u("/api/portainer/endpoints/" + s.endpoint_id + "/containers/" + enc(c.name) + "/stats"), { suppressToast: true })
-          .then((st) => S.stats.set(s.endpoint_id + "/" + c.name, st), () => {})));
-      t.render();
-    } catch (e) { S.detail.set(k, { error: e.message }); t.render(); }
-  }
-  function toggle(s) {
-    const k = keyOf(s);
-    if (S.open.has(k)) S.open.delete(k); else { S.open.add(k); if (!S.detail.has(k)) loadDetail(s); }
-    t.render();
-  }
-  function detailOf(s) {
-    const k = keyOf(s);
-    if (!S.open.has(k)) return null;
-    const d = S.detail.get(k);
-    if (!d) return el("div", { class: "ct-detail faint" }, "Loading its containers…");
-    if (d.error) return el("div", { class: "ct-detail" }, el("span", { class: "pill fail" }, "error"), " " + d.error);
-    const meta = [d.type + " stack", d.managed ? "" : "not created through Portainer", d.auto_update ? "auto-update on" : "", d.has_webhook ? "has a deploy webhook (id hidden)" : "",
-      d.git ? "from " + d.git.url + (d.git.has_credentials ? " (uses credentials)" : "") : "", d.updated_by ? "last updated by " + d.updated_by : ""].filter(Boolean).join(" · ");
-    return el("div", { class: "ct-detail" },
-      el("div", { class: "ct-meta" }, meta, d.env_names && d.env_names.length ? el("div", {}, "Environment variables (names only; values are never read out): " + d.env_names.join(", ")) : null),
-      d.containers.length ? d.containers.map((c) => {
-        const st = S.stats.get(s.endpoint_id + "/" + c.name);
-        const ports = c.ports.filter((p) => p.public).map((p) => (p.ip && p.ip !== "0.0.0.0" ? p.ip + ":" : "") + p.public + "→" + p.private + (p.proto !== "tcp" ? "/" + p.proto : "")).join(", ");
-        return el("div", { class: "ct-row" },
-          el("span", { class: "mono", title: c.name }, c.name, c.service && c.service !== c.name ? el("span", { class: "faint" }, " · " + c.service) : null),
-          el("span", { class: "mono faint", title: c.image }, c.image),
-          el("span", {}, cpill(c.state), c.health ? [" ", el("span", { class: "pill " + (c.health === "healthy" ? "ok" : c.health === "unhealthy" ? "fail" : "off") }, c.health)] : null),
-          el("span", { class: "mono", style: { fontSize: "12px" } }, ports || "—"),
-          el("span", { class: "faint" }, st ? Math.round(st.cpu_percent) + "% · " + fmt.bytes(st.mem_bytes) : c.status_text || ""),
-          el("span", { class: "acts" },
-            el("button", { type: "button", class: "ghost small", onclick: () => logs(s, c) }, "Logs"),
-            el("button", { type: "button", class: "ghost small", onclick: () => containerAction(s, c, "restart") }, "Restart"),
-            window.UI.menuButton(() => [
-              { label: "Start", onClick: () => containerAction(s, c, "start") },
-              { label: "Stop", onClick: () => containerAction(s, c, "stop") },
-              { label: "Restart", onClick: () => containerAction(s, c, "restart") },
-              c.open_url ? { label: "Open in Portainer ↗", href: c.open_url } : null,
-              c.linked_services && c.linked_services.length ? { label: "Open " + c.linked_services[0], href: "/services/" + enc(c.linked_services[0]) } : null,
-            ].filter(Boolean), "Actions for " + c.name)));
-      }) : el("p", { class: "faint" }, "No containers."),
-      d.host_commands && d.host_commands.length ? el("details", { class: "ct-meta" }, el("summary", {}, "The same by hand, on the Docker host"), el("pre", { class: "sys-pre" }, d.host_commands.join("\n"))) : null);
-  }
-
-  // --- logs ---------------------------------------------------------------------------------------
-  function logs(s, c) {
-    let lines = []; let timer = 0;
-    const out = el("pre", { class: "log", "aria-live": "off" });
-    const tail = el("select", { "aria-label": "Lines" }, [100, 200, 500, 1000, 2000].map((n) => el("option", { value: String(n), selected: n === 200 }, n + " lines")));
-    const follow = el("input", { type: "checkbox" }); const ts = el("input", { type: "checkbox", checked: true }); const wrap = el("input", { type: "checkbox" });
-    const filter = el("input", { type: "search", placeholder: "filter lines", "aria-label": "Filter lines" });
-    const count = el("span", { class: "faint", style: { fontSize: "12.5px" } });
-    function draw() {
-      const f = filter.value.toLowerCase();
-      const stick = out.scrollTop + out.clientHeight >= out.scrollHeight - 24;
-      fill(out, lines.filter((l) => !f || l.text.toLowerCase().includes(f)).map((l) =>
-        el("div", { class: l.stream === "stderr" ? "err" : null }, l.ts && ts.checked ? el("span", { class: "ts" }, fmt.time(l.ts) + "  ") : null, l.text)));
-      if (stick) out.scrollTop = out.scrollHeight;
-      out.classList.toggle("wrap", wrap.checked);
-    }
-    async function load() {
-      try {
-        const r = await api.get(u("/api/portainer/endpoints/" + s.endpoint_id + "/containers/" + enc(c.name) + "/logs?tail=" + tail.value + "&timestamps=true"), { suppressToast: true });
-        lines = r.lines; count.textContent = r.count + " lines"; draw();
-      } catch (e) { count.textContent = e.message; }
-    }
-    function download() {
-      const text = lines.map((l) => (l.ts ? l.ts + " " : "") + l.text).join("\n") + "\n";
-      const a = el("a", { href: URL.createObjectURL(new Blob([text], { type: "text/plain" })), download: c.name + ".log" });
-      a.click(); URL.revokeObjectURL(a.href);
-    }
-    follow.addEventListener("change", () => { clearInterval(timer); if (follow.checked) timer = setInterval(load, 3000); });
-    tail.addEventListener("change", load);
-    for (const x of [ts, wrap, filter]) x.addEventListener("input", draw);
-    drawer({
-      title: "Logs of " + c.name, sub: s.name + " · " + c.image, wide: true, saveLabel: "Done",
-      async onSave() { /* nothing to save */ },
-      onClose: () => clearInterval(timer),
-      fields: [{ type: "custom", render: () => el("div", {},
-        el("div", { class: "log-tools" }, tail, el("label", { class: "inline" }, follow, " follow"), el("label", { class: "inline" }, ts, " timestamps"),
-          el("label", { class: "inline" }, wrap, " wrap"), filter,
-          el("button", { type: "button", class: "secondary small", onclick: load }, "Reload"),
-          el("button", { type: "button", class: "secondary small", onclick: download }, "Download"), count),
-        out) }],
-    });
-    load();
+    view.refresh();
   }
 
   // --- new stack ------------------------------------------------------------------------------------
@@ -242,43 +147,46 @@
   const t = table($("#stacks"), {
     rows: [], key: keyOf, name: (s) => s.name, noun: ["stack", "stacks"],
     placeholder: "Filter by stack, container, image…",
-    search: (s) => [s.name, sourceText(s), (s.linked_services || []).join(" "), ((S.detail.get(keyOf(s)) || {}).containers || []).map((c) => c.name + " " + c.image).join(" ")].join(" "),
+    search: (s) => [s.name, sourceText(s), (s.linked_services || []).join(" "), (s.container_states || []).map((c) => c.name).join(" ")].join(" "),
     sort: { key: "name", dir: 1 },
     toolbarExtra: el("span", { style: { display: "inline-flex", gap: "8px" } }, instSel, envSel),
     age,
     columns: [
-      { key: "name", label: "Stack", sort: (s) => s.name.toLowerCase(),
-        render: (s) => [el("button", { type: "button", class: "ct-toggle", "aria-expanded": String(S.open.has(keyOf(s))), onclick: () => toggle(s) },
-          el("span", { class: "tw", "aria-hidden": "true" }, S.open.has(keyOf(s)) ? "▾" : "▸"), s.name),
-          el("span", { class: "sub" }, (S.envs && S.envs[s.endpoint_id]) || "environment " + s.endpoint_id, !s.managed ? [" · ", el("span", { class: "tag" }, "not in Portainer's stack list")] : null)] },
+      { key: "name", label: "Stack", sort: (s) => (s.loose ? "~" : s.name.toLowerCase()),
+        render: (s) => [el("a", { href: pageOf(s), style: { fontWeight: "600", color: "var(--text)" } }, s.name),
+          el("span", { class: "sub" }, (S.envs && S.envs[s.endpoint_id]) || "environment " + s.endpoint_id, s.loose ? [" · ", el("span", { class: "tag" }, "loose containers")] : !s.managed ? [" · ", el("span", { class: "tag" }, "not in Portainer's stack list")] : null)] },
       { key: "state", label: "State", sort: (s) => stateOf(s).label, render: (s) => { const x = stateOf(s); return el("span", { class: "pill " + x.cls }, x.label); } },
-      { key: "containers", label: "Containers", sort: (s) => s.containers_running || 0, render: (s) => (s.containers_running || 0) + " / " + (s.containers_total || 0) + " running" },
+      { key: "containers", label: "Containers", sort: (s) => s.containers_running || 0, render: (s) => [dots(s), el("span", { class: "faint" }, (s.containers_running || 0) + " / " + (s.containers_total || 0))] },
       { key: "source", label: "Source", phone: false, render: (s) => el("span", { class: "mono", style: { fontSize: "12px" }, title: s.git ? s.git.url : null }, sourceText(s)) },
       { key: "updated", label: "Updated", sort: (s) => s.updated_at || "", render: (s) => s.updated_at ? el("span", { class: "faint", title: fmt.time(s.updated_at) }, fmt.ago(s.updated_at)) : "—" },
-      { key: "service", label: "Service", render: (s) => (s.linked_services || []).length ? linkedTo(s.linked_services) : [el("span", { class: "faint" }, "not linked"), " · ", el("a", { href: "/sources#portainer" }, "Link…")] },
+      { key: "service", label: "Sub-service", render: (s) => (s.linked_services || []).length ? linkedTo(s.linked_services) : s.loose ? el("span", { class: "faint" }, "—") : [el("span", { class: "faint" }, "not linked"), " · ", el("a", { href: "/sources#portainer" }, "Adopt…")] },
+      { key: "open", label: "", phone: false, render: (s) => el("a", { class: "btn ghost small", href: pageOf(s) }, "Open →") },
     ],
     chips: [
       { key: "running", label: "Running", test: (s) => stateOf(s).label === "running" },
       { key: "stopped", label: "Stopped", test: (s) => stateOf(s).label === "stopped" },
       { key: "partly", label: "Partly running", test: (s) => stateOf(s).label === "partly running" },
-      { key: "unlinked", label: "Not linked", test: (s) => !(s.linked_services || []).length },
+      { key: "unlinked", label: "Not linked", test: (s) => !s.loose && !(s.linked_services || []).length },
     ],
-    detail: detailOf,
-    menu: (s) => [
-      { label: S.open.has(keyOf(s)) ? "Hide its containers" : "Show its containers", onClick: () => toggle(s) },
+    menu: (s) => s.loose ? [{ label: "Open", href: pageOf(s) }] : [
+      { label: "Open", href: pageOf(s) },
       { label: "Start", onClick: () => stackAction([s], "start") },
       { label: "Stop", onClick: () => stackAction([s], "stop") },
       { label: "Restart", onClick: () => stackAction([s], "restart") },
-      (s.linked_services || []).length ? { label: "Open " + s.linked_services[0], href: "/services/" + enc(s.linked_services[0]) } : { label: "Link to a service…", href: "/sources#portainer" },
+      s.git ? { label: "Redeploy", onClick: () => redeploy(s) } : null,
+      (s.linked_services || []).length ? { label: "Open " + s.linked_services[0], href: "/services/" + enc(s.linked_services[0]) } : { label: "Adopt as a sub-service…", href: "/sources#portainer" },
       s.open_url ? { label: "Open in Portainer ↗", href: s.open_url } : null,
       "-",
       { label: "Delete…", danger: true, onClick: () => deleteStack(s) },
     ].filter(Boolean),
-    bulk: (rows) => [
-      { label: "Start", onClick: () => stackAction(rows, "start") },
-      { label: "Stop", onClick: () => stackAction(rows, "stop") },
-      { label: "Restart", onClick: () => stackAction(rows, "restart") },
-    ],
+    bulk: (rows) => {
+      const real = rows.filter((r) => !r.loose);
+      return [
+        { label: "Start", onClick: () => stackAction(real, "start") },
+        { label: "Stop", onClick: () => stackAction(real, "stop") },
+        { label: "Restart", onClick: () => stackAction(real, "restart") },
+      ];
+    },
     empty: { title: "No stacks", text: "Portainer has no stacks here yet.", action: el("button", { type: "button", class: "small", onclick: newStack }, "+ New stack") },
   });
 
@@ -302,19 +210,19 @@
     const down = Object.values(r.errors || {});
     if (down.length) banners.push(el("div", { class: "banner sys-banner" }, el("span", { class: "pill warn" }, "hidden"), " ",
       down.length === 1 ? "One environment is not answering, so its stacks are not shown: " : down.length + " environments are not answering, so their stacks are not shown: ", down.join("; ")));
-    return { stacks: r.stacks, banners };
+    const loose = (r.loose || []).map((x) => Object.assign({ name: "(no stack)", loose: true, managed: false, status: "active", git: null }, x));
+    return { stacks: r.stacks.concat(loose), banners };
   }
   const view = region(el("div"), { // the table is the visible part; the section only loads
     load,
     render: (d) => {
       fill($("#banners"), d.banners);
       t.setRows(d.stacks);
-      for (const s of d.stacks) if (S.open.has(keyOf(s)) && !S.detail.has(keyOf(s))) loadDetail(s);
     },
     every: 60000, poll: true, age,
   });
   envSel.addEventListener("change", () => { S.env = envSel.value; writeUrl(); view.refresh(); });
-  instSel.addEventListener("change", () => { S.instance = instSel.value; S.open.clear(); S.detail.clear(); writeUrl(); view.refresh(); });
+  instSel.addEventListener("change", () => { S.instance = instSel.value; writeUrl(); view.refresh(); });
   function writeUrl() {
     const p = new URLSearchParams(location.search);
     S.instance ? p.set("instance", S.instance) : p.delete("instance");

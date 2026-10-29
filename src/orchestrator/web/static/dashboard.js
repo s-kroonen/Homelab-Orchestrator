@@ -31,6 +31,8 @@
   }
   function action(it) {
     if (it.kind === "failed") return el("button", { type: "button", class: "secondary small", onclick: () => check(it.slug) }, "Check now");
+    if (it.kind === "degraded") return it.stack ? el("a", { class: "btn secondary small", href: it.stack.href }, "Manage stack")
+      : el("button", { type: "button", class: "secondary small", onclick: () => check(it.sub || it.slug) }, "Check now");
     if (it.kind === "backup") return el("a", { class: "btn secondary small", href: "/activity?kind=backup&service=" + enc(it.slug) }, "Open run");
     if (it.kind === "changed") return el("button", { type: "button", class: "secondary small", onclick: () => putBack(it.host) }, "Put it back");
     return null;
@@ -102,12 +104,17 @@
   }
 
   // --- glance ------------------------------------------------------------------------------------------
+  const openGlance = new Set();
   function drawGlance() {
     const box = clear($("#glance"));
     if (!V.glance.length) { box.append(el("div", { class: "card dt-empty" }, el("strong", {}, "No services yet"), el("div", {}, "Import your Proxmox guests or add a service."), el("div", { style: { marginTop: "10px" } }, el("button", { type: "button", class: "small", onclick: newService }, "New service")))); return; }
     for (const g of V.glance) {
       box.append(el("div", { class: "card", style: { margin: 0 } }, el("div", { class: "faint", style: { fontSize: "12.5px", marginBottom: "8px" } }, g.name),
-        el("div", { class: "tags", style: { gap: "6px" } }, g.services.map((s) => el("a", { class: "pill " + s.cls, href: "/services/" + enc(s.slug), title: s.name + ": " + s.label, style: { textDecoration: "none" } }, s.slug)))));
+        el("div", { class: "tags", style: { gap: "6px" } }, g.services.map((s) => [el("a", { class: "pill " + s.cls, href: "/services/" + enc(s.slug), title: s.name + ": " + s.label, style: { textDecoration: "none" } }, s.slug),
+          s.subs.length ? el("button", { type: "button", class: "sub-toggle", style: { fontSize: "12.5px", color: "var(--muted)" }, "aria-expanded": String(openGlance.has(s.slug)), "aria-label": "Sub-services of " + s.name,
+            onclick: () => { openGlance.has(s.slug) ? openGlance.delete(s.slug) : openGlance.add(s.slug); drawGlance(); } }, (openGlance.has(s.slug) ? "▾ " : "▸ ") + s.subs.length) : null])),
+        g.services.filter((s) => s.subs.length && openGlance.has(s.slug)).map((s) => el("div", { style: { marginTop: "8px" } },
+          el("div", { class: "faint", style: { fontSize: "12px" } }, s.slug), O.subList(s.subs, { compact: true })))));
     }
   }
 

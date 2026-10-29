@@ -28,7 +28,7 @@ from starlette.middleware.sessions import SessionMiddleware
 
 from orchestrator import __version__
 from orchestrator.adapters.factory import build_adapters
-from orchestrator.config import get_settings
+from orchestrator.config import Settings, get_settings
 from orchestrator.connections.watch import ConnectionsWatcher
 from orchestrator.db.session import build_engine, session_scope
 from orchestrator.events import install_db_hooks
@@ -118,6 +118,27 @@ def _maybe_run_migrations() -> None:
     command.upgrade(cfg, "head")
 
 
+def _fold_stacks(settings: Settings) -> None:
+    """A stack is one sub-service: fold the per-container children older adoptions made
+    into their stack (``registry/stack_fold.py``), and save services.yaml if anything moved."""
+    from orchestrator.registry.autosave import keep_previous
+    from orchestrator.registry.loader import save_registry_to_yaml
+    from orchestrator.registry.stack_fold import fold_all
+
+    try:
+        with session_scope() as session:
+            done = fold_all(session)
+            if done and settings.registry_autosave:
+                keep_previous(settings)
+                save_registry_to_yaml(session, settings.services_yaml_path)
+    except Exception as exc:
+        get_logger(__name__).error(
+            "stack.fold_failed",
+            error=str(exc),
+            impact="Stacks keep a sub-service per container until the next start.",
+        )
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     configure_logging()
@@ -157,6 +178,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     try:
         with session_scope() as session:
             reconcile_yaml_into_db(session, settings.services_yaml_path)
+        _fold_stacks(settings)
     except RegistryPathError as exc:
         log.error(
             "registry.path.invalid",

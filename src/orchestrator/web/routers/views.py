@@ -24,11 +24,13 @@ from orchestrator.db.models import (
     BackupRecord,
     Node,
     PipelineRun,
+    Probe,
     ProxyHost,
     Service,
     ServiceState,
 )
 from orchestrator.domain.enums import BackupMode, GuestKind, PipelineKind, PipelineStatus
+from orchestrator.pipelines.wake import traffic_blocker
 from orchestrator.registry.probe_specs import PROBE_SPECS
 from orchestrator.registry.topology import build_map
 from orchestrator.registry.tree import TreeIndex
@@ -159,10 +161,11 @@ def service_rows(session: Session) -> list[dict[str, Any]]:
             backup = {"main": "with parent", "sub": "", "cls": "off"}
         elif svc.backup_policy_id is None:
             backup = {"main": "no policy", "sub": "", "cls": "warn"}
-        elif backup_failed and run is not None:
+        elif run is not None and (backup_failed or run.status is PipelineStatus.SKIPPED):
             backup = {
                 "main": policies.get(svc.backup_policy_id, "?"),
-                "sub": "failed",
+                "sub": "failed" if backup_failed else "skipped",
+                "why": run.error or "",
                 "at": (run.finished_at or run.started_at).isoformat(),
                 "cls": "warn",
             }
@@ -179,19 +182,19 @@ def service_rows(session: Session) -> list[dict[str, Any]]:
                 "sub": "never backed up",
                 "cls": "warn",
             }
-        node_wakes = node.wake_on_hit_enabled if node is not None else False
         wake_why = ""
+        blocked = traffic_blocker(session, svc, node=node, served=tree.is_served(svc))
         if parent is not None and not svc.wake_on_hit_enabled:
             wake = "via parent"
-        elif svc.wake_on_hit_enabled and node_wakes:
-            wake = "yes (button)" if svc.wake_trigger.value == "button" else "yes"
-        else:
+        elif blocked is not None:
             wake = "no"
-            wake_why = (
-                "off for this service"
-                if not svc.wake_on_hit_enabled
-                else f"off for its node {node.name if node else '?'}"
-            )
+            wake_why = blocked
+        elif node is not None and not node.always_on and not node.wake_on_hit_enabled:
+            # On now, so a hit starts the guest; once the node is off, traffic will not wake it.
+            wake = "while on"
+            wake_why = f"its node {node.name} has wake on hit off: traffic does not turn it on"
+        else:
+            wake = "yes (button)" if svc.wake_trigger.value == "button" else "yes"
         rows.append(
             {
                 "id": svc.id,
@@ -221,9 +224,87 @@ def service_rows(session: Session) -> list[dict[str, Any]]:
                 "wake_on_hit_why": wake_why,
                 "wake_on_hit_enabled": svc.wake_on_hit_enabled,
                 "has_controller": bool(svc.controller) or svc.guest_kind is not GuestKind.NONE,
+                "kind": _sub_kind(svc),
+                "stack": _stack_ref(svc),
             }
         )
+    _roll_up(session, rows)
     return rows
+
+
+def _sub_kind(svc: Service) -> str:
+    """What a sub-service is, in a word: a Portainer ``stack`` or ``container``, the
+    controller's type, or ""."""
+    cfg = svc.controller or {}
+    if cfg.get("type") == "portainer":
+        return "stack" if cfg.get("stack") else "container"
+    return str(cfg.get("type") or "")
+
+
+def _stack_ref(svc: Service) -> dict[str, Any] | None:
+    """Where the stack page of a stack sub-service is: {instance, endpoint, name, href}."""
+    from orchestrator.registry.stack_fold import stack_link
+
+    link = stack_link(svc)
+    if link is None:
+        return None
+    return stack_ref(str(link.get("instance") or ""), int(link["endpoint"]), str(link["stack"]))
+
+
+def stack_ref(instance: str, endpoint: int, name: str) -> dict[str, Any]:
+    from urllib.parse import quote
+
+    path = f"/portainer/{endpoint}/{quote(name, safe='')}"
+    return {
+        "instance": instance,
+        "endpoint": endpoint,
+        "name": name,
+        "href": path + (f"?instance={quote(instance, safe='')}" if instance else ""),
+    }
+
+
+#: A sub-service in one of these states makes its (healthy) parent "degraded".
+_FAILING = {"failed", "stopped"}
+
+
+def _roll_up(session: Session, rows: list[dict[str, Any]]) -> None:
+    """A parent's state takes in its sub-services: healthy itself with a failed or stopped
+    sub-service below it is "degraded". Each row also gets ``subs`` (its direct children's
+    slugs) and ``sub_failing`` (the failing ones anywhere below it), and a stack its number of
+    containers (its ``container:`` checks)."""
+    from orchestrator.registry.stack_fold import PREFIX
+
+    by_slug = {r["slug"]: r for r in rows}
+    containers: dict[int, int] = {}
+    for p in session.exec(select(Probe)).all():
+        if p.name.startswith(PREFIX):
+            containers[p.service_id] = containers.get(p.service_id, 0) + 1
+    for r in rows:
+        r["subs"] = []
+        r["sub_failing"] = []
+        r["containers"] = containers.get(r["id"], 0)
+    for r in rows:
+        if r["parent"] in by_slug:
+            by_slug[r["parent"]]["subs"].append(r["slug"])
+    for r in rows:
+        if not r["enabled"] or r["state"]["label"] not in _FAILING:
+            continue
+        up = by_slug.get(r["parent"] or "")
+        while up is not None:
+            up["sub_failing"].append(r["name"])
+            up = by_slug.get(up["parent"] or "")
+    for r in rows:
+        if r["sub_failing"] and r["state"]["label"] in ("healthy", "backup failed"):
+            r["own_state"] = r["state"]
+            names = r["sub_failing"]
+            r["state"] = {
+                "cls": "warn",
+                "label": "degraded",
+                "why": f"healthy itself; {', '.join(names[:3])}"
+                + (f" and {len(names) - 3} more" if len(names) > 3 else "")
+                + (" is" if len(names) == 1 else " are")
+                + " failing",
+            }
 
 
 def services_view(session: Session) -> dict[str, Any]:
@@ -260,6 +341,22 @@ async def services_page(request: Request, session: SessionDep) -> HTMLResponse |
 # --- nodes ------------------------------------------------------------------------------------
 
 
+def _node_boot(session: Session, node: Node) -> dict[str, Any]:
+    """What Proxmox does when the node boots, from the kept copy of its settings."""
+    from orchestrator.db.models import NodeState
+    from orchestrator.registry import boot as boot_mod
+
+    state = session.get(NodeState, node.id) if node.id is not None else None
+    took, learned = boot_mod.node_boot_s(session, node)
+    return {
+        "delay_s": state.onboot_delay_s if state else None,
+        "read_at": state.boot_read_at.isoformat() if state and state.boot_read_at else None,
+        "sequence": [x.as_dict() for x in boot_mod.sequence(session, node)],
+        "boot_s": took,
+        "boot_learned": learned,
+    }
+
+
 def nodes_view(session: Session) -> dict[str, Any]:
     services = list(session.exec(select(Service)).all())
     tree = TreeIndex(services)
@@ -277,6 +374,7 @@ def nodes_view(session: Session) -> dict[str, Any]:
                 "wake_on_hit_enabled": n.wake_on_hit_enabled,
                 "services": len(mine),
                 "service_slugs": sorted(s.slug for s in mine if tree.parent(s) is None),
+                "boot": _node_boot(session, n),
             }
         )
     return {"nodes": out, "services": [{"slug": s.slug, "name": s.name} for s in services]}
@@ -348,10 +446,59 @@ def health_view(session: Session, svc: Service) -> dict[str, Any]:
     }
 
 
+def _subs_view(
+    session: Session, rows: list[dict[str, Any]], row: dict[str, Any]
+) -> list[dict[str, Any]]:
+    """The Sub-services tab: everything below a service, in tree order, with what each is,
+    its checks, whether a backup waits for it and its proxy hosts."""
+    by_slug = {r["slug"]: r for r in rows}
+    out = []
+    for slug in _below(by_slug, row):
+        r = by_slug[slug]
+        svc = session.get(Service, r["id"])
+        if svc is None:
+            continue
+        probes = [
+            p for p in session.exec(select(Probe).where(Probe.service_id == svc.id)) if p.enabled
+        ]
+        waits = sorted(p.name for p in probes if p.backup_waits)
+        state = session.get(ServiceState, svc.id)
+        results = {
+            str(x.get("probe_name")): x.get("state")
+            for x in (state.last_probe_results if state else [])
+            if x.get("kind") != "guest" and not (x.get("details") or {}).get("skipped")
+        }
+        ok = sum(1 for p in probes if results.get(p.name) == "healthy")
+        hosts = session.exec(select(ProxyHost).where(ProxyHost.service_id == svc.id)).all()
+        out.append(
+            {
+                **_sub_brief(r),
+                "parent": r["parent"],
+                "why": r["state"]["why"],
+                "check": r["check"],
+                "checks": {"ok": ok, "total": len(probes), "run": bool(results)},
+                "backup": (
+                    "waits for it"
+                    if svc.backup_gate.value == "required"
+                    else (
+                        f"waits for {', '.join(w.removeprefix('container:') for w in waits)}"
+                        if waits
+                        else "does not wait"
+                    )
+                ),
+                "hosts": [h.hostname for h in hosts],
+                "controller": dict(svc.controller or {}),
+                "enabled": svc.enabled,
+            }
+        )
+    return out
+
+
 def service_view(session: Session, settings: Any, svc: Service) -> dict[str, Any]:
     """Everything the service page shows, from the database only."""
     detail = service_detail(session, svc)
-    row = next((r for r in service_rows(session) if r["slug"] == svc.slug), None)
+    rows = service_rows(session)
+    row = next((r for r in rows if r["slug"] == svc.slug), None)
     tree = TreeIndex.build(session)
     below = {d.slug for d in tree.descendants(svc)}
     others = [s.slug for s in session.exec(select(Service).order_by(Service.slug)).all()]
@@ -363,6 +510,7 @@ def service_view(session: Session, settings: Any, svc: Service) -> dict[str, Any
     return {
         "service": detail,
         "row": row,
+        "subs": _subs_view(session, rows, row) if row else [],
         "health": health_view(session, svc),
         "policy": (
             {
@@ -554,8 +702,38 @@ def _attention(session: Session, rows: list[dict[str, Any]]) -> list[dict[str, A
     items: list[dict[str, Any]] = []
     runs = _latest_backup_runs(session)
     ids = {s.slug: s.id for s in session.exec(select(Service)).all()}
+    by_slug = {r["slug"]: r for r in rows}
     for r in rows:
+        if r["parent"]:
+            continue  # a sub-service shows up under its parent ("degraded")
         st = r["state"]
+        if st["label"] == "degraded":
+            first = next(
+                (
+                    by_slug[s]
+                    for s in _below(by_slug, r)
+                    if by_slug[s]["state"]["label"] in _FAILING and by_slug[s]["enabled"]
+                ),
+                None,
+            )
+            items.append(
+                {
+                    "kind": "degraded",
+                    "cls": "warn",
+                    "label": "Degraded",
+                    "slug": r["slug"],
+                    "title": f"{r['name']}: sub-service {first['name'] if first else '?'} "
+                    + (first["state"]["label"] if first else "failing"),
+                    "text": (
+                        (first["check"]["text"] or first["state"]["why"]) if first else st["why"]
+                    ),
+                    "at": first["check"]["at"] if first else None,
+                    "action": "check",
+                    "sub": first["slug"] if first else None,
+                    "stack": first.get("stack") if first else None,
+                }
+            )
+            st = r.get("own_state", st)
         if st["cls"] == "fail":
             items.append(
                 {
@@ -583,11 +761,49 @@ def _attention(session: Session, rows: list[dict[str, Any]]) -> list[dict[str, A
                     "action": "run",
                 }
             )
+        else:
+            run = runs.get(ids.get(r["slug"]) or -1)
+            if run is not None and run.status is PipelineStatus.SKIPPED:
+                items.append(
+                    {
+                        "kind": "backup",
+                        "cls": "warn",
+                        "label": "Backup",
+                        "slug": r["slug"],
+                        "title": f"{r['name']} backup skipped",
+                        "text": run.error or "its last backup was skipped",
+                        "at": (run.finished_at or run.started_at).isoformat(),
+                        "action": "run",
+                    }
+                )
     return items
+
+
+def _sub_brief(r: dict[str, Any]) -> dict[str, Any]:
+    """A sub-service as the dropdowns show it."""
+    return {
+        "slug": r["slug"],
+        "name": r["name"],
+        "cls": r["state"]["cls"],
+        "label": r["state"]["label"],
+        "kind": r["kind"],
+        "containers": r["containers"],
+        "stack": r["stack"],
+        "depth": r["depth"],
+    }
+
+
+def _below(by_slug: dict[str, dict[str, Any]], row: dict[str, Any]) -> list[str]:
+    out: list[str] = []
+    for s in row["subs"]:
+        out.append(s)
+        out += _below(by_slug, by_slug[s])
+    return out
 
 
 def dashboard_view(session: Session, scheduler: Any) -> dict[str, Any]:
     rows = service_rows(session)
+    by_slug = {r["slug"]: r for r in rows}
     groups: dict[str, list[dict[str, Any]]] = {}
     for r in rows:
         if r["parent"]:
@@ -598,6 +814,7 @@ def dashboard_view(session: Session, scheduler: Any) -> dict[str, Any]:
                 "name": r["name"],
                 "cls": r["state"]["cls"],
                 "label": r["state"]["label"],
+                "subs": [_sub_brief(by_slug[x]) for x in _below(by_slug, r)],
             }
         )
     policies = [
@@ -607,11 +824,12 @@ def dashboard_view(session: Session, scheduler: Any) -> dict[str, Any]:
     nxt = sorted((p for p in policies if p["next_run"]), key=lambda p: p["next_run"])
     last = _last_runs(session)
     counts: dict[str, int] = {}
-    for r in rows:
+    tops = [r for r in rows if not r["parent"]]  # a sub-service counts in its parent's state
+    for r in tops:
         counts[r["state"]["cls"]] = counts.get(r["state"]["cls"], 0) + 1
     return {
         "attention": _attention(session, rows),
-        "services": {"total": len(rows), "by_state": counts},
+        "services": {"total": len(tops), "by_state": counts},
         "glance": [{"name": k, "services": v} for k, v in sorted(groups.items())],
         "nodes": nodes_view(session)["nodes"],
         "proxy_hosts": len(session.exec(select(ProxyHost)).all()),

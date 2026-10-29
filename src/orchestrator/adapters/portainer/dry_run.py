@@ -83,6 +83,14 @@ _STACKS = [
 ]
 
 _KINDS = {"dev-xymbols": "build", "media": "image"}
+_ENV: dict[str, list[tuple[str, str]]] = {
+    "dev-xymbols": [
+        ("DB_PASSWORD", "sample-db-password"),
+        ("APP_KEY", "base64:sample-app-key"),
+        ("MAIL_DSN", "smtp://mail.example.lan:25"),
+    ],
+    "media": [("PUID", "1000"), ("PGID", "1000")],
+}
 _BASE_HEALTH: dict[str, str] = {}
 
 
@@ -163,6 +171,8 @@ class DryRunPortainerAdapter(PortainerAdapter):
         self._containers: list[Container] = list(_CONTAINERS)
         self._read_only = bool(getattr(settings, "portainer_read_only", False))
         self.calls: list[str] = []
+        #: Each stack's environment (values), by stack name.
+        self.env: dict[str, list[tuple[str, str]]] = {k: list(v) for k, v in _ENV.items()}
         #: What the next exec writes / how it ends (tests set these).
         self.exec_output: bytes | None = None
         self.exec_exit: int | None = 0
@@ -220,6 +230,60 @@ class DryRunPortainerAdapter(PortainerAdapter):
         return _KINDS.get(stack.name, "unknown")
 
     # -- writes ----------------------------------------------------------------------------------
+
+    async def stack_env(self, stack: Stack) -> list[tuple[str, str]]:
+        if stack.id is None:
+            raise AdapterRequestError(f"{stack.name!r} is not a stack Portainer created")
+        return list(self.env.get(stack.name, []))
+
+    async def set_stack_env(
+        self,
+        stack: Stack,
+        env: list[tuple[str, str]],
+        *,
+        pull_image: bool = True,
+        prune: bool = False,
+    ) -> None:
+        self._writable()
+        if stack.id is None:
+            raise AdapterRequestError(f"{stack.name!r} is not a stack Portainer created")
+        self.calls.append(f"env {stack.name}")
+        self.env[stack.name] = list(env)
+        self._set_stack(
+            stack, env_names=tuple(n for n, _ in env), updated_at=datetime.now(UTC).isoformat()
+        )
+        self._set_containers(stack, "running")
+
+    async def set_git_settings(
+        self, stack: Stack, *, reference: str, auto_update_interval: str | None
+    ) -> None:
+        self._writable()
+        if stack.git is None:
+            raise AdapterRequestError(f"{stack.name!r} is not deployed from a Git repository")
+        self.calls.append(f"git {stack.name}")
+        self._set_stack(
+            stack,
+            git=replace(stack.git, reference=reference),
+            auto_update=bool(auto_update_interval),
+            auto_update_interval=auto_update_interval or "",
+        )
+
+    async def inspect(self, endpoint_id: int, ref: str) -> dict[str, Any] | None:
+        c = self._find(ref) if endpoint_id == 1 else None
+        if c is None:
+            return None
+        return {
+            "Id": c.id * 5,
+            "Name": "/" + c.name,
+            "Image": c.image_id,
+            "State": {"Status": c.state, "Running": c.state == "running"},
+            "Config": {
+                "Image": c.image,
+                "Env": ["TZ=***", "PATH=***"],
+                "Labels": {"com.docker.compose.project": c.stack or ""},
+            },
+            "HostConfig": {"RestartPolicy": {"Name": "unless-stopped"}},
+        }
 
     def _set_stack(self, stack: Stack, **changes: Any) -> None:
         self._stacks = [
@@ -364,7 +428,7 @@ class DryRunPortainerAdapter(PortainerAdapter):
         return ExecResult(self.exec_exit, self.exec_stderr, len(data))
 
     async def container_action(self, endpoint_id: int, ref: str, verb: str) -> str:
-        if verb not in {"start", "stop", "restart"}:
+        if verb not in {"start", "stop", "restart", "kill", "recreate"}:
             raise AdapterRequestError(f"unknown container action {verb!r}")
         self._writable()
         c = self._find(ref) if endpoint_id == 1 else None
@@ -373,7 +437,7 @@ class DryRunPortainerAdapter(PortainerAdapter):
                 f"no container {ref!r} on Portainer environment {endpoint_id}"
             )
         self.calls.append(f"{verb} container {c.name}")
-        up = verb != "stop"
+        up = verb not in {"stop", "kill"}
         self._containers = [
             (
                 replace(

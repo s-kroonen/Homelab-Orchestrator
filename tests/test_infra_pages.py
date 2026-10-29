@@ -138,6 +138,8 @@ def test_infra_guests_api_shows_real_adapter_data(client: TestClient) -> None:
             "status": "running",
             # Not registered as a service here.
             "service_slug": None,
+            # Its node is not registered, so its boot settings were never read.
+            "boot": None,
         }
     ]
 
@@ -169,3 +171,35 @@ def test_infra_snapshots_api_shows_real_adapter_data(client: TestClient) -> None
     assert snap["size_bytes"] == 123456
     assert snap["verified"] is True
     assert snap["owner"] == "orchestrator@pbs"
+
+
+def test_guest_boot_settings_are_read_shown_and_changed(client: TestClient) -> None:
+    """Nodes & guests: each guest's Start at boot / order is read from Proxmox while its node is
+    on, kept, shown with its place in the boot sequence, and can be changed (in Proxmox)."""
+    from orchestrator.adapters.proxmox.base import Guest, GuestBoot
+    from orchestrator.domain.enums import GuestKind
+
+    r = client.post("/api/registry/nodes", json={"name": "node-a", "power_mgr_target": "node-a"})
+    assert r.status_code in (200, 201), r.text
+    proxmox = client.app.state.adapters.proxmox  # type: ignore[attr-defined]
+    proxmox.simulated_guests = [
+        Guest(node="node-a", vmid=101, kind=GuestKind.VM, name="db", status="running"),
+        Guest(node="node-a", vmid=102, kind=GuestKind.CT, name="app", status="stopped"),
+    ]
+    proxmox.simulated_boot[101] = GuestBoot(onboot=True, order=1, up_s=30)
+    proxmox.simulated_onboot_delay["node-a"] = 10
+
+    rows = {g["vmid"]: g for g in client.get("/api/infra/proxmox/guests").json()}
+    assert rows[101]["boot"]["onboot"] is True and rows[101]["boot"]["position"] == 1
+    assert rows[101]["boot"]["starts_after_s"] == 10
+    assert rows[102]["boot"]["onboot"] is False and rows[102]["boot"]["position"] is None
+
+    r = client.put("/api/infra/guests/node-a/102/boot", json={"onboot": True, "order": 2})
+    assert r.status_code == 200, r.text
+    assert proxmox.simulated_boot[102].onboot is True and proxmox.simulated_boot[102].order == 2
+    rows = {g["vmid"]: g for g in client.get("/api/infra/proxmox/guests").json()}
+    assert rows[102]["boot"]["position"] == 2
+
+    assert client.put("/api/infra/guests/node-a/999/boot", json={"onboot": True}).status_code == 404
+    bad = client.put("/api/infra/guests/node-a/101/boot", json={"onboot": True, "up_s": -1})
+    assert bad.status_code == 400

@@ -1,8 +1,12 @@
 # Sub-services, the tree and the map
 
 A **service** is one thing you run and probe. A **sub-service** is a service that lives
-*inside* another one - the containers on a Portainer VM, the add-ons on Home Assistant.
-Both are the same kind of row; a sub-service just has a `parent`.
+*inside* another one - a Portainer stack on a VM, an add-on on Home Assistant. Both are the
+same kind of row; a sub-service just has a `parent`.
+
+**A stack is one sub-service.** Its containers are checks on it (`container:<name>`, kind
+`portainer`), not services of their own, and are managed on the stack page
+([portainer.md](portainer.md)).
 
 ```yaml
 services:
@@ -33,10 +37,21 @@ services:
 * **Health**: a sub-service is checked through its own probes. If the guest or node is
   down it is DOWN (not FAILED) and its alert folds into the guest/node alert. A failing
   parent does not by itself fail its children.
+* **A parent's state takes in its sub-services.** A parent that is healthy itself, with a
+  sub-service below it that is failed or stopped, shows **degraded** (amber) on the Services
+  list, the Dashboard (an attention item naming the sub-service, with *Manage stack*) and the
+  Map. Lists show only top-level services; ▸ opens a service's sub-services in place (on the Map
+  the open ones are remembered per browser). A parent that is failed itself stays failed. This is
+  only what is shown: the backup gate is unchanged (below).
+* The **Sub-services** tab of a service page lists everything below it: what each is (a stack
+  with its containers' state), its state, its checks, whether a backup waits for it, its proxy
+  hosts, a link to its own page and to its stack page.
 * **Backups** run per guest, on the root. Each sub-service has a `backup_gate`:
   `ignore` (default) or `required` - the backup starts the sub-service through its
   controller if it is stopped, waits until it is healthy, and the plan lists it as
-  `sub_start:<slug>` / `sub_gate:<slug>`. Backups of a sub-service on its own are refused (a database can be *dumped* on its own instead: [dumps.md](dumps.md)).
+  `sub_start:<slug>` / `sub_gate:<slug>`. A single check can be waited for instead
+  (`backup_waits: true` on the probe): the backup waits for just those checks to pass (a stack's
+  database container) and ignores the sub-service's other checks (its web container). Backups of a sub-service on its own are refused (a database can be *dumped* on its own instead: [dumps.md](dumps.md)).
 * Notifications, controllers and recovery work at every level; see
   [notifications.md](notifications.md), [controllers.md](controllers.md) and
   [recovery.md](recovery.md).
