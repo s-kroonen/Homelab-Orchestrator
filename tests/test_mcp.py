@@ -766,3 +766,71 @@ def test_approval_tokens_can_always_be_typed_as_a_cli_argument(client: TestClien
         tokens = [r.token for r in s.exec(select(PendingApproval)).all()]
     assert len(tokens) == 25 and all(t[0].isalpha() for t in tokens)
     assert approvals.request_url(config_module.get_settings(), tokens[0]).endswith(tokens[0])
+
+
+# -- configure: the settings a person would change on the pages -----------------------------------
+
+
+def test_configure_tools_need_their_scope(client: TestClient) -> None:
+    got = connect(client, ["read", "control"])
+    out = call(client, got["access_token"], "adopt_stack", {"endpoint_id": 1, "stack": "media"})
+    assert out["isError"] is True and "configure" in out["content"][0]["text"]
+
+
+def test_adopt_then_dump_deploy_and_git_through_the_assistant(client: TestClient) -> None:
+    import json
+
+    got = connect(client, ["read", "configure"])
+    tok = got["access_token"]
+
+    out = call(client, tok, "adopt_stack", {"endpoint_id": 1, "stack": "dev-xymbols",
+                                            "parent": "portainer-vm", "slug": "xym", "hosts": ""})  # fmt: skip
+    assert out["isError"] is False, out
+    assert "xym" in json.loads(out["content"][0]["text"])["services"]
+
+    out = call(client, tok, "set_dump", {"slug": "xym", "type": "postgres",
+                                         "container": "dev-xymbols-db-1", "keep": 3})  # fmt: skip
+    assert out["isError"] is False, out
+    dump = json.loads(out["content"][0]["text"])["dump"]
+    assert dump["type"] == "postgres" and dump["keep"] == 3 and dump["schedule"] == ""
+
+    out = call(client, tok, "set_deploy", {"slug": "xym", "preset": "probes+keep3",
+                                           "webhook": "github", "branch": "dev"})  # fmt: skip
+    assert out["isError"] is False, out
+    body = json.loads(out["content"][0]["text"])
+    assert body["deploy"]["guard"]["pre"]["keep_previous"]["keep"] == 3
+    assert body["deploy"]["trigger"]["webhook"] == {"provider": "github", "branch": "dev"}
+    assert "secret" not in json.dumps(body["deploy"])
+
+    out = call(client, tok, "set_stack_git", {"endpoint_id": 1, "stack": "dev-xymbols"})
+    assert out["isError"] is False, out
+    assert "no polling" in out["content"][0]["text"]
+
+    with Session(get_engine()) as s:
+        actions = {a.action for a in s.exec(select(AuditEntry)).all()}
+    assert {"service.updated", "stack.git_settings"} <= actions
+
+
+def test_a_command_dump_waits_for_a_person(client: TestClient) -> None:
+    got = connect(client, ["read", "configure", "propose"])
+    out = call(client, got["access_token"], "set_dump",
+               {"slug": "wiki", "type": "command", "command": "tar -cf - /data"})  # fmt: skip
+    assert out["isError"] is False and "NOT DONE" in out["content"][0]["text"]
+    assert _only_request(client)["status"] == "waiting"
+
+
+def test_linking_a_proxy_host_moves_it(client: TestClient) -> None:
+    from orchestrator.db.models import ProxyHost
+
+    with Session(get_engine()) as s:
+        s.add(ProxyHost(hostname="wiki.example.lan", upstream="http://10.0.0.5:80"))
+        s.commit()
+    got = connect(client, ["read", "configure"])
+    out = call(client, got["access_token"], "link_proxy_host",
+               {"hostname": "wiki.example.lan", "slug": "wiki"})  # fmt: skip
+    assert out["isError"] is False, out
+    with Session(get_engine()) as s:
+        ph = s.exec(select(ProxyHost)).one()
+        assert ph.service_id is not None
+    assert call(client, got["access_token"], "link_proxy_host",
+                {"hostname": "nope.example.lan", "slug": "wiki"})["isError"]  # fmt: skip
