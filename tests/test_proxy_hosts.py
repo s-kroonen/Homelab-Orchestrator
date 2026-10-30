@@ -8,6 +8,7 @@ than imported, so neither test module depends on the other's internals.
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from types import SimpleNamespace
 from typing import Any
 
@@ -875,6 +876,18 @@ def _patch_tm_transport(monkeypatch: pytest.MonkeyPatch, handler: Any) -> None:
     monkeypatch.setattr(tm_mod.httpx, "AsyncClient", _PatchedAsyncClient)
 
 
+#: Apps started by ``_tm_client``; each is shut down when its test ends. Left running, their
+#: schedulers keep polling (and writing to whatever database is current) for the rest of the run.
+_TM_CLIENTS: list[TestClient] = []
+
+
+@pytest.fixture(autouse=True)
+def _close_tm_clients() -> Iterator[None]:
+    yield
+    while _TM_CLIENTS:
+        _TM_CLIENTS.pop().__exit__(None, None, None)
+
+
 def _tm_client(monkeypatch: pytest.MonkeyPatch, **env: str) -> TestClient:
     """Build a fresh app with the proxy adapter resolved to
     ``TraefikManagerProxyAdapter`` — ``DRY_RUN=false``,
@@ -893,6 +906,7 @@ def _tm_client(monkeypatch: pytest.MonkeyPatch, **env: str) -> TestClient:
     session_module.create_all_for_tests()
     client = TestClient(create_app())
     client.__enter__()
+    _TM_CLIENTS.append(client)
     _login_as_first_admin(client, monkeypatch)
     return client
 

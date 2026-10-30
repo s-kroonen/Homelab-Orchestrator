@@ -1180,3 +1180,26 @@ async def test_a_wake_that_cannot_start_never_breaks_the_rollups(
 
     assert status["ok"] is True and status["woken"] == []
     assert len(_rollups()) == 1
+
+
+async def test_shutdown_cancels_a_poll_still_running() -> None:
+    # A poll waiting on Traefik Manager when the app stops must not write afterwards (into a
+    # database that may be gone by then).
+    import asyncio
+
+    collector, proxy = _collector([], geoip=False)
+    entered, release = asyncio.Event(), asyncio.Event()
+
+    async def slow(*_a: Any, **_k: Any) -> Any:
+        entered.set()
+        await release.wait()
+        return []
+
+    proxy.fetch_access_log = slow  # type: ignore[method-assign]
+    proxy.tail_access_log = slow  # type: ignore[method-assign]
+    poll = asyncio.create_task(collector.poll_once())
+    await asyncio.wait_for(entered.wait(), 5)
+
+    await collector.shutdown()
+
+    assert poll.cancelled()  # it never got as far as saving its status
