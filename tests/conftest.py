@@ -18,6 +18,7 @@ from orchestrator import config as config_module
 from orchestrator.db import session as session_module
 from orchestrator.db.models import Node, Service
 from orchestrator.domain.enums import GuestKind
+from tests import open_apps
 
 
 @pytest.fixture(autouse=True)
@@ -53,6 +54,7 @@ def _isolated_settings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Itera
 
     yield
 
+    open_apps.close_all()
     session_module.reset_engine_cache()
     config_module.reset_settings_cache()
 
