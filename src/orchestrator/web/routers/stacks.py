@@ -52,7 +52,7 @@ class AdoptIn(BaseModel):
     children: list[ChildIn] = Field(default_factory=list)
     hosts: list[str] = Field(default_factory=list)
     probes: bool = True
-    deploy: Literal["none", "probes", "probes+backup"] | None = None
+    deploy: Literal["none", "probes", "probes+backup", "probes+keep3"] | None = None
     webhook: Literal["generic", "gitlab", "github"] | None = None
 
     def plan(self) -> AdoptPlan:

@@ -35,10 +35,21 @@ container), or in the registry:
 | `path` | sqlite only: the database file inside the container |
 | `command` | `type: command` only: a shell command run in the container; its stdout is the dump |
 | `container` | run in another container than the service's own (same Portainer environment) |
-| `schedule` | cron; blank = manual only |
+| `schedule` | cron; blank = manual only (or before each deploy, below) |
 | `keep`, `keep_days` | retention; see below |
 | `timeout_s`, `min_bytes` | give up after this long; a dump smaller than this is a failure |
 | `enabled` | `false` pauses it without losing the settings |
+
+**Only on deploys.** A stack whose deploy method keeps the previous version
+(`guard.pre.keep_previous`, preset `probes+keep3`; see
+[portainer_deploys.md](portainer_deploys.md#deploys)) runs its dump before each redeploy. Leave
+`schedule` blank and set `keep` to the number of versions to keep, and the dumps are exactly the
+last N releases.
+
+**A whole data folder** (for an app that keeps SQLite and uploads on a volume, without a
+`sqlite3` binary in its image) can be a `type: command` dump that writes a tar to stdout, for
+example `tar -cf - -C /data db uploads`. SQLite copied while the app writes can be torn, so
+prefer a quiet hour, or an app's own export.
 
 From a shell: `orchestrator-cli dump set SLUG ...`, `dump run SLUG`, `dump list`, `dump show`,
 `dump clear`. An assistant (MCP) can `list_dumps` and, with the `backup` permission, `run_dump`.

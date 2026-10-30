@@ -141,7 +141,8 @@ A service linked to a stack that was deployed from Git can have a **deploy metho
 deploy:
   trigger: {webhook: {provider: gitlab, branch: dev}}   # or null: manual only
   guard:
-    pre:  {probes: true, backup: {max_age_h: 24, take_if_older: true}}
+    pre:  {probes: true, backup: {max_age_h: 24, take_if_older: true},
+           keep_previous: {keep: 3, dump: true, images: true}}   # or null
     post: {probes: true, timeout_s: 180, settle_s: 30}
   on_failure: notify        # notify | stop | restore_backup
   pull_image: true
@@ -155,6 +156,7 @@ notifications and in push:
 lock           switched off? another deploy/switch running? a guest backup running?
 pre-guards     probes healthy?   a verified backup newer than N hours - or take one
 snapshot       what is deployed now (Git commit, image ids) - recorded, never secret
+keep previous  (keep_previous) a database dump and a pre-deploy tag on each image, last N kept
 redeploy       Portainer pulls the repository, pulls / builds, recreates
 wait up        every container running and settled
 post-guards    probes healthy within timeout_s, then healthy for settle_s
@@ -165,6 +167,21 @@ post-guards    probes healthy within timeout_s, then healthy for settle_s
 * The **backup guard** uses a *verified* backup of the guest the stack runs on; if the newest is
   older than `max_age_h` it is taken first (`take_if_older`) through the normal wake + backup
   pipeline, or the deploy is refused.
+* **Keeping the previous version** (`keep_previous`, preset `probes+keep3`) is for stacks that
+  need no routine backup but should be easy to step back on a bad release, such as dev stacks.
+  Before each redeploy it:
+  * runs the service's **database dump** (`dump:`, see [dumps.md](dumps.md)) when one is set
+    up and `dump` is on. The dump's own `keep` decides how many stay, so set it to the same N
+    and leave its schedule empty to dump only on deploys. A dump that fails blocks the deploy.
+  * tags each image the stack runs as `<repo>:pre-deploy-<UTC time>` when `images` is on,
+    then removes that repository's oldest `pre-deploy-*` tags beyond `keep`. A tag only keeps
+    the old image from being pruned. An image that cannot be tagged is noted in the step and
+    the deploy goes on.
+
+  It runs on every deploy started here, including one without guards. A deploy done in Portainer
+  itself (its own webhook or auto-update) is only seen afterwards, so nothing is kept: switch
+  the stack's trigger to this deploy webhook and turn Portainer's auto-update off. Rolling back
+  is by hand for now: restore the dump, and point the compose file at the tagged image.
 * After the redeploy, a failure ends the run *failed* (`deploy_failed`) and then does
   `on_failure`: **notify** (leave it as it is), **stop** (switch the service off - fine for dev
   and test; a stopped service with a notification is a legitimate outcome), or

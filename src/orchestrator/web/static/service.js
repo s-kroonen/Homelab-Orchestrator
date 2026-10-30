@@ -60,8 +60,9 @@
   const busy = (btn, fn) => async () => { btn.disabled = true; try { await fn(); } finally { btn.disabled = false; } };
 
   // --- header ------------------------------------------------------------------------------------
-  function guestText() {
-    if (!isRoot()) return "part of " + S.parent;
+  function guestText(row) {
+    if (!isRoot()) return ["part of ", el("a", { href: "/services/" + enc(S.parent) + "?tab=subs" }, S.parent),
+      row.stack ? [" · stack ", el("a", { class: "mono", href: row.stack.href }, row.stack.name)] : ""];
     if (!hasGuest()) return S.node ? "on " + S.node.name : "no guest";
     return S.guest_kind.toUpperCase() + " " + S.guest_id + (S.node ? " on " + S.node.name : "");
   }
@@ -92,7 +93,7 @@
     $("#svc-name").textContent = S.name || slug;
     const st = $("#svc-state"); st.className = "pill " + row.state.cls; st.textContent = row.state.label; st.title = row.state.why || "";
     const host = (S.proxy_hosts || [])[0];
-    fill($("#svc-sub"), guestText(), S.group ? " · " + S.group : "",
+    fill($("#svc-sub"), guestText(row), S.group ? " · " + S.group : "",
       host ? [" · ", el("a", { href: "https://" + host.hostname, target: "_blank", rel: "noopener" }, host.hostname + " ↗")] : "",
       S.description ? el("span", { class: "faint" }, " · " + S.description) : "");
     $("#wake-banner").hidden = !S.wake_unsupported;
@@ -455,8 +456,8 @@
     if (kind === "http") {
       set(c, "url", v.url.trim()); c.method = v.method;
       const statuses = String(v.expect_status || "").split(",").map((x) => x.trim()).filter(Boolean);
-      if (statuses.some((x) => !/^\d{3}$/.test(x))) throw fieldError("expect_status", "Write status codes separated by commas, like 200, 401");
-      c.expect_status = statuses.length ? statuses.map(Number) : [200];
+      if (statuses.some((x) => !/^(\d{3}|[1-5]xx)$/i.test(x))) throw fieldError("expect_status", "Write status codes or classes separated by commas, like 2xx, 3xx, 401");
+      c.expect_status = statuses.length ? statuses.map((x) => (/^\d{3}$/.test(x) ? Number(x) : x.toLowerCase())) : [200];
       set(c, "expect_body_contains", v.expect_body_contains); c.verify_tls = !!v.verify_tls;
       set(c, "host_header", v.host_header.trim()); set(c, "sni_hostname", v.sni_hostname.trim());
     } else if (kind === "tcp") {
@@ -487,7 +488,7 @@
         { key: "kind", label: "Kind", type: "select", options: V.probe_kinds.map((k) => ({ value: k.kind, label: k.kind + (k.summary ? " — " + k.summary : "") })) },
         { key: "url", label: "URL", required: true, mono: true, placeholder: "https://app.example.lan/health", show: is("http") },
         { key: "method", label: "Method", type: "select", options: ["GET", "HEAD"], show: is("http") },
-        { key: "expect_status", label: "Expected status", mono: true, placeholder: "200, 401", show: is("http") },
+        { key: "expect_status", label: "Expected status", mono: true, placeholder: "2xx, 3xx, 401", show: is("http") },
         { key: "expect_body_contains", label: "Body contains", placeholder: "optional", show: is("http") },
         { key: "verify_tls", label: "Verify the certificate", type: "checkbox", show: is("http") },
         { key: "host_header", label: "Host header", mono: true, placeholder: "optional: app.example.lan", help: "When the URL is a proxy's address, like curl --resolve.", show: is("http") },
@@ -735,12 +736,15 @@
   // --- related: stack and deploys -------------------------------------------------------------------
   let deployRuns = [];
   let deploySteps = null;
-  const PRESETS = { none: [false, false, false], probes: [true, false, true], "probes+backup": [true, true, true] };
+  // [healthy before, recent backup, healthy after, keep previous]
+  const PRESETS = { none: [false, false, false, false], probes: [true, false, true, false], "probes+backup": [true, true, true, false], "probes+keep3": [true, false, true, true] };
   function guardsText(d) {
     if (!d || !Object.keys(d).length) return "No deploy method yet.";
     const g = d.guard; const bits = [];
     if (g.pre.probes) bits.push("healthy before");
     if (g.pre.backup) bits.push("a backup newer than " + g.pre.backup.max_age_h + " h" + (g.pre.backup.take_if_older ? " (taken if older)" : ""));
+    const kp = g.pre.keep_previous;
+    if (kp) bits.push("keep the last " + kp.keep + " versions (" + [kp.dump ? "dump" : "", kp.images ? "images" : ""].filter(Boolean).join(" and ") + ")");
     if (g.post.probes) bits.push("healthy within " + g.post.timeout_s + " s after, for " + g.post.settle_s + " s");
     return (d.enabled ? "" : "Deploys are switched off. ") + "Guards: " + (bits.join(", ") || "none") + ". If it fails: " + ({ notify: "notify", stop: "switch it off", restore_backup: "propose a restore" }[d.on_failure] || d.on_failure) + "." + (d.trigger && d.trigger.webhook ? " Webhook: " + d.trigger.webhook.provider + (d.trigger.webhook.branch ? " (" + d.trigger.webhook.branch + ")" : "") + "." : "");
   }
@@ -790,18 +794,25 @@
       intro: "Portainer holds the stack, its Git repository and its environment; only the guards and the history live here.",
       values: {
         preset: "", pre_probes: g ? !!g.pre.probes : false, backup: g ? !!g.pre.backup : false, backup_age: g && g.pre.backup ? g.pre.backup.max_age_h : 24,
-        take: g && g.pre.backup ? !!g.pre.backup.take_if_older : true, post_probes: g ? !!g.post.probes : true, timeout_s: g ? g.post.timeout_s : 180, settle_s: g ? g.post.settle_s : 30,
+        take: g && g.pre.backup ? !!g.pre.backup.take_if_older : true,
+        keep: g ? !!g.pre.keep_previous : false, keep_n: g && g.pre.keep_previous ? g.pre.keep_previous.keep : 3,
+        keep_dump: g && g.pre.keep_previous ? !!g.pre.keep_previous.dump : true, keep_images: g && g.pre.keep_previous ? !!g.pre.keep_previous.images : true,
+        post_probes: g ? !!g.post.probes : true, timeout_s: g ? g.post.timeout_s : 180, settle_s: g ? g.post.settle_s : 30,
         on_failure: d ? d.on_failure : "notify", pull_image: d ? !!d.pull_image : true, prune: d ? !!d.prune : false, enabled: d ? !!d.enabled : true,
         provider: hook ? hook.provider : "", branch: hook ? hook.branch : "",
       },
       note: "Saved at once; services.yaml is written by itself.",
       fields: [
-        { key: "preset", label: "Start from", type: "select", options: [{ value: "", label: "(as it is)" }, { value: "none", label: "None: redeploy and check the stack came up" }, { value: "probes", label: "Probes: healthy before and after" }, { value: "probes+backup", label: "Probes and a recent backup" }] },
+        { key: "preset", label: "Start from", type: "select", options: [{ value: "", label: "(as it is)" }, { value: "none", label: "None: redeploy and check the stack came up" }, { value: "probes", label: "Probes: healthy before and after" }, { value: "probes+backup", label: "Probes and a recent backup" }, { value: "probes+keep3", label: "Probes, and keep the last 3 versions" }] },
         { type: "section", label: "Before the deploy" },
         { key: "pre_probes", label: "Its probes must be healthy", type: "checkbox" },
         { key: "backup", label: "A verified backup must be recent", type: "checkbox" },
         { key: "backup_age", label: "Newer than (hours)", type: "number", min: 1, show: (v) => v.backup },
         { key: "take", label: "Take one first when it is older", type: "checkbox", show: (v) => v.backup },
+        { key: "keep", label: "Keep the version it replaces", type: "checkbox", help: "A database dump and a pre-deploy tag on each image, for rolling back." },
+        { key: "keep_n", label: "Versions to keep", type: "number", min: 1, show: (v) => v.keep },
+        { key: "keep_dump", label: "Dump the database (needs a dump set up)", type: "checkbox", show: (v) => v.keep },
+        { key: "keep_images", label: "Tag the images", type: "checkbox", show: (v) => v.keep },
         { type: "section", label: "After the deploy" },
         { key: "post_probes", label: "Its probes must turn healthy", type: "checkbox" },
         { key: "timeout_s", label: "Within (seconds)", type: "number", min: 1, show: (v) => v.post_probes },
@@ -817,7 +828,8 @@
       async onSave(v) {
         const deploy = {
           enabled: !!v.enabled, trigger: { webhook: v.provider ? { provider: v.provider, branch: (v.branch || "").trim() } : null },
-          guard: { pre: { probes: !!v.pre_probes, backup: v.backup ? { max_age_h: Number(v.backup_age) || 24, take_if_older: !!v.take } : null },
+          guard: { pre: { probes: !!v.pre_probes, backup: v.backup ? { max_age_h: Number(v.backup_age) || 24, take_if_older: !!v.take } : null,
+            keep_previous: v.keep ? { keep: Number(v.keep_n) || 3, dump: !!v.keep_dump, images: !!v.keep_images } : null },
             post: { probes: !!v.post_probes, timeout_s: Number(v.timeout_s) || 180, settle_s: Number(v.settle_s) || 0 } },
           on_failure: v.on_failure, pull_image: !!v.pull_image, prune: !!v.prune,
         };
@@ -827,7 +839,7 @@
     const sel = dr.el.querySelector("#f-preset");
     sel.addEventListener("change", () => {
       const p = PRESETS[sel.value]; if (!p) return;
-      [["pre_probes", p[0]], ["backup", p[1]], ["post_probes", p[2]]].forEach(([k, val]) => { const cb = dr.el.querySelector("#f-" + k); if (cb) { cb.checked = val; } dr.set(k, val); });
+      [["pre_probes", p[0]], ["backup", p[1]], ["post_probes", p[2]], ["keep", p[3]]].forEach(([k, val]) => { const cb = dr.el.querySelector("#f-" + k); if (cb) { cb.checked = val; } dr.set(k, val); });
     });
   }
   function unguardedDrawer() {

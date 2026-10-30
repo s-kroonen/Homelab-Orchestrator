@@ -102,6 +102,7 @@ class LivePortainerAdapter(PortainerAdapter):
         self._key = settings.portainer_api_key.get_secret_value()
         self._verify = settings.portainer_verify_tls
         self._timeout = float(settings.controller_timeout_s)
+        self._long = float(getattr(settings, "portainer_deploy_timeout_s", 900))
         self._read_only = settings.portainer_read_only
         self._transport = transport
         self._client: httpx.AsyncClient | None = None
@@ -141,6 +142,7 @@ class LivePortainerAdapter(PortainerAdapter):
         *,
         method: str = "GET",
         json: Any = None,
+        long: bool = False,
     ) -> httpx.Response:
         if not self.configured:
             raise AdapterNotConfigured(
@@ -150,7 +152,18 @@ class LivePortainerAdapter(PortainerAdapter):
             await self.start()
         assert self._client is not None
         try:
-            response = await self._client.request(method, path, params=params, json=json)
+            response = await self._client.request(
+                method,
+                path,
+                params=params,
+                json=json,
+                # a build or a pull can take minutes; the other calls keep the short limit
+                timeout=(
+                    httpx.Timeout(self._timeout, read=self._long)
+                    if long
+                    else httpx.USE_CLIENT_DEFAULT
+                ),
+            )
         except httpx.TimeoutException as exc:
             raise AdapterUnreachable(f"Portainer timed out on {method} {path}: {exc}") from exc
         except httpx.TransportError as exc:
@@ -334,7 +347,7 @@ class LivePortainerAdapter(PortainerAdapter):
         self._writable()
         sid = self._need_id(stack)
         await self._request(
-            f"/api/stacks/{sid}/start", {"endpointId": stack.endpoint_id}, method="POST"
+            f"/api/stacks/{sid}/start", {"endpointId": stack.endpoint_id}, method="POST", long=True
         )
         self.invalidate()
 
@@ -379,6 +392,7 @@ class LivePortainerAdapter(PortainerAdapter):
             {"endpointId": stack.endpoint_id},
             method="PUT",
             json=body,
+            long=True,
         )
         self.invalidate()
 
@@ -426,7 +440,9 @@ class LivePortainerAdapter(PortainerAdapter):
                 "repositoryReferenceName": git.get("ReferenceName", ""),
                 **self._git_auth(raw),
             }
-            await self._request(f"/api/stacks/{sid}/git/redeploy", params, method="PUT", json=body)
+            await self._request(
+                f"/api/stacks/{sid}/git/redeploy", params, method="PUT", json=body, long=True
+            )
         else:
             text = await self._json(f"/api/stacks/{sid}/file", cache=False)
             body = {
@@ -435,7 +451,7 @@ class LivePortainerAdapter(PortainerAdapter):
                 "pullImage": pull_image,
                 "stackFileContent": str((text or {}).get("StackFileContent", "")),
             }
-            await self._request(f"/api/stacks/{sid}", params, method="PUT", json=body)
+            await self._request(f"/api/stacks/{sid}", params, method="PUT", json=body, long=True)
         self.invalidate()
 
     async def set_git_settings(
@@ -513,7 +529,7 @@ class LivePortainerAdapter(PortainerAdapter):
     async def create_stack(self, spec: StackCreate) -> Stack:
         self._writable()
         path, params, body = self._create_request(spec)
-        response = await self._request(path, params, method="POST", json=body)
+        response = await self._request(path, params, method="POST", json=body, long=True)
         self.invalidate()
         data = response.json()
         return (
@@ -554,6 +570,7 @@ class LivePortainerAdapter(PortainerAdapter):
                 f"/api/docker/{endpoint_id}/containers/{cid}/recreate",
                 method="POST",
                 json={"PullImage": True},
+                long=True,
             )
             self.invalidate()
             return f"container {ref} recreated (image pulled)"
@@ -711,6 +728,28 @@ class LivePortainerAdapter(PortainerAdapter):
             f"/api/endpoints/{endpoint_id}/docker/containers/{cid}/json", cache=False
         )
         return parse.mask_inspect(raw)
+
+    async def tag_image(self, endpoint_id: int, image: str, repo: str, tag: str) -> None:
+        self._writable()
+        await self._request(
+            f"/api/endpoints/{endpoint_id}/docker/images/{image}/tag",
+            {"repo": repo, "tag": tag},
+            method="POST",
+        )
+
+    async def image_tags(self, endpoint_id: int, repo: str) -> list[str]:
+        raw = await self._json(f"/api/endpoints/{endpoint_id}/docker/images/json", cache=False)
+        out = []
+        for img in raw if isinstance(raw, list) else []:
+            for name in img.get("RepoTags") or []:
+                head, _, tag = str(name).rpartition(":")
+                if head == repo and tag:
+                    out.append(tag)
+        return sorted(set(out))
+
+    async def remove_image(self, endpoint_id: int, ref: str) -> None:
+        self._writable()
+        await self._request(f"/api/endpoints/{endpoint_id}/docker/images/{ref}", method="DELETE")
 
     async def stats(self, endpoint_id: int, ref: str) -> ContainerStats:
         cid = await self._resolve(endpoint_id, ref)

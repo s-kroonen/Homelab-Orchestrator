@@ -521,3 +521,89 @@ def test_cli_run_history_and_show(env: AdapterBundle) -> None:
     assert needs_reason.exit_code != 0 and "--reason" in needs_reason.output
     refused = run.invoke(cli, ["deploy", "run", "media"])
     assert refused.exit_code != 0 and "no deploy method" in refused.output
+
+
+# -- keeping the previous version -----------------------------------------------------------------
+
+
+def test_the_repository_of_an_image() -> None:
+    from orchestrator.deploy.pipeline import image_repo
+
+    assert image_repo("ghcr.io/team/app:1.2") == "ghcr.io/team/app"
+    assert image_repo("registry.example.lan:5000/app") == "registry.example.lan:5000/app"
+    assert image_repo("mongo:4@sha256:abc") == "mongo"
+    assert image_repo("app") == "app"
+
+
+def _keep(**keep: Any) -> None:
+    _set_deploy(
+        "dev-xymbols",
+        guard={"pre": {"probes": True, "keep_previous": keep}, "post": {"probes": False}},
+    )
+
+
+def _dump(cfg: dict[str, Any] | None) -> None:
+    with Session(get_engine()) as s:
+        svc = s.exec(select(Service).where(Service.slug == "dev-xymbols")).one()
+        svc.dump = cfg
+        s.add(svc)
+        s.commit()
+
+
+async def test_a_deploy_keeps_a_dump_and_the_previous_images(
+    env: AdapterBundle, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("DUMP_DIR", str(tmp_path / "dumps"))
+    config_module.reset_settings_cache()
+    env.portainer.exec_output = (  # type: ignore[union-attr]
+        b"-- dump\nCREATE TABLE t (id int);\n-- PostgreSQL database dump complete\n"
+    )
+    _dump({"type": "postgres", "database": "app", "keep": 3, "container": "dev-xymbols-db-1"})
+    _keep(keep=2)
+    repo = deploy_pipeline.image_repo(
+        next(c.image for c in await env.portainer.list_containers(1, stack="dev-xymbols"))  # type: ignore[union-attr]
+    )
+    env.portainer.tags[repo] = {"pre-deploy-20250101-000000", "pre-deploy-20250102-000000"}  # type: ignore[union-attr]
+
+    run = await _deploy(env)
+
+    assert run.status is PipelineStatus.SUCCEEDED, run.error
+    names = [s["name"] for s in run.steps]
+    assert names.index("snapshot") < names.index("keep_previous") < names.index("redeploy")
+    kept = next(s for s in run.steps if s["name"] == "keep_previous")["detail"]
+    with Session(get_engine()) as s:
+        dump = s.get(PipelineRun, kept["dump_run_id"])
+        assert dump is not None and dump.kind is PipelineKind.DUMP
+        assert dump.status is PipelineStatus.SUCCEEDED
+    assert any(i.startswith(f"{repo}:pre-deploy-") for i in kept["images"])
+    assert kept["removed"] == [f"{repo}:pre-deploy-20250101-000000"]  # the newest two stay
+    calls = env.portainer.calls  # type: ignore[union-attr]
+    assert calls.index(f"rmi {repo}:pre-deploy-20250101-000000") < calls.index(
+        "redeploy dev-xymbols"
+    )
+
+
+async def test_a_failed_dump_blocks_the_deploy(
+    env: AdapterBundle, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("DUMP_DIR", str(tmp_path / "dumps"))
+    config_module.reset_settings_cache()
+    env.portainer.exec_output = b"pg_dump: error: connection refused\n"  # type: ignore[union-attr]
+    _dump({"type": "postgres", "database": "app", "container": "dev-xymbols-db-1"})
+    _keep()
+
+    run = await _deploy(env)
+
+    assert run.status is PipelineStatus.SKIPPED and "dump" in (run.error or "")
+    assert _steps(run)["keep_previous"] == "failed"
+    assert "redeploy dev-xymbols" not in env.portainer.calls  # type: ignore[union-attr]
+
+
+async def test_without_a_dump_only_the_images_are_kept(env: AdapterBundle) -> None:
+    _keep(dump=True, images=True)
+
+    run = await _deploy(env)
+
+    assert run.status is PipelineStatus.SUCCEEDED, run.error
+    kept = next(s for s in run.steps if s["name"] == "keep_previous")["detail"]
+    assert "dump_run_id" not in kept and kept["images"]

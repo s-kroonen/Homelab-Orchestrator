@@ -10,7 +10,12 @@
   </div>
 </div>
 <p class="page-sub">Everything the orchestrator watches, wakes and backs up. Sub-services sit under their parent.</p>
-<div id="services-table"></div>
+<div class="tabs" role="tablist" aria-label="Services" id="svc-list-tabs">
+  <button role="tab" data-tab="services">Services <span class="n" id="n-tops"></span></button>
+  <button role="tab" data-tab="subs">Sub-services <span class="n" id="n-subs">{{ initial.rows | rejectattr("parent", "none") | list | length }}</span></button>
+</div>
+<div role="tabpanel" data-tab="services"><div id="services-table"></div></div>
+<div role="tabpanel" data-tab="subs" hidden><div id="subs-table"></div></div>
 <script type="application/json" id="initial">{{ initial | tojson }}</script>
 {% endblock %}
 {% block scripts %}

@@ -171,6 +171,8 @@ class DryRunPortainerAdapter(PortainerAdapter):
         self._containers: list[Container] = list(_CONTAINERS)
         self._read_only = bool(getattr(settings, "portainer_read_only", False))
         self.calls: list[str] = []
+        #: Extra image names (repo -> tags) made by tag_image.
+        self.tags: dict[str, set[str]] = {}
         #: Each stack's environment (values), by stack name.
         self.env: dict[str, list[tuple[str, str]]] = {k: list(v) for k, v in _ENV.items()}
         #: What the next exec writes / how it ends (tests set these).
@@ -284,6 +286,25 @@ class DryRunPortainerAdapter(PortainerAdapter):
             },
             "HostConfig": {"RestartPolicy": {"Name": "unless-stopped"}},
         }
+
+    async def tag_image(self, endpoint_id: int, image: str, repo: str, tag: str) -> None:
+        self._writable()
+        self.calls.append(f"tag {repo}:{tag}")
+        self.tags.setdefault(repo, set()).add(tag)
+
+    async def image_tags(self, endpoint_id: int, repo: str) -> list[str]:
+        base = {
+            c.image.rpartition(":")[2] or "latest"
+            for c in self._containers
+            if c.image.rpartition(":")[0] == repo or c.image == repo
+        }
+        return sorted(self.tags.get(repo, set()) | base)
+
+    async def remove_image(self, endpoint_id: int, ref: str) -> None:
+        self._writable()
+        self.calls.append(f"rmi {ref}")
+        repo, _, tag = ref.rpartition(":")
+        self.tags.get(repo, set()).discard(tag)
 
     def _set_stack(self, stack: Stack, **changes: Any) -> None:
         self._stacks = [

@@ -82,7 +82,7 @@ def describe(cfg: dict[str, Any]) -> list[str]:
     "preset_name",
     type=click.Choice(list(PRESETS)),
     default=None,
-    help="Start from none, probes, or probes+backup (replaces the guards).",
+    help="Start from none, probes, probes+backup or probes+keep3 (replaces the guards).",
 )
 @click.option(
     "--pre-probes/--no-pre-probes", default=None, help="Refuse unless probes are healthy."

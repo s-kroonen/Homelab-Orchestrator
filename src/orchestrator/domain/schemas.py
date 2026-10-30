@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from orchestrator.domain.enums import HealthState, ProbeKind
 
@@ -44,7 +44,8 @@ class HttpProbeConfig(_ProbeBase):
     kind: Literal[ProbeKind.HTTP] = ProbeKind.HTTP
     url: str
     method: Literal["GET", "HEAD"] = "GET"
-    expect_status: list[int] = Field(default_factory=lambda: [200])
+    #: Status codes (``200``) or whole classes (``"2xx"``) that count as healthy.
+    expect_status: list[int | str] = Field(default_factory=lambda: list[int | str]([200]))
     expect_body_contains: str | None = None
     headers: dict[str, str] = Field(default_factory=dict)
     verify_tls: bool = True
@@ -57,6 +58,35 @@ class HttpProbeConfig(_ProbeBase):
 
     def effective_sni(self) -> str | None:
         return self.sni_hostname or self.host_header
+
+    @field_validator("expect_status")
+    @classmethod
+    def _statuses(cls, value: list[int | str]) -> list[int | str]:
+        out: list[int | str] = []
+        for item in value:
+            if isinstance(item, str) and item.isdigit():
+                item = int(item)
+            if isinstance(item, int) and 100 <= item <= 599:
+                out.append(item)
+            elif (
+                isinstance(item, str)
+                and len(item) == 3
+                and item[0] in "12345"
+                and item[1:].lower() == "xx"
+            ):
+                out.append(item.lower())
+            else:
+                raise ValueError(f"{item!r} is not a status code (200) or class (2xx)")
+        if not out:
+            raise ValueError("expect_status needs at least one status code or class")
+        return out
+
+    def accepts(self, status: int) -> bool:
+        """``status`` is one of the codes, or in one of the classes."""
+        return any(
+            status == want if isinstance(want, int) else str(status)[0] == want[0]
+            for want in self.expect_status
+        )
 
 
 class TcpProbeConfig(_ProbeBase):

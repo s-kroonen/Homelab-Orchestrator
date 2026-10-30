@@ -232,6 +232,11 @@ ENV_SECTIONS: tuple[EnvSection, ...] = (
                 "The address you open Portainer at in a browser, for 'Open in Portainer' links "
                 "(blank: PORTAINER_URL).",
             ),
+            EnvKey(
+                "PORTAINER_DEPLOY_TIMEOUT_S",
+                "Seconds to wait for Portainer to start, redeploy or create a stack (it may build "
+                "or pull images first).",
+            ),
             EnvKey("HAOS_URL", "e.g. http://10.0.0.6:8123. For `controller: {type: haos ...}`."),
             EnvKey(
                 "HAOS_TOKEN",

@@ -282,7 +282,7 @@ class AdoptPlan:
     children: list[ChildPlan] = field(default_factory=list)
     hosts: list[str] = field(default_factory=list)
     probes: bool = True
-    #: a preset name (none, probes, probes+backup) or None for no deploy method
+    #: a preset name (none, probes, probes+backup, probes+keep3) or None for no deploy method
     deploy: str | None = None
     #: gitlab | github | generic - also creates the webhook secret
     webhook: str | None = None

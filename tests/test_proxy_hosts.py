@@ -667,7 +667,8 @@ def test_create_proxy_host_creates_a_non_required_http_probe(
     assert probe.required is False
     assert probe.config["url"] == "https://10.0.0.2/"
     assert probe.config["host_header"] == "media.example.com"
-    assert probe.config["expect_status"] == list(range(200, 500))
+    # a redirect or an auth wall proves the route; a 404 (Traefik: no such route) does not
+    assert probe.config["expect_status"] == ["2xx", "3xx", 401, 403]
 
     assert "probe.created" in _audit_actions_all()
 

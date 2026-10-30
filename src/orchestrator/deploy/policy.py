@@ -19,6 +19,8 @@ DEFAULTS: dict[str, Any] = {
     "enabled": True,
     "trigger": {"webhook": None},
     "guard": {
+        # Also ``keep_previous`` when set: before each redeploy, dump the database and tag the
+        # images it runs, so the last ``keep`` versions can be put back ({keep, dump, images}).
         "pre": {"probes": False, "backup": None},
         "post": {"probes": True, "timeout_s": 180, "settle_s": 30},
     },
@@ -34,6 +36,14 @@ PRESETS: dict[str, dict[str, Any]] = {
     "probes+backup": {
         "guard": {
             "pre": {"probes": True, "backup": {"max_age_h": 24, "take_if_older": True}},
+            "post": {"probes": True},
+        }
+    },
+    # A dev or test stack: no routine backups, but the last three versions (database dump and
+    # images) are kept from its deploys.
+    "probes+keep3": {
+        "guard": {
+            "pre": {"probes": True, "keep_previous": {"keep": 3, "dump": True, "images": True}},
             "post": {"probes": True},
         }
     },
@@ -102,7 +112,7 @@ def normalize_deploy(raw: dict[str, Any] | None) -> dict[str, Any]:
     guard = _dict(cfg.get("guard"), "guard")
     _only(guard, ("pre", "post"), "deploy guard")
     pre = _dict(guard.get("pre"), "guard.pre")
-    _only(pre, ("probes", "backup"), "deploy guard.pre")
+    _only(pre, ("probes", "backup", "keep_previous"), "deploy guard.pre")
     out["guard"]["pre"]["probes"] = _bool(pre.get("probes", False), "guard.pre.probes")
     backup = pre.get("backup")
     if backup not in (None, False):
@@ -113,6 +123,15 @@ def normalize_deploy(raw: dict[str, Any] | None) -> dict[str, Any]:
             "take_if_older": _bool(
                 backup.get("take_if_older", True), "guard.pre.backup.take_if_older"
             ),
+        }
+    keep = pre.get("keep_previous")
+    if keep not in (None, False):
+        keep = _dict(keep, "guard.pre.keep_previous")
+        _only(keep, ("keep", "dump", "images"), "deploy guard.pre.keep_previous")
+        out["guard"]["pre"]["keep_previous"] = {
+            "keep": _int(keep.get("keep", 3), "guard.pre.keep_previous.keep", 1),
+            "dump": _bool(keep.get("dump", True), "guard.pre.keep_previous.dump"),
+            "images": _bool(keep.get("images", True), "guard.pre.keep_previous.images"),
         }
     post = _dict(guard.get("post"), "guard.post")
     _only(post, ("probes", "timeout_s", "settle_s"), "deploy guard.post")
@@ -143,7 +162,8 @@ def check_target(deploy: dict[str, Any], controller: dict[str, Any]) -> None:
 
 
 def preset(name: str) -> dict[str, Any]:
-    """A normalised block for a named preset (``none``, ``probes``, ``probes+backup``)."""
+    """A normalised block for a named preset (``none``, ``probes``, ``probes+backup``,
+    ``probes+keep3``)."""
     if name not in PRESETS:
         raise ValueError(f"unknown preset {name!r} (one of {', '.join(PRESETS)})")
     return normalize_deploy(copy.deepcopy(PRESETS[name]))

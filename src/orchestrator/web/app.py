@@ -119,15 +119,18 @@ def _maybe_run_migrations() -> None:
 
 
 def _fold_stacks(settings: Settings) -> None:
-    """A stack is one sub-service: fold the per-container children older adoptions made
-    into their stack (``registry/stack_fold.py``), and save services.yaml if anything moved."""
+    """One-time registry upkeep at start: fold the per-container children older adoptions
+    made into their stack (``registry/stack_fold.py``), tighten the route probes that still
+    accept a 404 (``registry/traefik_probes.py``), and save services.yaml if anything changed."""
     from orchestrator.registry.autosave import keep_previous
     from orchestrator.registry.loader import save_registry_to_yaml
     from orchestrator.registry.stack_fold import fold_all
+    from orchestrator.registry.traefik_probes import tighten_old
 
     try:
         with session_scope() as session:
-            done = fold_all(session)
+            folded = bool(fold_all(session))
+            done = bool(tighten_old(session)) or folded  # route probes: 404 is not "up"
             if done and settings.registry_autosave:
                 keep_previous(settings)
                 save_registry_to_yaml(session, settings.services_yaml_path)
