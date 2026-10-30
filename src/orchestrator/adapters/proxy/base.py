@@ -333,6 +333,11 @@ class ProxyAdapter(ABC):
         ``None`` result into its own error.
         """
 
+    async def refresh_maintenance_rules(self) -> list[SyncEvent]:
+        """Rewrite maintenance-page rules an older version wrote differently (another range
+        of status codes), whichever routes they are on. Never raises. Default: nothing."""
+        return []
+
     def maintenance_middleware_name(self, service_slug: str) -> str | None:
         """The name of the middleware that carries the maintenance-page fallback
         for ``service_slug`` on a route, or ``None`` when this backend cannot say

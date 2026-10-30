@@ -134,12 +134,13 @@ _DUMMY_ROUTER_HOSTNAME = "orchestrator-maintenance-backend.invalid"
 #: drop the whole file's routes.
 SHARED_BACKEND_SERVICE_REF = f"{SHARED_BACKEND_SERVICE_NAME}-service"
 
-#: Traefik's own convention for "treat a fully unreachable backend as this
-#: middleware's trigger": a dead backend surfaces to the ``errors``
-#: middleware as a synthetic 5xx (Traefik's own "no server available"/"bad
-#: gateway" response), so the full server-error range is sufficient — no
-#: forwardAuth or separate health poll needed.
-_ERRORS_MIDDLEWARE_STATUS = ["500-599"]
+#: Only what Traefik itself answers when it cannot reach the backend: 502 Bad Gateway
+#: (connection refused, no route to the host), 503 Service Unavailable (no server to send it
+#: to) and 504 Gateway Timeout (a guest that is off often just does not answer). Every other
+#: 5xx is the application's own error and goes to the visitor untouched, body and all: the
+#: ``errors`` middleware cannot pass the original body on, so catching those hid the
+#: application's message behind this page (Portainer showed the page's HTML as its error).
+_ERRORS_MIDDLEWARE_STATUS = ["502-504"]
 
 _yaml = YAML(typ="rt")
 _yaml.indent(mapping=2, sequence=4, offset=2)
@@ -933,6 +934,46 @@ class TraefikManagerProxyAdapter(ProxyAdapter):
             )
             if raise_errors:
                 raise
+        return events
+
+    async def refresh_maintenance_rules(self) -> list[SyncEvent]:
+        """Rewrite every ``maintenance-<slug>`` middleware of ours whose status range is not
+        the current one. A push only re-applies the rule to a route that lacks it, so without
+        this a rule attached under an older range (``500-599``) would stay as it was."""
+        if not self._settings.traefik_manager_url.strip():
+            return []
+        events: list[SyncEvent] = []
+        try:
+            routes = await self._get_routes()
+            mws = routes.get("middlewares") if isinstance(routes, dict) else None
+            for mw in mws if isinstance(mws, list) else []:
+                name = mw.get("name") if isinstance(mw, dict) else None
+                text = mw.get("yaml") if isinstance(mw, dict) else None
+                if not isinstance(name, str) or not name.startswith("maintenance-"):
+                    continue
+                if not isinstance(text, str) or mw.get("type", "http") != "http":
+                    continue
+                try:
+                    errors = (_yaml.load(text) or {}).get("errors") or {}
+                except Exception:  # unreadable YAML is not ours to judge
+                    continue
+                if errors.get("service") != SHARED_BACKEND_SERVICE_REF:
+                    continue  # someone else's errors middleware
+                status = [str(s) for s in errors.get("status") or []]
+                if status == _ERRORS_MIDDLEWARE_STATUS:
+                    continue
+                slug = name.removeprefix("maintenance-")
+                content = self._middleware_yaml(SHARED_BACKEND_SERVICE_REF, slug)
+                await self._save_middleware(name, content, protocol="http", is_edit=True)
+                events.append(
+                    SyncEvent(
+                        "middleware.updated",
+                        name,
+                        {"status": list(_ERRORS_MIDDLEWARE_STATUS), "was": status},
+                    )
+                )
+        except TraefikManagerError as exc:
+            log.warning("traefik_manager.maintenance_refresh_failed", error=str(exc))
         return events
 
     async def remove_maintenance_fallback(
