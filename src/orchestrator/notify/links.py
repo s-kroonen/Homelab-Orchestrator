@@ -61,11 +61,15 @@ def link_for(level: str, target: str, event: str = "") -> str | None:
 
 
 def origin(settings: Settings) -> str:
-    """The address the dashboard is reached on (no trailing slash)."""
+    """The address people reach the dashboard on (no trailing slash): ``EXTERNAL_URL``, else
+    the passkey origin (the address people sign in on), and only then
+    ``ORCHESTRATOR_PUBLIC_URL``, the address Traefik forwards to, often a LAN one a phone away
+    from home cannot open."""
+    passkey = settings.webauthn_origin.strip()
+    if "://localhost" in passkey or "://127." in passkey:
+        passkey = ""  # the default, never set
     return (
-        (settings.external_url or settings.orchestrator_public_url or settings.webauthn_origin)
-        .strip()
-        .rstrip("/")
+        (settings.external_url or passkey or settings.orchestrator_public_url).strip().rstrip("/")
     )
 
 

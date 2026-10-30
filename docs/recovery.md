@@ -45,8 +45,8 @@ A restore overwrites the guest with an older copy, so it needs a person:
 1. A proposal is created — by the `propose_restore` step, or **Propose a restore…** on a
    service's Backups tab. It names the latest **verified** backup of the root service and
    is valid for `APPROVAL_TTL_HOURS` (24). A newer proposal supersedes an open one.
-2. The alert carries a link to `/approvals/<token>` (built from `EXTERNAL_URL`, else
-   `ORCHESTRATOR_PUBLIC_URL`). You need to be logged in.
+2. The alert carries a link to `/approvals/<token>` (built from `EXTERNAL_URL`, else the
+   passkey origin, else `ORCHESTRATOR_PUBLIC_URL`). You need to be logged in.
 3. **Approve and restore** stops the guest, restores the backup over it, starts it and
    waits for the service to be healthy, with progress on the page. **Deny** closes it.
 

@@ -139,7 +139,9 @@ def create_proposal(
 
 
 def approval_url(settings: Settings, token: str) -> str | None:
-    base = (settings.external_url or settings.orchestrator_public_url).strip().rstrip("/")
+    from orchestrator.notify.links import origin
+
+    base = origin(settings)
     return f"{base}/approvals/{token}" if base else None
 
 

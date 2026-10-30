@@ -934,6 +934,10 @@ class PushSubscription(SQLModel, table=True):
     last_ok_at: datetime | None = None
     #: The last failure from the push service ("" = the last send worked).
     last_error: str = ""
+    #: Paused devices get nothing but their own tests (migration 0032).
+    enabled: bool = Field(default=True)
+    #: info | warn | error | critical - the least severe alert this device gets.
+    min_severity: str = "info"
 
 
 class Setting(SQLModel, table=True):

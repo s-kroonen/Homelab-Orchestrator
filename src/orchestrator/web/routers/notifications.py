@@ -15,6 +15,7 @@ from sqlmodel import Session, col, select
 from orchestrator.audit import log as audit
 from orchestrator.db.models import NotificationEvent, NotificationRule
 from orchestrator.notify.engine import (
+    DEFAULT_EVENTS,
     EVENTS,
     LEVELS,
     SEVERITIES,
@@ -63,6 +64,8 @@ async def notifications_page(
         "events_known": [e for e in EVENTS if e != "test"],
         "severities": list(SEVERITIES),
         "channel_names": list(CHANNEL_NAMES),
+        #: What applies while there is no rule at all (shown, and copied into a rule to edit).
+        "default_events": list(DEFAULT_EVENTS),
     }
     return _templates.TemplateResponse(
         request, "notifications.html", {"admin": admin, "initial": initial}

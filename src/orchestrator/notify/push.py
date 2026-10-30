@@ -111,6 +111,18 @@ def send_one(
     )
 
 
+_RANK = {"info": 0, "warn": 1, "error": 2, "critical": 3}
+
+
+def wants(sub: PushSubscription, severity: NotifySeverity | None) -> bool:
+    """Does this device get an alert of ``severity``? Paused ones get nothing."""
+    if not sub.enabled:
+        return False
+    if severity is None:
+        return True
+    return _RANK.get(severity.value, 0) >= _RANK.get(sub.min_severity or "info", 0)
+
+
 def _gone(exc: Exception) -> bool:
     response = getattr(exc, "response", None)
     return getattr(response, "status_code", None) in (404, 410)
@@ -128,16 +140,20 @@ async def deliver(
     payload: str,
     *,
     endpoint: str | None = None,
+    severity: NotifySeverity | None = None,
 ) -> dict[str, str]:
-    """Send ``payload`` to every device (or just ``endpoint``). Returns
-    ``{device label: "ok" | "error: ..."}``. Devices the push service says are gone
-    are forgotten; every outcome is remembered on the subscription."""
+    """Send ``payload`` to every device that wants it (or just ``endpoint``, whatever its
+    settings: a test). A paused device, or one whose least severity is above ``severity``,
+    is left out. Returns ``{device label: "ok" | "error: ..."}``. Devices the push service
+    says are gone are forgotten; every outcome is remembered on the subscription."""
     out: dict[str, str] = {}
     with session_factory() as session:
         vapid, _public = get_vapid(session)
         subs = list(session.exec(select(PushSubscription)).all())
         if endpoint is not None:
             subs = [s for s in subs if s.endpoint == endpoint]
+        else:
+            subs = [s for s in subs if wants(s, severity)]
         subject = vapid_subject(settings)
         for sub in subs:
             name = sub.label or sub.user_agent[:40] or f"device {sub.id}"
@@ -186,10 +202,13 @@ class WebPushNotifier(Notifier):
     ) -> None:
         url = approve_url or "/activity"
         results = await deliver(
-            session_scope, self._settings, _payload(severity, title, body, tags, url)
+            session_scope,
+            self._settings,
+            _payload(severity, title, body, tags, url),
+            severity=severity,
         )
         if not results:
-            raise NotSent("no device has turned notifications on (Notifications page)")
+            raise NotSent("no device wants this one (Notifications page: Devices)")
         failed = {k: v for k, v in results.items() if v != "ok"}
         if len(failed) == len(results):
             raise RuntimeError("; ".join(f"{k}: {v}" for k, v in failed.items()))
