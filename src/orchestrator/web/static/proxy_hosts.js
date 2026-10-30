@@ -43,15 +43,22 @@
     refresh();
   }
   const edit = (h) => proxyHostDrawer({ host: h, services, onSaved: refresh });
-  async function push(h, verb) {
+  // Push one or many hosts to Traefik Manager in one request; a failing host never stops the rest.
+  async function push(hosts, verb) {
+    hosts = [].concat(hosts);
+    const what = hosts.length === 1 ? hosts[0].hostname : hosts.length + " proxy hosts";
     try {
-      const r = await api.post("/api/push", { hostnames: [h.hostname] });
+      const r = await api.post("/api/push", { hostnames: hosts.map((h) => h.hostname) });
       const bad = (r.results || r.push_results || []).filter((x) => !x.ok);
-      window.toast(bad.length ? bad.map((x) => x.message).join("; ") : verb + " " + h.hostname, bad.length ? "error" : "ok");
+      window.toast(bad.length ? bad.length + " not pushed: " + bad.slice(0, 3).map((x) => x.message).join("; ") + (bad.length > 3 ? "…" : "") : verb + " " + what, bad.length ? "error" : "ok");
     } catch (_e) { /* toast shown */ }
+    t.clearSelection();
     refresh();
     if (window.OrchShell) window.OrchShell.refreshPending();
   }
+  const pushAll = $("#push-all");
+  const showPushAll = (hosts) => { const n = hosts.filter((h) => h.sync_pending).length; pushAll.hidden = !n; pushAll.textContent = "Push " + n + " not pushed"; };
+  pushAll.addEventListener("click", () => push(t.rows.filter((h) => h.sync_pending), "Pushed"));
 
   const t = table($("#hosts"), {
     rows: init.hosts,
@@ -98,6 +105,7 @@
       const ids = rows.map((h) => h.id);
       const run = (action) => () => bulk("proxy-hosts", action, ids).then(() => { t.clearSelection(); refresh(); }, () => {});
       return [
+        { label: "Push to Traefik Manager", onClick: () => push(rows, "Pushed") },
         { label: "Switch on", onClick: run("enable") },
         { label: "Switch off", onClick: run("disable") },
         { label: "Wake on hit on", onClick: run("wake_on_hit_on") },
@@ -112,9 +120,11 @@
     },
   });
 
+  showPushAll(init.hosts);
+
   const r = region(el("div"), {
     load: () => api.get("/api/proxy-hosts", { suppressToast: true }),
-    render: (hosts) => { live = true; t.setRows(hosts); $("#ph-count").textContent = hosts.length; },
+    render: (hosts) => { live = true; t.setRows(hosts); showPushAll(hosts); $("#ph-count").textContent = hosts.length; },
     topics: ["registry", "pending"], wait: 1500, every: 60000, age,
   });
   const svcRegion = region(el("div"), {

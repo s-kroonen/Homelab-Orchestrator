@@ -83,14 +83,13 @@ def probe_name_for_hostname(hostname: str) -> str:
 
 
 #: This probe answers "is Traefik routing this host to a live backend at
-#: all", not "does the app's homepage render". The bare root path almost
-#: never returns a plain 200 for a real app — a login redirect, an auth
-#: wall, a 404 at "/" with the real content elsewhere are all completely
-#: normal and all prove the route works. Only a genuine gateway/server
-#: error (5xx — Traefik's own "no backend"/"bad gateway" responses, or the
-#: app itself erroring) means the route is actually broken, so every 2xx,
-#: 3xx and 4xx counts as reachable.
-_EXPECT_STATUS = list(range(200, 500))
+#: all", not "does the app's homepage render". A redirect (3xx) or an auth
+#: wall (401, 403) at "/" proves the route works. A 404 does not: it is what
+#: Traefik itself answers when no router matches the host, so a missing route
+#: would look fine. 5xx (no backend, bad gateway, the app erroring) is broken.
+_EXPECT_STATUS: list[int | str] = ["2xx", "3xx", 401, 403]
+#: What these probes expected before (every 2xx-4xx, 404 included): rewritten once.
+_OLD_EXPECT_STATUS = list(range(200, 500))
 
 
 def _probe_config(settings: Settings, hostname: str) -> dict[str, Any]:
@@ -108,6 +107,24 @@ def _probe_config(settings: Settings, hostname: str) -> dict[str, Any]:
         # edit this probe by hand, same as any other.
         "verify_tls": False,
     }
+
+
+def tighten_old(session: Session) -> int:
+    """Rewrite the route probes that still accept every 2xx-4xx status (the old default) to
+    :data:`_EXPECT_STATUS`. Only ``expect_status`` changes; a hand-edited list is left alone.
+    Returns how many changed; commits when any did."""
+    changed = 0
+    for probe in session.exec(select(Probe).where(Probe.kind == ProbeKind.HTTP)).all():
+        cfg = probe.config or {}
+        if not probe.name.startswith("traefik:") or cfg.get("expect_status") != _OLD_EXPECT_STATUS:
+            continue
+        probe.config = {**cfg, "expect_status": list(_EXPECT_STATUS)}
+        session.add(probe)
+        changed += 1
+    if changed:
+        session.commit()
+        log.info("traefik_probe.tightened", probes=changed)
+    return changed
 
 
 def _find(session: Session, service_id: int, name: str) -> Probe | None:

@@ -240,3 +240,15 @@ def test_startup_folds_old_container_children_and_saves_the_registry(
     assert "backup_waits: true" in text
     with Session(get_engine()) as s:
         assert {x.slug for x in s.exec(select(Service)).all()} == {"portainer-vm", "shop"}
+
+
+def test_the_services_list_has_a_sub_services_tab(client: TestClient) -> None:
+    adopt_dev(client)
+    r = client.get("/services")
+    assert r.status_code == 200
+    assert 'data-tab="subs"' in r.text and '<span class="n" id="n-subs">1</span>' in r.text
+
+
+def test_the_proxy_hosts_page_can_push_many(client: TestClient) -> None:
+    r = client.get("/proxy-hosts")
+    assert r.status_code == 200 and 'id="push-all"' in r.text

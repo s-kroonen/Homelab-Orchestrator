@@ -15,6 +15,8 @@ SCOPES: dict[str, str] = {
     "deploy": "Run guarded deploys",
     "wake": "Wake services and nodes",
     "control": "Start, stop and restart services, stacks and containers; switch a service on or off",
+    "configure": "Change settings: adopt Portainer stacks, set database dumps and deploy settings, "
+    "a stack's Git branch and polling, which service a proxy host belongs to",
     "propose": "Ask for dangerous actions (restore, guest and node power, unguarded deploy, "
     "stack delete) - a person approves each one",
 }
@@ -26,14 +28,15 @@ ROLES: dict[str, tuple[str, ...]] = {
     "viewer": ("read",),
     "operator": ("read", "backup", "wake"),
     "deployer": ("read", "backup", "wake", "deploy", "control"),
-    "admin": ("read", "backup", "wake", "deploy", "control", "propose"),
+    "admin": ("read", "backup", "wake", "deploy", "control", "configure", "propose"),
 }
 
 ROLE_BLURBS: dict[str, str] = {
     "viewer": "Looks only. Cannot change anything.",
     "operator": "Looks, starts backups, wakes things up.",
     "deployer": "Also deploys and starts / stops / restarts. Dangerous actions are refused.",
-    "admin": "Everything, including asking for dangerous actions (each one needs a person).",
+    "admin": "Everything, including changing settings and asking for dangerous actions (each "
+    "one needs a person).",
 }
 
 

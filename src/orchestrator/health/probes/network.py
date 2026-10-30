@@ -100,7 +100,7 @@ class HttpProbe(Probe):
         if sni:
             details["sni_hostname"] = sni
 
-        if response.status_code not in cfg.expect_status:
+        if not cfg.accepts(response.status_code):
             return self._result(
                 row,
                 HealthState.FAILED,

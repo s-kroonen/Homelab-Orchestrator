@@ -2,7 +2,7 @@
  * Data: GET /api/views/services, refreshed in place on health, run and registry events. */
 (function () {
   "use strict";
-  const { $, el, api, fmt, region, table, drawer } = window.UI;
+  const { $, el, api, fmt, region, table, tabs, drawer } = window.UI;
   const { bulk, serviceActions, serviceDrawer, subList } = window.Objects;
   let view = JSON.parse($("#initial").textContent);
   const age = el("span", { class: "age" });
@@ -70,6 +70,47 @@
     },
   });
 
+  // Every sub-service in one list, with what it is part of and its stack.
+  const subsOf = (rows) => rows.filter((r) => r.parent);
+  const s = table($("#subs-table"), {
+    rows: subsOf(view.rows),
+    key: (r) => r.slug,
+    name: (r) => r.name,
+    noun: ["sub-service", "sub-services"],
+    placeholder: "Filter by name, slug, parent, stack…",
+    search: (r) => [r.name, r.slug, r.parent, r.stack ? r.stack.name : "", r.state.label].join(" "),
+    sort: { key: "parent", dir: 1 },
+    age: el("span", { class: "age" }),
+    columns: [
+      { key: "name", label: "Sub-service", sort: (r) => r.name.toLowerCase(),
+        render: (r) => [el("a", { href: "/services/" + encodeURIComponent(r.slug), style: { fontWeight: "600", color: "var(--text)" } }, r.name), el("span", { class: "sub mono" }, r.slug)] },
+      { key: "state", label: "State", sort: (r) => ["fail", "warn", "pending", "off", "ok"].indexOf(r.state.cls),
+        render: (r) => el("span", { class: "pill " + r.state.cls, title: r.state.why || null }, r.state.label) },
+      { key: "parent", label: "Part of", sort: (r) => (r.parent + " " + r.name).toLowerCase(),
+        render: (r) => two(bySlug[r.parent] ? bySlug[r.parent].name : r.parent, r.parent, "/services/" + encodeURIComponent(r.parent) + "?tab=subs") },
+      { key: "kind", label: "What", phone: false, sort: (r) => r.kind || "",
+        render: (r) => r.stack ? two("Stack " + r.stack.name, r.containers ? r.containers + " container" + (r.containers === 1 ? "" : "s") : "") : two(r.kind === "stack" ? "Stack" : "Service", "") },
+      { key: "check", label: "Last check", phone: false, render: (r) => two(r.check.text, r.check.at ? fmt.ago(r.check.at) : "") },
+      { key: "manage", label: "", render: (r) => r.stack ? el("a", { class: "btn ghost small", href: r.stack.href }, "Manage stack →") : null },
+    ],
+    chips: [
+      { key: "failed", label: "Failed", test: (r) => r.state.cls === "fail" },
+      { key: "stacks", label: "Stacks", test: (r) => !!r.stack },
+      { key: "off", label: "Off", test: (r) => r.state.cls === "off" },
+    ],
+    groupBy: [{ key: "parent", label: "Part of", of: (r) => r.parent }],
+    menu: (r) => serviceActions(r, view, refresh),
+    bulk: (rows) => {
+      const slugs = rows.map((r) => r.slug);
+      const run = (action) => () => bulk("services", action, slugs).then(() => { s.clearSelection(); refresh(); }, () => {});
+      return [{ label: "Check", onClick: run("resync") }, { label: "Enable", onClick: run("enable") }, { label: "Disable", onClick: run("disable") }];
+    },
+    empty: { title: "No sub-services", text: "Adopt a Portainer stack, or give a service a parent, and it shows here." },
+  });
+  tabs($("#svc-list-tabs"));
+  const counts = (rows) => { $("#n-tops").textContent = tops(rows).length; $("#n-subs").textContent = subsOf(rows).length; };
+  counts(view.rows);
+
   function policyDrawer(slugs) {
     drawer({
       title: "Set the backup policy",
@@ -87,7 +128,7 @@
   const r = region($("#services-table"), {
     initial: view,
     load: () => api.get("/api/views/services", { suppressToast: true }),
-    render: (data) => { view = data; const rows = tops(data.rows); t.setRows(rows); $("#svc-count").textContent = rows.length; },
+    render: (data) => { view = data; const rows = tops(data.rows); t.setRows(rows); s.setRows(subsOf(data.rows)); counts(data.rows); $("#svc-count").textContent = rows.length; },
     topics: ["health", "run", "registry"],
     wait: 1200,
     age,

@@ -132,7 +132,7 @@ def stack_suggest(endpoint: int, name: str, parent: str | None, as_json: bool) -
 @click.option(
     "--deploy",
     "deploy_preset",
-    type=click.Choice(["none", "probes", "probes+backup"]),
+    type=click.Choice(["none", "probes", "probes+backup", "probes+keep3"]),
     default=None,
 )
 @click.option("--webhook", type=click.Choice(["generic", "gitlab", "github"]), default=None)

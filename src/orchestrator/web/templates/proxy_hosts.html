@@ -4,7 +4,7 @@
 {% block content %}
 <div class="page-header">
   <h1>Proxy hosts <span class="count" id="ph-count">{{ initial.hosts | length }}</span></h1>
-  <div class="actions"><button type="button" id="add-host">+ Add proxy host</button></div>
+  <div class="actions"><button type="button" class="secondary" id="push-all" hidden>Push all not pushed</button><button type="button" id="add-host">+ Add proxy host</button></div>
 </div>
 <p class="page-sub">Hostnames Traefik serves for your services. Changes are pushed to Traefik Manager by themselves.</p>
 <nav class="tabbar" aria-label="Proxy hosts">

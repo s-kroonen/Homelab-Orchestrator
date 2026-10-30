@@ -147,6 +147,11 @@ in line with the DB rows. It runs from the autosaver after a change, on **Save t
 (after the YAML was written and committed - a push failure never undoes the save and is
 reported in the response), on **Push now**, and from the CLI.
 
+On the Proxy hosts page, **Push to Traefik Manager** in the bulk bar pushes the selected
+hosts, and **Push N not pushed** in the header pushes every host that is not pushed yet, in one
+`POST /api/push` with their `hostnames`. A host that fails is listed in the message; the
+others still go.
+
 ### What is remembered
 
 `ProxyHost.pushed_sig` (migration `0015_proxy_host_pushed_sig`, default empty =
@@ -863,7 +868,7 @@ linked to the `example-media` service gets a probe named
 config:
   url: "<PROBE_PROXY_BASE_URL>/"    # the gateway's LOCAL address
   host_header: media.example.com    # what the proxy routes on
-  expect_status: [200, 201, ..., 499]  # any 2xx/3xx/4xx — see below
+  expect_status: ["2xx", "3xx", 401, 403]  # see below
   verify_tls: false
 ```
 
@@ -872,13 +877,20 @@ HTTP probe in `services.yaml` already uses (see
 [probing_through_a_gateway.md](probing_through_a_gateway.md)) — no new probe
 kind, just one created for you from data the orchestrator already has.
 
-`expect_status` accepts every 2xx/3xx/4xx (200-499), not just `200`. This
+`expect_status` accepts any 2xx or 3xx, and 401 / 403, not just `200`. This
 probe answers "is Traefik routing this host to a live backend at all", not
 "does the app's homepage render" — it always hits the bare root path `/`,
-which for a real app very often redirects, sits behind a login wall, or
-404s while the real content lives elsewhere. All of that still proves the
-route works. Only a genuine 5xx (Traefik's own "no backend"/"bad gateway"
-responses, or the app itself erroring) counts as the route being broken.
+which for a real app very often redirects or sits behind a login wall. Both
+still prove the route works. Everything else fails: a **404** is what Traefik
+answers when no router matches the host (a missing or misnamed route), so it
+is no longer taken as "up", and neither are other 4xx or any 5xx (Traefik's
+"no backend" / "bad gateway", or the app erroring). An app whose root really
+is a 404 needs its own probe on a path that exists.
+
+`expect_status` takes status codes (`200`) and whole classes (`"2xx"`), in
+any probe. Probes created with the old 200-499 list are rewritten to the new
+one once, at startup (`traefik_probes.tighten_old`); a list you changed by hand
+is left alone.
 If you want this probe to validate something more specific, edit it by hand
 same as any other probe — but note that a manual edit is **not** preserved:
 the next Resync (or any create/update touching that `ProxyHost`) recomputes

@@ -3,6 +3,8 @@
     lock           (switched off? something else running? a guest backup running?)
     pre-guards     probes healthy?  a verified backup newer than N hours, or take one
     snapshot       what is deployed now (Git hash, image ids) - recorded, never secret
+    keep previous  (when set) a database dump and a ``pre-deploy-<time>`` tag on each image,
+                   keeping the last N
     redeploy       Portainer pulls the Git repository and rebuilds / pulls / recreates
     wait up        every container running and settled
     post-guards    probes healthy in time, then staying healthy
@@ -64,6 +66,18 @@ class DeployRefused(Exception):
     def __init__(self, message: str, code: str = "busy") -> None:
         super().__init__(message)
         self.code = code
+
+
+KEEP_TAG = "pre-deploy-"
+
+
+def image_repo(image: str) -> str:
+    """``registry:5000/team/app:1.2@sha256:...`` -> ``registry:5000/team/app``."""
+    name = image.split("@", 1)[0]
+    head, _, last = name.rpartition("/")
+    if ":" in last:
+        last = last.split(":", 1)[0]
+    return f"{head}/{last}" if head else last
 
 
 class DeployBlocked(Exception):
@@ -241,7 +255,11 @@ class DeployPipeline:
                 self._finish(session, run, svc, PipelineStatus.SUCCEEDED, None, trigger)
                 return
             if not outside:
-                rec.record("snapshot", "ok", detail=await self._snapshot(svc, stack))
+                snap = await self._snapshot(svc, stack)
+                rec.record("snapshot", "ok", detail=snap)
+                keep = cfg["guard"]["pre"].get("keep_previous")
+                if keep:
+                    await self._keep_previous(session, rec, svc, stack, snap, keep, trigger)
                 await self._redeploy(rec, svc, stack, cfg)
             await self._wait_up(session, rec, svc, cfg)
             await self._post_guards(session, rec, svc, tree, cfg)
@@ -461,6 +479,80 @@ class DeployPipeline:
             started_at=started,
             detail={"took_backup": True, "backup_run_id": backup_run.id, "why": why},
         )
+
+    async def _keep_previous(
+        self,
+        session: Session,
+        rec: StepRecorder,
+        svc: Service,
+        stack: Stack,
+        snap: dict[str, Any],
+        keep: dict[str, Any],
+        trigger: Trigger,
+    ) -> None:
+        """Keep what is deployed now, so a bad version can be rolled back: a database dump (the
+        dump's own ``keep`` decides how many stay) and a ``pre-deploy-<time>`` tag on each image
+        the stack runs, removing the oldest such tags beyond ``keep``. A dump that fails blocks
+        the deploy; an image that cannot be tagged is noted and the deploy goes on."""
+        from orchestrator.dumps.pipeline import DumpPipeline, DumpRefused
+
+        started = datetime.now(UTC)
+        detail: dict[str, Any] = {"keep": keep["keep"]}
+        if keep["dump"] and svc.dump:
+            try:
+                dump = await DumpPipeline(self._adapters, self._settings).run_for_service(
+                    session, svc.slug, trigger.actor
+                )
+            except DumpRefused as exc:
+                rec.record(
+                    "keep_previous", "failed", started_at=started, detail={"error": str(exc)}
+                )
+                raise DeployBlocked(f"the dump before the deploy could not run: {exc}") from exc
+            if dump.status is not PipelineStatus.SUCCEEDED:
+                rec.record(
+                    "keep_previous",
+                    "failed",
+                    started_at=started,
+                    detail={"dump_run_id": dump.id, "error": dump.error},
+                )
+                raise DeployBlocked(f"the dump before the deploy failed: {dump.error}")
+            detail["dump_run_id"] = dump.id
+        if keep["images"]:
+            detail.update(await self._tag_images(svc, stack, snap, keep["keep"], started))
+        rec.record("keep_previous", "ok", started_at=started, detail=detail)
+
+    async def _tag_images(
+        self, svc: Service, stack: Stack, snap: dict[str, Any], keep: int, now: datetime
+    ) -> dict[str, Any]:
+        adapter = self._portainer(svc)
+        tag = KEEP_TAG + now.strftime("%Y%m%d-%H%M%S")
+        tagged: list[str] = []
+        removed: list[str] = []
+        problems: list[str] = []
+        seen: set[str] = set()
+        for box in snap.get("containers") or []:
+            repo = image_repo(str(box.get("image") or ""))
+            image = str(box.get("image_id") or box.get("image") or "")
+            if not repo or not image or repo in seen:
+                continue
+            seen.add(repo)
+            try:
+                await adapter.tag_image(stack.endpoint_id, image, repo, tag)
+                tagged.append(f"{repo}:{tag}")
+                old = sorted(t for t in await adapter.image_tags(stack.endpoint_id, repo)
+                             if t.startswith(KEEP_TAG))  # fmt: skip
+                for t in old[: max(0, len(old) - keep)]:
+                    try:
+                        await adapter.remove_image(stack.endpoint_id, f"{repo}:{t}")
+                        removed.append(f"{repo}:{t}")
+                    except AdapterError as exc:
+                        problems.append(f"{repo}:{t} was not removed: {exc}")
+            except AdapterError as exc:
+                problems.append(f"{repo} was not tagged: {exc}")
+        out: dict[str, Any] = {"images": tagged, "removed": removed}
+        if problems:
+            out["problems"] = problems
+        return out
 
     async def _redeploy(
         self, rec: StepRecorder, svc: Service, stack: Stack, cfg: dict[str, Any]

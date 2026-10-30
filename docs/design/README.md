@@ -112,7 +112,7 @@ Something that is off on purpose (a node asleep, its services) is **off**, never
 | Screen | Wireframe |
 |---|---|
 | Dashboard: what needs attention, nodes, recent activity | [PNG](wireframes/Main.png) · [HTML](wireframes/Main.html) |
-| Services list: filters, bulk bar, row menu | [PNG](wireframes/Services.png) · [HTML](wireframes/Services.html) |
+| Services list: filters, bulk bar, row menu (its *Sub-services* tab is the same table, one row per sub-service) | [PNG](wireframes/Services.png) · [HTML](wireframes/Services.html) |
 | Nodes & guests | [PNG](wireframes/Nodes.png) · [HTML](wireframes/Nodes.html) |
 | Service: Overview tab | [PNG](wireframes/ServiceOverview.png) · [HTML](wireframes/ServiceOverview.html) |
 | Service: Configuration tab, editing in the drawer | [PNG](wireframes/ServiceConfig.png) · [HTML](wireframes/ServiceConfig.html) |

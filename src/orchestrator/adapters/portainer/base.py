@@ -336,3 +336,17 @@ class PortainerAdapter(ABC):
     async def inspect(self, endpoint_id: int, ref: str) -> dict[str, Any] | None:
         """Docker's own description of a container, environment values masked."""
         raise AdapterRequestError("inspecting a container is not supported here")
+
+    # -- images kept from earlier deploys --------------------------------------------------
+
+    async def tag_image(self, endpoint_id: int, image: str, repo: str, tag: str) -> None:
+        """Give the image ``image`` (an id or a name) the extra name ``repo:tag``."""
+        raise AdapterRequestError("tagging images is not supported here")
+
+    async def image_tags(self, endpoint_id: int, repo: str) -> list[str]:
+        """The tags images named ``repo`` have on this environment."""
+        raise AdapterRequestError("listing images is not supported here")
+
+    async def remove_image(self, endpoint_id: int, ref: str) -> None:
+        """Remove the name ``ref`` (repo:tag); the image goes with its last name."""
+        raise AdapterRequestError("removing images is not supported here")

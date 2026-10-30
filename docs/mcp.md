@@ -40,6 +40,7 @@ A connection carries a set of permissions; a role is a named preset.
 | `deploy` | run guarded deploys |
 | `wake` | wake services and nodes |
 | `control` | start / stop / restart services, stacks, containers; the one switch; start a guest |
+| `configure` | change settings: adopt a Portainer stack, a service's dump and deploy settings, a stack's Git branch and Portainer polling, which service a proxy host belongs to |
 | `propose` | **ask for** dangerous actions (below); each one still needs a person |
 
 | role | permissions |
@@ -47,7 +48,10 @@ A connection carries a set of permissions; a role is a named preset.
 | `viewer` | read |
 | `operator` | read, backup, wake |
 | `deployer` | read, backup, wake, deploy, control |
-| `admin` | all of the above, including propose |
+| `admin` | all of the above, including configure and propose |
+
+A connection made before `configure` existed does not have it: tick it on the AI assistants
+page.
 
 The consent page starts at `viewer`; nothing is granted you did not tick. A tool the connection
 may not use is not even listed to the assistant.
@@ -63,9 +67,14 @@ may not use is not even listed to the assistant.
 * **act** (runs at once, logged, audited as `mcp:<connection>`): `run_backup`, `run_dump`, `propose_restore`,
   `deploy_service` (with its guards), `wake_service`, `node_power wake`, `switch_service`,
   `service_action`, `stack_action`, `container_action`, `guest_power start`.
+* **configure** (act, needs `configure`): `adopt_stack`, `set_dump`, `set_deploy`, `set_stack_git`,
+  `link_proxy_host`. They make the same writes as the pages (validated, audited, `services.yaml`
+  saved by itself). Secrets never pass through them: a deploy webhook's secret is made on the
+  service page, and `adopt_stack` does not return one.
 * **dangerous** (waits for a person, needs `propose`): `guest_power stop`, `node_power power_off` /
   `restart`, `delete_stack`, `deploy_service` with `skip_guards`, `switch_service off` with
-  `include_guest`, `service_action stop` / `restart` on a `guest`.
+  `include_guest`, `service_action stop` / `restart` on a `guest`, `set_dump` with a `command`
+  (it runs a shell command in a container).
 
 The tools call the same code the dashboard buttons do, so every guard applies unchanged: nothing
 is stopped under a running backup, deploys run their pre-guards, the switch keeps its order.
