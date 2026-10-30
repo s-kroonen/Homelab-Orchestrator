@@ -781,6 +781,22 @@ class ProxyPusher:
             )
             return out
 
+        if routes is not None and not dry_run:
+            # Rules written by an older version (another status range) are rewritten in place.
+            refreshed = await adapters.proxy.refresh_maintenance_rules()
+            audit_sync_events(session, actor, refreshed)
+            out.extend(
+                PushResult(
+                    TARGET,
+                    "*",
+                    "fallback",
+                    True,
+                    f"maintenance page rule {e.name} now only catches "
+                    f"{', '.join(e.details.get('status', []))}",
+                )
+                for e in refreshed
+            )
+
         if dry_run:
             for ph, hs in needs:
                 for action in hs.actions:

@@ -70,8 +70,16 @@ newest twelve, with what was sent where ("Show folded and unsent" hides what was
 another alert or that no rule wanted; Activity → Alerts has the whole feed). On the right,
 **Channels** says which of ntfy, e-mail, webhook and push are set up (they are set up on
 Connections → Alerts), and **This device** turns alerts on or off for the browser you are using,
-installs the dashboard as an app, sends a test, and lists the devices with alerts on.
+installs the dashboard as an app, sends a test, and lists every device with push.
 **Send a test** in the header sends one to every channel.
+
+With no rule at all, the built-in default is shown as a rule of its own (the events above, every
+channel). **Make editable** copies it into a real rule, which then replaces the default.
+
+Each device has its own settings (**Edit** on its row, `PATCH /api/push/subscriptions/{id}`):
+its name, whether it gets alerts (a paused device gets only its own tests) and the least severe
+alert it gets (everything, warnings and worse, errors and worse, critical only). They apply on top
+of the rules: a rule decides whether an alert goes to push at all, the device whether it wants it.
 
 ## Where an alert takes you
 
@@ -91,8 +99,10 @@ the webhook, and the target in the Notifications feed and on the Activity page.
 | self-update | `/system` |
 | a request waiting for approval | its approval page (always wins over the above) |
 
-The address comes from `EXTERNAL_URL` (falling back to `ORCHESTRATOR_PUBLIC_URL`, then the
-passkey origin), so set it to the https address you use on your phone.
+The address comes from `EXTERNAL_URL`, falling back to the passkey origin (`WEBAUTHN_ORIGIN`, the
+address you sign in on) and only then to `ORCHESTRATOR_PUBLIC_URL`, which is the address Traefik
+forwards to and often a LAN one a phone away from home cannot open. Set `EXTERNAL_URL` to the https
+address you use on your phone. Deploy webhook URLs and restore approval links use the same order.
 
 If the service in an old alert has since been deleted, the link lands on a page that says so and
 offers to restore it from the [archive](archive.md).

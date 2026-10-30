@@ -63,7 +63,9 @@ def _secret(session: Session, slug: str) -> str:
 
 
 def webhook_url(settings: Settings, slug: str) -> str:
-    base = (settings.external_url or settings.orchestrator_public_url).strip().rstrip("/")
+    from orchestrator.notify.links import origin
+
+    base = origin(settings)
     return f"{base}/hooks/deploy/{slug}" if base else f"/hooks/deploy/{slug}"
 
 

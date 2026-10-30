@@ -214,3 +214,62 @@ def test_subscription_table_exists_in_the_models() -> None:
         assert s.exec(select(PushSubscription)).all() == []
     with session_scope() as s:
         assert s.exec(select(PushSubscription)).all() == []
+
+
+# -- a device's own settings -----------------------------------------------------------------------
+
+
+async def test_a_device_gets_only_what_its_settings_allow(
+    client: TestClient, sent: list[dict[str, Any]]
+) -> None:
+    client.post("/api/push/subscribe", json=SUB)
+    client.post(
+        "/api/push/subscribe", json={**SUB, "endpoint": SUB["endpoint"] + "2", "label": "Tab"}
+    )
+    pixel, tab = client.get("/api/push/subscriptions").json()
+    assert pixel["enabled"] is True and pixel["min_severity"] == "info"
+
+    r = client.patch(f"/api/push/subscriptions/{pixel['id']}", json={"min_severity": "error"})
+    assert r.status_code == 200 and r.json()["min_severity"] == "error"
+    client.patch(
+        f"/api/push/subscriptions/{tab['id']}", json={"enabled": False, "label": " Tablet "}
+    )
+    assert (
+        client.patch(
+            f"/api/push/subscriptions/{pixel['id']}", json={"min_severity": "loud"}
+        ).status_code
+        == 422
+    )
+    assert client.patch("/api/push/subscriptions/999", json={"enabled": True}).status_code == 404
+
+    channel = MultiNotifier({"push": push_mod.WebPushNotifier(get_settings())})
+    warn = await channel.notify_via(None, severity=NotifySeverity.WARN, title="w", body="b")
+    assert warn["push"].startswith("skipped:") and sent == []  # below Pixel's, Tablet paused
+    err = await channel.notify_via(None, severity=NotifySeverity.ERROR, title="e", body="b")
+    assert err == {"push": "ok"}
+    assert [c["subscription_info"]["endpoint"] for c in sent] == [SUB["endpoint"]]
+
+    # a paused device still gets its own test
+    r = client.post("/api/push/test", json={"endpoint": SUB["endpoint"] + "2"})
+    assert r.json() == {"results": {"Tablet": "ok"}, "ok": True}
+    actions = [e["action"] for e in client.get("/api/activity?kind=admin").json()]
+    assert "push.device_updated" in actions
+
+
+def test_alert_links_use_the_public_address(monkeypatch: pytest.MonkeyPatch) -> None:
+    from orchestrator import config as config_module
+    from orchestrator.notify.links import absolute
+
+    monkeypatch.setenv("ORCHESTRATOR_PUBLIC_URL", "http://10.0.0.5:8080")
+    monkeypatch.setenv("WEBAUTHN_ORIGIN", "https://orch.example.lan")
+    config_module.reset_settings_cache()
+    assert absolute(get_settings(), "/activity") == "https://orch.example.lan/activity"
+
+    monkeypatch.setenv("EXTERNAL_URL", "https://orchestrator.example.lan/")
+    config_module.reset_settings_cache()
+    assert absolute(get_settings(), "/x") == "https://orchestrator.example.lan/x"
+
+    monkeypatch.delenv("EXTERNAL_URL")
+    monkeypatch.setenv("WEBAUTHN_ORIGIN", "http://localhost:8080")  # the default, never set
+    config_module.reset_settings_cache()
+    assert absolute(get_settings(), "/x") == "http://10.0.0.5:8080/x"

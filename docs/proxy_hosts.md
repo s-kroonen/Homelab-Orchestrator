@@ -1059,17 +1059,28 @@ as every other optional integration in this app.
 
    ```yaml
    errors:
-     status: ["500-599"]
+     status: ["502-504"]
      service: orchestrator-maintenance-backend
      query: /maintenance/<slug>
    ```
 
-   `status` covers the full 5xx range — Traefik's own convention for "the
-   backend is unreachable at all", since a fully down backend surfaces to
-   this middleware as a synthetic 5xx (Traefik's own "no server
-   available"/"bad gateway" response). This alone is sufficient to catch a
+   `status` is only what Traefik itself answers when it cannot reach the
+   backend: 502 Bad Gateway (connection refused, no route to the host), 503
+   Service Unavailable (no server to send it to) and 504 Gateway Timeout (a
+   guest that is off often just does not answer). That is enough to catch a
    sleeping/off backend; a `forwardAuth`-based health check was considered
    and explicitly rejected as unnecessary complexity for the same outcome.
+
+   Every other 5xx is the application's own error and reaches the visitor
+   untouched, body included. The `errors` middleware cannot pass the
+   original body on, so the old range (`500-599`) hid an application's own
+   message behind this page; Portainer, for one, showed the page's HTML as
+   its error text. An application that answers 503 itself (a maintenance
+   mode) still gets the page.
+
+   Rules written with another range are rewritten on the next push
+   (`refresh_maintenance_rules`), whichever route they are attached to; the
+   push lists each one it changed.
    `query` is the literal path `/maintenance/<slug>` — exactly the existing
    `GET /maintenance/{service_slug}` route, unmodified; nothing there
    needed to change for this feature. `service` always points at the one

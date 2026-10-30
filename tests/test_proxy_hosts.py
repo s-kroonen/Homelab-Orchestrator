@@ -8,7 +8,6 @@ than imported, so neither test module depends on the other's internals.
 
 from __future__ import annotations
 
-from collections.abc import Iterator
 from types import SimpleNamespace
 from typing import Any
 
@@ -26,6 +25,7 @@ from orchestrator.domain.enums import GuestKind
 from orchestrator.registry.loader import read_yaml_file
 from orchestrator.web import auth as auth_lib
 from orchestrator.web.app import create_app
+from tests import open_apps
 
 # Captured once, at import time, before anything in this module monkeypatches
 # httpx.AsyncClient — a test that patches BOTH the direct-Traefik-API client
@@ -876,18 +876,6 @@ def _patch_tm_transport(monkeypatch: pytest.MonkeyPatch, handler: Any) -> None:
     monkeypatch.setattr(tm_mod.httpx, "AsyncClient", _PatchedAsyncClient)
 
 
-#: Apps started by ``_tm_client``; each is shut down when its test ends. Left running, their
-#: schedulers keep polling (and writing to whatever database is current) for the rest of the run.
-_TM_CLIENTS: list[TestClient] = []
-
-
-@pytest.fixture(autouse=True)
-def _close_tm_clients() -> Iterator[None]:
-    yield
-    while _TM_CLIENTS:
-        _TM_CLIENTS.pop().__exit__(None, None, None)
-
-
 def _tm_client(monkeypatch: pytest.MonkeyPatch, **env: str) -> TestClient:
     """Build a fresh app with the proxy adapter resolved to
     ``TraefikManagerProxyAdapter`` — ``DRY_RUN=false``,
@@ -904,9 +892,7 @@ def _tm_client(monkeypatch: pytest.MonkeyPatch, **env: str) -> TestClient:
         monkeypatch.setenv(key, value)
     config_module.reset_settings_cache()
     session_module.create_all_for_tests()
-    client = TestClient(create_app())
-    client.__enter__()
-    _TM_CLIENTS.append(client)
+    client = open_apps.keep(TestClient(create_app()))  # shut down when the test ends
     _login_as_first_admin(client, monkeypatch)
     return client
 

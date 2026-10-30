@@ -277,3 +277,51 @@ def test_the_middleware_points_at_the_service_traefik_manager_creates() -> None:
     body = TraefikManagerProxyAdapter._middleware_yaml(SHARED_BACKEND_SERVICE_REF, SLUG)
     assert f"service: {SHARED_BACKEND_SERVICE_REF}" in body
     assert SHARED_BACKEND_SERVICE_REF.endswith("-service")
+
+
+# -- only Traefik's "could not reach it" answers show the page ------------------------------------
+
+
+def test_the_rule_catches_only_502_to_504() -> None:
+    from orchestrator.adapters.proxy.traefik_manager import SHARED_BACKEND_SERVICE_REF
+
+    body = TraefikManagerProxyAdapter._middleware_yaml(SHARED_BACKEND_SERVICE_REF, SLUG)
+    assert "502-504" in body and "500-599" not in body
+
+
+async def test_an_older_rule_is_rewritten_and_others_are_left(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from orchestrator.adapters.proxy.traefik_manager import SHARED_BACKEND_SERVICE_REF
+
+    ref = SHARED_BACKEND_SERVICE_REF
+    current = TraefikManagerProxyAdapter._middleware_yaml(ref, "media")
+    listed = [
+        *_routes_response(ref, [ref])["middlewares"],  # maintenance-cloud, 500-599; cloud-hsts
+        {"name": "maintenance-media", "type": "http", "yaml": current},
+        {
+            "name": "maintenance-other",
+            "type": "http",
+            "yaml": "errors:\n  status: ['500-599']\n  service: someone-else\n  query: /x\n",
+        },
+    ]
+    saved: list[dict[str, str]] = []
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/routes":
+            return httpx.Response(200, json={"apps": [], "middlewares": listed})
+        if request.url.path == "/save-middleware":
+            from urllib.parse import parse_qsl
+
+            saved.append(dict(parse_qsl(request.content.decode())))
+            return httpx.Response(200, json={"ok": True})
+        return httpx.Response(404)
+
+    _patch(monkeypatch, handle)
+
+    events = await _adapter().refresh_maintenance_rules()
+
+    assert [(e.name, e.details["was"]) for e in events] == [(MW, ["500-599"])]
+    assert [s["middlewareName"] for s in saved] == [MW]
+    assert "502-504" in saved[0]["middlewareContent"]
+    assert f"/maintenance/{SLUG}" in saved[0]["middlewareContent"]

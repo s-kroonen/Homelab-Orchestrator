@@ -71,17 +71,28 @@
     if (!await confirm({ title: "Delete rule " + r.name + "?", action: "Delete" })) return;
     try { await api.del("/api/notifications/rules/" + r.id); rules.refresh(); } catch (_e) { /* toast */ }
   }
+  // Without rules the built-in default applies: shown as a row of its own, and copied into a
+  // real rule (which then replaces it) to change it.
+  const DEFAULT_ROW = { id: "default", builtin: true, name: "Default (built in)", enabled: true, levels: [], scope: {}, events: V.default_events, min_severity: "info", channels: [] };
+  const withDefault = (rows) => (rows.length ? rows : [DEFAULT_ROW]);
+  async function copyDefault() {
+    try {
+      await api.post("/api/notifications/rules", { name: "Default", enabled: true, levels: [], scope: {}, events: V.default_events, min_severity: "info", channels: [] }, { suppressToast: true });
+      toast("The default is now a rule: edit it to change what goes where", "ok");
+    } catch (e) { toast(e.message, "error"); }
+    rules.refresh();
+  }
   const rt = table($("#rules"), {
-    rows: V.rules, key: (r) => r.id, plain: true, urlState: false, noun: ["rule", "rules"],
+    rows: withDefault(V.rules), key: (r) => r.id, plain: true, urlState: false, noun: ["rule", "rules"],
     columns: [
-      { key: "name", label: "Rule", render: (r) => el("strong", {}, r.name) },
+      { key: "name", label: "Rule", render: (r) => [el("strong", {}, r.name), r.builtin ? el("span", { class: "sub" }, "applies while there is no rule") : null] },
       { key: "when", label: "When", render: (r) => whenText(r) },
       { key: "about", label: "About", render: (r) => scopeText(r) },
       { key: "to", label: "Sends to", render: (r) => r.channels.length ? el("span", { class: "tags" }, r.channels.map((c) => el("span", { class: "tag" }, c))) : el("span", { class: "faint" }, "every channel") },
-      { key: "on", label: "On", render: (r) => el("button", { type: "button", class: "switch", role: "switch", "aria-checked": String(r.enabled), "aria-label": (r.enabled ? "Turn off " : "Turn on ") + r.name, onclick: (e) => { e.stopPropagation(); toggle(r); } }) },
-      { key: "edit", label: "", render: (r) => el("button", { type: "button", class: "ghost small", onclick: (e) => { e.stopPropagation(); ruleDrawer(r); } }, "Edit") },
+      { key: "on", label: "On", render: (r) => r.builtin ? null : el("button", { type: "button", class: "switch", role: "switch", "aria-checked": String(r.enabled), "aria-label": (r.enabled ? "Turn off " : "Turn on ") + r.name, onclick: (e) => { e.stopPropagation(); toggle(r); } }) },
+      { key: "edit", label: "", render: (r) => el("button", { type: "button", class: "ghost small", onclick: (e) => { e.stopPropagation(); if (r.builtin) copyDefault(); else ruleDrawer(r); } }, r.builtin ? "Make editable" : "Edit") },
     ],
-    menu: (r) => [
+    menu: (r) => r.builtin ? [{ label: "Make it an editable rule", onClick: copyDefault }] : [
       { label: "Edit…", onClick: () => ruleDrawer(r) },
       { label: r.enabled ? "Turn off" : "Turn on", onClick: () => toggle(r) },
       { label: "Its alerts", href: "/activity?kind=alert" },
@@ -94,7 +105,7 @@
   const rules = region($("#rules"), {
     initial: V.rules,
     load: () => api.get("/api/notifications/rules", { suppressToast: true }),
-    render: (rows) => rt.setRows(rows),
+    render: (rows) => rt.setRows(withDefault(rows)),
     topics: ["audit"], wait: 1200,
   });
   $("#new-rule").addEventListener("click", () => ruleDrawer(null));
@@ -199,14 +210,37 @@
   async function drawDevices() {
     let list;
     try { list = await api.get("/api/push/subscriptions", { suppressToast: true }); } catch (_e) { return; }
-    const mine = (await P.status()).endpoint;
+    // The list does not depend on this browser: one without push can still manage the others.
+    let mine = null;
+    try { mine = (await P.status()).endpoint; } catch (_e) { /* no push here */ }
     const box = clear($("#devices"));
     if (!list.length) return;
-    box.append(el("div", { class: "label" }, "Devices with alerts on (" + list.length + ")"),
-      list.map((d) => el("div", { class: "notif-dev" },
+    box.append(el("div", { class: "label" }, "Devices (" + list.length + ")"),
+      ...list.map((d) => el("div", { class: "notif-dev" },
         el("span", { style: { minWidth: 0 } }, el("strong", {}, d.label || d.user_agent || "device " + d.id), d.endpoint === mine ? [" ", el("span", { class: "pill ok" }, "this device")] : null,
+          el("span", { class: "pill " + (d.enabled ? (d.min_severity === "info" ? "ok" : "warn") : "off"), style: { marginLeft: "6px" } }, deviceGets(d)),
           el("span", { class: "faint" }, " · " + d.username + " · since " + fmt.short(d.created_at) + " · " + (d.last_error ? "last failed: " + d.last_error : d.last_ok_at ? "last ok " + fmt.ago(d.last_ok_at) : "not used yet"))),
-        el("button", { type: "button", class: "ghost small", onclick: async () => { try { await api.del("/api/push/subscriptions/" + enc(d.id)); } catch (_e) { /* toast */ } refreshDevice(); } }, "Remove"))));
+        el("span", { class: "notif-dev-actions" },
+          el("button", { type: "button", class: "ghost small", onclick: () => deviceDrawer(d) }, "Edit"),
+          el("button", { type: "button", class: "ghost small", onclick: async () => { if (!await confirm({ title: "Remove " + (d.label || "this device") + "?", body: "It stops getting alerts until it turns them on again.", action: "Remove" })) return; try { await api.del("/api/push/subscriptions/" + enc(d.id)); } catch (_e) { /* toast */ } refreshDevice(); } }, "Remove")))));
+  }
+  const SEV_TEXT = { info: "everything", warn: "warnings and worse", error: "errors and worse", critical: "critical only" };
+  const deviceGets = (d) => (d.enabled ? "gets " + SEV_TEXT[d.min_severity || "info"] : "paused");
+  function deviceDrawer(d) {
+    drawer({
+      title: "Edit " + (d.label || "device " + d.id), sub: "What this device gets of the alerts the rules send to push",
+      values: { label: d.label, enabled: d.enabled, min_severity: d.min_severity || "info" },
+      fields: [
+        { key: "label", label: "Name", required: true },
+        { key: "enabled", label: "Alerts on", type: "checkbox", help: "Off pauses it: nothing arrives but its own tests." },
+        { key: "min_severity", label: "Gets", type: "select", show: (v) => v.enabled, options: V.severities.map((s) => ({ value: s, label: SEV_TEXT[s] || s })) },
+      ],
+      async onSave(v) {
+        await api.patch("/api/push/subscriptions/" + enc(d.id), { label: v.label.trim(), enabled: !!v.enabled, min_severity: v.min_severity }, { suppressToast: true });
+        toast("Saved " + v.label.trim(), "ok");
+        drawDevices();
+      },
+    });
   }
   function refreshDevice() { drawDevice(); drawDevices(); }
   document.addEventListener("orch:installable", drawDevice);

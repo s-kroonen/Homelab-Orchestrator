@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, ConfigDict, Field
@@ -110,6 +110,8 @@ def _row(sub: PushSubscription) -> dict[str, Any]:
         "last_error": sub.last_error,
         "endpoint_tail": sub.endpoint[-18:],
         "endpoint": sub.endpoint,
+        "enabled": sub.enabled,
+        "min_severity": sub.min_severity or "info",
     }
 
 
@@ -172,6 +174,40 @@ async def unsubscribe(
         session.delete(sub)
         session.commit()
     return {"removed": sub is not None}
+
+
+class DeviceIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    label: str | None = None
+    enabled: bool | None = None
+    min_severity: Literal["info", "warn", "error", "critical"] | None = None
+
+
+@api.patch("/subscriptions/{sub_id}")
+async def update_subscription(
+    sub_id: int, body: DeviceIn, session: SessionDep, admin: CurrentAdmin
+) -> dict[str, Any]:
+    """A device's name, whether it gets alerts, and the least severe alert it gets."""
+    sub = session.get(PushSubscription, sub_id)
+    if sub is None:
+        raise HTTPException(404, "no such device")
+    changes = body.model_dump(exclude_none=True)
+    if "label" in changes:
+        changes["label"] = changes["label"].strip()[:80]
+    for key, value in changes.items():
+        setattr(sub, key, value)
+    session.add(sub)
+    audit.record(
+        session,
+        actor=admin.username,
+        action="push.device_updated",
+        target=f"device:{sub.label or sub.id}",
+        details=changes,
+    )
+    session.commit()
+    session.refresh(sub)
+    return _row(sub)
 
 
 @api.delete("/subscriptions/{sub_id}")
