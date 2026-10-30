@@ -260,6 +260,8 @@ class AccessLogCollector:
         self._wake_pipeline = WakePipeline(
             power=adapters.power, proxmox=adapters.proxmox, settings=settings
         )
+        # Polls still running; shutdown cancels them, so none writes after the app is gone.
+        self._polls: set[asyncio.Task[Any]] = set()
 
     # -- lifecycle -------------------------------------------------------
 
@@ -299,6 +301,11 @@ class AccessLogCollector:
         if self._scheduler.running:
             self._scheduler.shutdown(wait=False)
             await asyncio.sleep(0)
+        polls = list(self._polls)
+        for task in polls:
+            task.cancel()
+        if polls:
+            await asyncio.gather(*polls, return_exceptions=True)
         self._geoip.close()
         log.info("access_log_collector.stopped")
 
@@ -339,6 +346,16 @@ class AccessLogCollector:
 
     async def poll_once(self) -> dict[str, Any]:
         """One poll. Never raises; returns (and persists) the status dict."""
+        task = asyncio.current_task()
+        if task is not None:
+            self._polls.add(task)
+        try:
+            return await self._poll_and_save()
+        finally:
+            if task is not None:
+                self._polls.discard(task)
+
+    async def _poll_and_save(self) -> dict[str, Any]:
         now = datetime.now(UTC)
         status = _empty_status(now)
         try:
