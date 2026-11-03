@@ -25,6 +25,7 @@
     if (r.events.length) bits.push(r.events.join(" · ").replace(/_/g, " "));
     if (r.levels.length) bits.push("on a " + r.levels.join(" or "));
     if (r.min_severity && r.min_severity !== "info") bits.push("at least " + r.min_severity);
+    if (r.first_check) bits.push("on the first check");
     return bits.join(", ") || "everything";
   };
   async function save(rule, body) {
@@ -32,14 +33,14 @@
     else await api.post("/api/notifications/rules", body, { suppressToast: true });
     rules.refresh();
   }
-  const bodyOf = (r, over) => Object.assign({ name: r.name, enabled: r.enabled, levels: r.levels, scope: r.scope, events: r.events, min_severity: r.min_severity, channels: r.channels }, over || {});
+  const bodyOf = (r, over) => Object.assign({ name: r.name, enabled: r.enabled, levels: r.levels, scope: r.scope, events: r.events, min_severity: r.min_severity, channels: r.channels, first_check: !!r.first_check }, over || {});
   function ruleDrawer(rule) {
     const r = rule || { name: "", enabled: true, levels: [], scope: {}, events: [], min_severity: "info", channels: [] };
     drawer({
       title: rule ? "Edit " + rule.name : "Add a rule",
       sub: "Leave a list empty for \"any\". A rule sends what it matches to its channels; without rules everything that matters goes everywhere.",
       values: {
-        name: r.name, enabled: r.enabled, events: r.events, levels: r.levels, min_severity: r.min_severity,
+        name: r.name, enabled: r.enabled, events: r.events, levels: r.levels, min_severity: r.min_severity, first_check: !!r.first_check,
         slugs: (r.scope.slugs || []).join(", "), groups: (r.scope.groups || []).join(", "), nodes: (r.scope.nodes || []).join(", "), channels: r.channels,
       },
       saveLabel: rule ? "Save" : "Add rule",
@@ -48,8 +49,9 @@
         { key: "enabled", label: "On", type: "checkbox" },
         { type: "section", label: "When" },
         { key: "events", label: "Events", type: "checklist", options: V.events_known.map((e) => ({ value: e, label: e.replace(/_/g, " ") })) },
-        { key: "levels", label: "About a", type: "checklist", options: V.levels.map((l) => ({ value: l, label: l === "sub" ? "sub-service" : l })) },
+        { key: "levels", label: "About a", type: "checklist", options: V.levels.map((l) => ({ value: l, label: { sub: "sub-service", network: "the orchestrator's network", route: "route (proxy host)" }[l] || l })) },
         { key: "min_severity", label: "At least", type: "select", options: V.severities.map((s) => ({ value: s, label: s })) },
+        { key: "first_check", label: "Send on the first check", type: "checkbox", help: "Without it a change must be seen on two checks in a row before it is sent, so one blip is not an alert. With it, this rule's alerts go out at once." },
         { type: "section", label: "About" },
         { key: "slugs", label: "Only these services", placeholder: "slugs, comma separated", mono: true },
         { key: "groups", label: "Only these groups", placeholder: "groups, comma separated" },
@@ -58,7 +60,7 @@
         { key: "channels", label: "Channels", type: "checklist", help: "None ticked: every channel.", options: V.channel_names.map((c) => ({ value: c, label: CHANNEL_LABEL[c] || c })) },
       ],
       async onSave(v) {
-        await save(rule, { name: v.name, enabled: !!v.enabled, events: v.events || [], levels: v.levels || [], min_severity: v.min_severity,
+        await save(rule, { name: v.name, enabled: !!v.enabled, events: v.events || [], levels: v.levels || [], min_severity: v.min_severity, first_check: !!v.first_check,
           scope: { slugs: csv(v.slugs), groups: csv(v.groups), nodes: csv(v.nodes) }, channels: v.channels || [] });
         toast((rule ? "Saved " : "Added ") + v.name, "ok");
       },

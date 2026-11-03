@@ -55,6 +55,10 @@ class HttpProbeConfig(_ProbeBase):
     host_header: str | None = None
     #: TLS SNI to present. Defaults to ``host_header`` when that is set.
     sni_hostname: str | None = None
+    #: Look the URL's hostname up with this public DNS-over-HTTPS server (``1.1.1.1``)
+    #: and connect to the public address it gives: the way a visitor outside comes in,
+    #: whatever the LAN's own DNS says. The ``public:<hostname>`` route probes use it.
+    resolve_via: str | None = None
 
     def effective_sni(self) -> str | None:
         return self.sni_hostname or self.host_header
@@ -217,3 +221,9 @@ class ServiceVerdict(BaseModel):
     state: HealthState
     reason: str
     probe_results: list[ProbeResult]
+    #: What this verdict is an effect of, when it is one: ``network:lan``, ``node:<name>``,
+    #: ``service:<slug>``. The notifications group it under that (notify/monitor.py).
+    cause: str | None = None
+    #: The verdict is DOWN or FAILED because required checks got no answer while the
+    #: orchestrator's own network was fine: an outage, alerted as an error.
+    unreachable: bool = False

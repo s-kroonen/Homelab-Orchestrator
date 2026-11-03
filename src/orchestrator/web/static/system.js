@@ -5,7 +5,7 @@
  * (GitHub) and the updater's state are read after. */
 (function () {
   "use strict";
-  const { $, el, clear, fill, api, fmt, confirm } = window.UI;
+  const { $, el, clear, fill, api, fmt, confirm, pill } = window.UI;
   const V = JSON.parse($("#initial").textContent);
   const toast = (m, k) => window.toast(m, k);
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -65,6 +65,31 @@
       ["Its backups", [i.self_backup.enabled ? "every " + i.self_backup.interval_hours + " h, keep " + i.self_backup.keep : "off", " · ", el("a", { href: "/backup-policies?tab=orchestrator" }, "on Backups → Orchestrator")]],
     ]);
   }
+  // --- the orchestrator's own network checks ---------------------------------------------------------
+  let net = V.network;
+  function drawNet() {
+    const last = net && net.last;
+    const byName = Object.fromEntries(((last && last.checks) || []).map((c) => [c.name, c]));
+    const own = last ? last.own_network_ok : null;
+    fill($("#net-pill"), last ? pill(own === false ? "fail" : own ? "ok" : "off", own === false ? "own network down" : own ? "reachable" : "not configured") : pill("off", "not checked yet"));
+    fill($("#net-age"), last ? "checked " + fmt.ago(last.at) : "");
+    fill($("#net-list"), el("div", { class: "kv-list" }, net.targets.map((t) => {
+      const c = byName[t.name];
+      const state = !t.target ? ["off", "not configured"] : !c ? ["off", "not checked yet"] : c.ok ? ["ok", "answers"] : ["fail", "no answer"];
+      return el("div", { style: { padding: "8px 0", borderTop: "1px solid var(--border)" } },
+        el("div", { style: { display: "flex", gap: "8px", alignItems: "center", flexWrap: "wrap" } }, el("strong", {}, t.label), pill(state[0], state[1])),
+        el("div", { class: "faint", style: { overflowWrap: "anywhere", fontSize: "13px", marginTop: "2px" } },
+          t.target ? [el("span", { class: "mono" }, t.target), c && c.latency_ms != null ? " · " + c.latency_ms + " ms" : "", c && !c.ok && c.message ? " · " + c.message : ""]
+            : ["set ", el("code", {}, net.settings[t.name]), " in .env to check this"]));
+    })));
+  }
+  drawNet();
+  $("#net-check").addEventListener("click", async (e) => {
+    const b = e.currentTarget; b.disabled = true;
+    try { net = await api.post("/api/system/network/check", {}, { suppressToast: true }); drawNet(); } catch (err) { toast(err.message, "error"); }
+    b.disabled = false;
+  });
+
   async function reloadInfo() { try { info = await api.get("/api/system/info", { suppressToast: true }); drawInfo(); } catch (_e) { /* keep what is shown */ } }
   async function migrate() {
     try { const r = await api.post("/api/system/migrate", undefined, { suppressToast: true }); toast(r.message + (r.backup ? " Backup: " + r.backup : ""), "ok"); } catch (e) { toast(e.message, "error"); }

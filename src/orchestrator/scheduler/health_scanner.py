@@ -70,6 +70,8 @@ from orchestrator.db.session import session_scope
 from orchestrator.deploy.watch import DeployWatcher
 from orchestrator.domain.schemas import ServiceVerdict
 from orchestrator.health.engine import HealthEngine
+from orchestrator.health.network import NetworkStatus, check_network
+from orchestrator.health.network import save as save_network
 from orchestrator.logging_setup import get_logger
 from orchestrator.notify.engine import NotificationEngine
 from orchestrator.notify.monitor import collect
@@ -168,12 +170,16 @@ class HealthScanner:
         APScheduler job is logged by APScheduler and then forgotten, so every
         failure mode is caught and logged here instead."""
         cache: dict[str, ServiceVerdict] = {}
-        # One Proxmox read of nodes + guests for the whole cycle, same idea as
-        # ``cache``: every service is judged against the same moment's
-        # cluster state, and N services cost two API calls, not 2N.
-        guest_cache = self._engine.new_guest_cache()
+        # First the orchestrator's own network: it decides what "could not connect"
+        # means for everything after it (health/network.py).
+        network = await check_network(self._settings)
         try:
             with session_scope() as session:
+                save_network(session, network)
+                # One Proxmox read of nodes + guests for the whole cycle, same idea as
+                # ``cache``: every service is judged against the same moment's
+                # cluster state, and N services cost two API calls, not 2N.
+                guest_cache = self._engine.new_guest_cache(session, network)
                 stmt = select(Service).order_by(Service.slug)
                 stmt = stmt.where(Service.enabled == True)  # noqa: E712
                 services = session.exec(stmt).all()
@@ -194,7 +200,11 @@ class HealthScanner:
                         continue
                     try:
                         await self._engine.scan(
-                            session, svc, _cache=cache, _guest_cache=guest_cache
+                            session,
+                            svc,
+                            _cache=cache,
+                            _guest_cache=guest_cache,
+                            _network=network,
                         )
                     except Exception as exc:  # pragma: no cover - defensive
                         # One service's probe blowing up must not stop the
@@ -209,7 +219,7 @@ class HealthScanner:
                         )
 
                 inserted = self._store_samples(session, cache)
-                await self._announce(session, cache, guest_cache, tree)
+                await self._announce(session, cache, guest_cache, tree, network)
                 await self._watch_linked(session, guest_cache)
                 # Pruning is independent of whether this cycle's scans
                 # succeeded — a probe hiccup must not also stop old samples
@@ -230,6 +240,7 @@ class HealthScanner:
         cache: dict[str, ServiceVerdict],
         guest_cache: Any,
         tree: TreeIndex,
+        network: NetworkStatus | None = None,
     ) -> None:
         """Hand this cycle's results to the notification engine. Never raises."""
         if self._notifications is None:
@@ -238,7 +249,13 @@ class HealthScanner:
             cluster = None
             if guest_cache is not None:
                 cluster, _ = await guest_cache.cluster()
-            await self._notifications.observe(session, collect(session, cache, cluster, tree))
+            if cluster is not None:
+                from orchestrator.registry.node_addresses import fill_from_cluster
+
+                fill_from_cluster(session, cluster, self._settings, actor="system")
+            await self._notifications.observe(
+                session, collect(session, cache, cluster, tree, network)
+            )
             self._notifications.prune(session)
             if self._recovery is not None:
                 await self._recovery.run_cycle(session, cache, tree)

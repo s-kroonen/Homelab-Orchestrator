@@ -18,6 +18,10 @@ from orchestrator import config as config_module
 from orchestrator.db import session as session_module
 from orchestrator.db.models import Node, Service
 from orchestrator.domain.enums import GuestKind
+from orchestrator.health import network as network_module
+from orchestrator.health.network import NetworkStatus
+from orchestrator.health.network import remember as remember_network
+from orchestrator.scheduler import health_scanner as health_scanner_module
 from tests import open_apps
 
 
@@ -51,6 +55,15 @@ def _isolated_settings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Itera
 
     config_module.reset_settings_cache()
     session_module.reset_engine_cache()
+    remember_network(None)  # the last network check is process-wide: no test inherits one
+    # The health cycle's own network check would reach out to real hosts: tests get "nothing
+    # configured" (the old rules) unless they hand a NetworkStatus in (tests/test_detection.py).
+
+    async def _no_checks(_settings: object) -> NetworkStatus:
+        return NetworkStatus(checks=[])
+
+    monkeypatch.setattr(network_module, "check_network", _no_checks)
+    monkeypatch.setattr(health_scanner_module, "check_network", _no_checks)
 
     yield
 

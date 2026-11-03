@@ -15,7 +15,11 @@ scan; it announces CHANGES, and only the useful ones:
   hears about it; with no rules at all, failed / down / recovered go to every
   channel.
 
-UNKNOWN ("we could not look") is never announced and never counts as a change.
+UNKNOWN ("we could not look") is a state like the others: a change to it is debounced
+and announced (a warning), grouped under its cause like the rest. It is rare by design: a
+check that cannot connect while the orchestrator's own network is fine is DOWN, not
+UNKNOWN (health/engine.py ``judge_unreachable``). A rule with ``first_check`` sends on the
+first check that sees a change instead of waiting for it to be confirmed.
 """
 
 from __future__ import annotations
@@ -35,10 +39,13 @@ from orchestrator.notify.links import absolute, link_for
 
 log = get_logger(__name__)
 
-LEVELS = ("node", "guest", "service", "sub")
+#: network: the orchestrator's own LAN, internet and proxy checks (health/network.py);
+#: route: a proxy host's route, inside through the proxy and from outside.
+LEVELS = ("network", "node", "guest", "service", "sub", "route")
 EVENTS = (
     "failed",
     "down",
+    "unknown",
     "recovered",
     "flapping",
     "recovery_attempt",
@@ -72,6 +79,7 @@ _RANK = {s: i for i, s in enumerate(SEVERITIES)}
 DEFAULT_EVENTS = (
     "failed",
     "down",
+    "unknown",
     "recovered",
     "flapping",
     "backup_failed",
@@ -115,6 +123,8 @@ class Observation:
     #: The incident that explains this one ("node:pve1"); see the module docstring.
     cause_key: str | None = None
     scope: dict[str, str] = field(default_factory=dict)  # slug / group / node
+    #: Overrides the level's usual severity (an unreachable service is an outage: error).
+    severity: str | None = None
 
 
 @dataclass
@@ -136,7 +146,12 @@ def _severity_for(level: str, state: str) -> str:
     if state == "failed":
         return "error"
     if state == "down":
-        return "error" if level == "node" else "warn"
+        # A node, the orchestrator's own network or a route down is an outage; a service
+        # down is often deliberate (a guest switched off) unless it is unreachable, which
+        # the observation says itself.
+        return "error" if level in ("node", "network", "route") else "warn"
+    if state == "unknown":
+        return "warn"
     return "info"
 
 
@@ -144,6 +159,8 @@ class NotificationEngine:
     def __init__(self, notifier: Notifier, settings: Settings) -> None:
         self._notifier = notifier
         self._settings = settings
+        #: The enabled rules that send on the first check, read once per observe().
+        self._fast: list[NotificationRule] = []
 
     # -- state changes -----------------------------------------------------------
 
@@ -154,6 +171,7 @@ class NotificationEngine:
         became worth saying."""
         if not self._settings.notifications_enabled:
             return []
+        self._fast = [r for r in self._rules(session) if r.first_check]
         out: list[NotificationEvent] = []
         for obs in observations:
             event = self._advance(session, obs)
@@ -171,7 +189,7 @@ class NotificationEngine:
             session.add(TargetState(level=obs.level, key=obs.key, state=obs.state, since=now))
             return None
         row.updated_at = now
-        if obs.state == "unknown" or obs.state == row.state:
+        if obs.state == row.state:
             row.pending_state, row.pending_count = "", 0
             session.add(row)
             return None
@@ -180,7 +198,7 @@ class NotificationEngine:
             row.pending_count += 1
         else:
             row.pending_state, row.pending_count = obs.state, 1
-        if row.pending_count < max(1, self._settings.notify_confirm_scans):
+        if row.pending_count < self._confirmations(obs):
             session.add(row)
             return None
 
@@ -240,7 +258,7 @@ class NotificationEngine:
             key=obs.key,
             name=obs.name,
             event=obs.state,
-            severity=_severity_for(obs.level, obs.state),
+            severity=obs.severity or _severity_for(obs.level, obs.state),
             title=f"{obs.name} is {word}",
             body=(obs.reason or f"{obs.name} is {obs.state}.")[:1500],
             cause_key=obs.cause_key,
@@ -250,10 +268,28 @@ class NotificationEngine:
         if obs.cause_key:
             level, _, key = obs.cause_key.partition(":")
             cause = session.get(TargetState, (level, key))
-            if cause is not None and cause.state in ("failed", "down"):
+            if cause is not None and cause.state in ("failed", "down", "unknown"):
                 return self._suppressed_event(event, f"covered by {obs.cause_key}")
         row.announced = obs.state
         return event
+
+    def _confirmations(self, obs: Observation) -> int:
+        """How many checks in a row must see a change: 1 when an enabled rule asks for the
+        first check and would send this one, else ``NOTIFY_CONFIRM_SCANS``."""
+        if self._fast:
+            probe = Event(
+                level=obs.level,
+                key=obs.key,
+                name=obs.name,
+                event=obs.state if obs.state != "healthy" else "recovered",
+                severity=obs.severity or _severity_for(obs.level, obs.state),
+                title="",
+                body="",
+                scope=obs.scope,
+            )
+            if any(self._rule_matches(r, probe) for r in self._fast):
+                return 1
+        return max(1, self._settings.notify_confirm_scans)
 
     @staticmethod
     def _suppressed(obs: Observation, previous: str, reason: str) -> Event:

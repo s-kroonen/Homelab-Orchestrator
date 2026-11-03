@@ -55,8 +55,41 @@ async def system_page(
     initial = {
         "info": await get_info(settings),
         "display": display_state(session, settings),
+        "network": network_view(session, settings),
     }
     return _templates.TemplateResponse(request, "system.html", {"admin": admin, "initial": initial})
+
+
+def network_view(session: Session, settings: Any) -> dict[str, Any]:
+    """The orchestrator's own network checks (health/network.py): the last result, and
+    what each one checks."""
+    from orchestrator.health import network as net
+
+    last = net.load(session)
+    return {
+        "last": last,
+        "targets": [
+            {"name": n, "label": net.LABELS[n], "target": t} for n, t in net.targets(settings)
+        ],
+        "settings": {"lan": "NETWORK_CHECK_LAN", "internet": "NETWORK_CHECK_INTERNET",
+                     "proxy": "PROBE_PROXY_BASE_URL"},
+    }  # fmt: skip
+
+
+@api.get("/network")
+async def get_network(session: SessionDep, settings: SettingsDep) -> dict[str, Any]:
+    return network_view(session, settings)
+
+
+@api.post("/network/check")
+async def check_network_now(session: SessionDep, settings: SettingsDep) -> dict[str, Any]:
+    """Run the checks now (they run by themselves at the start of every health cycle)."""
+    from orchestrator.health import network as net
+
+    status_ = await net.check_network(settings)
+    net.save(session, status_)
+    session.commit()
+    return network_view(session, settings)
 
 
 @api.get("/info")

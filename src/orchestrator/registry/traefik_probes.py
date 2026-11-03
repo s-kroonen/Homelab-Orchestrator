@@ -28,9 +28,21 @@ nothing here is gateway-aware on its own; it only has to point the probe's
 ``url`` at the gateway, which the ``probe_proxy_base_url`` + ``host_header``
 shape above already does.
 
-This whole module is a no-op when ``Settings.probe_proxy_base_url`` is
-unset — same "empty disables it" convention as every other optional
-Traefik/PBS/Proxmox integration in this app.
+Each proxy host also gets ``public:<hostname>``: the way a visitor outside comes in.
+It looks the hostname up with a public DNS server (``1.1.1.1``, whatever the LAN's own
+DNS says), connects to that public address with the real hostname and checks the
+certificate - so it tests public DNS, the WAN address, the router's port forward and the
+proxy together. It needs the router to let the orchestrator reach its own public address
+from inside (NAT loopback, "hairpin"). It is ticked ``needs_internet``: while the
+orchestrator's internet check fails it is skipped, not counted. A hostname with no public
+DNS record is not checked from outside at all.
+
+Both probes are diagnostic (``required=False``); their results become route alerts of
+their own (notify/monitor.py), so a broken route is reported whether or not it gates the
+service.
+
+The inside probe needs ``Settings.probe_proxy_base_url``; without it only the outside
+one is kept.
 """
 
 from __future__ import annotations
@@ -69,6 +81,25 @@ class ProbeSyncEvent:
     config: dict[str, Any] | None = None
     #: The probe's ``enabled`` flag after the sync (it follows its proxy host).
     enabled: bool | None = None
+
+
+PUBLIC_PREFIX = "public:"
+#: The public DNS-over-HTTPS server the outside probes look hostnames up with.
+PUBLIC_RESOLVER = "1.1.1.1"
+
+
+def public_probe_name(hostname: str) -> str:
+    return f"{PUBLIC_PREFIX}{hostname}"
+
+
+def _public_config(hostname: str) -> dict[str, Any]:
+    return {
+        "url": f"https://{hostname}/",
+        "expect_status": _EXPECT_STATUS,
+        "resolve_via": PUBLIC_RESOLVER,
+        # From outside the certificate must be right: visitors get it too.
+        "verify_tls": True,
+    }
 
 
 def probe_name_for_hostname(hostname: str) -> str:
@@ -127,27 +158,57 @@ def tighten_old(session: Session) -> int:
     return changed
 
 
+def backfill_public(session: Session) -> int:
+    """Give every proxy host linked to a service its outside probe, if it has none yet
+    (hosts linked before ``public:<hostname>`` existed). Returns how many were made; commits
+    when any were."""
+    from orchestrator.config import get_settings
+    from orchestrator.db.models import ProxyHost
+
+    settings = get_settings()
+    made = 0
+    for ph in session.exec(select(ProxyHost)).all():
+        service_id = ph.service_id
+        if service_id is None or not ph.hostname:
+            continue
+        if _find(session, service_id, public_probe_name(ph.hostname)) is not None:
+            continue
+        if _upsert(session, service_id, ph.hostname, settings, ph.enabled, public=True):
+            made += 1
+    if made:
+        session.commit()
+        log.info("traefik_probe.public_backfilled", probes=made)
+    return made
+
+
 def _find(session: Session, service_id: int, name: str) -> Probe | None:
     return session.exec(
         select(Probe).where(Probe.service_id == service_id, Probe.name == name)
     ).first()
 
 
-def _remove(session: Session, service_id: int, hostname: str) -> ProbeSyncEvent | None:
-    name = probe_name_for_hostname(hostname)
-    probe = _find(session, service_id, name)
-    if probe is None or probe.id is None:
-        return None
-    event = ProbeSyncEvent("deleted", probe.id, service_id, name)
-    session.delete(probe)
-    return event
+def _remove(session: Session, service_id: int, hostname: str) -> list[ProbeSyncEvent]:
+    events = []
+    for name in (probe_name_for_hostname(hostname), public_probe_name(hostname)):
+        probe = _find(session, service_id, name)
+        if probe is None or probe.id is None:
+            continue
+        events.append(ProbeSyncEvent("deleted", probe.id, service_id, name))
+        session.delete(probe)
+    return events
 
 
 def _upsert(
-    session: Session, service_id: int, hostname: str, settings: Settings, enabled: bool
+    session: Session,
+    service_id: int,
+    hostname: str,
+    settings: Settings,
+    enabled: bool,
+    *,
+    public: bool = False,
 ) -> ProbeSyncEvent | None:
-    name = probe_name_for_hostname(hostname)
-    config = _probe_config(settings, hostname)
+    name = public_probe_name(hostname) if public else probe_name_for_hostname(hostname)
+    config = _public_config(hostname) if public else _probe_config(settings, hostname)
     probe = _find(session, service_id, name)
     if probe is None:
         probe = Probe(
@@ -156,9 +217,10 @@ def _upsert(
             kind=ProbeKind.HTTP,
             required=False,
             timeout_s=PROBE_SPECS[ProbeKind.HTTP].default_timeout_s,
-            order=_AUTO_PROBE_ORDER,
+            order=_AUTO_PROBE_ORDER + (1 if public else 0),
             config=config,
             enabled=enabled,
+            needs_internet=public,
         )
         session.add(probe)
         session.flush()
@@ -169,12 +231,19 @@ def _upsert(
     # disabled host is not served, so its probe must not run) is rewritten.
     # ``required`` and ``timeout_s`` are the operator's: a Resync, a proxy-host
     # edit or a disable -> enable must never undo "this route gates the service".
-    changed = probe.config != config or probe.kind is not ProbeKind.HTTP or probe.enabled != enabled
+    changed = (
+        probe.config != config
+        or probe.kind is not ProbeKind.HTTP
+        or probe.enabled != enabled
+        or (public and not probe.needs_internet)
+    )
     if not changed:
         return None
     probe.config = config
     probe.kind = ProbeKind.HTTP
     probe.enabled = enabled
+    if public:
+        probe.needs_internet = True
     session.add(probe)
     session.flush()
     return ProbeSyncEvent("updated", probe.id, service_id, name, config, enabled)
@@ -224,10 +293,6 @@ def sync_traefik_probe(
     ``old_service_id``/``old_hostname`` are all unset (nothing to do, nothing
     to undo — the "exists unlinked at the DB level" case).
     """
-    if not settings.probe_proxy_base_url:
-        log.debug("traefik_probe.skipped reason=probe_proxy_base_url_unset")
-        return []
-
     if old_service_id is None and old_hostname is None:
         old_service_id, old_hostname = service_id, hostname
 
@@ -242,14 +307,16 @@ def sync_traefik_probe(
     )
 
     if (moved_or_cleared or renamed_in_place) and old_service_id is not None and old_hostname:
-        removed = _remove(session, old_service_id, old_hostname)
-        if removed is not None:
-            events.append(removed)
+        events.extend(_remove(session, old_service_id, old_hostname))
 
     if service_id is None or not hostname:
         return events
 
-    upserted = _upsert(session, service_id, hostname, settings, enabled)
-    if upserted is not None:
-        events.append(upserted)
+    if settings.probe_proxy_base_url:
+        upserted = _upsert(session, service_id, hostname, settings, enabled)
+        if upserted is not None:
+            events.append(upserted)
+    public = _upsert(session, service_id, hostname, settings, enabled, public=True)
+    if public is not None:
+        events.append(public)
     return events

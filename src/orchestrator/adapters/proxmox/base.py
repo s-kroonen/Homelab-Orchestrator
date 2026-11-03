@@ -64,6 +64,9 @@ class ClusterStatus:
     #: None on a standalone node, which has no quorum to lose.
     quorate: bool | None = None
     cluster_name: str = ""
+    #: True when no Proxmox API answered and each node was judged by whether its own
+    #: address answers (health/guest_gate.py): online means "it answers", nothing more.
+    synthetic: bool = False
 
     @property
     def local_node(self) -> ClusterNode | None:
@@ -163,6 +166,10 @@ class ProxmoxAdapter(ABC):
     @abstractmethod
     async def version(self) -> VersionInfo:
         """Cheap authenticated call — used as the connectivity check."""
+
+    def set_fallback_hosts(self, addresses: list[str]) -> None:  # noqa: B027 - optional
+        """Other nodes' addresses to try when the configured host does not answer (any node
+        of a cluster serves the whole cluster's API). Default: no fallback."""
 
     async def node_health(self, node: str, address: str) -> NodeHealth:
         """Ask ``node``'s own Proxmox API at ``address`` (``host`` or

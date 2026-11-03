@@ -42,6 +42,12 @@
   </section>
 </div>
 
+<section class="card" aria-labelledby="h-net">
+  <div class="card-head"><h2 id="h-net">Network</h2><span id="net-pill"></span><span style="flex: 1"></span><span class="age" id="net-age"></span><button type="button" class="ghost small" id="net-check">Check now</button></div>
+  <p class="faint" style="margin: 0 0 10px; font-size: 13px">The orchestrator's own checks, run at the start of every health cycle. While the LAN router answers, a service that does not answer is down. While it does not, nothing can be concluded and services read unknown. While the internet does not answer, checks that need it are skipped.</p>
+  <div id="net-list"></div>
+</section>
+
 <section class="card" aria-labelledby="h-this">
   <div class="card-head"><h2 id="h-this">This orchestrator</h2><span id="mode-pill"></span><span class="faint" id="mode-text" style="font-size: 13px"></span></div>
   <dl class="kv kv-2" id="info-kv"></dl>

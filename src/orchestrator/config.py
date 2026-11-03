@@ -351,6 +351,10 @@ class Settings(BaseSettings):
     #: The reverse proxy's LOCAL address, e.g. https://10.0.0.2 — HTTP probes point
     #: here and route with a Host header, like curl --resolve.
     probe_proxy_base_url: str = ""
+    #: The orchestrator's own network, checked every health cycle (health/network.py):
+    #: the LAN router and something on the internet, host or host:port.
+    network_check_lan: str = ""
+    network_check_internet: str = "1.1.1.1"
     #: Slug of the gateway service. New services get `depends_on: [<this>]`, so a
     #: gateway outage reads as UNKNOWN downstream rather than as every service failing.
     gateway_service: str = ""

@@ -199,6 +199,8 @@ class ProbeCreate(_Body):
     enabled: bool = True
     #: On a sub-service: its root's backup waits for this check.
     backup_waits: bool = False
+    #: It goes over the internet: skipped while the internet check fails.
+    needs_internet: bool = False
 
 
 class ProbeUpdate(_Body):
@@ -210,6 +212,7 @@ class ProbeUpdate(_Body):
     config: dict[str, Any] | None = None
     enabled: bool | None = None
     backup_waits: bool | None = None
+    needs_internet: bool | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -254,6 +257,7 @@ def _probe_dict(probe: Probe) -> dict[str, Any]:
         "config": probe.config,
         "enabled": probe.enabled,
         "backup_waits": probe.backup_waits,
+        "needs_internet": probe.needs_internet,
     }
 
 
@@ -1393,6 +1397,7 @@ async def create_probe(
         config=body.config,
         enabled=body.enabled,
         backup_waits=body.backup_waits,
+        needs_internet=body.needs_internet,
     )
     session.add(probe)
     session.flush()
@@ -1430,7 +1435,7 @@ def apply_probe_update(
         _check_probe_name_free(session, probe.service_id, changes["name"], exclude_id=probe.id)
     if "kind" in changes:
         changes["kind"] = _parse_probe_kind(changes["kind"] or "")
-    for key in ("required", "timeout_s", "order", "enabled", "backup_waits"):
+    for key in ("required", "timeout_s", "order", "enabled", "backup_waits", "needs_internet"):
         if key in changes and changes[key] is None:
             raise _bad_request(f"{key} must not be null")
     if "timeout_s" in changes and changes["timeout_s"] <= 0:

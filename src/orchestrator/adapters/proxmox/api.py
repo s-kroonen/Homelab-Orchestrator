@@ -6,7 +6,12 @@ import asyncio
 import time
 from typing import Any
 
-from orchestrator.adapters.errors import AdapterAuthError, AdapterError, TaskTimeout
+from orchestrator.adapters.errors import (
+    AdapterAuthError,
+    AdapterError,
+    AdapterUnreachable,
+    TaskTimeout,
+)
 from orchestrator.adapters.proxmox.base import (
     BackupStorage,
     ClusterNode,
@@ -56,17 +61,96 @@ def _split_address(address: str, default_port: int) -> tuple[str, int]:
     return value, default_port
 
 
+class _FailoverClient:
+    """The configured Proxmox host, and the cluster's other nodes when it does not answer.
+
+    Any node of a cluster serves the whole cluster's API, so with one node off the network
+    (or switched off) the rest can still be read - and can say that node is offline. A
+    fallback that answered is kept until the configured host answers again; that is tried
+    first again after ``_RETRY_PRIMARY_S``. Only "could not connect" moves on: an auth or
+    request error from a host that answered is the answer.
+    """
+
+    _RETRY_PRIMARY_S = 300.0
+
+    def __init__(self, settings: Settings) -> None:
+        self._settings = settings
+        self.primary = self._make(settings.proxmox_host, settings.proxmox_port, connect=5.0)
+        self._fallbacks: list[str] = []
+        self._current: tuple[str, ProxmoxFamilyClient] | None = None
+        self._current_since = 0.0
+
+    def _make(self, host: str, port: int, *, connect: float = 4.0) -> ProxmoxFamilyClient:
+        s = self._settings
+        return ProxmoxFamilyClient(
+            flavor="pve",
+            host=host,
+            port=port,
+            token_id=s.proxmox_token_id,
+            token_secret=s.proxmox_token_secret.get_secret_value(),
+            verify_tls=s.proxmox_verify_tls,
+            connect_timeout=connect,
+        )
+
+    def set_fallbacks(self, addresses: list[str]) -> None:
+        primary = self._settings.proxmox_host.strip().lower()
+        seen: list[str] = []
+        for a in addresses:
+            a = (a or "").strip()
+            if a and _split_address(a, 0)[0].lower() != primary and a not in seen:
+                seen.append(a)
+        self._fallbacks = seen
+
+    @property
+    def serving(self) -> str:
+        """Which host answers right now: the configured one, or a fallback."""
+        return self._current[0] if self._current else self._settings.proxmox_host
+
+    async def start(self) -> None:
+        await self.primary.start()
+
+    async def stop(self) -> None:
+        await self.primary.stop()
+        if self._current is not None:
+            await self._current[1].stop()
+            self._current = None
+
+    async def request(self, method: str, path: str, **kw: Any) -> Any:
+        if self._current is not None:
+            if time.monotonic() - self._current_since < self._RETRY_PRIMARY_S:
+                try:
+                    return await self._current[1].request(method, path, **kw)
+                except AdapterUnreachable:
+                    pass
+            await self._current[1].stop()
+            self._current = None
+        try:
+            return await self.primary.request(method, path, **kw)
+        except AdapterUnreachable as first:
+            for address in self._fallbacks:
+                host, port = _split_address(address, self._settings.proxmox_port)
+                client = self._make(host, port)
+                try:
+                    out = await client.request(method, path, **kw)
+                except AdapterUnreachable:
+                    await client.stop()
+                    continue
+                except Exception:
+                    await client.stop()
+                    raise
+                log.warning("proxmox.failover", primary=self._settings.proxmox_host, now=host)
+                self._current, self._current_since = (host, client), time.monotonic()
+                return out
+            raise first
+
+
 class LiveProxmoxAdapter(ProxmoxAdapter):
     def __init__(self, settings: Settings) -> None:
         self._settings = settings
-        self._client = ProxmoxFamilyClient(
-            flavor="pve",
-            host=settings.proxmox_host,
-            port=settings.proxmox_port,
-            token_id=settings.proxmox_token_id,
-            token_secret=settings.proxmox_token_secret.get_secret_value(),
-            verify_tls=settings.proxmox_verify_tls,
-        )
+        self._client = _FailoverClient(settings)
+
+    def set_fallback_hosts(self, addresses: list[str]) -> None:
+        self._client.set_fallbacks(addresses)
 
     async def start(self) -> None:
         await self._client.start()

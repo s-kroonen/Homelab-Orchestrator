@@ -326,31 +326,9 @@ async def fill_node_addresses(
         cluster = await adapters.proxmox.cluster_status()
     except AdapterError as exc:
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc)) from exc
-    by_name = {n.name: n for n in cluster.nodes}
-    filled: dict[str, str] = {}
-    skipped: list[str] = []
-    for node in session.exec(select(Node).order_by(Node.name)).all():
-        if node.address.strip():
-            continue
-        entry = by_name.get(node.name)
-        if entry is None:
-            skipped.append(node.name)
-            continue
-        address = settings.proxmox_host if entry.local else entry.ip
-        if not address:
-            skipped.append(node.name)
-            continue
-        node.address = address
-        session.add(node)
-        filled[node.name] = address
-    if filled:
-        audit.record(
-            session,
-            actor=admin.username,
-            action="node.addresses_filled",
-            target="nodes",
-            details={"filled": filled},
-        )
+    from orchestrator.registry.node_addresses import fill_from_cluster
+
+    filled, skipped = fill_from_cluster(session, cluster, settings, actor=admin.username)
     session.commit()
     return {"filled": filled, "skipped": skipped}
 

@@ -57,6 +57,12 @@ a mostly-powered-off cluster. Both are covered in
 
 ## Health model
 
+Every health cycle starts with the orchestrator's **own network** (`health/network.py`, shown
+on System → Network): can it reach its LAN router (`NETWORK_CHECK_LAN`), the internet
+(`NETWORK_CHECK_INTERNET`, default 1.1.1.1) and the proxy (`PROBE_PROXY_BASE_URL`)? A TCP
+connect each; a host that refuses the port still answered. That decides what "could not
+connect" means for everything after it - see [Detection](#detection) below.
+
 A scan runs three stages in order; each one short-circuits the rest:
 
 1. **Guest gate** (`health/guest_gate.py`) — for a service with a guest
@@ -65,8 +71,12 @@ A scan runs three stages in order; each one short-circuits the rest:
    not, the verdict is **DOWN** and no probe runs. The check is recorded as the
    first entry in the verdict's probe results (name `guest`, kind `guest`) and
    every probe is recorded as `skipped — guest stopped` / `skipped — node
-   offline`. If Proxmox cannot be read, the gate steps aside: the probes run as
-   before and the reason notes "guest state unknown".
+   offline`. If the configured Proxmox host does not answer, the adapter tries the
+   cluster's other nodes (their addresses, filled in from the cluster's own node list).
+   If no Proxmox API answers and the orchestrator's own network is fine, each node is
+   judged by whether its address answers on the Proxmox port: one that does not is
+   offline, and its guests are DOWN under it. Only when even that cannot be told does the
+   gate step aside: the probes run as before and the reason notes "guest state unknown".
 2. **Dependencies** — any `depends_on` service not HEALTHY makes this one
    UNKNOWN (`blocked: dependency 'nas' is DOWN (guest vm 9001 is stopped)…`).
 3. **Probes** — the required probes aggregate into one of the states below.
@@ -81,8 +91,8 @@ A scan runs three stages in order; each one short-circuits the rest:
 | -------- | ------------------------------------------------------------------------------------------------ | ----------- |
 | HEALTHY  | Node online, guest running AND all required probes pass (containers healthy, DB integrity ok).   | Runs        |
 | FAILED   | A definitive negative: unit failed, container exited/unhealthy, HTTP 5xx, integrity check fails. | Skipped, restore candidate. |
-| UNKNOWN  | Indeterminate — probe timed out, node unreachable, DB check couldn't run, dependency blocked.    | Skipped, alert only. |
-| DOWN     | The guest gate: node offline or guest not running. Probes were not run.                          | Skipped; **not** a restore candidate. |
+| UNKNOWN  | Cannot be determined: our own network is down, no required probe, a check could not run, a dependency is not healthy. | Skipped, alert only. |
+| DOWN     | Not running or not reachable: node offline, guest not running, or no required check got an answer while our own network is fine. | Skipped; **not** a restore candidate. |
 
 **Never overwrite a good backup with a bad one.** UNKNOWN is treated as
 non-clean (fail closed) so a network blip cannot cascade a failed backup.
@@ -102,6 +112,31 @@ persisted by name into plain string columns (`service_state.last_verdict`,
 `health_scan_sample.state`), so DOWN needed no migration. A `HealthEngine`
 constructed without a `proxmox=` adapter has no guest gate; every real
 construction site (scanner, wake and backup pipelines, CLI `scan`) passes one.
+
+### Detection
+
+UNKNOWN is a grey state: it hides outages, so it is kept for what really cannot be
+determined, and it is announced like any other change. The rules, after a node had its
+network cable pulled and nothing was announced for hours (every check that could not
+connect read UNKNOWN, UNKNOWN was never announced, and with that node's Proxmox API gone
+no node was said to be down):
+
+| What is seen | Our own network | Verdict | Alert |
+|---|---|---|---|
+| A required check gets no answer (connect refused for TCP, timeout, no route, DNS) | up | **DOWN** (unreachable); **FAILED** when its guest runs or another required check answers | error (`down` / `failed`) |
+| the same | down | UNKNOWN, cause `network:lan` | folded under "LAN router is DOWN" |
+| A check over the internet (`needs_internet`) | internet down | skipped, not counted | the internet check's own alert |
+| A certificate that does not validate (`verify_tls`) | - | FAILED | error |
+| Configured Proxmox host does not answer | - | the next node's API is asked | - |
+| No Proxmox API answers; a node's address does not answer | up | node DOWN; its guests and services DOWN under it | one error for the node |
+| No Proxmox API answers; no address to check | up | node UNKNOWN | warning |
+| A dependency is not healthy | - | UNKNOWN, cause the dependency | folded under it |
+| No required check configured, a check that cannot run (bad config, a transport refusing) | - | UNKNOWN | warning on change |
+| A proxy host's route, inside through the proxy or from outside (`public:<host>`), does not answer or fails | - | route DOWN / FAILED (its own alert, not the service's verdict) | error, folded under the service or the proxy when they are the cause |
+
+The orchestrator's own checks are observations too (level `network`): the LAN router,
+the internet and the proxy each alert when they stop answering (error), and everything
+that depends on them is folded under them.
 
 ### Periodic scanning and the shared-cache consistency guarantee
 

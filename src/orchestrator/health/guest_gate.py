@@ -18,10 +18,12 @@ know exactly what is wrong. The backup gate refuses it like any other
 non-HEALTHY verdict (see ``pipelines/backup.py``), and ``Wake before backup`` is
 what brings the guest up first.
 
-If Proxmox itself cannot be read, the gate does NOT short-circuit: the probes
-run as before and the verdict's reason notes that the guest state is unknown.
-An unreachable API must not be allowed to blank out the probes, which may
-still have something definite to say.
+If Proxmox itself cannot be read, the adapter first tries the cluster's other nodes (any
+node serves the whole cluster's API). When none answers and the orchestrator's own network
+is fine, each node is judged by whether its own address answers on the Proxmox port: one
+that does not is offline, so its guests are DOWN under it (one "node is DOWN" alert, not
+one per service). A node that answers but whose API does not leaves its guests' state
+unknown; then the probes run as before and the verdict's reason notes it.
 
 Fetching is shared: :class:`GuestStateCache` reads ``cluster_status`` and
 ``list_guests`` at most once each, lazily, and is handed to every scan in one
@@ -38,7 +40,7 @@ from dataclasses import dataclass
 from typing import Literal
 
 from orchestrator.adapters.errors import AdapterError
-from orchestrator.adapters.proxmox.base import ClusterStatus, Guest, ProxmoxAdapter
+from orchestrator.adapters.proxmox.base import ClusterNode, ClusterStatus, Guest, ProxmoxAdapter
 from orchestrator.domain.enums import GuestKind, HealthState
 from orchestrator.domain.schemas import GUEST_CHECK_KIND, ProbeResult
 
@@ -57,8 +59,19 @@ class GuestStateCache:
     one timeout per cycle rather than one per service.
     """
 
-    def __init__(self, proxmox: ProxmoxAdapter) -> None:
+    def __init__(
+        self,
+        proxmox: ProxmoxAdapter,
+        *,
+        nodes: list[tuple[str, str]] | None = None,
+        own_network_ok: bool | None = None,
+        port: int = 8006,
+    ) -> None:
         self._proxmox = proxmox
+        #: ``[(name, address)]`` of the registry's nodes, to judge them by when no API answers.
+        self._nodes = [(n, a) for n, a in (nodes or []) if a]
+        self._own_network_ok = own_network_ok
+        self._port = port
         self._lock = asyncio.Lock()
         self._cluster: ClusterStatus | None = None
         self._cluster_error: str | None = None
@@ -74,8 +87,24 @@ class GuestStateCache:
                     self._cluster = await self._proxmox.cluster_status()
                 except AdapterError as exc:
                     self._cluster_error = f"{type(exc).__name__}: {exc}"
+                    self._cluster = await self._by_reachability()
                 self._cluster_done = True
         return self._cluster, self._cluster_error
+
+    async def _by_reachability(self) -> ClusterStatus | None:
+        """No Proxmox API answered: judge each node by whether its address answers. None
+        when there is nothing to go by (no addresses, or our own network is down)."""
+        if not self._nodes or self._own_network_ok is not True:
+            return None
+        from orchestrator.health.network import reach
+
+        async def one(name: str, address: str) -> ClusterNode:
+            target = address if ":" in address.strip("[]") else f"{address}:{self._port}"
+            ok, _ms, _msg = await reach(target, timeout=4.0)
+            return ClusterNode(name=name, online=ok, ip=address)
+
+        nodes = await asyncio.gather(*(one(n, a) for n, a in self._nodes))
+        return ClusterStatus(nodes=sorted(nodes, key=lambda n: n.name), synthetic=True)
 
     async def guests(self) -> tuple[list[Guest] | None, str | None]:
         async with self._lock:
@@ -155,9 +184,12 @@ async def check_guest(
         if entry is not None:
             node_online = entry.online
             if not entry.online:
-                return GuestCheck(
-                    "down", f"node {node_name!r} is offline", node_online=False, **base
+                why = (
+                    f"node {node_name!r} does not answer at {entry.ip}"
+                    if cluster.synthetic
+                    else f"node {node_name!r} is offline"
                 )
+                return GuestCheck("down", why, node_online=False, **base)
 
     guests, guests_err = await cache.guests()
     if guests is None:
