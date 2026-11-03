@@ -226,7 +226,7 @@ async def test_disabling_a_host_skips_its_probe_and_enabling_brings_it_back_unch
     switch(False)
     off = _traefik_probe(service)
     assert (off.enabled, off.required, off.timeout_s) == (False, True, 33)
-    assert all(not p.enabled for p in _probes_for(service.id))  # type: ignore[arg-type]  # outside too
+    assert all(not p.enabled for p in _probes_for(service.id, ""))  # type: ignore[arg-type]  # outside too
     session.expire_all()
     engine = RecordingEngine({off.name: HealthState.FAILED})
     verdict = await engine.scan(session, service)
@@ -250,7 +250,7 @@ def test_the_probe_sync_is_audited_and_keeps_one_probe(
     host = _create_host(client, service)
     client.post(f"/api/proxy-hosts/{host['id']}/enabled", json={"enabled": False})
     client.post(f"/api/proxy-hosts/{host['id']}/enabled", json={"enabled": True})
-    names = sorted(p.name for p in _probes_for(service.id))  # type: ignore[arg-type]
+    names = sorted(p.name for p in _probes_for(service.id, ""))  # type: ignore[arg-type]
     assert names == ["public:media.example.com", "traefik:media.example.com"]  # one of each
     from tests.test_proxy_hosts import _audit_actions_all
 
