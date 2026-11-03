@@ -134,7 +134,10 @@ def test_service_page_renders_tablist_and_four_panels_with_counts(client: TestCl
     assert html.count('role="tab" ') == 5 and 'data-tab="subs" id="tab-subs" hidden' in html
     # The counts come from the data in the page.
     view = client.get(f"/api/views/service/{svc['slug']}").json()
-    assert len(view["service"]["probes"]) == 2 and len(view["service"]["proxy_hosts"]) == 1
+    # The two above, plus the proxy host's outside route check (public:).
+    names = sorted(p["name"] for p in view["service"]["probes"])
+    assert names == ["port", "public:media.example.com", "web"]
+    assert len(view["service"]["proxy_hosts"]) == 1
     js = client.get("/static/service.js").text
     assert '$("#n-probes").textContent' in js and '$("#n-related").textContent' in js
     # Old links to a part of the page land on the tab that holds it now.

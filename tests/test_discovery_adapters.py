@@ -32,8 +32,10 @@ def _serve(adapter: Any, routes: dict[str, Any], seen: list[httpx.Request] | Non
             return httpx.Response(404)
         return httpx.Response(200, json={"data": routes[path]})
 
-    adapter._client._client = httpx.AsyncClient(
-        base_url=adapter._client._base_url, transport=httpx.MockTransport(handle)
+    # The Proxmox adapter wraps its client in a failover; the PBS one does not.
+    client = getattr(adapter._client, "primary", adapter._client)
+    client._client = httpx.AsyncClient(
+        base_url=client._base_url, transport=httpx.MockTransport(handle)
     )
 
 

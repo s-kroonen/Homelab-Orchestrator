@@ -309,6 +309,23 @@ def test_a_route_down_while_its_service_is_fine_is_its_own_alert(session: Sessio
     assert route.state == "down" and route.cause_key is None
 
 
+def test_a_service_blocked_by_a_sub_service_is_grouped_under_it(session: Session) -> None:
+    tree, svc = _tree(session)
+    db = Service(slug="web-db", name="Web DB", node_id=svc.node_id, parent_id=svc.id)
+    session.add(db)
+    session.commit()
+    tree = TreeIndex.build(session)
+    verdict = ServiceVerdict(
+        state=HealthState.FAILED,
+        reason="dependency web-db is not healthy",
+        cause="service:web-db",
+        probe_results=[],
+    )
+    out = collect(session, {"web": verdict}, None, tree, _status())
+    (svc_obs,) = [o for o in out if o.level == "service"]
+    assert svc_obs.cause_key == "sub:web-db"
+
+
 async def test_routes_and_the_network_are_errors_and_a_first_check_rule_sends_at_once(
     session: Session,
 ) -> None:

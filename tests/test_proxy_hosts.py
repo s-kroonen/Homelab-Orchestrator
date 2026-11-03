@@ -645,9 +645,12 @@ def _second_service() -> Service:
         return svc
 
 
-def _probes_for(service_id: int) -> list[Probe]:
+def _probes_for(service_id: int, prefix: str = "traefik:") -> list[Probe]:
+    """The inside route probes (``traefik:``); each host also gets a ``public:`` twin,
+    the outside route (tests/test_detection.py covers those)."""
     with Session(get_engine()) as s:
-        return list(s.exec(select(Probe).where(Probe.service_id == service_id)).all())
+        rows = s.exec(select(Probe).where(Probe.service_id == service_id)).all()
+        return [p for p in rows if p.name.startswith(prefix)]
 
 
 def test_create_proxy_host_creates_a_non_required_http_probe(
@@ -680,6 +683,8 @@ def test_proxy_base_url_unset_never_creates_a_probe(client: TestClient, service:
     )
     assert r.status_code == 201, r.text
     assert _probes_for(service.id) == []
+    # The outside route needs no proxy address: it goes the way a visitor does.
+    assert [p.name for p in _probes_for(service.id, "public:")] == ["public:media.example.com"]
 
 
 def test_update_hostname_updates_host_header_without_duplicating_probe(
@@ -837,8 +842,14 @@ def test_auto_probe_appears_on_service_detail_as_non_required(
 
     detail = client.get(f"/api/registry/services/{service.slug}").json()
     probes_by_name = {p["name"]: p for p in detail["probes"]}
-    assert set(probes_by_name) == {"traefik:media.example.com", "manual-check"}
+    assert set(probes_by_name) == {
+        "traefik:media.example.com",
+        "public:media.example.com",
+        "manual-check",
+    }
     assert probes_by_name["traefik:media.example.com"]["required"] is False
+    assert probes_by_name["public:media.example.com"]["required"] is False
+    assert probes_by_name["public:media.example.com"]["needs_internet"] is True
     assert probes_by_name["manual-check"]["required"] is True
 
 

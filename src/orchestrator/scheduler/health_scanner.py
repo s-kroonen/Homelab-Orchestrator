@@ -174,8 +174,14 @@ class HealthScanner:
         # means for everything after it (health/network.py).
         network = await check_network(self._settings)
         try:
+            # Its own short transaction: a write held open through the scans below would
+            # lock the database (SQLite) for every other writer until the cycle ends.
             with session_scope() as session:
                 save_network(session, network)
+        except Exception as exc:  # pragma: no cover - defensive
+            log.error("health_scanner.network_save_failed", error=str(exc))
+        try:
+            with session_scope() as session:
                 # One Proxmox read of nodes + guests for the whole cycle, same idea as
                 # ``cache``: every service is judged against the same moment's
                 # cluster state, and N services cost two API calls, not 2N.
@@ -252,7 +258,9 @@ class HealthScanner:
             if cluster is not None:
                 from orchestrator.registry.node_addresses import fill_from_cluster
 
-                fill_from_cluster(session, cluster, self._settings, actor="system")
+                filled, _ = fill_from_cluster(session, cluster, self._settings, actor="system")
+                if filled:
+                    session.commit()  # rarely anything; never held through the sends below
             await self._notifications.observe(
                 session, collect(session, cache, cluster, tree, network)
             )

@@ -240,7 +240,7 @@ def _cause_key(cause: str | None, tree: TreeIndex) -> str | None:
     if not cause or not cause.startswith("service:"):
         return cause
     slug = cause.split(":", 1)[1]
-    dep = next((s for s in tree.services if s.slug == slug), None)
+    dep = tree.by_slug.get(slug)
     if dep is not None and tree.parent(dep) is not None:
         return f"sub:{slug}"
     return cause
