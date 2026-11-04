@@ -50,7 +50,7 @@ from orchestrator.registry.schema import (
     RegistryFile,
     ServiceSpec,
 )
-from orchestrator.registry.traefik_probes import probe_name_for_hostname
+from orchestrator.registry.traefik_probes import probe_name_for_hostname, public_probe_name
 from orchestrator.registry.tree import MAX_DEPTH
 
 log = get_logger(__name__)
@@ -134,6 +134,8 @@ def write_yaml_file(path: Path, registry: RegistryFile) -> str:
                 probe.pop("enabled", None)
             if not probe.get("backup_waits", False):
                 probe.pop("backup_waits", None)
+            if not probe.get("needs_internet", False):
+                probe.pop("needs_internet", None)
     buf = io.BytesIO()
     _yaml.dump(body, buf)
     data = buf.getvalue()
@@ -241,6 +243,7 @@ def _spec_from_db(session: Session) -> RegistryFile:
                         config=p.config,
                         enabled=p.enabled,
                         backup_waits=p.backup_waits,
+                        needs_internet=p.needs_internet,
                     )
                     for p in probes
                 ],
@@ -533,7 +536,12 @@ def apply_service_spec(
     # A registry saved before probes had ``enabled`` still lists the
     # ``traefik:<hostname>`` probe of a disabled host as on: the host is not
     # served, so the probe follows it (the same rule the proxy-host sync applies).
-    parked = {probe_name_for_hostname(h.hostname) for h in spec.proxy_hosts if not h.enabled}
+    parked = {
+        name
+        for h in spec.proxy_hosts
+        if not h.enabled
+        for name in (probe_name_for_hostname(h.hostname), public_probe_name(h.hostname))
+    }
     for pspec in spec.probes:
         session.add(
             Probe(
@@ -546,6 +554,7 @@ def apply_service_spec(
                 config=pspec.config,
                 enabled=pspec.enabled and pspec.name not in parked,
                 backup_waits=pspec.backup_waits,
+                needs_internet=pspec.needs_internet,
             )
         )
     for phspec in spec.proxy_hosts:

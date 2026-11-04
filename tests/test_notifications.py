@@ -118,10 +118,19 @@ async def test_recovery_is_announced_only_for_what_was_announced(session: Sessio
     assert [e.event for batch in out for e in batch] == ["failed", "recovered"]
 
 
-async def test_unknown_is_ignored(session: Session) -> None:
-    engine = engine_with(Recorder())
-    out = await feed(engine, session, [obs("web", "healthy")], *([[obs("web", "unknown")]] * 4))
-    assert sum(len(x) for x in out) == 0
+async def test_unknown_is_announced_like_any_other_change(session: Session) -> None:
+    # A grey state hides outages: a change to UNKNOWN is debounced and announced (a warning).
+    rec = Recorder()
+    engine = engine_with(rec)
+    out = await feed(
+        engine,
+        session,
+        [obs("web", "healthy")],
+        *([[obs("web", "unknown")]] * 2),
+        *([[obs("web", "healthy")]] * 2),
+    )
+    events = [(e.event, e.severity) for batch in out for e in batch]
+    assert events == [("unknown", "warn"), ("recovered", "info")]
     assert session.get(TargetState, ("service", "web")).state == "healthy"  # type: ignore[union-attr]
 
 

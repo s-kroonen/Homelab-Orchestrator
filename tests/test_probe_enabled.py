@@ -180,7 +180,7 @@ async def test_probe_test_still_runs_a_disabled_probe_on_demand(
 
 
 def _traefik_probe(service: Service) -> Probe:
-    (probe,) = _probes_for(service.id)  # type: ignore[arg-type]
+    (probe,) = [p for p in _probes_for(service.id) if p.name.startswith("traefik:")]  # type: ignore[arg-type]
     return probe
 
 
@@ -226,6 +226,7 @@ async def test_disabling_a_host_skips_its_probe_and_enabling_brings_it_back_unch
     switch(False)
     off = _traefik_probe(service)
     assert (off.enabled, off.required, off.timeout_s) == (False, True, 33)
+    assert all(not p.enabled for p in _probes_for(service.id, ""))  # type: ignore[arg-type]  # outside too
     session.expire_all()
     engine = RecordingEngine({off.name: HealthState.FAILED})
     verdict = await engine.scan(session, service)
@@ -238,7 +239,8 @@ async def test_disabling_a_host_skips_its_probe_and_enabling_brings_it_back_unch
     session.expire_all()
     engine = RecordingEngine({on.name: HealthState.FAILED})
     verdict = await engine.scan(session, service)
-    assert engine.ran == [on.name] and verdict.state is HealthState.FAILED
+    assert engine.ran == [on.name, "public:media.example.com"]  # inside and from outside
+    assert verdict.state is HealthState.FAILED
 
 
 def test_the_probe_sync_is_audited_and_keeps_one_probe(
@@ -248,10 +250,11 @@ def test_the_probe_sync_is_audited_and_keeps_one_probe(
     host = _create_host(client, service)
     client.post(f"/api/proxy-hosts/{host['id']}/enabled", json={"enabled": False})
     client.post(f"/api/proxy-hosts/{host['id']}/enabled", json={"enabled": True})
-    assert len(_probes_for(service.id)) == 1  # type: ignore[arg-type]
+    names = sorted(p.name for p in _probes_for(service.id, ""))  # type: ignore[arg-type]
+    assert names == ["public:media.example.com", "traefik:media.example.com"]  # one of each
     from tests.test_proxy_hosts import _audit_actions_all
 
-    assert _audit_actions_all().count("probe.updated") == 2
+    assert _audit_actions_all().count("probe.updated") == 4  # each switch updates both
 
 
 def test_resync_follows_the_hosts_enabled_state(

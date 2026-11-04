@@ -172,6 +172,8 @@ class RuleIn(BaseModel):
     events: list[str] = Field(default_factory=list)
     min_severity: str = "info"
     channels: list[str] = Field(default_factory=list)
+    #: Send on the first check that sees the change (no confirmation round).
+    first_check: bool = False
 
 
 def _clean_rule(body: RuleIn) -> dict[str, Any]:
@@ -207,6 +209,7 @@ def _clean_rule(body: RuleIn) -> dict[str, Any]:
         "events": list(dict.fromkeys(body.events)),
         "min_severity": body.min_severity,
         "channels": list(dict.fromkeys(body.channels)),
+        "first_check": body.first_check,
     }
 
 
@@ -220,6 +223,7 @@ def _rule_dict(rule: NotificationRule) -> dict[str, Any]:
         "events": list(rule.events or []),
         "min_severity": rule.min_severity,
         "channels": list(rule.channels or []),
+        "first_check": rule.first_check,
     }
 
 

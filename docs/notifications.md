@@ -21,18 +21,27 @@ silent whatever this says.** Check it: the **Send a test notification** button, 
 
 ## What triggers an alert
 
-Every health scan the engine looks at nodes (Proxmox cluster status), guests (running
-or not) and every service and sub-service, and announces CHANGES:
+Every health scan the engine looks at the orchestrator's own network (its LAN router, the
+internet, the proxy - System → Network), nodes (Proxmox cluster status, or whether the node
+answers when no API does), guests (running or not), every service and sub-service, and every
+proxy host's route (inside through the proxy, and from outside), and announces CHANGES:
 
-* **failed** (a required probe failed), **down** (the node or guest is not running),
+* **failed** (a required probe failed), **down** (the node or guest is not running, or it is
+  not reachable while the orchestrator's own network is fine), **unknown** (it cannot be
+  determined - rare by design, see [architecture.md](architecture.md#detection)),
   **recovered** - and only a recovery for something that was announced.
-* Debounced: a change must be seen on `NOTIFY_CONFIRM_SCANS` (2) consecutive scans.
+* Severity: a node, the orchestrator's network or a route going down is an **error**, as is a
+  service that is unreachable; a service down because its guest was switched off is a
+  warning, unknown is a warning.
+* Debounced: a change must be seen on `NOTIFY_CONFIRM_SCANS` (2) consecutive scans, unless a
+  rule with **Send on the first check** matches it: then it goes out on the first scan.
 * Grouped under the root cause: a service that is down because its node or guest is
   down is *folded into* that alert (kept in the feed, marked "covered by node:pve1"),
   so a dead host sends one alert, not one per container.
 * Flap-damped: `NOTIFY_FLAP_THRESHOLD` (4) changes inside `NOTIFY_FLAP_WINDOW_S`
   (30 min) = one "flapping" alert, then quiet until it settles.
-* UNKNOWN ("we could not look") is never announced.
+* Effects of the orchestrator's own network being down are folded under its LAN router
+  check (they cannot be judged, and nothing could be sent anyway until it is back).
 
 Pipelines add **backup_failed** and **wake_failed** (default), **backup_retry** (default) and
 **backup_skipped** (a backup that was not taken because the service was unhealthy, had no
@@ -47,12 +56,13 @@ AI assistant adds **mcp_request** (with the approval link) - see [mcp.md](mcp.md
 
 ## Rules
 
-With **no rules**, `failed`, `down`, `recovered`, `flapping`, `backup_failed`, `wake_failed`,
+With **no rules**, `failed`, `down`, `unknown`, `recovered`, `flapping`, `backup_failed`, `wake_failed`,
 `recovery_succeeded`, `recovery_exhausted`, `restore_proposed`, `switch_failed`, `outside_change`,
 `deploy_blocked`, `deploy_failed`, `dump_failed` and `mcp_request` go to every channel
 (`recovery_attempt` stays in the feed unless a rule asks for it). A rule narrows or routes: levels
-(`node` / `guest` / `service` / `sub`), scope (services, groups, nodes), events, the
-least severity (`info` < `warn` < `error` < `critical`) and channels. An empty list
+(`network` / `node` / `guest` / `service` / `sub` / `route`), scope (services, groups, nodes),
+events, the least severity (`info` < `warn` < `error` < `critical`), channels, and whether it
+sends on the first check. An empty list
 means "any". Once any rule exists, an event is sent only if some enabled rule matches;
 the rest stay in the feed marked "no rule wants this". Rules live in the database
 (not `services.yaml`) and are part of the orchestrator's own backups (Backups → Orchestrator).

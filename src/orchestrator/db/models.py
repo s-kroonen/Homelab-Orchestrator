@@ -252,6 +252,9 @@ class Probe(SQLModel, table=True):
     #: sub-service as a whole is not ``backup_gate: required`` (a stack whose database
     #: container must be up, but whose web container may be down). See docs/service_tree.md.
     backup_waits: bool = Field(default=False)
+    #: It goes over the internet (a public address): while the orchestrator's internet
+    #: check fails it is skipped, not counted (health/network.py, migration 0033).
+    needs_internet: bool = Field(default=False)
 
 
 class ProxyHost(SQLModel, table=True):
@@ -818,6 +821,9 @@ class NotificationRule(SQLModel, table=True):
     min_severity: str = "info"
     #: Channel names (ntfy, email, webhook); empty = every configured channel.
     channels: list[str] = Field(default_factory=list, sa_column=Column(JSON))
+    #: Send on the first check that sees the change, instead of waiting for it to be
+    #: confirmed on NOTIFY_CONFIRM_SCANS checks in a row (migration 0033).
+    first_check: bool = Field(default=False)
     created_at: datetime = Field(default_factory=_utcnow)
     updated_at: datetime = Field(default_factory=_utcnow)
 

@@ -17,6 +17,7 @@ import asyncio
 import json
 from collections.abc import Callable
 from datetime import UTC, datetime
+from types import SimpleNamespace
 from typing import Any
 
 from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
@@ -147,6 +148,8 @@ async def deliver(
     is left out. Returns ``{device label: "ok" | "error: ..."}``. Devices the push service
     says are gone are forgotten; every outcome is remembered on the subscription."""
     out: dict[str, str] = {}
+    # Read, then send with no session open, then record: the alert engine may hold the
+    # database's write lock while it waits for this, so nothing here may need it to send.
     with session_factory() as session:
         vapid, _public = get_vapid(session)
         subs = list(session.exec(select(PushSubscription)).all())
@@ -154,32 +157,63 @@ async def deliver(
             subs = [s for s in subs if s.endpoint == endpoint]
         else:
             subs = [s for s in subs if wants(s, severity)]
-        subject = vapid_subject(settings)
-        for sub in subs:
-            name = sub.label or sub.user_agent[:40] or f"device {sub.id}"
-            try:
-                await asyncio.to_thread(send_one, vapid, subject, sub, payload)
-            except WebPushException as exc:
-                if _gone(exc):
-                    session.delete(sub)
-                    out[name] = "error: the device unsubscribed (removed)"
-                else:
-                    sub.last_error = _describe(exc)
-                    session.add(sub)
-                    out[name] = f"error: {sub.last_error}"
-                log.warning("push.send_failed", device=name, error=str(exc)[:200])
-            except Exception as exc:  # network down, bad key...
-                sub.last_error = str(exc)[:200]
-                session.add(sub)
-                out[name] = f"error: {sub.last_error}"
-                log.warning("push.send_error", device=name, error=str(exc)[:200])
+        targets = [
+            SimpleNamespace(
+                id=s.id,
+                endpoint=s.endpoint,
+                p256dh=s.p256dh,
+                auth=s.auth,
+                name=s.label or s.user_agent[:40] or f"device {s.id}",
+            )
+            for s in subs
+        ]
+    subject = vapid_subject(settings)
+    outcomes: list[tuple[int, str]] = []  # (id, "" ok | "gone" | error)
+    for sub in targets:
+        try:
+            await asyncio.to_thread(send_one, vapid, subject, sub, payload)  # type: ignore[arg-type]
+        except WebPushException as exc:
+            if _gone(exc):
+                outcomes.append((sub.id, "gone"))
+                out[sub.name] = "error: the device unsubscribed (removed)"
             else:
-                sub.last_ok_at = datetime.now(UTC)
-                sub.last_error = ""
-                session.add(sub)
-                out[name] = "ok"
-        session.commit()
+                outcomes.append((sub.id, _describe(exc)))
+                out[sub.name] = f"error: {_describe(exc)}"
+            log.warning("push.send_failed", device=sub.name, error=str(exc)[:200])
+        except Exception as exc:  # network down, bad key...
+            outcomes.append((sub.id, str(exc)[:200]))
+            out[sub.name] = f"error: {str(exc)[:200]}"
+            log.warning("push.send_error", device=sub.name, error=str(exc)[:200])
+        else:
+            outcomes.append((sub.id, ""))
+            out[sub.name] = "ok"
+    _record(session_factory, outcomes)
     return out
+
+
+def _record(session_factory: Callable[[], Any], outcomes: list[tuple[int, str]]) -> None:
+    """Remember each device's last outcome. Best-effort: a busy database must never turn
+    a push that was delivered into a failed one."""
+    if not outcomes:
+        return
+    try:
+        with session_factory() as session:
+            for sub_id, outcome in outcomes:
+                sub = session.get(PushSubscription, sub_id)
+                if sub is None:
+                    continue
+                if outcome == "gone":
+                    session.delete(sub)
+                    continue
+                if outcome:
+                    sub.last_error = outcome
+                else:
+                    sub.last_ok_at = datetime.now(UTC)
+                    sub.last_error = ""
+                session.add(sub)
+            session.commit()
+    except Exception as exc:
+        log.warning("push.record_failed", error=str(exc)[:200])
 
 
 class WebPushNotifier(Notifier):

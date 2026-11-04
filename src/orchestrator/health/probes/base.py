@@ -72,6 +72,8 @@ class Probe(ABC):
         tells us nothing about whether the service is healthy, and FAILED would
         mark it as a restore candidate on the strength of a network problem.
         """
+        from orchestrator.health.transports.base import TransportUnreachable
+
         return self._result(
             row,
             HealthState.UNKNOWN,
@@ -79,6 +81,8 @@ class Probe(ABC):
             details={
                 "transport_error": type(exc).__name__,
                 "indeterminate": True,
+                # The host the command runs on did not answer: that host is unreachable.
+                "unreachable": isinstance(exc, TransportUnreachable),
                 "reason": "the check could not be executed, so nothing was learned",
             },
         )

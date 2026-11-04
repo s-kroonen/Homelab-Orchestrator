@@ -52,6 +52,7 @@ from orchestrator.db.models import Node, Service, ServiceState
 from orchestrator.db.models import Probe as ProbeRow
 from orchestrator.domain.enums import HealthState
 from orchestrator.domain.schemas import ProbeResult, ServiceVerdict
+from orchestrator.health import network as net
 from orchestrator.health.guest_gate import GuestCheck, GuestStateCache, check_guest, has_guest
 from orchestrator.health.probes import get_probe_class
 from orchestrator.health.transports.base import (
@@ -158,6 +159,70 @@ class TransportFactory:
         )
 
 
+def judge_unreachable(
+    verdict: ServiceVerdict,
+    rows: Sequence[ProbeRow],
+    results: Sequence[ProbeResult],
+    guest: GuestCheck | None,
+    network: net.NetworkStatus | None,
+) -> ServiceVerdict:
+    """What an UNKNOWN made of checks that could not connect really is.
+
+    A check that never got through is not "we could not tell" when the orchestrator's own
+    network is fine: then the service is not reachable, and that is an outage.
+
+        own network down          -> UNKNOWN (cause network:lan): nothing can be concluded
+        guest running, or another
+        required check answered   -> FAILED: it is up, but this part does not answer
+        otherwise                 -> DOWN: not reachable (cause network:proxy when the
+                                     checks go through a proxy that does not answer)
+
+    UNKNOWN stays only for what really cannot be determined: no network of our own, no
+    required check, a check that could not be run (bad config, a transport refusing).
+    """
+    if verdict.state is not HealthState.UNKNOWN or network is None:
+        return verdict
+    wanted = {r.name for r in rows if r.required and r.enabled}
+    required = [r for r in results if r.probe_name in wanted and not r.details.get("skipped")]
+    gone = [r for r in required if r.state is HealthState.UNKNOWN and r.details.get("unreachable")]
+    if not gone:
+        return verdict
+    own = network.own_network_ok
+    if own is None:
+        return verdict  # nothing to judge by: no network check configured or answering
+    names = ", ".join(f"{r.probe_name} ({r.message})" for r in gone)
+    if own is False:
+        lan = next((c for c in network.checks if c.name == "lan"), None)
+        why = lan.message if lan is not None else "no network check answered"
+        return verdict.model_copy(
+            update={
+                "reason": f"the orchestrator cannot reach its own network ({why}), so nothing "
+                f"can be concluded: {verdict.reason}",
+                "cause": "network:lan",
+            }
+        )
+    answered = [r for r in required if r.state is HealthState.HEALTHY]
+    if (guest is not None and guest.outcome == "up") or answered:
+        up = "its guest is running" if guest is not None and guest.outcome == "up" else "it answers"
+        return verdict.model_copy(
+            update={
+                "state": HealthState.FAILED,
+                "reason": f"{up}, but {len(gone)} required probe(s) got no answer: {names}",
+                "unreachable": True,
+            }
+        )
+    via_proxy = network.proxy_ok is False and any(r.details.get("host_header") for r in gone)
+    return verdict.model_copy(
+        update={
+            "state": HealthState.DOWN,
+            "reason": f"not reachable: {names}"
+            + (" (the proxy does not answer)" if via_proxy else ""),
+            "cause": "network:proxy" if via_proxy else verdict.cause,
+            "unreachable": True,
+        }
+    )
+
+
 def can_verify(session: Session, service: Service) -> bool:
     """Whether ``service`` has an enabled, required probe: without one every verdict is
     UNKNOWN, so nothing can ever let a backup of it through."""
@@ -182,10 +247,27 @@ class HealthEngine:
         # the adapter bundle's Proxmox adapter.
         self._proxmox = proxmox
 
-    def new_guest_cache(self) -> GuestStateCache | None:
+    def new_guest_cache(
+        self, session: Session | None = None, network: net.NetworkStatus | None = None
+    ) -> GuestStateCache | None:
         """A fresh guest-state cache, or None when there is no guest gate.
-        The HealthScanner makes one per cycle and passes it to every scan."""
-        return GuestStateCache(self._proxmox) if self._proxmox is not None else None
+        The HealthScanner makes one per cycle and passes it to every scan.
+
+        With a ``session`` the registry's node addresses become the Proxmox adapter's
+        fallback hosts, and what nodes are judged by when no API answers at all."""
+        if self._proxmox is None:
+            return None
+        nodes: list[tuple[str, str]] = []
+        if session is not None:
+            nodes = [(n.name, n.address) for n in session.exec(select(Node)).all() if n.address]
+            self._proxmox.set_fallback_hosts([a for _, a in nodes])
+        network = network or net.latest(max_age_s=2 * self._settings.health_scan_interval_s)
+        return GuestStateCache(
+            self._proxmox,
+            nodes=nodes,
+            own_network_ok=network.own_network_ok if network is not None else None,
+            port=self._settings.proxmox_port,
+        )
 
     def can_verify(self, session: Session, service: Service) -> bool:
         """Whether a scan of ``service`` could ever say HEALTHY: it has an enabled, required
@@ -201,6 +283,7 @@ class HealthEngine:
         _cache: dict[str, ServiceVerdict] | None = None,
         _visiting: frozenset[str] | None = None,
         _guest_cache: GuestStateCache | None = None,
+        _network: net.NetworkStatus | None = None,
     ) -> ServiceVerdict:
         """Run every probe for ``service`` and return the aggregated verdict.
 
@@ -219,7 +302,11 @@ class HealthEngine:
         """
         cache = {} if _cache is None else _cache
         visiting = frozenset() if _visiting is None else _visiting
-        guest_cache = _guest_cache if _guest_cache is not None else self.new_guest_cache()
+        # The cycle's own network check, or the last one when this is a one-off scan.
+        network = _network or net.latest(max_age_s=2 * self._settings.health_scan_interval_s)
+        guest_cache = (
+            _guest_cache if _guest_cache is not None else self.new_guest_cache(session, network)
+        )
 
         rows = session.exec(
             select(ProbeRow)
@@ -241,7 +328,9 @@ class HealthEngine:
             )
             return down
 
-        blocker = await self._check_dependencies(session, service, cache, visiting, guest_cache)
+        blocker = await self._check_dependencies(
+            session, service, cache, visiting, guest_cache, network
+        )
         if blocker is not None:
             if guest is not None:
                 blocker = blocker.model_copy(
@@ -262,9 +351,12 @@ class HealthEngine:
             if not row.enabled:
                 results.append(self._disabled_result(row))
                 continue
+            if row.needs_internet and network is not None and network.internet_ok is False:
+                results.append(self._no_internet_result(row))
+                continue
             results.append(await self.run_probe(row))
 
-        verdict = self.aggregate(rows, results)
+        verdict = judge_unreachable(self.aggregate(rows, results), rows, results, guest, network)
         if guest is not None:
             # The guest result is prepended AFTER aggregation: it is not a
             # probe row and must never count towards (or against) the verdict.
@@ -315,6 +407,17 @@ class HealthEngine:
         )
 
     @staticmethod
+    def _no_internet_result(row: ProbeRow) -> ProbeResult:
+        """A probe over the internet while the orchestrator has none: skipped, not counted."""
+        return ProbeResult(
+            probe_name=row.name,
+            kind=row.kind,
+            state=HealthState.UNKNOWN,
+            message="skipped — the orchestrator's internet check fails",
+            details={"skipped": True, "skipped_because": "no_internet"},
+        )
+
+    @staticmethod
     def _down_verdict(guest: GuestCheck, rows: Sequence[ProbeRow]) -> ServiceVerdict:
         """DOWN: the guest gate failed, so every probe is recorded as skipped."""
         why = "node offline" if guest.node_online is False else "guest stopped"
@@ -344,6 +447,7 @@ class HealthEngine:
         cache: dict[str, ServiceVerdict],
         visiting: frozenset[str],
         guest_cache: GuestStateCache | None = None,
+        network: net.NetworkStatus | None = None,
     ) -> ServiceVerdict | None:
         """Scan this service's dependencies. Return a blocking verdict, or None.
 
@@ -388,6 +492,7 @@ class HealthEngine:
                     _cache=cache,
                     _visiting=visiting | {service.slug},
                     _guest_cache=guest_cache,
+                    _network=network,
                 )
 
             if verdict.state is HealthState.DOWN:
@@ -402,6 +507,7 @@ class HealthEngine:
                         f"itself."
                     ),
                     probe_results=[],
+                    cause=f"service:{dep_slug}",
                 )
             if verdict.state is not HealthState.HEALTHY:
                 return ServiceVerdict(
@@ -412,6 +518,7 @@ class HealthEngine:
                         f"NOT evidence about {service.slug!r} itself."
                     ),
                     probe_results=[],
+                    cause=f"service:{dep_slug}",
                 )
 
         return None

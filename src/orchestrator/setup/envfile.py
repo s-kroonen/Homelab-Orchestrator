@@ -521,6 +521,17 @@ ENV_SECTIONS: tuple[EnvSection, ...] = (
                 "written into each probe explicitly, never applied behind your back.",
             ),
             EnvKey(
+                "NETWORK_CHECK_LAN",
+                "Your LAN router (host or host:port), checked at the start of every health\n"
+                "cycle. While it answers, a service that does not answer is DOWN; while it\n"
+                "does not, nothing can be concluded and services read UNKNOWN. Shown on System.",
+            ),
+            EnvKey(
+                "NETWORK_CHECK_INTERNET",
+                "Something on the internet to reach (host or host:port), default 1.1.1.1.\n"
+                "While it does not answer, probes ticked 'needs internet' are skipped.",
+            ),
+            EnvKey(
                 "GATEWAY_SERVICE",
                 "Slug of the gateway service. New services get depends_on: [it], so a gateway\n"
                 "outage reads as UNKNOWN downstream instead of every service failing at once.",
@@ -715,6 +726,8 @@ EXAMPLE_VALUES: dict[str, str] = {
     "WEBAUTHN_ORIGIN": "https://orchestrator.example.lan",
     "SESSION_SECRET": "change-me-generate-a-long-random-string",
     "PROXMOX_HOST": "proxmox.example.lan",
+    "NETWORK_CHECK_LAN": "10.0.0.1",
+    "NETWORK_CHECK_INTERNET": "1.1.1.1",
     "PROXMOX_TOKEN_ID": "orchestrator@pve!backups",
     "PROXMOX_TOKEN_SECRET": "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx",
     "PROXMOX_RESTORE_TOKEN_ID": "orchestrator@pve!restore",

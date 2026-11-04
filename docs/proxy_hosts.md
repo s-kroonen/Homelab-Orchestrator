@@ -887,6 +887,21 @@ is no longer taken as "up", and neither are other 4xx or any 5xx (Traefik's
 "no backend" / "bad gateway", or the app erroring). An app whose root really
 is a 404 needs its own probe on a path that exists.
 
+**From outside, too.** Each linked host also gets `public:<hostname>`: the way a visitor
+comes in. It looks the hostname up with a public DNS server (`resolve_via: 1.1.1.1`,
+whatever the LAN's own DNS says), connects to that public address with the real hostname
+and checks the certificate (`verify_tls: true`), so it tests public DNS, the WAN address,
+the router's port forward and the proxy together. It needs the router to let the
+orchestrator reach its own public address from inside (NAT loopback); a router that does
+not will show every outside check failing. It is ticked **needs internet**: while the
+orchestrator's internet check fails it is skipped, not counted. A hostname with no public DNS
+record is not checked from outside. Hosts linked before this existed get theirs at the next
+start.
+
+Both route probes are diagnostic (`required: false`), but a route that fails or does not
+answer is announced on its own (level `route`, an error), folded under the service behind it
+or the proxy when those are the cause - see [notifications.md](notifications.md).
+
 `expect_status` takes status codes (`200`) and whole classes (`"2xx"`), in
 any probe. Probes created with the old 200-499 list are rewritten to the new
 one once, at startup (`traefik_probes.tighten_old`); a list you changed by hand

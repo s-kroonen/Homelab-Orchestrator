@@ -430,7 +430,7 @@
   function probeValues(p) {
     const c = (p && p.config) || {}; const t = c.transport || {};
     return {
-      name: p ? p.name : "", kind: p ? p.kind : "http", required: p ? p.required : true, enabled: p ? p.enabled !== false : true, backup_waits: !!(p && p.backup_waits),
+      name: p ? p.name : "", kind: p ? p.kind : "http", required: p ? p.required : true, enabled: p ? p.enabled !== false : true, backup_waits: !!(p && p.backup_waits), needs_internet: !!(p && p.needs_internet),
       timeout_s: p ? p.timeout_s : kindInfo("http").default_timeout_s,
       order: p ? p.order : S.probes.reduce((m, x) => Math.max(m, x.order), -1) + 1,
       url: c.url || "", method: c.method || "GET", expect_status: (c.expect_status || [200]).join(", "), expect_body_contains: c.expect_body_contains || "",
@@ -510,6 +510,7 @@
         { key: "required", label: "Required", type: "checkbox", help: "The service counts as failed when this probe fails, and is not backed up." },
         { key: "enabled", label: "Run it", type: "checkbox", help: "Off: not run and never counted; its settings are kept." },
         { key: "backup_waits", label: "Backup waits for it", type: "checkbox", show: () => !isRoot(), help: "A backup of " + (S.root || "the parent") + " waits for this check to pass." },
+        { key: "needs_internet", label: "Needs the internet", type: "checkbox", help: "It goes over the internet (a public address). While the orchestrator's internet check fails it is skipped, not counted (System → Network)." },
         { key: "timeout_s", label: "Timeout (seconds)", type: "number", min: 1 },
         { key: "order", label: "Order", type: "number" },
       ],
@@ -525,7 +526,7 @@
         await api.del("/api/registry/probes/" + editing.id); toast("Deleted " + editing.name, "ok"); view.refresh();
       } : null,
       async onSave(v) {
-        const body = { name: v.name.trim(), kind: v.kind, required: !!v.required, enabled: !!v.enabled, backup_waits: !isRoot() && !!v.backup_waits, timeout_s: Number(v.timeout_s) || kindInfo(v.kind).default_timeout_s, order: Number(v.order) || 0, config: probeConfig(v, editing) };
+        const body = { name: v.name.trim(), kind: v.kind, required: !!v.required, enabled: !!v.enabled, backup_waits: !isRoot() && !!v.backup_waits, needs_internet: !!v.needs_internet, timeout_s: Number(v.timeout_s) || kindInfo(v.kind).default_timeout_s, order: Number(v.order) || 0, config: probeConfig(v, editing) };
         if (editing) await api.put("/api/registry/probes/" + editing.id, body, { suppressToast: true });
         else await api.post(reg + "/probes", body, { suppressToast: true });
         toast((editing ? "Saved " : "Added ") + body.name, "ok");

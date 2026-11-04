@@ -171,14 +171,16 @@ def build_command(cfg: dict[str, Any]) -> list[str]:
             f'exec "$t" -u "$u" --single-transaction --routines --triggers --events {target}'
         )
     elif kind == "mongo":
-        auth = (
-            '--username "$MONGO_INITDB_ROOT_USERNAME" --password "$MONGO_INITDB_ROOT_PASSWORD" '
-            "--authenticationDatabase admin "
-        )
+        # Two whole commands, not flags kept in a variable: the shell does not expand
+        # "$VAR" a second time inside a variable's value, so mongodump would be handed
+        # the literal text "$MONGO_INITDB_ROOT_USERNAME" and fail to authenticate.
         which = f'--db "{db}" ' if db else ""
         script = (
-            f"if [ -n \"${{MONGO_INITDB_ROOT_USERNAME:-}}\" ]; then a='{auth.strip()}'; "
-            f'else a=""; fi; exec mongodump $a {which}--archive'
+            'if [ -n "${MONGO_INITDB_ROOT_USERNAME:-}" ]; then '
+            'exec mongodump --username "$MONGO_INITDB_ROOT_USERNAME" '
+            '--password "$MONGO_INITDB_ROOT_PASSWORD" --authenticationDatabase admin '
+            f"{which}--archive; "
+            f"else exec mongodump {which}--archive; fi"
         )
     elif kind == "sqlite":
         script = f'exec sqlite3 "{cfg["path"]}" .dump'
