@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import gzip
+import os
+import subprocess
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -118,6 +120,27 @@ def test_the_command_uses_the_containers_own_credentials() -> None:
     assert "sqlite3" in lite[2] and "/data/a.db" in lite[2]
     cmd = policy.build_command(policy.normalize_dump({"type": "command", "command": "tar c /x"}))
     assert cmd == ["sh", "-c", "tar c /x"]
+
+
+def test_the_mongo_dump_is_handed_the_credentials_themselves(tmp_path: Path) -> None:
+    """Run the script with a stand-in mongodump that prints its arguments: it must get the
+    values from the container's environment, not the text "$MONGO_INITDB_ROOT_USERNAME"."""
+    fake = tmp_path / "mongodump"
+    fake.write_text('#!/bin/sh\nfor a in "$@"; do printf "%s\\n" "$a"; done\n')
+    fake.chmod(0o755)
+    path = f"{tmp_path}:{os.environ['PATH']}"
+
+    def args(cfg: dict[str, str], **env: str) -> list[str]:
+        argv = policy.build_command(policy.normalize_dump({"type": "mongo", **cfg}))
+        out = subprocess.run(argv, env={"PATH": path, **env}, capture_output=True, text=True)
+        return out.stdout.splitlines()
+
+    authed = args({}, MONGO_INITDB_ROOT_USERNAME="root", MONGO_INITDB_ROOT_PASSWORD="p w$x")
+    assert authed == [
+        "--username", "root", "--password", "p w$x", "--authenticationDatabase", "admin",
+        "--archive",
+    ]  # fmt: skip
+    assert args({"database": "bingo"}) == ["--db", "bingo", "--archive"]  # no auth in the env
 
 
 def test_a_dump_needs_a_container_to_run_in() -> None:
