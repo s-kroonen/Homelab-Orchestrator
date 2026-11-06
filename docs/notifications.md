@@ -43,6 +43,10 @@ proxy host's route (inside through the proxy, and from outside), and announces C
 * Effects of the orchestrator's own network being down are folded under its LAN router
   check (they cannot be judged, and nothing could be sent anyway until it is back).
 
+Guests' disks add **disk_low** (a filesystem at `DISK_WARN_PCT`, 85%: a warning) and **disk_full**
+(`DISK_FULL_PCT`, 95%: an error), sent by default, with *recovered* when there is room again -
+see [disks.md](disks.md).
+
 Pipelines add **backup_failed** and **wake_failed** (default), **backup_retry** (default) and
 **backup_skipped** (a backup that was not taken because the service was unhealthy, had no
 required check or was off and may not be woken - see [backup_wake.md](backup_wake.md); in
@@ -56,11 +60,11 @@ AI assistant adds **mcp_request** (with the approval link) - see [mcp.md](mcp.md
 
 ## Rules
 
-With **no rules**, `failed`, `down`, `unknown`, `recovered`, `flapping`, `backup_failed`, `wake_failed`,
+With **no rules**, `failed`, `down`, `unknown`, `recovered`, `flapping`, `disk_low`, `disk_full`, `backup_failed`, `wake_failed`,
 `recovery_succeeded`, `recovery_exhausted`, `restore_proposed`, `switch_failed`, `outside_change`,
 `deploy_blocked`, `deploy_failed`, `dump_failed` and `mcp_request` go to every channel
 (`recovery_attempt` stays in the feed unless a rule asks for it). A rule narrows or routes: levels
-(`network` / `node` / `guest` / `service` / `sub` / `route`), scope (services, groups, nodes),
+(`network` / `node` / `guest` / `service` / `sub` / `route` / `disk`), scope (services, groups, nodes),
 events, the least severity (`info` < `warn` < `error` < `critical`), channels, and whether it
 sends on the first check. An empty list
 means "any". Once any rule exists, an event is sent only if some enabled rule matches;
@@ -105,7 +109,7 @@ the webhook, and the target in the Notifications feed and on the Activity page.
 | database dump | `/services/<slug>#dumps` |
 | switch failed, outside change | `/services/<slug>#stack` |
 | node | `/nodes?q=<node>` (Nodes & guests, its guests listed) |
-| guest | `/nodes?q=<vmid>` (Nodes & guests, filtered to that guest) |
+| guest, or a guest's disk | `/nodes?q=<vmid>` (Nodes & guests, filtered to that guest) |
 | self-update | `/system` |
 | a request waiting for approval | its approval page (always wins over the above) |
 

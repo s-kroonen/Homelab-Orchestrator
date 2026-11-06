@@ -298,6 +298,16 @@ async def _guests(ctx: ToolContext, a: dict[str, Any]) -> Any:
     return await _call(infra.list_guests(ctx.adapters, ctx.session, a.get("node")))
 
 
+async def _disk_usage(ctx: ToolContext, a: dict[str, Any]) -> Any:
+    from orchestrator.web.routers import infra
+
+    if a.get("refresh"):
+        return await _call(
+            infra.check_disks_now(ctx.session, ctx.adapters, ctx.settings, a.get("node"))
+        )
+    return await infra.disk_usage(ctx.session, a.get("node"))
+
+
 async def _proxy_hosts(ctx: ToolContext, a: dict[str, Any]) -> Any:
     from orchestrator.web.routers import proxy_hosts
 
@@ -679,12 +689,25 @@ async def _set_deploy(ctx: ToolContext, a: dict[str, Any]) -> Any:
             cfg[key] = a[key]
     out = _update(ctx, a["slug"], deploy=cfg)
     note = (
-        "Make the webhook's secret on the service page (Deploys - Webhook and GitHub): it is "
-        "shown once and never passes through an assistant."
+        "Get the webhook's key and a ready deploy command with deploy_command(slug, "
+        "create_if_missing=true), or on the service page (Deploys - Webhook and GitHub)."
         if hook
         else "Deploys run from deploy_service, the service page or the CLI."
     )
     return {"slug": a["slug"], "deploy": out.get("deploy", cfg), "next": note}
+
+
+async def _deploy_command(ctx: ToolContext, a: dict[str, Any]) -> Any:
+    from orchestrator.web.routers import hooks
+
+    body = hooks.CommandIn(create=bool(a.get("create_if_missing", False)))
+    out = await _call(hooks.deploy_command(a["slug"], ctx.session, ctx.settings, ctx.admin, body))
+    out.pop("github_inline_key", None)  # long; the service page has it
+    out["next"] = (
+        "Run commands.deploy to deploy (guarded); its answer has run_id - put it in "
+        "commands.status to read the result. This key was audited as shown to you."
+    )
+    return out
 
 
 async def _set_stack_git(ctx: ToolContext, a: dict[str, Any]) -> Any:
@@ -931,6 +954,17 @@ TOOLS: dict[str, Tool] = {
             "read",
             _guests,
             {"node": _s("Only this node")},
+        ),
+        Tool(
+            "disk_usage",
+            "Disk usage of the guests",
+            "How full each guest's filesystems are, fullest first: state full / low / ok, "
+            "unmeasured (a VM without the QEMU guest agent) or off (not running), with every "
+            "filesystem's mount, size and percent. From the last health cycle unless "
+            "refresh=true, which reads them now.",
+            "read",
+            _disk_usage,
+            {"node": _s("Only this node"), "refresh": _b("Read the disks now")},
         ),
         Tool(
             "list_proxy_hosts",
@@ -1213,7 +1247,7 @@ TOOLS: dict[str, Tool] = {
             "Set a service's deploy settings",
             "Set how a stack's service is deployed: start from a preset (probes+keep3 keeps a "
             "dump and the images of the last 3 versions), the webhook provider and branch, what "
-            "to do on failure. The webhook's secret is made on the service page, never here.",
+            "to do on failure. The webhook's key: deploy_command (or the service page).",
             "configure",
             _set_deploy,
             {
@@ -1231,6 +1265,23 @@ TOOLS: dict[str, Tool] = {
                 ),
                 "enabled": _b("Deploys allowed"),
                 "clear": _b("Remove the deploy method"),
+            },
+            ("slug",),
+            ACT,
+        ),
+        Tool(
+            "deploy_command",
+            "A service's deploy command, with its key",
+            "The ready-to-paste command that deploys a service or sub-service through its "
+            "webhook (guarded, like deploy_service), and the one that reads the result - with "
+            "the service's deploy key written in, so a person, a script or another assistant "
+            "can run it. Each showing is audited. create_if_missing=true makes a key when the "
+            "service has none yet; an existing key is never replaced here.",
+            "configure",
+            _deploy_command,
+            {
+                "slug": SLUG,
+                "create_if_missing": _b("No key yet: make one"),
             },
             ("slug",),
             ACT,

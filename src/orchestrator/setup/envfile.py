@@ -645,6 +645,14 @@ ENV_SECTIONS: tuple[EnvSection, ...] = (
             EnvKey("NOTIFY_FLAP_WINDOW_S"),
             EnvKey("NOTIFY_RETENTION_DAYS", "How long the feed on /notifications is kept."),
             EnvKey(
+                "DISK_WARN_PCT",
+                "A guest filesystem this full (percent, default 85) is a warning (disk_low).",
+            ),
+            EnvKey(
+                "DISK_FULL_PCT",
+                "A guest filesystem this full (percent, default 95) is an error (disk_full).",
+            ),
+            EnvKey(
                 "ARCHIVE_RETENTION_DAYS",
                 "A deleted service stays in the archive (restorable from /archive) this many days.",
             ),

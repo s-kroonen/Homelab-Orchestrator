@@ -145,6 +145,33 @@
     } catch (_e) { return; }
     setTimeout(() => guestsRegion.refresh(), 2500);
   }
+  // The last health cycle's disk check (health/disks.py): the fullest filesystem decides.
+  function diskSort(g) {
+    const d = g.disk;
+    if (!d || !d.worst) return d && d.state === "unmeasured" ? -1 : -2;
+    return d.worst.percent;
+  }
+  function diskCell(g) {
+    const d = g.disk;
+    if (!d) return el("span", { class: "faint" }, "not checked yet");
+    if (d.state === "off") return el("span", { class: "faint" }, "—");
+    if (d.state === "unmeasured") {
+      return el("span", { class: "faint", title: d.error || "" }, g.kind === "lxc" || g.kind === "ct" ? "not measured" : "not measured: no guest agent");
+    }
+    const w = d.worst || {};
+    const others = (d.filesystems || []).filter((f) => f.mount !== w.mount);
+    return [
+      el("span", { class: "pill " + ({ full: "fail", low: "warn" }[d.state] || "ok"), title: (d.filesystems || []).map((f) => f.mount + "  " + f.percent + "%  " + fmt.bytes(f.used) + " of " + fmt.bytes(f.total)).join("\n") }, Math.round(w.percent) + "% " + w.mount),
+      el("span", { class: "sub" }, fmt.bytes(w.used) + " of " + fmt.bytes(w.total) + (others.length ? " · " + others.length + " more" : "")),
+    ];
+  }
+  async function checkDisks() {
+    try {
+      await api.post("/api/infra/disks/check", undefined, { suppressToast: true });
+      window.toast("Disks checked", "ok");
+    } catch (e) { window.toast(e.message, "error"); return; }
+    guestsRegion.refresh();
+  }
   const t = table($("#guests"), {
     rows: [],
     key: (g) => g.node + "/" + g.vmid,
@@ -164,6 +191,7 @@
         render: (g) => !g.boot ? el("span", { class: "faint" }, "not read yet")
           : !g.boot.onboot ? el("span", { class: "faint" }, "no: started when needed")
           : [el("span", {}, "yes, " + nth(g.boot.position || 0)), el("span", { class: "sub" }, [g.boot.order != null ? "order " + g.boot.order : "no order", g.boot.up_s ? "waits " + g.boot.up_s + " s" : "", g.boot.starts_after_s != null ? "starts ~" + fmtSecs(g.boot.starts_after_s) + " after boot" : ""].filter(Boolean).join(" · "))] },
+      { key: "disk", label: "Disk", sort: diskSort, phone: "Disk", render: diskCell },
       { key: "service", label: "Service", sort: (g) => g.service_slug || "~",
         render: (g) => g.service_slug ? el("a", { href: "/services/" + encodeURIComponent(g.service_slug) }, g.service_slug)
           : el("button", { type: "button", class: "ghost small", style: { color: "var(--link)", padding: "0" }, onclick: () => makeService(g) }, "Make a service…") },
@@ -173,6 +201,7 @@
       { key: "running", label: "Running", test: (g) => g.status === "running" },
       { key: "stopped", label: "Stopped", test: (g) => g.status !== "running" },
       { key: "unlinked", label: "Not a service", test: (g) => !g.service_slug },
+      { key: "disk", label: "Disk filling up", test: (g) => !!g.disk && (g.disk.state === "low" || g.disk.state === "full") },
     ],
     menu: (g) => [
       g.service_slug ? { label: "Open " + g.service_slug, href: "/services/" + encodeURIComponent(g.service_slug) } : { label: "Make a service…", onClick: () => makeService(g) },
@@ -214,5 +243,6 @@
   $("#nodes-more").append(menuButton(() => [
     { label: "Add a node by hand…", onClick: () => nodeDrawer({ onSaved: () => nodesRegion.refresh() }) },
     { label: "Check all nodes", onClick: () => { status.refresh(); guestsRegion.refresh(); } },
+    { label: "Check guest disks now", onClick: checkDisks },
   ], "More actions"));
 })();

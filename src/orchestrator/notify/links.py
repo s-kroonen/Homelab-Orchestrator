@@ -51,7 +51,7 @@ def link_for(level: str, target: str, event: str = "") -> str | None:
         return f"/services/{quote(target, safe='')}#{spot}"
     if level == "node":
         return f"/nodes?{urlencode({'q': target})}" if target else None
-    if level == "guest":
+    if level in ("guest", "disk"):
         # Nodes & guests, its guest list filtered to this one.
         node, _, vmid = target.partition("/")
         if not node:

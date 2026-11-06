@@ -219,10 +219,29 @@ post-guards    probes healthy within timeout_s, then healthy for settle_s
 * Answers: `202` started (or acknowledged), `401` bad secret, `404` no such webhook (also for a
   service without one), `423` the service is switched off, `409` busy or deploys disabled.
 * The **secret** is created or replaced from the tab (*Create / replace the secret*) or `deploy
-  webhook SLUG [--rotate|--remove]`, and **shown once**. It is kept in the database (`setting`
-  table, so in the System page's backups) - never in `services.yaml` and never in an API response
-  after it was created. Rotate it if it leaked. The tab and the CLI show what to enter in GitLab
-  or GitHub.
+  webhook SLUG [--rotate|--remove]`. It is kept in the database (`setting` table, so in the
+  System page's backups), never in `services.yaml`. After it was created it is shown again only
+  on purpose, as the deploy command below. Rotate it if it leaked. The tab and the CLI show what
+  to enter in GitLab or GitHub.
+
+### The deploy command
+
+*Stack actions -> Copy the deploy command...* (also in the Webhook drawer), or the assistant
+tool `deploy_command` (needs the `configure` permission), gives a service's - or sub-service's -
+deploy as commands to paste into a terminal, a script or another assistant, **with its key in
+them**:
+
+```
+curl -fsS -X POST -H "Authorization: Bearer <key>" https://orchestrator.example.lan/hooks/deploy/dev-xymbols
+curl -fsS -H "Authorization: Bearer <key>" https://orchestrator.example.lan/hooks/deploy/dev-xymbols/runs/RUN_ID
+```
+
+The first starts a guarded deploy (as *Redeploy now*) and answers `{"started": true, "run_id":
+...}`; the second reads that run's result. A service without a key gets one first (asked on the
+page, `create_if_missing` for the tool); an existing key is never replaced here. **Every showing
+is audited** (`deploy.key_revealed`, with who asked), and the key works from wherever it is
+pasted, so keep it out of repositories and replace it if it leaks. `POST
+/api/services/{slug}/deploy/command` (admins; body `{"create": true}`) is the API behind both.
 
 ### Calling it from GitHub Actions
 
@@ -261,6 +280,7 @@ else). The *Webhook* section of the tab has a **GitHub pipeline** block - a comp
 | deploy settings | tab | `deploy set|show|clear` | `PUT /api/registry/services/{slug}` (`deploy`) |
 | run / history | tab | `deploy run|guards|history|show` | `POST /api/services/{slug}/deploy`, `GET .../deploys`, `GET /api/deploys/{id}` |
 | webhook | tab | `deploy webhook` | `POST|DELETE /api/services/{slug}/deploy/webhook`, `GET .../deploy` |
+| deploy command (with key) | tab | - | `POST /api/services/{slug}/deploy/command` |
 
 New notification events: `switch_failed`, `outside_change`, `deploy_blocked`, `deploy_failed`
 (sent by default) and `deploy_succeeded`, `deploy_outside` (in the feed unless a rule asks).

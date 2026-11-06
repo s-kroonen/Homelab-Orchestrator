@@ -1,5 +1,5 @@
 """The deploy webhook endpoint (public, authenticated by the per-service secret) and the
-admin endpoints that create and rotate that secret."""
+admin endpoints that create, rotate and - as a ready-to-paste deploy command - show it."""
 
 from __future__ import annotations
 
@@ -7,6 +7,7 @@ import json
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
+from pydantic import BaseModel
 from sqlmodel import desc, select
 
 from orchestrator.audit import log as audit
@@ -207,6 +208,70 @@ async def create_webhook_secret(
             "workflow"
         ],
         "note": "Copy the secret now: it cannot be shown again, only replaced.",
+    }
+
+
+class CommandIn(BaseModel):
+    #: No key yet: make one (an existing key is never replaced here).
+    create: bool = False
+
+
+@admin.post("/{slug}/deploy/command")
+async def deploy_command(
+    slug: str,
+    session: SessionDep,
+    settings: SettingsDep,
+    who: CurrentAdmin,
+    body: CommandIn | None = None,
+) -> dict[str, Any]:
+    """The service's deploy as a command to paste, with its key in it. The key works from
+    anywhere it is pasted, so every showing is audited (``deploy.key_revealed``); replace the
+    key (Webhook - Replace the secret) if it leaks."""
+    svc = _service(session, slug)
+    cfg = webhook_of(svc.deploy)
+    if cfg is None:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            f"{slug} has no deploy webhook: turn one on in its deploy settings first",
+        )
+    created = False
+    if not hook.has_secret(session, slug):
+        if not (body and body.create):
+            raise HTTPException(
+                status.HTTP_409_CONFLICT, f"{slug} has no deploy key yet: ask for one (create)"
+            )
+        hook.rotate_secret(session, slug)
+        audit.record(
+            session, actor=who.username, action="deploy.webhook_secret", target=f"service:{slug}"
+        )
+        created = True
+    key = hook.reveal_secret(session, slug)
+    audit.record(
+        session, actor=who.username, action="deploy.key_revealed", target=f"service:{slug}"
+    )
+    session.commit()
+    url = _public(hook.webhook_url(settings, slug))
+    workflow = hook.github_workflow(slug, url, cfg["branch"], key=key)
+    return {
+        "slug": slug,
+        "url": url,
+        "url_is_public": not url.startswith("https://YOUR-ORCHESTRATOR"),
+        "key": key,
+        "created": created,
+        "branch": cfg["branch"],
+        "enabled": is_enabled(svc.deploy),
+        "commands": hook.deploy_curl(url, key),
+        "answers": {
+            "202": "started: the answer has run_id; read the result with the status command",
+            "401": "the key is wrong (it was replaced)",
+            "404": "the webhook is off",
+            "409": "busy, or deploys are switched off",
+            "423": "the service is switched off",
+        },
+        "secret_name": workflow["secret_name"],
+        "github_inline_key": workflow["workflow"],
+        "note": f"This key deploys {slug} from wherever it is pasted. Keep it out of "
+        "repositories; replace it from the service page if it leaks.",
     }
 
 

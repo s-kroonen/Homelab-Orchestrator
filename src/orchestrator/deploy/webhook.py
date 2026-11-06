@@ -4,9 +4,11 @@ The orchestrator is one place that can receive it; Portainer's own webhook keeps
 is noticed from outside (see ``watch.py``). Coming through here, the deploy is *guarded*: the
 guards run before Portainer is asked to redeploy anything.
 
-Each service has its own secret, generated here and shown once. It lives in the database's
-``setting`` table (``deploy.webhook.<slug>``), never in ``services.yaml`` and never in an
-API response after it was created. GitHub signs the body with the secret (HMAC), GitLab
+Each service has its own secret, generated here. It lives in the database's ``setting``
+table (``deploy.webhook.<slug>``), never in ``services.yaml``. After it was created it is
+only shown again on purpose, as a ready-to-paste deploy command (``deploy_command``: an
+admin on the service page, or an assistant with the ``configure`` scope), and every such
+showing is audited (``deploy.key_revealed``). GitHub signs the body with the secret (HMAC), GitLab
 sends it in a header, and the generic form takes a bearer token, so the raw secret has to be
 kept rather than a hash of it.
 """
@@ -60,6 +62,20 @@ def remove_secret(session: Session, slug: str) -> bool:
 def _secret(session: Session, slug: str) -> str:
     row = session.get(Setting, _key(slug))
     return str((row.value or {}).get("secret", "")) if row else ""
+
+
+def reveal_secret(session: Session, slug: str) -> str:
+    """The service's key, for a deploy command someone asked to see. Audit the showing."""
+    return _secret(session, slug)
+
+
+def deploy_curl(url: str, key: str) -> dict[str, str]:
+    """The commands that start a deploy and read its result, with the key written in."""
+    auth = f'-H "Authorization: Bearer {key}"'
+    return {
+        "deploy": f"curl -fsS -X POST {auth} {url}",
+        "status": f"curl -fsS {auth} {url}/runs/RUN_ID",
+    }
 
 
 def webhook_url(settings: Settings, slug: str) -> str:

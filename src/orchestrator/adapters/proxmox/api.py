@@ -18,6 +18,7 @@ from orchestrator.adapters.proxmox.base import (
     ClusterStatus,
     Guest,
     GuestBoot,
+    GuestFilesystems,
     GuestNetwork,
     NodeHealth,
     ProxmoxAdapter,
@@ -26,6 +27,7 @@ from orchestrator.adapters.proxmox.base import (
     VersionInfo,
     parse_startup,
 )
+from orchestrator.adapters.proxmox.disks import lxc_root, parse_fsinfo
 from orchestrator.adapters.proxmox.net import (
     parse_agent_interfaces,
     parse_lxc_interfaces,
@@ -59,6 +61,13 @@ def _split_address(address: str, default_port: int) -> tuple[str, int]:
         if port.isdigit():
             return host, int(port)
     return value, default_port
+
+
+def _int(value: Any) -> int:
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError):
+        return 0
 
 
 class _FailoverClient:
@@ -226,6 +235,8 @@ class LiveProxmoxAdapter(ProxmoxAdapter):
                     kind=kind,
                     name=str(row.get("name", "")),
                     status=str(row.get("status", "unknown")),
+                    disk=_int(row.get("disk")),
+                    maxdisk=_int(row.get("maxdisk")),
                 )
             )
         return sorted(guests, key=lambda g: g.vmid)
@@ -322,6 +333,40 @@ class LiveProxmoxAdapter(ProxmoxAdapter):
             return GuestNetwork(macs=macs)
         ips = parse_agent_interfaces(payload, macs)
         return GuestNetwork(macs=macs, ips=ips, source="guest_agent" if ips else None)
+
+    async def guest_filesystems(self, node: str, vmid: int, kind: GuestKind) -> GuestFilesystems:
+        """A container's root filesystem from Proxmox itself (current status); a VM's
+        filesystems from the QEMU guest agent, which has to be installed, running and enabled
+        on the VM (Options -> QEMU Guest Agent). Never raises."""
+        endpoint = self._endpoint_for(kind)
+        base = f"/nodes/{node}/{endpoint}/{vmid}"
+        if kind is GuestKind.CT:
+            try:
+                status = await self._client.request("GET", f"{base}/status/current") or {}
+            except AdapterAuthError as exc:
+                return GuestFilesystems(
+                    error=f"reading the container's status was refused ({exc.status_code}) - "
+                    f"the API token needs VM.Audit on /vms/{vmid}"
+                )
+            except AdapterError as exc:
+                return GuestFilesystems(error=f"could not read the container's status: {exc}")
+            found = lxc_root(status.get("disk"), status.get("maxdisk"))
+            return GuestFilesystems(filesystems=found, source="lxc" if found else None)
+        try:
+            payload = await self._client.request("GET", f"{base}/agent/get-fsinfo")
+        except AdapterAuthError as exc:
+            return GuestFilesystems(
+                error=f"the guest agent read was refused ({exc.status_code}) - the API token "
+                f"needs VM.GuestAgent.Audit (VM.Monitor before Proxmox 9) on /vms/{vmid}"
+            )
+        except AdapterError as exc:
+            # "QEMU guest agent is not running" / not enabled (500): the normal miss.
+            log.debug("proxmox.guest_agent.fsinfo_unavailable", vmid=vmid, error=str(exc))
+            return GuestFilesystems(error="no guest agent answered (install qemu-guest-agent)")
+        found = parse_fsinfo(payload)
+        if not found:
+            return GuestFilesystems(error="the guest agent reported no filesystem sizes")
+        return GuestFilesystems(filesystems=found, source="guest_agent")
 
     async def guest_boot(self, node: str, vmid: int, kind: GuestKind) -> GuestBoot:
         endpoint = self._endpoint_for(kind)

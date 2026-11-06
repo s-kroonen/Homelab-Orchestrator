@@ -17,6 +17,11 @@ class Guest:
     kind: GuestKind
     name: str
     status: str  # "running" | "stopped" | ...
+    #: Bytes used / size of the guest's disk as the cluster lists it. For a container this is
+    #: its root filesystem, measured; for a VM ``disk`` is 0 (Proxmox cannot see inside a VM
+    #: disk) and ``maxdisk`` is the size it was given - the guest agent knows the rest.
+    disk: int = 0
+    maxdisk: int = 0
 
 
 @dataclass(frozen=True)
@@ -118,6 +123,32 @@ class GuestNetwork:
 
 
 @dataclass(frozen=True)
+class Filesystem:
+    """One mounted filesystem inside a guest: where, what kind, bytes used and its size."""
+
+    mount: str
+    fstype: str
+    used: int
+    total: int
+
+    @property
+    def percent(self) -> float:
+        return round(self.used * 100 / self.total, 1) if self.total else 0.0
+
+
+@dataclass(frozen=True)
+class GuestFilesystems:
+    """What a guest's disks hold, from inside it: the QEMU guest agent for a VM
+    (``source="guest_agent"``), the container's root filesystem for a CT (``"lxc"``).
+    ``error`` explains why nothing could be read (no agent, a refused read); a VM without
+    the agent installed is a normal miss, not an alarm. Read-only; see docs/disks.md."""
+
+    filesystems: list[Filesystem] = field(default_factory=list)
+    source: str | None = None
+    error: str | None = None
+
+
+@dataclass(frozen=True)
 class GuestBoot:
     """How Proxmox starts a guest when its node boots: the guest's *Start at boot* (``onboot``)
     and *Start/Shutdown order* (``startup: order=N,up=S,down=S``).
@@ -193,6 +224,11 @@ class ProxmoxAdapter(ABC):
         """NIC MACs and (when Proxmox knows them) IPs of one guest. Never raises
         for a permission problem or a missing guest agent — those come back in
         :attr:`GuestNetwork.error` / as an empty ``ips`` list."""
+
+    async def guest_filesystems(self, node: str, vmid: int, kind: GuestKind) -> GuestFilesystems:
+        """How full each of the guest's filesystems is. Never raises: a missing agent or a
+        refused read comes back in :attr:`GuestFilesystems.error`."""
+        return GuestFilesystems(error="this adapter cannot read guest disks")
 
     async def guest_boot(self, node: str, vmid: int, kind: GuestKind) -> GuestBoot:
         """The guest's boot settings, read from its config. Needs ``node`` online (Proxmox

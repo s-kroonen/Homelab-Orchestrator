@@ -467,6 +467,10 @@ class Settings(BaseSettings):
     notify_flap_threshold: int = 4
     notify_flap_window_s: int = 1800
     notify_retention_days: int = 30
+    #: A guest filesystem this full (percent) is announced as a warning (disk_low), this full
+    #: as an error (disk_full). Checked every health cycle (health/disks.py).
+    disk_warn_pct: int = 85
+    disk_full_pct: int = 95
     #: A deleted service stays in the archive (restorable) this many days, then is purged.
     archive_retention_days: int = 30
 

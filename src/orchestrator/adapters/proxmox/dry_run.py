@@ -12,6 +12,7 @@ from orchestrator.adapters.proxmox.base import (
     ClusterStatus,
     Guest,
     GuestBoot,
+    GuestFilesystems,
     GuestNetwork,
     NodeHealth,
     ProxmoxAdapter,
@@ -48,6 +49,8 @@ class DryRunProxmoxAdapter(ProxmoxAdapter):
         #: vmid -> what guest_network() answers. Unset -> no MACs, no IPs.
         self.simulated_networks: dict[int, GuestNetwork] = {}
         self.guest_network_calls: list[tuple[str, int, GuestKind]] = []
+        #: vmid -> what guest_filesystems() answers. Unset -> "no guest agent answered".
+        self.simulated_filesystems: dict[int, GuestFilesystems] = {}
         #: vmid -> boot settings. Tests set them; set_guest_boot() records into it (a dry run
         #: changes nothing in Proxmox, but the page shows what was asked).
         self.simulated_boot: dict[int, GuestBoot] = {}
@@ -81,6 +84,11 @@ class DryRunProxmoxAdapter(ProxmoxAdapter):
 
     async def list_backup_storages(self) -> list[BackupStorage]:
         return list(self.simulated_backup_storages)
+
+    async def guest_filesystems(self, node: str, vmid: int, kind: GuestKind) -> GuestFilesystems:
+        return self.simulated_filesystems.get(
+            vmid, GuestFilesystems(error="no guest agent answered (install qemu-guest-agent)")
+        )
 
     async def guest_network(self, node: str, vmid: int, kind: GuestKind) -> GuestNetwork:
         log.info("proxmox.dry_run.guest_network", node=node, vmid=vmid, kind=kind.value)
