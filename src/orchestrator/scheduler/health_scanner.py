@@ -173,6 +173,7 @@ class HealthScanner:
         # First the orchestrator's own network: it decides what "could not connect"
         # means for everything after it (health/network.py).
         network = await check_network(self._settings)
+        guest_cache: Any = None
         try:
             # Its own short transaction: a write held open through the scans below would
             # lock the database (SQLite) for every other writer until the cycle ends.
@@ -237,23 +238,33 @@ class HealthScanner:
             log.error("health_scanner.poll_crashed", error=str(exc), error_type=type(exc).__name__)
             return 0
 
-        await self._check_disks()
+        await self._check_disks(guest_cache)
         log.info("health_scanner.polled", services=len(cache), inserted=inserted)
         return inserted
 
-    async def _check_disks(self) -> None:
+    async def _check_disks(self, guest_cache: Any = None) -> None:
         """How full each running guest's disks are; a filling disk is announced (health/
-        disks.py). Proxmox is read with no transaction open; the result is written after.
-        Never raises."""
+        disks.py). The guest list is the cycle's own (``guest_cache``), so Proxmox lists the
+        guests once per cycle. Proxmox is read with no transaction open; the result is written
+        after. Never raises."""
         if self._adapters is None:
             return
         from orchestrator.health import disks
 
         try:
+            guests = None
+            if guest_cache is not None:
+                guests, error = await guest_cache.guests()
+                if guests is None:
+                    log.info("health_scanner.disks_skipped", reason=error or "no guest list")
+                    return  # Proxmox did not answer this cycle: keep the last result
             with session_scope() as session:
                 previous = disks.previous_states(session)
             status = await asyncio.wait_for(
-                disks.check_disks(self._adapters.proxmox, self._settings, previous=previous), 90
+                disks.check_disks(
+                    self._adapters.proxmox, self._settings, previous=previous, guests=guests
+                ),
+                90,
             )
             with session_scope() as session:
                 disks.save(session, status)

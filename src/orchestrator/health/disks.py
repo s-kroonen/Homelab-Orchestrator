@@ -130,11 +130,17 @@ async def _read(proxmox: Any, guest: Guest, sem: asyncio.Semaphore) -> GuestFile
 
 
 async def check_disks(
-    proxmox: Any, settings: Settings, *, previous: dict[str, str] | None = None
+    proxmox: Any,
+    settings: Settings,
+    *,
+    previous: dict[str, str] | None = None,
+    guests: list[Guest] | None = None,
 ) -> DiskStatus:
-    """Read every guest. Raises only when Proxmox cannot list the guests at all."""
+    """Read every guest. ``guests``: the list the health cycle already read (so it is not read
+    twice). Raises only when Proxmox cannot list the guests at all."""
     previous = previous or {}
-    guests: list[Guest] = await proxmox.list_guests()
+    if guests is None:
+        guests = list(await proxmox.list_guests())
     sem = asyncio.Semaphore(_CONCURRENCY)
     running = [g for g in guests if g.status == "running"]
     reads = await asyncio.gather(*(_read(proxmox, g, sem) for g in running))
