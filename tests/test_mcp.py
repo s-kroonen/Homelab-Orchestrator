@@ -20,7 +20,7 @@ from orchestrator.adapters.proxmox.base import Guest
 from orchestrator.db import session as session_module
 from orchestrator.db.models import AuditEntry, McpCall, McpGrant, PendingApproval
 from orchestrator.db.session import get_engine
-from orchestrator.domain.enums import GuestKind
+from orchestrator.domain.enums import ApprovalKind, GuestKind
 from orchestrator.mcp import store
 from orchestrator.registry.loader import reconcile_yaml_into_db
 from orchestrator.web.app import create_app
@@ -535,7 +535,7 @@ def test_an_expired_request_cannot_be_approved(client: TestClient) -> None:
     )
     token = _only_request(client)["request_id"]
     with Session(get_engine()) as s:
-        row = s.exec(select(PendingApproval)).one()
+        row = s.exec(select(PendingApproval).where(PendingApproval.token == token)).one()
         row.expires_at = store.now() - store.timedelta(minutes=1)
         s.add(row)
         s.commit()
@@ -763,7 +763,8 @@ def test_approval_tokens_can_always_be_typed_as_a_cli_argument(client: TestClien
             {"node": "pve1", "vmid": 101, "action": "stop"},
         )
     with Session(get_engine()) as s:
-        tokens = [r.token for r in s.exec(select(PendingApproval)).all()]
+        rows = s.exec(select(PendingApproval)).all()
+        tokens = [r.token for r in rows if r.kind is not ApprovalKind.ADMIN_INVITE]
     assert len(tokens) == 25 and all(t[0].isalpha() for t in tokens)
     assert approvals.request_url(config_module.get_settings(), tokens[0]).endswith(tokens[0])
 
