@@ -1,10 +1,12 @@
 """Wake endpoint.
 
 ``POST`` returns as soon as the run is recorded — a cold node can take minutes
-to become healthy, and this is meant to be callable on behalf of an arbitrary
-visitor, so it must not block a request on that. The pipeline itself
+to become healthy, so it must not block a request on that. The pipeline itself
 continues via ``asyncio.create_task`` with its own DB session, detached from
 this request.
+
+**Admins only** (OR-5): it ignores the "wake on hit" switches and the wake button, so a
+public one let anyone power on any node. Visitors go through ``/maintenance/<slug>``.
 
 JSON for now, not HTML: the self-refreshing status page these responses back
 is the maintenance responder (``web/routers/maintenance.py``), which calls
@@ -15,16 +17,20 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status
 from sqlmodel import Session, desc, select
 
 from orchestrator.db.models import PipelineRun, Service
 from orchestrator.domain.enums import PipelineKind
 from orchestrator.pipelines.wake import WakeError, WakePipeline
+from orchestrator.web.auth import require_admin
 from orchestrator.web.deps import AdaptersDep, SessionDep, SettingsDep
 from orchestrator.web.wake_support import fire_background, run_to_dict
 
-router = APIRouter(tags=["wake"])
+# Admins only. Visitors wake a service through /maintenance/<slug> (Traefik's errors
+# middleware), which honours the per-service and per-node "wake on hit" switches and the
+# wake button's token; this endpoint skips those on purpose, so it must not be public.
+router = APIRouter(tags=["wake"], dependencies=[Depends(require_admin)])
 
 
 @router.post("/wake/{service_slug}", status_code=status.HTTP_202_ACCEPTED)

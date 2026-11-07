@@ -40,14 +40,17 @@ from orchestrator.notify.links import absolute, link_for
 log = get_logger(__name__)
 
 #: network: the orchestrator's own LAN, internet and proxy checks (health/network.py);
-#: route: a proxy host's route, inside through the proxy and from outside.
-LEVELS = ("network", "node", "guest", "service", "sub", "route")
+#: route: a proxy host's route, inside through the proxy and from outside;
+#: disk: how full a guest's filesystems are (health/disks.py).
+LEVELS = ("network", "node", "guest", "service", "sub", "route", "disk")
 EVENTS = (
     "failed",
     "down",
     "unknown",
     "recovered",
     "flapping",
+    "disk_low",
+    "disk_full",
     "recovery_attempt",
     "recovery_succeeded",
     "recovery_exhausted",
@@ -82,6 +85,8 @@ DEFAULT_EVENTS = (
     "unknown",
     "recovered",
     "flapping",
+    "disk_low",
+    "disk_full",
     "backup_failed",
     "backup_retry",
     "wake_failed",
@@ -125,6 +130,8 @@ class Observation:
     scope: dict[str, str] = field(default_factory=dict)  # slug / group / node
     #: Overrides the level's usual severity (an unreachable service is an outage: error).
     severity: str | None = None
+    #: Overrides the alert's title ("Disk on web is 91% full (/)" rather than "... is DISK_LOW").
+    title: str | None = None
 
 
 @dataclass
@@ -150,8 +157,10 @@ def _severity_for(level: str, state: str) -> str:
         # down is often deliberate (a guest switched off) unless it is unreachable, which
         # the observation says itself.
         return "error" if level in ("node", "network", "route") else "warn"
-    if state == "unknown":
+    if state in ("unknown", "disk_low"):
         return "warn"
+    if state == "disk_full":
+        return "error"
     return "info"
 
 
@@ -259,7 +268,7 @@ class NotificationEngine:
             name=obs.name,
             event=obs.state,
             severity=obs.severity or _severity_for(obs.level, obs.state),
-            title=f"{obs.name} is {word}",
+            title=obs.title or f"{obs.name} is {word}",
             body=(obs.reason or f"{obs.name} is {obs.state}.")[:1500],
             cause_key=obs.cause_key,
             scope=obs.scope,

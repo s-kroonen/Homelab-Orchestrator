@@ -781,6 +781,7 @@
         has ? { label: "Run the guards only", onClick: () => deployNow({ guards: true, guards_only: true }) } : null,
         has ? { label: "Redeploy without guards…", onClick: unguardedDrawer } : null,
         { label: "Deploy settings…", onClick: deployDrawer },
+        has && S.deploy.trigger && S.deploy.trigger.webhook ? { label: "Copy the deploy command…", onClick: deployCommandDrawer } : null,
         has && S.deploy.trigger && S.deploy.trigger.webhook ? { label: "Webhook and GitHub…", onClick: webhookDrawer } : null,
         { label: "Deploys in Activity", href: "/activity?kind=deploy&service=" + enc(slug) },
         has ? "-" : null,
@@ -871,6 +872,30 @@
     }
     loadDeploys(); loadLinked();
   }
+  // The deploy as a command to paste somewhere else (a terminal, a script, another assistant),
+  // with the service's key written in. Every showing is audited (deploy.key_revealed).
+  async function deployCommandDrawer() {
+    let w;
+    try { w = (await api.get(base + "/deploy", { suppressToast: true })).webhook; } catch (e) { toast(e.message, "error"); return; }
+    if (!w.secret_set && !await confirm({ title: "Make a deploy key?", body: "This service has no deploy key yet. One is made now; anything holding it can start a (guarded) deploy of " + (S.name || slug) + ".", action: "Make a key" })) return;
+    let r;
+    try { r = await api.post(base + "/deploy/command", { create: !w.secret_set }, { suppressToast: true }); } catch (e) { toast(e.message, "error"); return; }
+    const copy = (text) => (navigator.clipboard ? navigator.clipboard.writeText(text) : Promise.reject()).then(() => toast("Copied", "ok"), () => toast("Select it and copy it by hand", "error"));
+    const block = (label, text) => [
+      el("h3", {}, label),
+      el("pre", { class: "mono", style: { whiteSpace: "pre-wrap", overflowWrap: "anywhere", fontSize: "11.5px", background: "var(--inset)", padding: "10px", borderRadius: "8px", margin: "0 0 6px" } }, text),
+      el("button", { type: "button", class: "secondary small", style: { marginBottom: "12px" }, onclick: () => copy(text) }, "Copy"),
+    ];
+    const body = el("div", {},
+      el("div", { class: "banner info", style: { marginBottom: "12px" } }, r.note),
+      !r.url_is_public ? el("p", { class: "msg error" }, "No public address is set (EXTERNAL_URL): replace YOUR-ORCHESTRATOR with an address the caller can reach.") : null,
+      !r.enabled ? el("p", { class: "msg error" }, "Deploys are switched off for this service: the command is refused (409) until they are on.") : null,
+      block("Deploy", r.commands.deploy),
+      el("p", { class: "faint", style: { fontSize: "13px" } }, "Guarded like Redeploy now" + (r.branch ? ", for branch " + r.branch : "") + ". The answer has run_id: put it in the status command."),
+      block("Its result", r.commands.status),
+      el("p", { class: "faint", style: { fontSize: "13px" } }, Object.entries(r.answers).map(([c, t]) => c + ": " + t).join(" · ")));
+    drawer({ title: "Deploy command", sub: r.slug, fields: [{ type: "custom", key: "_c", render: () => body }], saveLabel: "Done", onSave: () => {} });
+  }
   async function webhookDrawer() {
     let w;
     try { w = (await api.get(base + "/deploy", { suppressToast: true })).webhook; } catch (e) { toast(e.message, "error"); return; }
@@ -896,6 +921,7 @@
           try { await api.del(base + "/deploy/webhook"); toast("Secret removed", "ok"); } catch (_e) { /* toast */ }
         } }, "Remove the secret") : null),
       secretBox,
+      w.secret_set ? el("p", {}, el("button", { type: "button", class: "ghost small", style: { color: "var(--link)", padding: "0" }, onclick: deployCommandDrawer }, "Copy the deploy command, with its key…")) : null,
       w.github ? [el("h3", {}, "GitHub pipeline"),
         el("p", { class: "faint", style: { fontSize: "13px" } }, "Save this as " + w.github.path + " in the repository; its key comes from the repository secret " + w.github.secret_name + "."),
         !w.url_is_public ? el("p", { class: "msg error" }, "No public address is set (ORCHESTRATOR_PUBLIC_URL): replace YOUR-ORCHESTRATOR in the block with an address the runner can reach.") : null,

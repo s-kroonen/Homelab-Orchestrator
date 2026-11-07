@@ -140,6 +140,8 @@ def test_infra_guests_api_shows_real_adapter_data(client: TestClient) -> None:
             "service_slug": None,
             # Its node is not registered, so its boot settings were never read.
             "boot": None,
+            # No health cycle has checked its disks yet (health/disks.py).
+            "disk": None,
         }
     ]
 

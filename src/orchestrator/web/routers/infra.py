@@ -473,10 +473,12 @@ async def list_guests(
     that is on are read again when the kept copy is older than ten minutes."""
     guests = await adapters.proxmox.list_guests(node)
     await _refresh_boot(session, adapters.proxmox, guests)
+    from orchestrator.health import disks as disks_mod
     from orchestrator.registry import boot as boot_mod
 
     nodes = {n.name: n for n in session.exec(select(Node)).all()}
     slots = {name: {s.vmid: s for s in boot_mod.sequence(session, n)} for name, n in nodes.items()}
+    disk_rows = disks_mod.by_guest(disks_mod.load(session))
     out = []
     for g in guests:
         svc = _service_for_guest(session, g.node, g.vmid)
@@ -493,9 +495,56 @@ async def list_guests(
                 "boot": _boot_view(
                     boot_mod.setting_for(session, g.node, g.vmid), slots.get(g.node, {}).get(g.vmid)
                 ),
+                # The last health cycle's disk check (health/disks.py); None = not checked yet.
+                "disk": _disk_view(disk_rows.get(f"{g.node}/{g.vmid}")),
             }
         )
     return out
+
+
+def _disk_view(row: dict[str, Any] | None) -> dict[str, Any] | None:
+    if row is None:
+        return None
+    keep = ("state", "filesystems", "worst", "source", "error", "at")
+    return {k: row.get(k) for k in keep}
+
+
+@router.get("/disks")
+async def disk_usage(session: SessionDep, node: str | None = None) -> dict[str, Any]:
+    """The last disk check of every guest, fullest first (health/disks.py)."""
+    from orchestrator.health import disks as disks_mod
+
+    snapshot = disks_mod.load(session)
+    if snapshot is None:
+        return {"at": None, "guests": [], "note": "not checked yet: the next health cycle does"}
+    return _disk_listing(snapshot, node)
+
+
+def _disk_listing(snapshot: dict[str, Any], node: str | None) -> dict[str, Any]:
+    rank = {"full": 0, "low": 1, "ok": 2, "unmeasured": 3, "off": 4}
+    guests = [g for g in snapshot.get("guests", []) if node is None or g.get("node") == node]
+    guests.sort(
+        key=lambda g: (rank.get(g.get("state", ""), 9), -((g.get("worst") or {}).get("percent", 0)))
+    )
+    return {**snapshot, "guests": guests}
+
+
+@router.post("/disks/check")
+async def check_disks_now(
+    session: SessionDep, adapters: AdaptersDep, settings: SettingsDep, node: str | None = None
+) -> dict[str, Any]:
+    """Read every running guest's disks now and keep the result. It is announced on the next
+    health cycle, like any other change."""
+    from orchestrator.health import disks as disks_mod
+
+    previous = disks_mod.previous_states(session)
+    try:
+        status_ = await disks_mod.check_disks(adapters.proxmox, settings, previous=previous)
+    except AdapterError as exc:
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, f"Proxmox: {exc}") from exc
+    disks_mod.save(session, status_)
+    session.commit()
+    return _disk_listing(status_.as_dict(), node)
 
 
 async def _refresh_boot(session: Session, proxmox: Any, guests: list[Any]) -> None:

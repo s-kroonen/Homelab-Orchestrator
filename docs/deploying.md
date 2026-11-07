@@ -59,7 +59,7 @@ dashboard re-reads the node's state for 30 seconds and reports whether it came o
 The maintenance page only starts a service when both the service's and its node's
 "wake on hit" switch are on; otherwise it shows a plain "not available" page and
 starts nothing (a wake already running is still shown). The manual wake button, the
-CLI and `POST /wake/{slug}` ignore those switches.
+CLI and `POST /wake/{slug}` (admins only) ignore those switches.
 
 The wizard asks for the image tag and writes it into `.env`, so later pulls fetch
 the tag you chose. It also flags the two mistakes that are easy to miss: a

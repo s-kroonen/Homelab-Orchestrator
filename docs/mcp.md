@@ -40,7 +40,7 @@ A connection carries a set of permissions; a role is a named preset.
 | `deploy` | run guarded deploys |
 | `wake` | wake services and nodes |
 | `control` | start / stop / restart services, stacks, containers; the one switch; start a guest |
-| `configure` | change settings: adopt a Portainer stack, a service's dump and deploy settings, a stack's Git branch and Portainer polling, which service a proxy host belongs to |
+| `configure` | change settings: adopt a Portainer stack, a service's dump and deploy settings, a stack's Git branch and Portainer polling, which service a proxy host belongs to; get a service's deploy command with its key |
 | `propose` | **ask for** dangerous actions (below); each one still needs a person |
 
 | role | permissions |
@@ -62,15 +62,20 @@ may not use is not even listed to the assistant.
 
 * **read**: `orchestrator_status`, `list_services`, `get_service`, `service_health_history`,
   `linked_state`, `recent_activity`, `list_backups`, `backup_plan`, `list_runs`, `get_run`,
-  `deploy_history`, `list_dumps`, `infra_status`, `list_nodes`, `list_guests`, `list_proxy_hosts`,
+  `deploy_history`, `list_dumps`, `infra_status`, `list_nodes`, `list_guests`, `disk_usage`
+  (how full each guest's filesystems are, [disks.md](disks.md)), `list_proxy_hosts`,
   `portainer_stacks`, `portainer_containers`, `container_logs` (secrets redacted), `get_request`.
 * **act** (runs at once, logged, audited as `mcp:<connection>`): `run_backup`, `run_dump`, `propose_restore`,
   `deploy_service` (with its guards), `wake_service`, `node_power wake`, `switch_service`,
   `service_action`, `stack_action`, `container_action`, `guest_power start`.
 * **configure** (act, needs `configure`): `adopt_stack`, `set_dump`, `set_deploy`, `set_stack_git`,
-  `link_proxy_host`. They make the same writes as the pages (validated, audited, `services.yaml`
-  saved by itself). Secrets never pass through them: a deploy webhook's secret is made on the
-  service page, and `adopt_stack` does not return one.
+  `link_proxy_host`, `deploy_command`. They make the same writes as the pages (validated, audited,
+  `services.yaml` saved by itself). `deploy_command` is the one that hands out a secret: a
+  service's deploy as a ready `curl` command **with its deploy key in it**, so the assistant (or
+  whoever it passes it to) can deploy that one service. Every call is audited
+  (`deploy.key_revealed`), the key is never in the connection's history (a result is logged only
+  as its length), and `create_if_missing` makes a key but never replaces one. `adopt_stack` does
+  not return a secret.
 * **dangerous** (waits for a person, needs `propose`): `guest_power stop`, `node_power power_off` /
   `restart`, `delete_stack`, `deploy_service` with `skip_guards`, `switch_service off` with
   `include_guest`, `service_action stop` / `restart` on a `guest`, `set_dump` with a `command`

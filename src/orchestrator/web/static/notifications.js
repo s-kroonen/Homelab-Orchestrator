@@ -49,7 +49,7 @@
         { key: "enabled", label: "On", type: "checkbox" },
         { type: "section", label: "When" },
         { key: "events", label: "Events", type: "checklist", options: V.events_known.map((e) => ({ value: e, label: e.replace(/_/g, " ") })) },
-        { key: "levels", label: "About a", type: "checklist", options: V.levels.map((l) => ({ value: l, label: { sub: "sub-service", network: "the orchestrator's network", route: "route (proxy host)" }[l] || l })) },
+        { key: "levels", label: "About a", type: "checklist", options: V.levels.map((l) => ({ value: l, label: { sub: "sub-service", network: "the orchestrator's network", route: "route (proxy host)", disk: "a guest's disk" }[l] || l })) },
         { key: "min_severity", label: "At least", type: "select", options: V.severities.map((s) => ({ value: s, label: s })) },
         { key: "first_check", label: "Send on the first check", type: "checkbox", help: "Without it a change must be seen on two checks in a row before it is sent, so one blip is not an alert. With it, this rule's alerts go out at once." },
         { type: "section", label: "About" },
