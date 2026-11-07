@@ -249,10 +249,11 @@ not reach Traefik at all, so a Traefik outage doesn't also stop old samples
 from being cleaned up.
 ## Wake-on-hit: a stand-in for a real Traefik-side trigger
 
-`POST /wake/{service_slug}` (`web/routers/wake.py`) was designed to be
+`POST /wake/{service_slug}` (`web/routers/wake.py`, now **admins only**: it skips the
+"wake on hit" switches, so a public one let anyone power on any node) was first designed to be
 called by Traefik's own **errors middleware** whenever a visitor hits a
-down backend — see that router's docstring and
-`orchestrator.web.wake_support`. That requires pushing config on the
+down backend; visitors now wake a service through `/maintenance/<slug>` instead (see
+`orchestrator.web.wake_support`). Calling it from Traefik would have required pushing config on the
 Traefik side (an `errors` middleware pointed at this app, attached to the
 relevant routers), and the owner currently only has **read-only API
 access** to Traefik, which lives on a different host (see

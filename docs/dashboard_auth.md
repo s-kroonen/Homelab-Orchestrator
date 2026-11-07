@@ -2,11 +2,26 @@
 
 Phase 7. The dashboard (`GET /`) and every `/api/registry/*`, `/api/backup/*`,
 `/api/runs*`, `/api/backups`, and `/api/infra/*` endpoint require a logged-in
-admin. `/healthz`, `/readyz`, `/maintenance/{slug}`, and `/wake/{slug}` stay
-public **on purpose** — Traefik's `errors` middleware routes arbitrary,
-unauthenticated visitors to the maintenance page during an outage (see
-[architecture.md](architecture.md)), and gating that behind a login would
-break the one feature it exists for.
+admin. `/healthz`, `/readyz` and `/maintenance/{slug}` stay public **on purpose** —
+Traefik's `errors` middleware routes arbitrary, unauthenticated visitors to the maintenance
+page during an outage (see [architecture.md](architecture.md)), and gating that behind a login
+would break the one feature it exists for. The maintenance page only wakes a service whose
+"wake on hit" switches are on (and, for a button service, when the button was pressed).
+`/wake/{slug}`, which skips those switches, is for admins only, and so is the API reference
+(`/docs`, over `/api/openapi.json`); FastAPI's public `/docs`, `/redoc` and `/openapi.json`
+are switched off.
+
+## Requests from other sites
+
+Every `POST`, `PUT`, `PATCH` and `DELETE` must come from the dashboard itself
+(`web/same_origin.py`): its `Origin` must be the host it was sent to or the host of
+`EXTERNAL_URL`, `WEBAUTHN_ORIGIN` or `ORCHESTRATOR_PUBLIC_URL`, and without an `Origin` its
+`Sec-Fetch-Site` must be `same-origin`. Anything else is answered `403`. The session cookie's
+`SameSite=lax` alone does not stop this: another app on a sibling subdomain counts as the same
+*site*, so a script-injection bug in one of them could otherwise make a signed-in browser act
+on the dashboard. Requests with neither header (the CLI, curl, a server) are not browsers and
+pass as before; the token-authenticated paths (`/hooks/`, `/mcp`, `/oauth/token`,
+`/oauth/revoke`, `/oauth/register`) are left to their tokens.
 
 ## Why passkeys, no passwords
 

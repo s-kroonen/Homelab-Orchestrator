@@ -48,6 +48,7 @@ from orchestrator.web.not_found import not_found_handler
 from orchestrator.web.routers import (
     actions,
     activity,
+    api_docs,
     approvals,
     archive,
     assistants,
@@ -87,6 +88,7 @@ from orchestrator.web.routers import (
 from orchestrator.web.routers import (
     map as map_page,
 )
+from orchestrator.web.same_origin import SameOriginMiddleware
 from orchestrator.web.static_files import RevalidatingStaticFiles
 
 
@@ -376,7 +378,14 @@ def create_app() -> FastAPI:
         title="homelab-orchestrator",
         version=__version__,
         lifespan=lifespan,
+        # Not public (OR-8): an admin gets them at /docs over /api/openapi.json (api_docs.py).
+        docs_url=None,
+        redoc_url=None,
+        openapi_url=None,
     )
+    # State-changing requests a browser sent from another site are refused (OR-6): the
+    # cookie's SameSite=lax does not stop a sibling subdomain (web/same_origin.py).
+    app.add_middleware(SameOriginMiddleware)
     # Signed-cookie session for the dashboard's passkey login (web/auth.py).
     # https_only=False: Traefik terminates TLS and speaks plain HTTP to this
     # container internally (see docs/dashboard_auth.md) — the cookie itself
@@ -394,6 +403,7 @@ def create_app() -> FastAPI:
         RevalidatingStaticFiles(directory=str(Path(__file__).parent / "static")),
         name="static",
     )
+    app.include_router(api_docs.router)
     app.include_router(health.router)
     app.include_router(maintenance.router)
     app.include_router(wake.router)
