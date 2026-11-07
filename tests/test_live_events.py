@@ -16,6 +16,7 @@ from orchestrator.db.models import AuditEntry, PipelineRun, Probe, Service, Serv
 from orchestrator.db.session import get_engine
 from orchestrator.domain.enums import HealthState, PipelineKind, PipelineStatus, ProbeKind
 from orchestrator.web.app import create_app
+from tests.auth_helpers import setup_token
 
 
 @pytest.fixture(autouse=True)
@@ -206,7 +207,8 @@ def test_the_endpoint_streams_events_to_a_logged_in_page(monkeypatch: pytest.Mon
         admin = httpx.Client(base_url=base)
         assert (
             admin.post(
-                "/api/auth/register/begin", json={"username": "storm", "invite_token": None}
+                "/api/auth/register/begin",
+                json={"username": "storm", "invite_token": setup_token()},
             ).status_code
             == 200
         )
@@ -215,7 +217,7 @@ def test_the_endpoint_streams_events_to_a_logged_in_page(monkeypatch: pytest.Mon
             json={
                 "username": "storm",
                 "device_label": "t",
-                "invite_token": None,
+                "invite_token": setup_token(),
                 "credential": th._credential(b"cred-1"),
             },
         )

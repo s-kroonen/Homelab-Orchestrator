@@ -37,6 +37,7 @@ from orchestrator.scheduler.access_log_collector import (
 )
 from orchestrator.web import auth as auth_lib
 from orchestrator.web.app import create_app
+from tests.auth_helpers import setup_token
 
 # Log timestamps an hour ago (so retention pruning never eats them), at a
 # fixed hour so minute buckets in assertions are predictable.
@@ -621,14 +622,16 @@ def _credential(raw_id: bytes) -> dict[str, Any]:
 
 def _login_as_first_admin(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
     _fake_verify_registration(monkeypatch, b"cred-1")
-    r = client.post("/api/auth/register/begin", json={"username": "storm", "invite_token": None})
+    r = client.post(
+        "/api/auth/register/begin", json={"username": "storm", "invite_token": setup_token()}
+    )
     assert r.status_code == 200, r.text
     r = client.post(
         "/api/auth/register/complete",
         json={
             "username": "storm",
             "device_label": "test-device",
-            "invite_token": None,
+            "invite_token": setup_token(),
             "credential": _credential(b"cred-1"),
         },
     )

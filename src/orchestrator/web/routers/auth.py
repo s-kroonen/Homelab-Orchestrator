@@ -6,27 +6,28 @@ the client resends ``username``/``device_label``/``invite_token`` at
 ``/complete`` rather than the server stashing them in between, so a stale or
 abandoned ceremony can't leave half-applied session state.
 
-Bootstrap rule: registration needs no invite while the ``admin`` table is
-empty. Once at least one admin exists, every new registration needs a valid,
-unused, unexpired invite link — created by an already-logged-in admin via
-``POST /api/auth/invites`` and consumed here.
+Registration always needs a valid, unused, unexpired invite link (OR-58), also while no
+admin exists: the first admin registers with the setup link the orchestrator prints in its log
+(and ``orchestrator-cli admin reset`` / ``admin invite`` print on the host). See
+``web/invites.py``. An invite made for an existing account adds a passkey to it instead of
+creating an admin.
 """
 
 from __future__ import annotations
 
-import secrets
 from datetime import timedelta
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request, status
 from pydantic import BaseModel
-from sqlmodel import Session, desc, func, select
+from sqlmodel import Session, desc, select
 
 from orchestrator.audit import log as audit
 from orchestrator.config import Settings
 from orchestrator.db.models import Admin, PendingApproval, WebAuthnCredential
 from orchestrator.domain.enums import ApprovalKind, ApprovalStatus, AuditResult
 from orchestrator.web import auth as auth_lib
+from orchestrator.web import invites as invites_lib
 from orchestrator.web.auth import CurrentAdmin
 from orchestrator.web.deps import SessionDep, SettingsDep
 from orchestrator.web.templating import templates
@@ -35,24 +36,8 @@ router = APIRouter(tags=["auth"])
 _templates = templates
 
 
-def _admin_count(session: SessionDep) -> int:
-    return session.exec(select(func.count()).select_from(Admin)).one()
-
-
-def _find_invite(session: SessionDep, token: str) -> PendingApproval | None:
-    invite = session.exec(
-        select(PendingApproval).where(
-            PendingApproval.token == token,
-            PendingApproval.kind == ApprovalKind.ADMIN_INVITE,
-        )
-    ).one_or_none()
-    if invite is None:
-        return None
-    if invite.status is not ApprovalStatus.PENDING:
-        return None
-    if invite.expires_at < auth_lib.utcnow():
-        return None
-    return invite
+def _admin_count(session: Session) -> int:
+    return invites_lib.admin_count(session)
 
 
 # ---------------------------------------------------------------------------
@@ -62,16 +47,17 @@ def _find_invite(session: SessionDep, token: str) -> PendingApproval | None:
 
 @router.get("/login")
 async def login_page(request: Request, session: SessionDep, invite: str | None = None) -> Any:
-    bootstrap_open = _admin_count(session) == 0
-    invite_row = _find_invite(session, invite) if invite else None
+    invite_row = invites_lib.find_open_invite(session, invite) if invite else None
+    target = invites_lib.invite_target(session, invite_row) if invite_row else None
     return _templates.TemplateResponse(
         request,
         "login.html",
         {
-            "bootstrap_open": bootstrap_open,
+            "bootstrap_open": _admin_count(session) == 0,
             "invite_token": invite if invite_row else None,
+            "invite_for": target.username if target else None,
             "invite_invalid": bool(invite) and invite_row is None,
-            "can_register": bootstrap_open or invite_row is not None,
+            "can_register": invite_row is not None,
         },
     )
 
@@ -156,7 +142,7 @@ async def login_complete(
     session.commit()
 
     assert admin.id is not None  # loaded from the DB by a non-null FK
-    auth_lib.login_admin(request, admin.id, stored.id)
+    auth_lib.login_admin(request, admin.id, stored)
     return {"status": "ok", "username": admin.username}
 
 
@@ -184,13 +170,30 @@ class RegisterBeginRequest(BaseModel):
 async def register_begin(
     body: RegisterBeginRequest, request: Request, session: SessionDep, settings: SettingsDep
 ) -> dict[str, Any]:
-    _check_registration_allowed(session, body.username, body.invite_token)
-    options = auth_lib.build_registration_options(
-        settings,
-        user_handle=auth_lib.new_user_handle(),
-        username=body.username,
-        display_name=body.username,
-    )
+    invite = _check_registration_allowed(session, body.username, body.invite_token)
+    target = invites_lib.invite_target(session, invite)
+    if target is not None:
+        existing_ids = list(
+            session.exec(
+                select(WebAuthnCredential.credential_id).where(
+                    WebAuthnCredential.admin_id == target.id
+                )
+            ).all()
+        )
+        options = auth_lib.build_registration_options(
+            settings,
+            user_handle=f"admin:{target.id}".encode(),
+            username=target.username,
+            display_name=target.display_name or target.username,
+            exclude_credential_ids=existing_ids,
+        )
+    else:
+        options = auth_lib.build_registration_options(
+            settings,
+            user_handle=auth_lib.new_user_handle(),
+            username=body.username,
+            display_name=body.username,
+        )
     auth_lib.store_challenge(request, auth_lib.base64url_to_bytes(options["challenge"]))
     return options
 
@@ -216,7 +219,8 @@ async def register_complete(
     except Exception as exc:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, f"verification failed: {exc}") from exc
 
-    admin = Admin(username=body.username, display_name=body.username)
+    target = invites_lib.invite_target(session, invite)
+    admin = target or Admin(username=body.username, display_name=body.username)
     session.add(admin)
     session.flush()
     assert admin.id is not None  # populated by the flush above
@@ -229,46 +233,54 @@ async def register_complete(
         sign_count=verified.sign_count,
         transports=list(transports),
         aaguid=str(verified.aaguid or ""),
-        label=body.device_label or "default",
+        label=body.device_label or ("device" if target else "default"),
     )
     session.add(cred)
 
-    if invite is not None:
-        invite.status = ApprovalStatus.CONSUMED
-        invite.approved_by = body.username
-        invite.approved_at = auth_lib.utcnow()
-        session.add(invite)
+    invite.status = ApprovalStatus.CONSUMED
+    invite.approved_by = admin.username
+    invite.approved_at = auth_lib.utcnow()
+    session.add(invite)
 
     audit.record(
         session,
-        actor=body.username,
-        action="auth.register",
+        actor=admin.username,
+        action="auth.credential.added" if target else "auth.register",
         target=f"admin:{admin.id}",
-        details={"via_invite": invite is not None},
+        details={"via_invite": True, "setup": bool((invite.payload or {}).get("setup"))},
     )
     session.commit()
+    session.refresh(cred)
 
-    auth_lib.login_admin(request, admin.id, cred.id)
+    auth_lib.login_admin(request, admin.id, cred)
     return {"status": "ok", "username": admin.username}
 
 
 def _check_registration_allowed(
-    session: SessionDep, username: str, invite_token: str | None
-) -> PendingApproval | None:
+    session: Session, username: str, invite_token: str | None
+) -> PendingApproval:
+    """The open invite this registration uses; 403 without one, also while no admin exists."""
+    invite = invites_lib.find_open_invite(session, invite_token or "")
+    if invite is None:
+        if not invite_token and _admin_count(session) == 0:
+            raise HTTPException(
+                status.HTTP_403_FORBIDDEN,
+                "the first admin registers with the setup link: it is in the orchestrator's log, "
+                "or run `orchestrator-cli admin invite` on the host",
+            )
+        if not invite_token:
+            raise HTTPException(
+                status.HTTP_403_FORBIDDEN, "an invite link from an existing admin is required"
+            )
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "invite link is invalid, used, or expired")
+    target = invites_lib.invite_target(session, invite)
+    if target is not None:
+        if target.disabled_at is not None:
+            raise HTTPException(status.HTTP_403_FORBIDDEN, "that account is disabled")
+        return invite  # a passkey for an existing account: its name, not the one typed
     existing = session.exec(select(Admin).where(Admin.username == username)).one_or_none()
     if existing is not None:
         raise HTTPException(status.HTTP_409_CONFLICT, "username already registered")
-
-    if _admin_count(session) == 0:
-        return None  # bootstrap: first admin needs no invite
-
-    if not invite_token:
-        raise HTTPException(
-            status.HTTP_403_FORBIDDEN, "an invite link from an existing admin is required"
-        )
-    invite = _find_invite(session, invite_token)
-    if invite is None:
-        raise HTTPException(status.HTTP_403_FORBIDDEN, "invite link is invalid, used, or expired")
     return invite
 
 
@@ -334,7 +346,8 @@ async def add_credential_complete(
         session, actor=admin.username, action="auth.credential.added", target=f"admin:{admin.id}"
     )
     session.commit()
-    auth_lib.remember_device(request, cred.id)  # it was just made on this device
+    session.refresh(cred)
+    auth_lib.remember_device(request, cred)  # it was just made on this device
     return {"status": "ok"}
 
 
@@ -380,15 +393,13 @@ class CreateInviteRequest(BaseModel):
 async def create_invite(
     body: CreateInviteRequest, admin: CurrentAdmin, session: SessionDep, settings: SettingsDep
 ) -> dict[str, Any]:
-    token = secrets.token_urlsafe(32)
-    invite = PendingApproval(
-        kind=ApprovalKind.ADMIN_INVITE,
-        token=token,
-        payload={"label": body.label},
+    invite = invites_lib.create_invite(
+        session,
         requested_by=admin.username,
-        expires_at=auth_lib.utcnow() + timedelta(hours=settings.invite_ttl_hours),
+        ttl=timedelta(hours=settings.invite_ttl_hours),
+        label=body.label,
     )
-    session.add(invite)
+    token = invite.token
     audit.record(
         session,
         actor=admin.username,
@@ -399,7 +410,7 @@ async def create_invite(
     session.refresh(invite)
     return {
         "token": token,
-        "url": f"{settings.webauthn_origin}/login?invite={token}",
+        "url": invites_lib.invite_url(settings, token),
         "expires_at": invite.expires_at.isoformat(),
     }
 
@@ -417,7 +428,10 @@ def invites_view(session: Session, settings: Settings) -> list[dict[str, Any]]:
     out = []
     for inv in invites:
         effective_status = inv.status
-        if effective_status is ApprovalStatus.PENDING and inv.expires_at < now:
+        if effective_status is ApprovalStatus.PENDING and (
+            inv.expires_at < now or (inv.payload or {}).get("setup")
+        ):
+            # Only signed-in admins read this, so an admin exists: a setup link is dead.
             effective_status = ApprovalStatus.EXPIRED
         is_open = effective_status is ApprovalStatus.PENDING
         out.append(
@@ -429,7 +443,7 @@ def invites_view(session: Session, settings: Settings) -> list[dict[str, Any]]:
                 "status": effective_status.value,
                 "approved_by": inv.approved_by,
                 "approved_at": inv.approved_at.isoformat() if inv.approved_at else None,
-                "url": f"{settings.webauthn_origin}/login?invite={inv.token}" if is_open else None,
+                "url": invites_lib.invite_url(settings, inv.token) if is_open else None,
             }
         )
     return out

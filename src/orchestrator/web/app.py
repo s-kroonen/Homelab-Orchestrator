@@ -21,6 +21,7 @@ import traceback
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import Any
 
 from fastapi import FastAPI
 from starlette.exceptions import HTTPException as StarletteHTTPException
@@ -145,6 +146,29 @@ def _fold_stacks(settings: Settings) -> None:
         )
 
 
+def _announce_setup_link(settings: Any, log: Any) -> None:
+    """While no admin exists, print the one-time link the first admin registers with (OR-58).
+    Without it registration is closed, so whoever reaches /login first cannot claim the
+    dashboard."""
+    try:
+        from orchestrator.web.invites import invite_url, open_setup_invite
+
+        with session_scope() as session:
+            invite = open_setup_invite(session, settings)
+            if invite is None:
+                return
+            log.warning(
+                "auth.setup_link",
+                url=invite_url(settings, invite.token),
+                expires_at=invite.expires_at.isoformat(),
+                hint="No admin is registered yet. Open this link to register the first passkey. "
+                "Registration is closed without it; `orchestrator-cli admin invite` prints a "
+                "new one.",
+            )
+    except Exception as exc:
+        log.error("auth.setup_link.failed", error=str(exc))
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     configure_logging()
@@ -201,6 +225,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             impact="No services are registered. Backups and wakes cannot run "
             "until this is fixed.",
         )
+
+    _announce_setup_link(settings, log)
 
     # Startup failures past this point must never be silent. uvicorn runs with
     # log_config=None so structlog owns stdout, which means an unhandled

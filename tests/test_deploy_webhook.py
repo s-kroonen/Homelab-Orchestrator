@@ -27,6 +27,7 @@ from orchestrator.domain.schemas import ServiceVerdict
 from orchestrator.health.engine import HealthEngine
 from orchestrator.registry.loader import reconcile_yaml_into_db
 from orchestrator.web.app import create_app
+from tests.auth_helpers import setup_token
 from tests.test_proxy_hosts import _login_as_first_admin
 
 REGISTRY = """\
@@ -539,7 +540,7 @@ def live(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Any:
     admin = httpx.Client(base_url=base)
     assert (
         admin.post(
-            "/api/auth/register/begin", json={"username": "storm", "invite_token": None}
+            "/api/auth/register/begin", json={"username": "storm", "invite_token": setup_token()}
         ).status_code
         == 200
     )
@@ -548,7 +549,7 @@ def live(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Any:
         json={
             "username": "storm",
             "device_label": "t",
-            "invite_token": None,
+            "invite_token": setup_token(),
             "credential": th._credential(b"cred-1"),
         },
     )

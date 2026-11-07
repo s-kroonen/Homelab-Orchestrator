@@ -30,6 +30,7 @@ from orchestrator.domain.enums import (
 )
 from orchestrator.web import auth as auth_lib
 from orchestrator.web.app import create_app
+from tests.auth_helpers import setup_token
 
 T0 = datetime(2026, 10, 1, 12, 0, tzinfo=UTC)
 
@@ -55,11 +56,18 @@ def _register(client: TestClient, monkeypatch: pytest.MonkeyPatch, username: str
         )
 
     monkeypatch.setattr(auth_lib, "verify_registration", _fake)
-    r = client.post("/api/auth/register/begin", json={"username": username})
+    r = client.post(
+        "/api/auth/register/begin", json={"username": username, "invite_token": setup_token()}
+    )
     assert r.status_code == 200, r.text
     r = client.post(
         "/api/auth/register/complete",
-        json={"username": username, "device_label": "t", "credential": _credential(b"cred-1")},
+        json={
+            "username": username,
+            "device_label": "t",
+            "invite_token": setup_token(),
+            "credential": _credential(b"cred-1"),
+        },
     )
     assert r.status_code == 200, r.text
     return r
