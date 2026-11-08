@@ -91,8 +91,9 @@ configured):
 
 Then `docker compose up -d` and open `/setup`. Who may use it follows the
 passkey bootstrap rule: while no admin exists, anyone who can reach the page
-may (as anyone may register the first admin — keep the port on loopback, as the
-compose file does); once an admin exists, only a logged-in admin. The page
+may (keep the port on loopback, as the compose file does); once an admin exists, only a
+logged-in admin. Registering that first admin needs the setup link from the log
+(`docker compose logs orchestrator | grep setup_link`). The page
 returns 404 for good as soon as `.env` or `services.yaml` has content. Afterwards
 remove the two lines above and `docker compose up -d` to apply the new `.env`.
 

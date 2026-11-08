@@ -29,6 +29,7 @@ from orchestrator.setup.envfile import read_env
 from orchestrator.setup.project import read_values
 from orchestrator.web import auth as auth_lib
 from orchestrator.web.app import create_app
+from tests.auth_helpers import setup_token
 
 PVE_SECRET = "pve-secret-value-0001"
 PBS_SECRET = "pbs-secret-value-0002"
@@ -128,12 +129,18 @@ def _register_admin(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None
         )
 
     monkeypatch.setattr(auth_lib, "verify_registration", _fake)
-    assert client.post("/api/auth/register/begin", json={"username": "storm"}).status_code == 200
+    assert (
+        client.post(
+            "/api/auth/register/begin", json={"username": "storm", "invite_token": setup_token()}
+        ).status_code
+        == 200
+    )
     r = client.post(
         "/api/auth/register/complete",
         json={
             "username": "storm",
             "device_label": "t",
+            "invite_token": setup_token(),
             "credential": {"id": b64, "rawId": b64, "response": {"transports": ["internal"]}},
         },
     )

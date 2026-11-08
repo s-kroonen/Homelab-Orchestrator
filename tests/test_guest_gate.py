@@ -53,6 +53,7 @@ from orchestrator.scheduler.health_scanner import HealthScanner
 from orchestrator.web import auth as auth_lib
 from orchestrator.web.app import create_app
 from orchestrator.web.routers.traffic import build_series
+from tests.auth_helpers import setup_token
 
 EXAMPLE = Path(__file__).parent.parent / "config" / "services.example.yaml"
 
@@ -472,14 +473,16 @@ def _login(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
 
     monkeypatch.setattr(auth_lib, "verify_registration", _fake)
     b64 = webauthn.helpers.bytes_to_base64url(b"cred-1")
-    r = client.post("/api/auth/register/begin", json={"username": "storm", "invite_token": None})
+    r = client.post(
+        "/api/auth/register/begin", json={"username": "storm", "invite_token": setup_token()}
+    )
     assert r.status_code == 200, r.text
     r = client.post(
         "/api/auth/register/complete",
         json={
             "username": "storm",
             "device_label": "t",
-            "invite_token": None,
+            "invite_token": setup_token(),
             "credential": {"id": b64, "rawId": b64, "response": {"transports": ["internal"]}},
         },
     )

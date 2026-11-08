@@ -18,7 +18,7 @@ from typing import Any
 import pytest
 import webauthn
 from fastapi.testclient import TestClient
-from sqlmodel import Session, select
+from sqlmodel import Session
 
 from orchestrator.db import session as session_module
 from orchestrator.db.models import PendingApproval
@@ -26,6 +26,7 @@ from orchestrator.db.session import get_engine
 from orchestrator.domain.enums import ApprovalKind, ApprovalStatus
 from orchestrator.web import auth as auth_lib
 from orchestrator.web.app import create_app
+from tests.auth_helpers import setup_token
 
 
 @pytest.fixture
@@ -69,7 +70,12 @@ def _register(
     """Drive the full begin->complete ceremony. The bootstrap/invite check
     runs in BOTH steps, so an expected failure may come back from ``begin``
     already — that response is returned as-is rather than asserted on, so
-    callers testing the rejection path see the real status code."""
+    callers testing the rejection path see the real status code.
+
+    Without ``invite_token`` it uses the setup link while no admin exists, and no invite
+    once one does."""
+    if invite_token is None:
+        invite_token = setup_token()
     _fake_verify_registration(monkeypatch, credential_id)
     r = client.post(
         "/api/auth/register/begin", json={"username": username, "invite_token": invite_token}
@@ -101,7 +107,9 @@ def _login(
 # ---------------------------------------------------------------------------
 
 
-def test_first_admin_registers_without_an_invite(app: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_first_admin_registers_with_the_setup_link(
+    app: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
     with TestClient(app) as client:
         r = _register(client, monkeypatch, username="storm", credential_id=b"cred-1")
     assert r.status_code == 200, r.text
@@ -125,7 +133,10 @@ def test_duplicate_username_is_rejected(app: Any, monkeypatch: pytest.MonkeyPatc
             _register(client, monkeypatch, username="storm", credential_id=b"cred-1").status_code
             == 200
         )
-        r = _register(client, monkeypatch, username="storm", credential_id=b"cred-2")
+        token = client.post("/api/auth/invites", json={}).json()["token"]
+        r = _register(
+            client, monkeypatch, username="storm", credential_id=b"cred-2", invite_token=token
+        )
     assert r.status_code == 409
 
 
@@ -163,18 +174,12 @@ def test_expired_invite_is_rejected(app: Any, monkeypatch: pytest.MonkeyPatch) -
         )
 
         with Session(get_engine()) as session:
-            invite = session.exec(
-                select(PendingApproval).where(PendingApproval.kind == ApprovalKind.ADMIN_INVITE)
-            ).one_or_none()
-            if invite is None:
-                invite = PendingApproval(
-                    kind=ApprovalKind.ADMIN_INVITE,
-                    token="expired-token",
-                    requested_by="storm",
-                    expires_at=auth_lib.utcnow() - timedelta(hours=1),
-                )
-            else:
-                invite.expires_at = auth_lib.utcnow() - timedelta(hours=1)
+            invite = PendingApproval(
+                kind=ApprovalKind.ADMIN_INVITE,
+                token="expired-token",
+                requested_by="storm",
+                expires_at=auth_lib.utcnow() - timedelta(hours=1),
+            )
             session.add(invite)
             session.commit()
             token = invite.token
@@ -284,6 +289,8 @@ def test_invite_listing_reflects_consumption(app: Any, monkeypatch: pytest.Monke
 
         before = client.get("/api/auth/invites").json()
         assert before[0]["status"] == ApprovalStatus.PENDING.value
+        assert before[1]["label"] == "setup"  # the first admin's link, used
+        assert before[1]["status"] == ApprovalStatus.CONSUMED.value
 
         client.post("/api/auth/logout")
         _register(client, monkeypatch, username="jane", credential_id=b"cred-2", invite_token=token)
@@ -325,8 +332,8 @@ def test_an_open_invite_keeps_its_link_until_used(
     with TestClient(app) as client:
         _register(client, monkeypatch, username="storm", credential_id=b"cred-1")
         made = client.post("/api/auth/invites", json={"label": "for Jane"}).json()
-        (open_one,) = client.get("/api/auth/invites").json()
-        assert open_one["url"] == made["url"]
+        open_one, setup = client.get("/api/auth/invites").json()
+        assert open_one["url"] == made["url"] and setup["url"] is None
 
         client.post("/api/auth/logout")
         _register(
@@ -336,6 +343,6 @@ def test_an_open_invite_keeps_its_link_until_used(
             credential_id=b"cred-2",
             invite_token=made["token"],
         )
-        (used,) = client.get("/api/auth/invites").json()
+        used, _setup = client.get("/api/auth/invites").json()
     assert used["status"] == ApprovalStatus.CONSUMED.value
     assert used["url"] is None

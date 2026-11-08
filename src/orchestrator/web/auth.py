@@ -8,13 +8,20 @@ authenticator, which pytest doesn't have.
 
 Session storage: a signed cookie (Starlette's ``SessionMiddleware``, wired in
 ``web/app.py`` with ``settings.session_secret``), not a DB table. It holds
-the logged-in ``admin_id`` plus, briefly, the challenge for an in-flight
+the logged-in ``admin_id``, the passkey it signed in with (its row id and a hash
+of its WebAuthn id) plus, briefly, the challenge for an in-flight
 registration/authentication ceremony — cleared as soon as that ceremony
 completes or fails.
+
+A session is valid only while the passkey it signed in with still exists and still belongs to
+that admin (OR-58). Removing a passkey ends its sessions, and ``admin reset`` ends them all: row
+ids are reused once a table is empty, so the hash, not the id, is what tells a new admin's
+passkey from the one an old cookie names.
 """
 
 from __future__ import annotations
 
+import hashlib
 import secrets
 from datetime import UTC, datetime
 from typing import Annotated, Any
@@ -40,23 +47,29 @@ from orchestrator.web.deps import SessionDep
 _SESSION_ADMIN_KEY = "admin_id"
 _SESSION_CHALLENGE_KEY = "webauthn_challenge"
 _SESSION_CREDENTIAL_KEY = "credential_id"
+_SESSION_PASSKEY_KEY = "passkey"
 
 # ---------------------------------------------------------------------------
 # Session helpers
 # ---------------------------------------------------------------------------
 
 
-def login_admin(request: Request, admin_id: int, credential_id: int | None = None) -> None:
+def passkey_tag(credential_id: bytes) -> str:
+    """A short hash of a passkey's WebAuthn id, unique per passkey (unlike its row id)."""
+    return hashlib.sha256(credential_id).hexdigest()[:32]
+
+
+def login_admin(request: Request, admin_id: int, credential: WebAuthnCredential) -> None:
     request.session[_SESSION_ADMIN_KEY] = admin_id
     request.session.pop(_SESSION_CHALLENGE_KEY, None)
-    remember_device(request, credential_id)
+    remember_device(request, credential)
 
 
-def remember_device(request: Request, credential_id: int | None) -> None:
-    """Which passkey this browser signed in (or was added) with, so Admins & devices can say
-    "this device". Display only: nothing is allowed or refused because of it."""
-    if credential_id is not None:
-        request.session[_SESSION_CREDENTIAL_KEY] = credential_id
+def remember_device(request: Request, credential: WebAuthnCredential) -> None:
+    """Which passkey this browser signed in (or was added) with. Admins & devices marks it
+    "this device", and the session lasts only as long as that passkey does."""
+    request.session[_SESSION_CREDENTIAL_KEY] = credential.id
+    request.session[_SESSION_PASSKEY_KEY] = passkey_tag(credential.credential_id)
 
 
 def current_device(request: Request) -> int | None:
@@ -104,7 +117,23 @@ def get_current_admin(request: Request, session: Session) -> Admin | None:
     admin = session.get(Admin, admin_id)
     if admin is None or admin.disabled_at is not None:
         return None
+    if not _passkey_still_valid(request, session, admin_id):
+        return None
     return admin
+
+
+def _passkey_still_valid(request: Request, session: Session, admin_id: int) -> bool:
+    """The passkey this session signed in with still exists and is this admin's."""
+    cred_id = current_device(request)
+    tag = request.session.get(_SESSION_PASSKEY_KEY)
+    if cred_id is None or not isinstance(tag, str):
+        return False  # a cookie from before passkey binding: sign in again
+    cred = session.get(WebAuthnCredential, cred_id)
+    return (
+        cred is not None
+        and cred.admin_id == admin_id
+        and secrets.compare_digest(passkey_tag(cred.credential_id), tag)
+    )
 
 
 def require_admin(request: Request, session: SessionDep) -> Admin:

@@ -23,6 +23,7 @@ from orchestrator.db.models import AuditEntry, BackupRecord, Node, Probe, Servic
 from orchestrator.db.session import get_engine
 from orchestrator.web import auth as auth_lib
 from orchestrator.web.app import create_app
+from tests.auth_helpers import setup_token
 
 
 @pytest.fixture
@@ -47,7 +48,9 @@ def _register(client: TestClient, monkeypatch: pytest.MonkeyPatch, username: str
     """Bootstrap the first admin; registering also logs the client in."""
     credential_id = b"cred-" + username.encode()
     _fake_verify_registration(monkeypatch, credential_id)
-    r = client.post("/api/auth/register/begin", json={"username": username})
+    r = client.post(
+        "/api/auth/register/begin", json={"username": username, "invite_token": setup_token()}
+    )
     assert r.status_code == 200, r.text
     b64 = webauthn.helpers.bytes_to_base64url(credential_id)
     r = client.post(
@@ -55,6 +58,7 @@ def _register(client: TestClient, monkeypatch: pytest.MonkeyPatch, username: str
         json={
             "username": username,
             "device_label": "test-device",
+            "invite_token": setup_token(),
             "credential": {"id": b64, "rawId": b64, "response": {"transports": ["internal"]}},
         },
     )

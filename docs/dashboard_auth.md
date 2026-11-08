@@ -33,19 +33,31 @@ identity label — it's what shows up in `audit_entry.actor` — not a secret.
 
 ## Bootstrap: the first admin
 
-Registration (`POST /api/auth/register/begin`) needs no invite **only while
-the `admin` table is empty**. The moment one admin exists, every further
-registration needs a valid, unused, unexpired invite link (below). This is
-why standing the dashboard up behind Traefik should happen only *after* you've
-registered the first admin against `http://127.0.0.1:8080` (or over SSH port
-forwarding) — a brief window where anyone who can reach the port could claim
-the first admin slot is the tradeoff for not needing a CLI step or a
-pre-shared secret. If you miss that window, see **Break-glass** below.
+Registration (`POST /api/auth/register/begin`) always needs an invite link, **also while no
+admin exists**. The dashboard is usually on the internet, so an open first-admin signup would
+make whoever loads `/login` first the admin.
+
+The first admin registers with the **setup link** instead:
+
+* **At start.** While no admin exists, the orchestrator prints the link in its log, valid for
+  `INVITE_TTL_HOURS`. A restart prints the same link until it expires.
+
+  ```bash
+  docker compose logs orchestrator | grep setup_link
+  ```
+
+* **On the host.** `orchestrator-cli admin invite` prints a fresh one, valid 30 minutes.
+
+Without the link, `/login` says where to find it, and `register/begin` answers 403. The setup
+link is an ordinary invite (below) with `setup: true` in its payload: it works once, and it
+shows in the Invites list afterwards.
 
 ## Invites: adding more admins
 
 Any logged-in admin can create one on Settings → Admins & devices ("Create
-invite link"), or via `POST /api/auth/invites`. It returns a one-time URL:
+invite link"), or via `POST /api/auth/invites`. On the host,
+`orchestrator-cli admin invite [--label X] [--minutes N]` does the same. It returns a
+one-time URL:
 
 ```
 {WEBAUTHN_ORIGIN}/login?invite=<token>
@@ -73,15 +85,29 @@ a hardware key) for an account you're *already* logged in as, use "Add this
 device" on Settings → Admins & devices, or `POST /api/auth/credentials/add/begin` /
 `/complete` directly — this does not consume or need an invite, since you're
 already proving who you are via your current session. The list marks the
-passkey this browser signed in (or was added) with as "this device"; the
-session remembers its id for that, and for nothing else.
+passkey this browser signed in (or was added) with as "this device".
+
+**Lost every device, but the host is reachable?** `orchestrator-cli admin invite --for NAME`
+prints a link that adds a passkey to the existing account `NAME`: same username, same
+history, nothing removed. The login page shows "Add a passkey to NAME" for it.
 
 ## Sessions
 
 A signed cookie (Starlette's `SessionMiddleware`, keyed by `SESSION_SECRET`),
-not a DB table — it holds the logged-in `admin_id` plus, briefly, the
-in-flight WebAuthn challenge between a ceremony's `begin` and `complete`
-calls. `same_site="lax"`.
+not a DB table. It holds:
+
+* the logged-in `admin_id`;
+* the passkey it signed in with: its row id and a hash of its WebAuthn id;
+* briefly, the in-flight WebAuthn challenge between a ceremony's `begin` and `complete` calls.
+
+`same_site="lax"`.
+
+**A session lasts only as long as its passkey.** Every request checks that the passkey still
+exists and still belongs to that admin. So removing a passkey ends every session it signed in,
+and `admin reset` ends them all. The hash matters: once a table is empty, SQLite hands out the
+same row ids again, so after a reset the new first admin is admin 1 with passkey 1, exactly
+what an old cookie names. Cookies from before this check carry no hash and must sign in again
+once.
 
 **`https_only=False` is deliberate, not an oversight.** Traefik terminates
 TLS at the gateway and speaks plain HTTP to this container over the internal
@@ -92,26 +118,31 @@ at all on a correctly configured deployment. The browser-to-Traefik leg is
 still HTTPS; only the Traefik-to-orchestrator leg inside your own network is
 not, same as every other service behind this gateway.
 
-## Break-glass: all passkeys lost
+## Break-glass: from the host
 
-If every registered device is lost (or nobody ever completed the bootstrap
-step and `WEBAUTHN_RP_ID`/`WEBAUTHN_ORIGIN` need fixing first), run:
+The CLI works without the dashboard, so these are the ways back in when nobody can sign in.
+In Docker, prefix each with `docker compose exec orchestrator`.
 
-```bash
-orchestrator-cli admin reset
-docker compose exec orchestrator orchestrator-cli admin reset   # in Docker
-```
+| Situation | Command |
+|---|---|
+| One admin lost their devices | `orchestrator-cli admin invite --for NAME` |
+| A device was stolen | `orchestrator-cli admin passkeys`, then `admin passkeys --remove ID` |
+| Every passkey of every admin is lost | `orchestrator-cli admin reset` |
 
-This lists every admin, asks for confirmation, then deletes all `admin` and
-`webauthn_credential` rows. The CLI works without any of this (it's the
-documented break-glass path, same reasoning as the host runner being usable
-when the dashboard itself is down) — afterward, the zero-admin bootstrap rule
-reopens and the next visitor to `/login` can register a fresh first admin.
+* **`admin passkeys`** lists every passkey (id, admin, device, added, last used).
+  `--remove ID` deletes one and ends the sessions it signed in. If that was the admin's last
+  passkey, it says how to add one.
+* **`admin reset`** lists every admin, asks for confirmation, then:
+  * deletes all `admin` and `webauthn_credential` rows;
+  * ends every session (see **Sessions**);
+  * expires every open invite, so a link handed out earlier cannot become the way in;
+  * prints a setup link, valid 30 minutes. Registration stays closed without it.
 
 ## Audit trail
 
 Every auth-relevant action writes an `audit_entry` row via
 `orchestrator.audit.log.record` — `auth.login` (OK or DENIED),
-`auth.logout`, `auth.register`, `auth.credential.added`,
-`auth.invite.created` — with `actor` set to the admin's username (or
-`"unknown"` for a login attempt against a credential that doesn't exist).
+`auth.logout`, `auth.register`, `auth.credential.added`, `auth.credential.removed`,
+`auth.invite.created`, `auth.reset` — with `actor` set to the admin's username (or
+`"unknown"` for a login attempt against a credential that doesn't exist, and `"cli"` for
+the host commands).

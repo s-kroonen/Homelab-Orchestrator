@@ -15,16 +15,22 @@
 
     {% if can_register %}
     <fieldset>
-      <legend>{{ "Create the first admin" if bootstrap_open else "Accept invite" }}</legend>
+      <legend>{% if invite_for %}Add a passkey to {{ invite_for }}{% elif bootstrap_open %}Create the first admin{% else %}Accept invite{% endif %}</legend>
       <label for="register-username">Username</label>
+      {% if invite_for %}
+      <input id="register-username" value="{{ invite_for }}" readonly>
+      {% else %}
       <input id="register-username" autocomplete="username webauthn">
+      {% endif %}
       <label for="register-label">Device name (optional)</label>
       <input id="register-label" placeholder="e.g. laptop, phone">
       <button id="register-btn">Register passkey</button>
       <p class="msg" id="register-msg"></p>
     </fieldset>
     {% elif invite_invalid %}
-    <p class="hint">That invite link is invalid, already used, or expired. Ask an admin for a new one.</p>
+    <p class="hint">That invite link is invalid, already used, or expired. Ask an admin for a new one{% if bootstrap_open %}, or run <code>orchestrator-cli admin invite</code> on the host{% endif %}.</p>
+    {% elif bootstrap_open %}
+    <p class="hint">No admin yet. Open the setup link from the orchestrator's log (<code>docker compose logs orchestrator | grep setup_link</code>), or run <code>orchestrator-cli admin invite</code> on the host.</p>
     {% else %}
     <p class="hint">Ask an existing admin for an invite link to register a new passkey.</p>
     {% endif %}

@@ -171,8 +171,9 @@ orchestrator                                           # serves on :8080
 
 Then `curl http://127.0.0.1:8080/healthz`, or browse the OpenAPI UI at
 <http://127.0.0.1:8080/docs>. The dashboard itself is at
-<http://127.0.0.1:8080/> — the first visit registers a first-admin passkey,
-no invite needed (see [docs/dashboard_auth.md](docs/dashboard_auth.md)); every
+<http://127.0.0.1:8080/>. The first admin registers a passkey with the one-time setup
+link the orchestrator prints in its log at start (`auth.setup_link`), or that
+`orchestrator-cli admin invite` prints (see [docs/dashboard_auth.md](docs/dashboard_auth.md)); every
 `/api/registry/*`, `/api/backup/*`, and `/api/infra/*` endpoint needs that
 login too.
 

@@ -19,10 +19,12 @@ Gating — when does ``/setup`` exist at all?
    the very rule ``init`` uses to decide whether it would be replacing files.
    Once setup has written them, the page 404s for good; changing config later
    is ``config edit`` / ``scaffold``, not a re-run of a clean install.
-3. Who may use it mirrors the ``/login`` bootstrap rule
-   (``_admin_count(session) == 0``): while NO admin exists, anyone who can
-   reach the page may — exactly as anyone may register the first admin. Once
-   an admin exists, only a logged-in admin may.
+3. While NO admin exists (``_admin_count(session) == 0``), anyone who can
+   reach the page may: it runs before ``.env`` sets ``WEBAUTHN_ORIGIN``, so
+   nobody can hold a passkey yet. That is why it needs ``SETUP_PROJECT_DIR``
+   (opt-in) and the port on loopback. Registering the first admin afterwards
+   needs the setup link (``web/invites.py``). Once an admin exists, only a
+   logged-in admin may.
 """
 
 from __future__ import annotations

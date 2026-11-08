@@ -18,7 +18,9 @@
                 wake SLUG                 wake the node, start the guest, wait until healthy
                 bulk services|proxy-hosts ACTION --all|--group|--slug
                                           one action on many items, per-item report
-    Recover     admin reset               break-glass: wipe admins/passkeys, reopen signup
+    Recover     admin invite [--for NAME]  a one-time link: a new admin, or a passkey for NAME
+                admin passkeys [--remove ID]  list passkeys; remove a lost or stolen one
+                admin reset               break-glass: wipe admins/passkeys, print a setup link
 
 Every command that acts on infrastructure honours ``DRY_RUN``. Setup discovery
 only reads, so it contacts the real cluster either way.
@@ -93,22 +95,168 @@ def admin_group() -> None:
     """Dashboard admin accounts (passkeys)."""
 
 
+def _print_link(url: str, expires_at: Any) -> None:
+    click.echo("")
+    click.secho(f"  {url}", fg="cyan", bold=True)
+    click.echo(f"  Valid once, until {expires_at:%Y-%m-%d %H:%M} UTC.")
+
+
+@admin_group.command("invite")
+@click.option("--label", default="", help="A note shown in the dashboard's invite list.")
+@click.option(
+    "--for",
+    "for_user",
+    default=None,
+    metavar="NAME",
+    help="Add a passkey to this existing admin instead of creating a new one.",
+)
+@click.option(
+    "--minutes",
+    type=click.IntRange(5, 24 * 60),
+    default=30,
+    show_default=True,
+    help="How long the link stays valid.",
+)
+def admin_invite(label: str, for_user: str | None, minutes: int) -> None:
+    """Print a one-time link to register a passkey, without removing anything.
+
+    \b
+    No admin yet       the setup link for the first admin
+    --for NAME         a new passkey for NAME, who lost every device
+    otherwise          an invite for a new admin
+    """
+    from datetime import timedelta
+
+    from orchestrator.audit import log as audit
+    from orchestrator.web import invites
+
+    _bootstrap()
+    settings = get_settings()
+    with Session(get_engine()) as session:
+        target = None
+        if for_user is not None:
+            target = session.exec(select(Admin).where(Admin.username == for_user)).one_or_none()
+            if target is None:
+                raise click.ClickException(f"no admin named {for_user!r}")
+            if target.disabled_at is not None:
+                raise click.ClickException(f"{for_user} is disabled")
+        setup = invites.admin_count(session) == 0
+        invite = invites.create_invite(
+            session,
+            requested_by="cli",
+            ttl=timedelta(minutes=minutes),
+            label=label or ("setup" if setup else ""),
+            setup=setup,
+            for_admin=target,
+        )
+        audit.record(
+            session,
+            actor="cli",
+            action="auth.invite.created",
+            target=f"admin:{target.id}" if target else "",
+            details={"label": label, "setup": setup, "expires_at": invite.expires_at.isoformat()},
+        )
+        session.commit()
+        if target is not None:
+            click.echo(f"Open this link on the new device to add a passkey to {target.username}:")
+        elif setup:
+            click.echo("No admin is registered. Open this link to register the first admin:")
+        else:
+            click.echo("Send this link to the new admin:")
+        _print_link(invites.invite_url(settings, invite.token), invite.expires_at)
+
+
+@admin_group.command("passkeys")
+@click.option(
+    "--remove",
+    "remove_id",
+    type=int,
+    default=None,
+    metavar="ID",
+    help="Remove this passkey; every session it signed in ends.",
+)
+@click.option("--yes", is_flag=True, help="Skip the confirmation.")
+def admin_passkeys(remove_id: int | None, yes: bool) -> None:
+    """List every admin's passkeys, or remove one (a lost or stolen device)."""
+    from orchestrator.audit import log as audit
+
+    _bootstrap()
+    with Session(get_engine()) as session:
+        admins = {a.id: a for a in session.exec(select(Admin)).all()}
+        creds = sorted(session.exec(select(WebAuthnCredential)).all(), key=lambda c: c.id or 0)
+        if remove_id is None:
+            if not creds:
+                click.echo("No passkeys registered.")
+                return
+            click.echo(f"{'ID':>4}  {'ADMIN':<16} {'DEVICE':<20} {'ADDED':<16} LAST USED")
+            for c in creds:
+                owner = admins.get(c.admin_id)
+                name = owner.username if owner else "?"
+                if owner is not None and owner.disabled_at is not None:
+                    name += " (off)"
+                used = f"{c.last_used_at:%Y-%m-%d %H:%M}" if c.last_used_at else "never"
+                click.echo(
+                    f"{c.id:>4}  {name:<16} {(c.label or '-'):<20} "
+                    f"{c.created_at:%Y-%m-%d %H:%M}  {used}"
+                )
+            return
+
+        cred = session.get(WebAuthnCredential, remove_id)
+        if cred is None:
+            raise click.ClickException(f"no passkey with id {remove_id}")
+        owner = admins.get(cred.admin_id)
+        name = owner.username if owner else "?"
+        if not yes and not click.confirm(
+            f"Remove passkey {cred.id} ({cred.label or 'unnamed'}) of {name}?", default=False
+        ):
+            click.echo("Aborted.")
+            return
+        admin_id, label = cred.admin_id, cred.label
+        session.delete(cred)
+        audit.record(
+            session,
+            actor="cli",
+            action="auth.credential.removed",
+            target=f"admin:{admin_id}",
+            details={"credential": remove_id, "label": label},
+        )
+        session.commit()
+        click.secho("Removed. Every session it signed in has ended.", fg="green")
+        left = session.exec(
+            select(WebAuthnCredential).where(WebAuthnCredential.admin_id == admin_id)
+        ).all()
+        if not left:
+            click.secho(
+                f"{name} has no passkey left. To add one: orchestrator-cli admin invite --for {name}",
+                fg="yellow",
+            )
+
+
 @admin_group.command("reset")
 @click.option("--yes", is_flag=True, help="Skip the interactive confirmation.")
 def admin_reset(yes: bool) -> None:
-    """Break-glass: remove every admin + passkey, then re-open first-admin signup.
+    """Break-glass: remove every admin and passkey, then print a setup link.
 
     Use this when every registered device/passkey is lost and nobody can log
-    in to the dashboard. The CLI itself works without any of this — it's the
-    break-glass path precisely for when the dashboard is unreachable. After
-    this runs, the next visitor to /login can register a fresh first admin
-    with no invite link needed, same as a brand-new install.
+    in to the dashboard. When one admin only lost their devices, prefer
+    ``admin invite --for NAME``: it removes nothing.
+
+    \b
+    Afterwards:
+    * every session ends, and every open invite link stops working;
+    * registration stays closed: only the printed setup link (valid 30 minutes)
+      registers the new first admin. Run `admin invite` for a fresh one.
     """
+    from orchestrator.audit import log as audit
+    from orchestrator.web import invites
+
     _bootstrap()
+    settings = get_settings()
     with Session(get_engine()) as session:
         admins = session.exec(select(Admin)).all()
         if not admins:
-            click.echo("No admins registered — nothing to reset.")
+            click.echo("No admins registered: nothing to reset.")
+            click.echo("For the first admin's setup link: orchestrator-cli admin invite")
             return
 
         click.secho(
@@ -133,8 +281,21 @@ def admin_reset(yes: bool) -> None:
         session.flush()
         for a in admins:
             session.delete(a)
+        session.flush()
+        cancelled = invites.cancel_open_invites(session)
+        invite = invites.create_invite(
+            session, requested_by="cli", ttl=invites.CLI_LINK_TTL, label="setup", setup=True
+        )
+        audit.record(
+            session,
+            actor="cli",
+            action="auth.reset",
+            details={"admins": [a.username for a in admins], "invites_cancelled": cancelled},
+        )
         session.commit()
-        click.secho("Done. The dashboard will accept a fresh first-admin registration.", fg="green")
+        click.secho("Done. Every session has ended.", fg="green")
+        click.echo("Open this link to register the new first admin (nobody can without it):")
+        _print_link(invites.invite_url(settings, invite.token), invite.expires_at)
 
 
 @cli.command()
