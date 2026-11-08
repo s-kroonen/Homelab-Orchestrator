@@ -134,7 +134,7 @@ Something that is off on purpose (a node asleep, its services) is **off**, never
 | Settings: AI assistants (waiting, connections, calls) | [PNG](wireframes/Assistants.png) · [HTML](wireframes/Assistants.html) |
 | Settings: System (update, time, this orchestrator) | [PNG](wireframes/System.png) · [HTML](wireframes/System.html) |
 | Settings: Archive | [PNG](wireframes/Archive.png) · [HTML](wireframes/Archive.html) |
-| Settings: Admins & devices (passkeys, invites) | [PNG](wireframes/Admins.png) · [HTML](wireframes/Admins.html) |
+| Settings: Admins & devices (passkeys, admins, invites) | [PNG](wireframes/Admins.png) · [HTML](wireframes/Admins.html) |
 | Phone: dashboard | [PNG](wireframes/PhoneDashboard.png) · [HTML](wireframes/PhoneDashboard.html) |
 | Phone: service | [PNG](wireframes/PhoneService.png) · [HTML](wireframes/PhoneService.html) |
 

@@ -36,7 +36,7 @@ from orchestrator.registry.topology import build_map
 from orchestrator.registry.tree import TreeIndex
 from orchestrator.web.auth import current_device, get_current_admin, login_redirect, require_admin
 from orchestrator.web.deps import SessionDep, SettingsDep
-from orchestrator.web.routers.auth import credentials_view, invites_view
+from orchestrator.web.routers.auth import admins_view, credentials_view, invites_view
 from orchestrator.web.routers.backup_policies import policy_to_dict
 from orchestrator.web.routers.dashboard import service_detail
 from orchestrator.web.routers.ui import (
@@ -415,6 +415,7 @@ async def admins_page(
     initial = {
         "credentials": credentials_view(session, admin, current_device(request)),
         "invites": invites_view(session, settings),
+        "admins": admins_view(session, admin),
     }
     return templates.TemplateResponse(request, "admins.html", {"admin": admin, "initial": initial})
 

@@ -483,7 +483,8 @@
   // table(container, {
   //   columns: [{key, label, sort: (r) => value | true, render: (r) => Node|string, cls, phone: "label" | false}],
   //   rows: [], key: (r) => id, search: (r) => "text to match", placeholder,
-  //   chips: [{key, label, test: (r) => bool}], menu: (r) => [items], href: (r) => url (name column link),
+  //   chips: [{key, label, test: (r) => bool}], menu: (r) => [items], menuFor: (r) => bool (rows
+  //   that get the ⋯ at all; default every row), href: (r) => url (name column link),
   //   bulk: (rows) => [{label, onClick, danger}], empty: {title, text, action: Node},
   //   sort: {key, dir: 1|-1}, noun: ["service", "services"], urlState: true, children: (r) => parentKey,
   //   groupBy: [{key: "node", label: "Node", of: (r) => "node-a"}] (adds a "Group by" select),
@@ -655,7 +656,7 @@
             "data-label": i === 0 || c.phone === false ? null : (c.phone || c.label),
           }, empty ? "" : v));
         });
-        if (o.menu) tr.append(el("td", { class: "menu-cell" }, menuButton(() => o.menu(r), "Actions for " + (o.name ? o.name(r) : k))));
+        if (o.menu) tr.append(el("td", { class: "menu-cell" }, !o.menuFor || o.menuFor(r) ? menuButton(() => o.menu(r), "Actions for " + (o.name ? o.name(r) : k)) : null));
         tbody.append(tr);
         const more = o.detail ? o.detail(r) : null;
         if (more) { tr.classList.add("expanded"); tbody.append(el("tr", { class: "detail-row" }, el("td", { colspan: span }, more))); }

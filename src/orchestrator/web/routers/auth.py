@@ -142,7 +142,7 @@ async def login_complete(
     session.commit()
 
     assert admin.id is not None  # loaded from the DB by a non-null FK
-    auth_lib.login_admin(request, admin.id, stored)
+    auth_lib.login_admin(request, admin, stored)
     return {"status": "ok", "username": admin.username}
 
 
@@ -252,7 +252,7 @@ async def register_complete(
     session.commit()
     session.refresh(cred)
 
-    auth_lib.login_admin(request, admin.id, cred)
+    auth_lib.login_admin(request, admin, cred)
     return {"status": "ok", "username": admin.username}
 
 
@@ -380,6 +380,164 @@ async def list_credentials(
     return credentials_view(session, admin, auth_lib.current_device(request))
 
 
+class CredentialPatch(BaseModel):
+    label: str
+
+
+def _own_credential(session: Session, admin: Admin, credential_id: int) -> WebAuthnCredential:
+    cred = session.get(WebAuthnCredential, credential_id)
+    if cred is None or cred.admin_id != admin.id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "no such passkey")
+    return cred
+
+
+@router.patch("/api/auth/credentials/{credential_id}")
+async def rename_credential(
+    credential_id: int, body: CredentialPatch, admin: CurrentAdmin, session: SessionDep
+) -> dict[str, Any]:
+    cred = _own_credential(session, admin, credential_id)
+    label = body.label.strip()[:60]
+    if not label:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "give the passkey a name")
+    old, cred.label = cred.label, label
+    session.add(cred)
+    audit.record(
+        session,
+        actor=admin.username,
+        action="auth.credential.renamed",
+        target=f"admin:{admin.id}",
+        details={"credential": cred.id, "from": old, "to": label},
+    )
+    session.commit()
+    return {"status": "ok", "label": label}
+
+
+@router.delete("/api/auth/credentials/{credential_id}")
+async def remove_credential(
+    credential_id: int, admin: CurrentAdmin, request: Request, session: SessionDep
+) -> dict[str, Any]:
+    """Remove one of your passkeys. Every session it signed in ends with it (web/auth.py). Your
+    last one is refused: without a passkey nobody can sign in as you again."""
+    cred = _own_credential(session, admin, credential_id)
+    left = session.exec(
+        select(WebAuthnCredential).where(WebAuthnCredential.admin_id == admin.id)
+    ).all()
+    if len(left) <= 1:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "this is your only passkey: add another device first, or you could not sign in again",
+        )
+    this_device = auth_lib.current_device(request) == cred.id
+    label = cred.label
+    session.delete(cred)
+    audit.record(
+        session,
+        actor=admin.username,
+        action="auth.credential.removed",
+        target=f"admin:{admin.id}",
+        details={"credential": credential_id, "label": label},
+    )
+    session.commit()
+    if this_device:
+        auth_lib.logout_admin(request)
+    return {"status": "ok", "signed_out": this_device}
+
+
+# ---------------------------------------------------------------------------
+# Admins
+# ---------------------------------------------------------------------------
+
+
+def admins_view(session: Session, me: Admin) -> list[dict[str, Any]]:
+    """Every admin, oldest first, with how many passkeys they have and when one was last used."""
+    creds = session.exec(select(WebAuthnCredential)).all()
+    out = []
+    for a in session.exec(select(Admin).order_by(Admin.created_at)).all():  # type: ignore[arg-type]
+        mine = [c for c in creds if c.admin_id == a.id]
+        used = [c.last_used_at for c in mine if c.last_used_at]
+        out.append(
+            {
+                "id": a.id,
+                "username": a.username,
+                "created_at": a.created_at.isoformat(),
+                "disabled_at": a.disabled_at.isoformat() if a.disabled_at else None,
+                "passkeys": len(mine),
+                "last_used_at": max(used).isoformat() if used else None,
+                "you": a.id == me.id,
+            }
+        )
+    return out
+
+
+@router.get("/api/auth/admins")
+async def list_admins(admin: CurrentAdmin, session: SessionDep) -> list[dict[str, Any]]:
+    return admins_view(session, admin)
+
+
+def _other_admin(session: Session, me: Admin, admin_id: int, verb: str) -> Admin:
+    """The admin to act on: never yourself. That also keeps one active admin at all times: you
+    are active (you are signed in), and only another admin can disable or remove you."""
+    target = session.get(Admin, admin_id)
+    if target is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "no such admin")
+    if target.id == me.id:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT, f"you cannot {verb} yourself: another admin has to"
+        )
+    return target
+
+
+@router.post("/api/auth/admins/{admin_id}/disable")
+async def disable_admin(admin_id: int, admin: CurrentAdmin, session: SessionDep) -> dict[str, Any]:
+    """They can no longer sign in, and every session they have ends now (also if they are
+    enabled again later: they sign in afresh)."""
+    target = _other_admin(session, admin, admin_id, "disable")
+    if target.disabled_at is None:
+        target.disabled_at = auth_lib.utcnow()
+        target.session_version += 1
+        session.add(target)
+        audit.record(
+            session, actor=admin.username, action="auth.admin.disabled", target=f"admin:{target.id}"
+        )
+        session.commit()
+    return {"status": "ok"}
+
+
+@router.post("/api/auth/admins/{admin_id}/enable")
+async def enable_admin(admin_id: int, admin: CurrentAdmin, session: SessionDep) -> dict[str, Any]:
+    target = _other_admin(session, admin, admin_id, "enable")
+    if target.disabled_at is not None:
+        target.disabled_at = None
+        session.add(target)
+        audit.record(
+            session, actor=admin.username, action="auth.admin.enabled", target=f"admin:{target.id}"
+        )
+        session.commit()
+    return {"status": "ok"}
+
+
+@router.delete("/api/auth/admins/{admin_id}")
+async def remove_admin(admin_id: int, admin: CurrentAdmin, session: SessionDep) -> dict[str, Any]:
+    """Remove another admin and their passkeys. Their sessions end with the passkeys."""
+    target = _other_admin(session, admin, admin_id, "remove")
+    name = target.username
+    for cred in session.exec(
+        select(WebAuthnCredential).where(WebAuthnCredential.admin_id == target.id)
+    ).all():
+        session.delete(cred)
+    session.flush()
+    session.delete(target)
+    audit.record(
+        session,
+        actor=admin.username,
+        action="auth.admin.removed",
+        target=f"admin:{admin_id}",
+        details={"username": name},
+    )
+    session.commit()
+    return {"status": "ok"}
+
+
 # ---------------------------------------------------------------------------
 # Invites
 # ---------------------------------------------------------------------------
@@ -436,6 +594,7 @@ def invites_view(session: Session, settings: Settings) -> list[dict[str, Any]]:
         is_open = effective_status is ApprovalStatus.PENDING
         out.append(
             {
+                "id": inv.id,
                 "label": inv.payload.get("label", ""),
                 "requested_by": inv.requested_by,
                 "requested_at": inv.requested_at.isoformat(),
@@ -454,3 +613,24 @@ async def list_invites(
     admin: CurrentAdmin, session: SessionDep, settings: SettingsDep
 ) -> list[dict[str, Any]]:
     return invites_view(session, settings)
+
+
+@router.delete("/api/auth/invites/{invite_id}")
+async def revoke_invite(invite_id: int, admin: CurrentAdmin, session: SessionDep) -> dict[str, Any]:
+    """An open invite stops working now; a used or expired one is left as it is."""
+    invite = session.get(PendingApproval, invite_id)
+    if invite is None or invite.kind is not ApprovalKind.ADMIN_INVITE:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "no such invite")
+    if invite.status is ApprovalStatus.PENDING:
+        invite.status = ApprovalStatus.DENIED
+        invite.approved_by = admin.username
+        invite.approved_at = auth_lib.utcnow()
+        session.add(invite)
+        audit.record(
+            session,
+            actor=admin.username,
+            action="auth.invite.revoked",
+            details={"invite": invite.id, "label": (invite.payload or {}).get("label", "")},
+        )
+        session.commit()
+    return {"status": "ok"}
