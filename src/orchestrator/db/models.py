@@ -478,6 +478,9 @@ class Admin(SQLModel, table=True):
     display_name: str = ""
     created_at: datetime = Field(default_factory=_utcnow)
     disabled_at: datetime | None = None
+    #: Raised to end every session this admin has (a session carries the version it signed in
+    #: with): disabling them does.
+    session_version: int = Field(default=0)
 
 
 class WebAuthnCredential(SQLModel, table=True):

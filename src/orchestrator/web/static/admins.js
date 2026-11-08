@@ -1,9 +1,10 @@
 /* Admins & devices (templates/admins.html), to the Admins wireframe: your passkeys (the one this
- * browser uses is marked) and the invite links, open ones with Copy.
+ * browser uses is marked; ⋯ renames or removes one) and the invite links, open ones with Copy
+ * and Revoke.
  * Data: embedded at first paint; /api/auth/credentials and /api/auth/invites after a change. */
 (function () {
   "use strict";
-  const { $, el, clear, api, fmt, region, table, drawer, confirm } = window.UI;
+  const { $, el, clear, api, fmt, region, table, drawer, confirm, menuButton } = window.UI;
   const V = JSON.parse($("#initial").textContent);
   const toast = (m, k) => window.toast(m, k);
 
@@ -12,9 +13,51 @@
       .then(() => toast("Link copied", "ok"), () => window.prompt("Copy the invite link", url));
   }
 
+  function renamePasskey(c) {
+    drawer({
+      title: "Rename passkey",
+      values: { label: c.label || "" },
+      saveLabel: "Save",
+      fields: [{ key: "label", label: "Name", placeholder: "Phone, laptop…", help: "So you can tell your devices apart." }],
+      async onSave(v) {
+        await api.patch("/api/auth/credentials/" + c.id, { label: (v.label || "").trim() });
+        toast("Passkey renamed", "ok");
+        devices.refresh();
+      },
+    });
+  }
+
+  async function removePasskey(c, count) {
+    if (count <= 1) {
+      toast("This is your only passkey. Add another device first, or you could not sign in again.", "error");
+      return;
+    }
+    const ok = await confirm({
+      title: "Remove " + (c.label || "this passkey") + "?",
+      body: c.this_device
+        ? "This is the passkey this browser signed in with. You are signed out here, and this device can no longer sign in."
+        : "That device can no longer sign in, and every session it signed in ends now. Use this for a lost or stolen device.",
+      action: "Remove passkey",
+    });
+    if (!ok) return;
+    const res = await api.del("/api/auth/credentials/" + c.id);
+    if (res && res.signed_out) { location.href = "/login"; return; }
+    toast("Passkey removed", "ok");
+    devices.refresh();
+  }
+
   const t = table($("#devices"), {
     rows: V.credentials, key: (c) => c.id, plain: true, urlState: false, noun: ["passkey", "passkeys"],
     sort: { key: "added", dir: -1 },
+    name: (c) => c.label || "passkey",
+    menu: (c) => {
+      const count = (devices.data || V.credentials).length;
+      return [
+        { label: "Rename…", onClick: () => renamePasskey(c) },
+        "-",
+        { label: "Remove…", danger: true, disabled: count <= 1, title: count <= 1 ? "Your only passkey: add another device first" : undefined, onClick: () => removePasskey(c, count) },
+      ];
+    },
     columns: [
       { key: "device", label: "Device", sort: (c) => (c.label || "").toLowerCase(),
         render: (c) => [el("strong", {}, c.label || "(no name)"), c.this_device ? [" ", el("span", { class: "pill ok" }, "this device")] : null] },
@@ -30,7 +73,19 @@
     age: $("#dev-age"),
   });
 
-  const STATUS = { pending: ["pending", "open"], consumed: ["ok", "used"], approved: ["ok", "used"], expired: ["off", "expired"], denied: ["fail", "refused"] };
+  const STATUS = { pending: ["pending", "open"], consumed: ["ok", "used"], approved: ["ok", "used"], expired: ["off", "expired"], denied: ["off", "revoked"] };
+
+  async function revoke(inv) {
+    const ok = await confirm({
+      title: "Revoke this invite?",
+      body: "The link stops working now. Make a new one if it is still needed.",
+      action: "Revoke",
+    });
+    if (!ok) return;
+    await api.del("/api/auth/invites/" + inv.id);
+    toast("Invite revoked", "ok");
+    invites.refresh();
+  }
   const invites = region($("#invites"), {
     initial: V.invites,
     load: () => api.get("/api/auth/invites", { suppressToast: true }),
@@ -42,7 +97,8 @@
         if (inv.url) {
           box.append(el("div", { class: "invite" },
             el("div", { class: "invite-line" }, el("span", { class: "pill " + cls }, word), el("span", { class: "mono" }, inv.url.replace(/^https?:\/\/[^/]+/, "…")),
-              el("button", { type: "button", class: "secondary small", style: { marginLeft: "auto" }, onclick: () => copy(inv.url) }, "Copy")),
+              el("button", { type: "button", class: "secondary small", style: { marginLeft: "auto" }, onclick: () => copy(inv.url) }, "Copy"),
+              menuButton([{ label: "Revoke…", danger: true, onClick: () => revoke(inv) }], "Actions for this invite")),
             el("div", { class: "faint", style: { fontSize: "12.5px", marginTop: "4px" } },
               [inv.label ? "for " + inv.label : "", "made by " + inv.requested_by + " " + fmt.ago(inv.requested_at), "expires in " + fmt.ago(inv.expires_at).replace(/ from now$/, "")].filter(Boolean).join(" · "))));
         } else {

@@ -20,6 +20,7 @@
                                           one action on many items, per-item report
     Recover     admin invite [--for NAME]  a one-time link: a new admin, or a passkey for NAME
                 admin passkeys [--remove ID]  list passkeys; remove a lost or stolen one
+                admin list | disable NAME | enable NAME   who can sign in; lock one out
                 admin reset               break-glass: wipe admins/passkeys, print a setup link
 
 Every command that acts on infrastructure honours ``DRY_RUN``. Setup discovery
@@ -230,6 +231,75 @@ def admin_passkeys(remove_id: int | None, yes: bool) -> None:
                 f"{name} has no passkey left. To add one: orchestrator-cli admin invite --for {name}",
                 fg="yellow",
             )
+
+
+@admin_group.command("list")
+def admin_list() -> None:
+    """Every admin: passkeys, last sign-in, disabled or not."""
+    _bootstrap()
+    with Session(get_engine()) as session:
+        admins = session.exec(select(Admin)).all()
+        if not admins:
+            click.echo("No admins registered. For the setup link: orchestrator-cli admin invite")
+            return
+        creds = session.exec(select(WebAuthnCredential)).all()
+        click.echo(f"{'ADMIN':<20} {'PASSKEYS':>8}  {'LAST USED':<16} STATE")
+        for a in sorted(admins, key=lambda x: x.created_at):
+            mine = [c for c in creds if c.admin_id == a.id]
+            used = max((c.last_used_at for c in mine if c.last_used_at), default=None)
+            state = f"disabled {a.disabled_at:%Y-%m-%d}" if a.disabled_at else "active"
+            last = f"{used:%Y-%m-%d %H:%M}" if used else "never"
+            click.echo(f"{a.username:<20} {len(mine):>8}  {last:<16} {state}")
+
+
+def _set_disabled(name: str, disabled: bool) -> None:
+    from orchestrator.audit import log as audit
+    from orchestrator.web.auth import utcnow
+
+    _bootstrap()
+    with Session(get_engine()) as session:
+        admin = session.exec(select(Admin).where(Admin.username == name)).one_or_none()
+        if admin is None:
+            raise click.ClickException(f"no admin named {name!r}")
+        if disabled == (admin.disabled_at is not None):
+            click.echo(f"{name} is already {'disabled' if disabled else 'active'}.")
+            return
+        if disabled:
+            active = [a for a in session.exec(select(Admin)).all() if a.disabled_at is None]
+            if len(active) <= 1:
+                raise click.ClickException(
+                    f"{name} is the only active admin: nobody could sign in afterwards"
+                )
+            admin.disabled_at = utcnow()
+            admin.session_version += 1  # every session they have ends now
+        else:
+            admin.disabled_at = None
+        session.add(admin)
+        audit.record(
+            session,
+            actor="cli",
+            action="auth.admin.disabled" if disabled else "auth.admin.enabled",
+            target=f"admin:{admin.id}",
+        )
+        session.commit()
+        if disabled:
+            click.secho(f"{name} is disabled, and every session they had has ended.", fg="green")
+        else:
+            click.secho(f"{name} can sign in again.", fg="green")
+
+
+@admin_group.command("disable")
+@click.argument("name")
+def admin_disable(name: str) -> None:
+    """Stop NAME signing in and end every session they have."""
+    _set_disabled(name, True)
+
+
+@admin_group.command("enable")
+@click.argument("name")
+def admin_enable(name: str) -> None:
+    """Let a disabled admin sign in again (with a fresh sign-in)."""
+    _set_disabled(name, False)
 
 
 @admin_group.command("reset")

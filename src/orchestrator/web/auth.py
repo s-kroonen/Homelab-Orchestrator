@@ -14,7 +14,8 @@ registration/authentication ceremony — cleared as soon as that ceremony
 completes or fails.
 
 A session is valid only while the passkey it signed in with still exists and still belongs to
-that admin (OR-58). Removing a passkey ends its sessions, and ``admin reset`` ends them all: row
+that admin (OR-58), and while the admin's ``session_version`` is the one it signed in with
+(disabling an admin raises it, OR-56). Removing a passkey ends its sessions, and ``admin reset`` ends them all: row
 ids are reused once a table is empty, so the hash, not the id, is what tells a new admin's
 passkey from the one an old cookie names.
 """
@@ -48,6 +49,7 @@ _SESSION_ADMIN_KEY = "admin_id"
 _SESSION_CHALLENGE_KEY = "webauthn_challenge"
 _SESSION_CREDENTIAL_KEY = "credential_id"
 _SESSION_PASSKEY_KEY = "passkey"
+_SESSION_VERSION_KEY = "admin_version"
 
 # ---------------------------------------------------------------------------
 # Session helpers
@@ -59,8 +61,9 @@ def passkey_tag(credential_id: bytes) -> str:
     return hashlib.sha256(credential_id).hexdigest()[:32]
 
 
-def login_admin(request: Request, admin_id: int, credential: WebAuthnCredential) -> None:
-    request.session[_SESSION_ADMIN_KEY] = admin_id
+def login_admin(request: Request, admin: Admin, credential: WebAuthnCredential) -> None:
+    request.session[_SESSION_ADMIN_KEY] = admin.id
+    request.session[_SESSION_VERSION_KEY] = admin.session_version
     request.session.pop(_SESSION_CHALLENGE_KEY, None)
     remember_device(request, credential)
 
@@ -117,6 +120,8 @@ def get_current_admin(request: Request, session: Session) -> Admin | None:
     admin = session.get(Admin, admin_id)
     if admin is None or admin.disabled_at is not None:
         return None
+    if request.session.get(_SESSION_VERSION_KEY, 0) != admin.session_version:
+        return None  # ended: the admin was disabled (and maybe enabled again) since
     if not _passkey_still_valid(request, session, admin_id):
         return None
     return admin

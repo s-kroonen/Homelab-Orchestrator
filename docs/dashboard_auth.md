@@ -91,19 +91,48 @@ passkey this browser signed in (or was added) with as "this device".
 prints a link that adds a passkey to the existing account `NAME`: same username, same
 history, nothing removed. The login page shows "Add a passkey to NAME" for it.
 
+## Managing passkeys, admins and invites
+
+On Settings → Admins & devices:
+
+* **Your passkeys:** ⋯ → *Rename…* or *Remove…*.
+  * Removing one ends every session it signed in, and that device can no longer sign in.
+  * Removing the one this browser uses signs you out here.
+  * Your **only** passkey cannot be removed: add another device first.
+* **Invites:** ⋯ → *Revoke…* on an open link. It stops working at once and shows as *revoked*.
+* **Other admins** (API now, page card to follow):
+  * `POST /api/auth/admins/{id}/disable` stops them signing in and ends every session they
+    have. It raises their `session_version`, so even after `/enable` they sign in afresh.
+  * `DELETE /api/auth/admins/{id}` removes them and their passkeys.
+  * You cannot disable or remove yourself. Since you are active, that keeps at least one
+    active admin.
+
+| Action | API |
+|---|---|
+| Rename a passkey | `PATCH /api/auth/credentials/{id}` `{"label": "…"}` |
+| Remove a passkey | `DELETE /api/auth/credentials/{id}` |
+| List admins | `GET /api/auth/admins` |
+| Disable / enable | `POST /api/auth/admins/{id}/disable` · `/enable` |
+| Remove an admin | `DELETE /api/auth/admins/{id}` |
+| Revoke an invite | `DELETE /api/auth/invites/{id}` |
+
+On the host: `orchestrator-cli admin list`, `admin disable NAME`, `admin enable NAME`. The CLI
+refuses to disable the last active admin.
+
 ## Sessions
 
 A signed cookie (Starlette's `SessionMiddleware`, keyed by `SESSION_SECRET`),
 not a DB table. It holds:
 
-* the logged-in `admin_id`;
+* the logged-in `admin_id` and the admin's `session_version` at sign-in;
 * the passkey it signed in with: its row id and a hash of its WebAuthn id;
 * briefly, the in-flight WebAuthn challenge between a ceremony's `begin` and `complete` calls.
 
 `same_site="lax"`.
 
-**A session lasts only as long as its passkey.** Every request checks that the passkey still
-exists and still belongs to that admin. So removing a passkey ends every session it signed in,
+**A session lasts only as long as its passkey, and until its admin is disabled.** Every request
+checks that the passkey still exists and still belongs to that admin, and that the admin's
+`session_version` is still the one it signed in with. So removing a passkey ends every session it signed in,
 and `admin reset` ends them all. The hash matters: once a table is empty, SQLite hands out the
 same row ids again, so after a reset the new first admin is admin 1 with passkey 1, exactly
 what an old cookie names. Cookies from before this check carry no hash and must sign in again
@@ -127,6 +156,7 @@ In Docker, prefix each with `docker compose exec orchestrator`.
 |---|---|
 | One admin lost their devices | `orchestrator-cli admin invite --for NAME` |
 | A device was stolen | `orchestrator-cli admin passkeys`, then `admin passkeys --remove ID` |
+| An admin must be locked out | `orchestrator-cli admin disable NAME` |
 | Every passkey of every admin is lost | `orchestrator-cli admin reset` |
 
 * **`admin passkeys`** lists every passkey (id, admin, device, added, last used).
@@ -142,7 +172,8 @@ In Docker, prefix each with `docker compose exec orchestrator`.
 
 Every auth-relevant action writes an `audit_entry` row via
 `orchestrator.audit.log.record` — `auth.login` (OK or DENIED),
-`auth.logout`, `auth.register`, `auth.credential.added`, `auth.credential.removed`,
-`auth.invite.created`, `auth.reset` — with `actor` set to the admin's username (or
+`auth.logout`, `auth.register`, `auth.credential.added`, `auth.credential.renamed`,
+`auth.credential.removed`, `auth.admin.disabled`, `auth.admin.enabled`, `auth.admin.removed`,
+`auth.invite.created`, `auth.invite.revoked`, `auth.reset` — with `actor` set to the admin's username (or
 `"unknown"` for a login attempt against a credential that doesn't exist, and `"cli"` for
 the host commands).
