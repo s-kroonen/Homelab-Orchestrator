@@ -87,27 +87,52 @@ tr.selrow td{background:#16233a}
         <button class="btn primary" type="button">Create invite link</button>
       </div>
       <div style="display: flex; flex-wrap: wrap; gap: 20px; align-items: flex-start">
-        <section class="card" style="flex: 2 1 560px; min-width: 0">
+        <div style="flex: 2 1 560px; min-width: 0; display: flex; flex-direction: column; gap: 20px">
+        <section class="card">
           <div class="card-h"><h2>Your passkeys</h2><span class="sub">signed in as admin</span></div>
           <table>
             <thead><tr><th>Device</th><th>Added</th><th>Last used</th><th></th></tr></thead>
             <tbody>
-              <tr><td><strong>Laptop</strong> <span class="pill ok">this device</span><div class="sub">Firefox on Linux · passkey in a password manager</div></td><td class="faint">14 Sep</td><td>just now</td><td></td></tr>
-              <tr><td><strong>Phone</strong><div class="sub">Safari on iOS · synced passkey</div></td><td class="faint">2 Oct</td><td>yesterday</td><td></td></tr>
-              <tr><td><strong>Security key</strong><div class="sub">hardware key</div></td><td class="faint">14 Sep</td><td>3 weeks ago</td><td></td></tr>
+              <tr><td><strong>Laptop</strong> <span class="pill ok">this device</span><div class="sub">Firefox on Linux · passkey in a password manager</div></td><td class="faint">14 Sep</td><td>just now</td><td class="faint" style="text-align: right">⋯</td></tr>
+              <tr><td><strong>Phone</strong><div class="sub">Safari on iOS · synced passkey</div></td><td class="faint">2 Oct</td><td>yesterday</td><td style="text-align: right; position: relative"><span class="faint">⋯</span>
+                <div style="position: absolute; right: 8px; top: 34px; z-index: 2; width: 170px; background: #1a1f29; border: 1px solid #2c3340; border-radius: 10px; padding: 6px; box-shadow: 0 12px 30px rgba(0,0,0,.45); text-align: left">
+                  <div style="padding: 7px 10px; border-radius: 6px">Rename…</div>
+                  <div style="height: 1px; background: #2c3340; margin: 4px 0"></div>
+                  <div style="padding: 7px 10px; border-radius: 6px; color: #ff8a82">Remove…</div>
+                </div></td></tr>
+              <tr><td><strong>Security key</strong><div class="sub">hardware key</div></td><td class="faint">14 Sep</td><td>3 weeks ago</td><td class="faint" style="text-align: right">⋯</td></tr>
             </tbody>
           </table>
-          <div style="padding: 10px 18px; font-size: 12.5px; color: #8a94a5">Add this device registers another passkey for you on the device you are using now.</div>
+          <div style="padding: 10px 18px; font-size: 12.5px; color: #8a94a5">Add this device registers another passkey for you on the device you are using now. Removing a passkey signs that device out; your only one can't be removed.</div>
         </section>
+        <section class="card">
+          <div class="card-h"><h2>Admins</h2><span class="sub">everyone who can sign in</span></div>
+          <table>
+            <thead><tr><th>Admin</th><th>Passkeys</th><th>Last sign-in</th><th>State</th><th></th></tr></thead>
+            <tbody>
+              <tr><td><strong>admin</strong> <span class="pill ok">you</span></td><td>3</td><td>just now</td><td><span class="pill ok">active</span></td><td></td></tr>
+              <tr><td><strong>admin2</strong><div class="sub">since 5 Oct</div></td><td>1</td><td>2 days ago</td><td><span class="pill ok">active</span></td><td style="text-align: right; position: relative"><span class="faint">⋯</span>
+                <div style="position: absolute; right: 8px; top: 34px; z-index: 2; width: 170px; background: #1a1f29; border: 1px solid #2c3340; border-radius: 10px; padding: 6px; box-shadow: 0 12px 30px rgba(0,0,0,.45); text-align: left">
+                  <div style="padding: 7px 10px; border-radius: 6px">Disable…</div>
+                  <div style="height: 1px; background: #2c3340; margin: 4px 0"></div>
+                  <div style="padding: 7px 10px; border-radius: 6px; color: #ff8a82">Remove…</div>
+                </div></td></tr>
+              <tr><td><strong>admin3</strong><div class="sub">since 1 Oct</div></td><td>2</td><td>3 weeks ago</td><td><span class="pill off">disabled</span></td><td class="faint" style="text-align: right">⋯</td></tr>
+            </tbody>
+          </table>
+          <div style="padding: 10px 18px; font-size: 12.5px; color: #8a94a5">Disabling an admin signs them out everywhere at once; enabling them lets them sign in again. You can't disable or remove yourself.</div>
+        </section>
+        </div>
         <section class="card" style="flex: 1 1 320px; min-width: 0">
           <div class="card-h"><h2>Invites</h2></div>
           <div style="padding: 0 18px 16px; display: grid; gap: 10px; font-size: 13.5px">
             <div class="sub">A link that works once. Whoever opens it registers their own passkey and becomes an admin.</div>
             <div style="padding: 10px 12px; background: #0f131a; border: 1px solid #232a36; border-radius: 8px">
-              <div style="display: flex; align-items: center; gap: 8px"><span class="pill pending">open</span><span class="mono" style="overflow: hidden; text-overflow: ellipsis">…/invite/7Hq2…</span><button class="btn small" type="button" style="margin-left: auto">Copy</button></div>
+              <div style="display: flex; align-items: center; gap: 8px"><span class="pill pending">open</span><span class="mono" style="overflow: hidden; text-overflow: ellipsis">…/invite/7Hq2…</span><button class="btn small" type="button" style="margin-left: auto">Copy</button><span class="faint">⋯</span></div>
               <div class="sub" style="margin-top: 4px">made by admin 10 min ago · expires in 23 h</div>
             </div>
             <div style="display: flex; align-items: center; gap: 8px"><span class="pill ok">used</span><span>by <strong>admin2</strong></span><span class="sub" style="margin-left: auto">5 Oct</span></div>
+            <div style="display: flex; align-items: center; gap: 8px"><span class="pill off">revoked</span><span>by <strong>admin</strong></span><span class="sub" style="margin-left: auto">3 Oct</span></div>
             <div style="display: flex; align-items: center; gap: 8px"><span class="pill off">expired</span><span class="faint">not used</span><span class="sub" style="margin-left: auto">1 Oct</span></div>
           </div>
         </section>
@@ -117,7 +142,7 @@ tr.selrow td{background:#16233a}
 
 </div>
 </x-dc>
-<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":760}}'>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":900}}'>
 class Component extends DCLogic {
   renderVals() {
     const cur = "Admins & devices";

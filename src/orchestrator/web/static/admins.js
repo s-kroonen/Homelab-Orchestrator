@@ -1,7 +1,8 @@
 /* Admins & devices (templates/admins.html), to the Admins wireframe: your passkeys (the one this
- * browser uses is marked; ⋯ renames or removes one) and the invite links, open ones with Copy
- * and Revoke.
- * Data: embedded at first paint; /api/auth/credentials and /api/auth/invites after a change. */
+ * browser uses is marked; ⋯ renames or removes one), every admin (⋯ disables, enables or removes
+ * another one) and the invite links, open ones with Copy and Revoke.
+ * Data: embedded at first paint; /api/auth/credentials, /api/auth/admins and /api/auth/invites
+ * after a change. */
 (function () {
   "use strict";
   const { $, el, clear, api, fmt, region, table, drawer, confirm, menuButton } = window.UI;
@@ -71,6 +72,60 @@
     load: () => api.get("/api/auth/credentials", { suppressToast: true }),
     render: (rows) => t.setRows(rows),
     age: $("#dev-age"),
+  });
+
+  async function setDisabled(a, disable) {
+    if (disable) {
+      const ok = await confirm({
+        title: "Disable " + a.username + "?",
+        body: a.username + " can no longer sign in, and is signed out everywhere now. Enabling them later lets them sign in again.",
+        action: "Disable",
+      });
+      if (!ok) return;
+    }
+    await api.post("/api/auth/admins/" + a.id + (disable ? "/disable" : "/enable"));
+    toast(a.username + (disable ? " is disabled" : " can sign in again"), "ok");
+    admins.refresh();
+  }
+
+  async function removeAdmin(a) {
+    const ok = await confirm({
+      title: "Remove " + a.username + "?",
+      body: "Their account and all " + a.passkeys + " of their passkeys are removed, and they are signed out everywhere. To let them back in later, send a new invite.",
+      typeName: a.username,
+      action: "Remove admin",
+    });
+    if (!ok) return;
+    await api.del("/api/auth/admins/" + a.id);
+    toast(a.username + " removed", "ok");
+    admins.refresh();
+  }
+
+  const at = table($("#admins"), {
+    rows: V.admins, key: (a) => a.id, plain: true, urlState: false, noun: ["admin", "admins"],
+    sort: { key: "admin", dir: 1 },
+    name: (a) => a.username,
+    menuFor: (a) => !a.you,
+    menu: (a) => [
+      a.disabled_at
+        ? { label: "Enable", onClick: () => setDisabled(a, false) }
+        : { label: "Disable…", onClick: () => setDisabled(a, true) },
+      "-",
+      { label: "Remove…", danger: true, onClick: () => removeAdmin(a) },
+    ],
+    columns: [
+      { key: "admin", label: "Admin", sort: (a) => a.created_at,
+        render: (a) => [el("strong", {}, a.username), a.you ? [" ", el("span", { class: "pill ok" }, "you")] : el("div", { class: "faint", style: { fontSize: "12.5px" } }, "since " + fmt.short(a.created_at))] },
+      { key: "passkeys", label: "Passkeys", sort: (a) => a.passkeys, render: (a) => String(a.passkeys) },
+      { key: "used", label: "Last sign-in", sort: (a) => a.last_used_at || "", render: (a) => a.last_used_at ? el("span", { title: fmt.time(a.last_used_at) }, fmt.ago(a.last_used_at)) : el("span", { class: "faint" }, "never") },
+      { key: "state", label: "State", sort: (a) => (a.disabled_at ? 1 : 0), render: (a) => a.disabled_at ? el("span", { class: "pill off", title: "since " + fmt.time(a.disabled_at) }, "disabled") : el("span", { class: "pill ok" }, "active") },
+    ],
+    empty: { title: "No admins", text: "" },
+  });
+  const admins = region($("#admins"), {
+    initial: V.admins,
+    load: () => api.get("/api/auth/admins", { suppressToast: true }),
+    render: (rows) => at.setRows(rows),
   });
 
   const STATUS = { pending: ["pending", "open"], consumed: ["ok", "used"], approved: ["ok", "used"], expired: ["off", "expired"], denied: ["off", "revoked"] };

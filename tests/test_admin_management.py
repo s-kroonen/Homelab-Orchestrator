@@ -188,3 +188,11 @@ def test_the_cli_disables_and_enables_and_keeps_one_admin_active(
         assert runner.invoke(cli, ["admin", "enable", "second"]).exit_code == 0
     with Session(get_engine()) as s:
         assert all(a.disabled_at is None for a in s.exec(select(Admin)).all())
+
+
+def test_the_page_carries_every_admin(app: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    with TestClient(app) as client, TestClient(app) as other:
+        _two_admins(client, other, monkeypatch)
+        page = client.get("/admins").text
+    assert 'id="admins"' in page
+    assert '"username": "second"' in page and '"you": true' in page

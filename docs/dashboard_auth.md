@@ -100,7 +100,7 @@ On Settings → Admins & devices:
   * Removing the one this browser uses signs you out here.
   * Your **only** passkey cannot be removed: add another device first.
 * **Invites:** ⋯ → *Revoke…* on an open link. It stops working at once and shows as *revoked*.
-* **Other admins** (API now, page card to follow):
+* **Admins:** ⋯ on another admin → *Disable…* / *Enable* or *Remove…* (type the name to confirm). Your own row has no ⋯.
   * `POST /api/auth/admins/{id}/disable` stops them signing in and ends every session they
     have. It raises their `session_version`, so even after `/enable` they sign in afresh.
   * `DELETE /api/auth/admins/{id}` removes them and their passkeys.
