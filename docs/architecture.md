@@ -331,9 +331,9 @@ is gated behind a `confirm()`, `start` is not.
 `GET /api/infra/proxmox/guests`, `GET /api/infra/pbs/snapshots` — predate the
 manual power actions above and map directly to `orchestrator-cli`'s
 `check`/`guests`/`snapshots` commands, but had no dashboard page of their
-own until the dashboard read them: Settings → Connections checks every connection,
+own until the dashboard read them: Sources checks every connection,
 the guests are on Nodes & guests and the snapshots on the Snapshots tab of Backups
-(the old `/infra`, `/infra/guests` and `/infra/snapshots` addresses redirect there).
+(`/infra/guests` and `/infra/snapshots` redirect there; `/infra` is gone).
 
 ## Deferred push (DB = working copy, outside services written on Save / Push)
 

@@ -54,7 +54,7 @@ up "which hostname reaches which service, through what":
 |---------------------------------|--------------------|---------------------------------------|
 | `orchestrator-cli proxy add/list/remove` | `services.yaml` directly | Reconciled into the DB on next boot / Reset |
 | `orchestrator-cli proxy add --entry-point websecure --cert-resolver letsencrypt` | `services.yaml`; validated first with the same rules as the API (entry points checked against the live Traefik when readable) | As above. `orchestrator-cli proxy entrypoints` lists what the manager reports (exit 1 + a message when unavailable); non-interactive runs use the default rule when no `--entry-point` is given |
-| Dashboard → **Data sources → Traefik Manager** (`/sources#traefik`) | pulls routes into records (import / resync) and rewrites old routes into the standard shape — see [sources.md](sources.md) | the import button and the *Discovered* list moved here from the proxy hosts page |
+| Dashboard → **Data sources → Traefik Manager** (`/pull#traefik`) | pulls routes into records (import / resync) and rewrites old routes into the standard shape — see [pull.md](pull.md) | the import button and the *Discovered* list moved here from the proxy hosts page |
 | Dashboard → **Proxy hosts** (`/proxy-hosts`) — list page | reads the live DB (painted at once), then Traefik's view per host | the Traefik column says serving / not pushed / changed in Traefik / error; the row menu pushes one host, puts back a host changed in Traefik or moves it to its config file; the **On** switch and the bulk bar enable/disable; tabs lead to **Import from Traefik** and **Format routes** (Data sources) |
 | Dashboard → **+ Add proxy host** / **Edit…** — the drawer (`static/objects.js`) | live DB; pushed by the autosaver (or the header pill's **Retry**) | same underlying API as below. The old addresses `/proxy-hosts/new[?service_id=]` and `/proxy-hosts/{id}/edit` open the drawer on the list |
 | Dashboard → a service's own page (`/services/{slug}`), **Proxy hosts** section | read-only list + a link that opens the drawer pre-filled for this service | same create/edit flow as above |
@@ -445,7 +445,7 @@ when Traefik does not have it, and the API refuses the option (`422`,
 options) and the route carries the headers middleware named by `TRAEFIK_HSTS_MIDDLEWARE` (default
 `hsts-headers`, a `headers` middleware with `stsSeconds`). It needs an HTTPS entry point (`422` on `hsts`
 otherwise). If Traefik has no such middleware it is created when the host is pushed (one year, this host
-only; never overwritten when it exists). Off by default. See docs/sources.md.
+only; never overwritten when it exists). Off by default. See docs/pull.md.
 
 Two more things the adapter now gets right on every write:
 

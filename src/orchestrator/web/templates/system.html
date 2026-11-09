@@ -48,6 +48,12 @@
   <div id="net-list"></div>
 </section>
 
+<section class="card" aria-labelledby="h-ssh">
+  <div class="card-head"><h2 id="h-ssh">SSH and host runner</h2><span id="ssh-pill"></span><span style="flex: 1"></span><button type="button" class="secondary small" id="ssh-edit">Edit</button></div>
+  <p class="faint" style="margin: 0 0 10px; font-size: 13px">How checks and controllers reach guests that are not on this network. Applied at once, no restart.</p>
+  <dl class="facts" id="ssh-facts"></dl>
+</section>
+
 <section class="card" aria-labelledby="h-this">
   <div class="card-head"><h2 id="h-this">This orchestrator</h2><span id="mode-pill"></span><span class="faint" id="mode-text" style="font-size: 13px"></span></div>
   <dl class="kv kv-2" id="info-kv"></dl>
@@ -55,5 +61,6 @@
 <script type="application/json" id="initial">{{ initial | tojson }}</script>
 {% endblock %}
 {% block scripts %}
+<script src="{{ asset('conn_drawer.js') }}"></script>
 <script src="{{ asset('system.js') }}"></script>
 {% endblock %}

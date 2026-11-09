@@ -16,6 +16,19 @@
   const more = $("#phone-more");
   if (more) more.addEventListener("click", (ev) => { ev.preventDefault(); setNav(true); window.scrollTo({ top: 0 }); });
 
+  // --- Sources folds remember being open (the one holding this page always opens) ----------
+  const FOLDS = "orch.navFolds";
+  let folds = {};
+  try { folds = JSON.parse(localStorage.getItem(FOLDS) || "{}") || {}; } catch (_e) { folds = {}; }
+  document.querySelectorAll(".nav-fold").forEach((d) => {
+    const key = d.dataset.fold;
+    if (!d.dataset.current && folds[key]) d.open = true;
+    d.addEventListener("toggle", () => {
+      folds[key] = d.open;
+      try { localStorage.setItem(FOLDS, JSON.stringify(folds)); } catch (_e) { /* private window */ }
+    });
+  });
+
   // --- live indicator ------------------------------------------------------------------------
   const livePill = $("#live-pill");
   function liveState() {

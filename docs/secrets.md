@@ -18,7 +18,7 @@ A stored value looks like `enc:v1:3f9c1a2b7d4e:<nonce>:<ciphertext>`.
   show, and the only form in which the key ever appears in logs, the CLI or the dashboard.
 
 `.env` is not covered yet. Secrets still set there (an install from before Connections) move
-into `connections.yaml` with `orchestrator-cli connections` or on the Connections page, and
+into `connections.yaml` with `orchestrator-cli connections` or from Sources (*Move into the file*), and
 are encrypted there. Moving every setting out of `.env` is a later step.
 
 ## Where the key lives

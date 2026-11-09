@@ -64,7 +64,7 @@ def _instance() -> str | None:
     "--instance",
     "-i",
     default=None,
-    help="Which Portainer connection (its id on the Connections page); default: the default one.",
+    help="Which Portainer connection (its id under Sources); default: the default one.",
 )
 @click.pass_context
 def stack(ctx: click.Context, instance: str | None) -> None:

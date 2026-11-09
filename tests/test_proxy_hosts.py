@@ -335,7 +335,7 @@ def test_page_renders_for_logged_in_admin(client: TestClient, service: Service) 
     assert r.status_code == 200
     assert "storm" in r.text
     assert 'id="add-host"' in r.text  # adds in the drawer, not on a page of its own
-    assert "/sources#traefik" in r.text  # the Import tab
+    assert "/pull#traefik" in r.text  # the Import tab
     # The services for the drawer's picker are in the page.
     assert "Thing" in r.text and '"slug": "thing"' in r.text
 

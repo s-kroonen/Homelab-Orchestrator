@@ -70,7 +70,7 @@ containers, proxy hosts. Create, edit, delete and bulk actions happen there, for
 * Actions across several sources get their own Bulk actions page (later).
 
 Being built: until each step lands, the pages it replaces (Nodes & guests, Containers, Proxy
-hosts, Connections) still exist; each is removed, with its wireframe, in the pull request that
+hosts) still exist; each is removed, with its wireframe, in the step that
 replaces it.
 
 Header on every page: breadcrumb, global search (`/`), the pending pill when something is
@@ -147,7 +147,6 @@ Something that is off on purpose (a node asleep, its services) is **off**, never
 | Proxy hosts: list, tabs for import and format *(replaced by Sources)* | [PNG](wireframes/ProxyHosts.png) · [HTML](wireframes/ProxyHosts.html) |
 | Proxy host: create / edit drawer | [PNG](wireframes/ProxyEdit.png) · [HTML](wireframes/ProxyEdit.html) |
 | Confirm a destructive action | [PNG](wireframes/ConfirmPowerOff.png) · [HTML](wireframes/ConfirmPowerOff.html) |
-| Settings: Connections *(replaced by Sources)* | [PNG](wireframes/Connections.png) · [HTML](wireframes/Connections.html) |
 | Backups: policies, snapshots, dumps, orchestrator backups | [PNG](wireframes/Backups.png) · [HTML](wireframes/Backups.html) |
 | Map: one row per node, shared backups, selection sidebar | [PNG](wireframes/Map.png) · [HTML](wireframes/Map.html) |
 | Traffic: one page, countries included | [PNG](wireframes/Traffic.png) · [HTML](wireframes/Traffic.html) |

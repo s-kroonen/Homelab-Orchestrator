@@ -1,5 +1,5 @@
 /* Format routes: plan, then rewrite hand-written / migrated routes into the standard shape, one host
- * at a time. Everything comes from /api/sources/traefik/format/*. Built with textContent only -
+ * at a time. Everything comes from /api/pull/traefik/format/*. Built with textContent only -
  * nothing a remote system returns is ever put in as HTML. */
 (function () {
   "use strict";
@@ -24,7 +24,7 @@
   let plan = null;
   async function planFormat() {
     msg("fmt-msg", "Reading every route…");
-        try { plan = await api("POST", "/api/sources/traefik/format/plan", hstsChoice() === null ? {} : { hsts: hstsChoice() }); }
+        try { plan = await api("POST", "/api/pull/traefik/format/plan", hstsChoice() === null ? {} : { hsts: hstsChoice() }); }
     catch (e) { msg("fmt-msg", err(e), "error"); return; }
     if (plan.problem) { msg("fmt-msg", plan.problem, "error"); $("fmt-items").replaceChildren(); return; }
     const c = plan.counts;
@@ -82,7 +82,7 @@
     });
     msg("fmt-msg", "Starting…");
     try {
-      const r = await api("POST", "/api/sources/traefik/format/run", {
+      const r = await api("POST", "/api/pull/traefik/format/run", {
         items, stop_on_failure: $("fmt-stop").checked, allow_unverified: $("fmt-unverified").checked,
         ...(hs === null ? {} : { hsts: hs }),
       });

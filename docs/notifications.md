@@ -82,8 +82,8 @@ Settings → Notifications (`/notifications`) has, on the left, the **Rules** (+
 open a drawer; the switch turns a rule on or off; ⋯ has the rest) and **Recent alerts**, the
 newest twelve, with what was sent where ("Show folded and unsent" hides what was folded into
 another alert or that no rule wanted; Activity → Alerts has the whole feed). On the right,
-**Channels** says which of ntfy, e-mail, webhook and push are set up (they are set up on
-Connections → Alerts), and **This device** turns alerts on or off for the browser you are using,
+**Channels** says which of ntfy, e-mail, webhook and push are set up (each is set up or edited
+right there, in its drawer), and **This device** turns alerts on or off for the browser you are using,
 installs the dashboard as an app, sends a test, and lists every device with push.
 **Send a test** in the header sends one to every channel.
 

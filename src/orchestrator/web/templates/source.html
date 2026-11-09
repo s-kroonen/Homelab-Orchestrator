@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% block title %}homelab-orchestrator — {{ source.name }}{% endblock %}
+{% block crumbs %}<a href="/sources">Sources</a> / {{ source.connector.group }} / <span class="here">{{ source.name }}</span>{% endblock %}
+{% block content %}
+{# One source (OR-78), to the SourceProxmox, SourceSettings and SourceRaw wireframes: header with
+   status, address and what uses it; Overview, one tab per resource, Settings, Raw. #}
+<div class="src-head">
+  <div class="src-title">
+    <h1><span id="src-name">{{ source.name }}</span> <span class="kindtag">{{ source.connector.title }}</span> <span id="src-pill"></span></h1>
+    <div class="src-sub" id="src-sub"></div>
+  </div>
+  <div class="src-actions">
+    <button type="button" class="secondary" id="src-test">Test</button>
+    <span id="src-more"></span>
+  </div>
+</div>
+<div id="src-banners"></div>
+<div class="tabs" role="tablist" aria-label="{{ source.name }}" id="src-tabs">
+  {% for t in initial.tabs %}<button role="tab" data-tab="{{ t.key }}">{{ t.label }}<span class="n" data-count="{{ t.key }}"></span></button>{% endfor %}
+</div>
+{% for t in initial.tabs %}
+<div role="tabpanel" data-tab="{{ t.key }}" data-view="{{ t.view }}" hidden></div>
+{% endfor %}
+<script type="application/json" id="initial">{{ initial | tojson }}</script>
+{% endblock %}
+{% block scripts %}
+<script src="{{ asset('conn_drawer.js') }}"></script>
+<script src="{{ asset('source.js') }}"></script>
+{% endblock %}

@@ -100,7 +100,7 @@ def test_nodes_view_counts_services_by_their_root(client: TestClient) -> None:
     assert node["name"] == "node-a" and node["services"] == 2
     assert node["service_slugs"] == ["media"]  # what a power-off confirm lists
     html = client.get("/nodes").text
-    assert 'href="/sources#proxmox"' in html and "/static/nodes.js?v=" in html
+    assert 'href="/pull#proxmox"' in html and "/static/nodes.js?v=" in html
 
 
 def test_admins_page_holds_devices_and_invites(client: TestClient) -> None:

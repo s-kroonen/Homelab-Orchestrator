@@ -1,5 +1,5 @@
 /* Data sources: pull what lives in Proxmox, Traefik Manager, Portainer and on the guests; import
- * what is new; format routes. Everything comes from /api/sources/*. Built with textContent only -
+ * what is new; format routes. Everything comes from /api/pull/*. Built with textContent only -
  * nothing a remote system returns is ever put in as HTML. */
 (function () {
   "use strict";
@@ -42,7 +42,7 @@
 
   async function loadOverview() {
     try {
-      const o = await api("GET", "/api/sources/overview");
+      const o = await api("GET", "/api/pull/overview");
       const r = o.refreshed || {};
       $("m-proxmox").textContent = `${o.proxmox.nodes} nodes, ${o.proxmox.guests} guests` + (r.proxmox ? ` · ${when(r.proxmox)}` : "");
       $("m-ips").textContent = `${o.ips.missing} without an address` + (r.ips ? ` · ${when(r.ips)}` : "");
@@ -54,13 +54,13 @@
   // -- Proxmox -----------------------------------------------------------------------------------------
   loaders.proxmox = async function () {
     let d;
-    try { d = await api("GET", "/api/sources/proxmox"); }
+    try { d = await api("GET", "/api/pull/proxmox"); }
     catch (e) { msg("px-msg", err(e), "error"); return; }
     if (d.proxmox_error) msg("px-msg", "Proxmox could not be read: " + d.proxmox_error, "error");
     $("px-nodes").replaceChildren(...(d.nodes.length ? d.nodes.map((n) => {
       const imp = el("button", { className: "secondary small" }, "Import");
       imp.addEventListener("click", () => busyButton(imp, async () => {
-        try { await api("POST", "/api/sources/proxmox/nodes/import", { name: n.name }); toast("Imported " + n.name, "ok"); loaders.proxmox(); loadOverview(); }
+        try { await api("POST", "/api/pull/proxmox/nodes/import", { name: n.name }); toast("Imported " + n.name, "ok"); loaders.proxmox(); loadOverview(); }
         catch (e) { msg("px-msg", err(e), "error"); }
       }));
       return el("tr", null,
@@ -72,7 +72,7 @@
     $("px-guests").replaceChildren(...(d.guests.length ? d.guests.map((g) => {
       const imp = el("button", { className: "secondary small" }, "Import as service");
       imp.addEventListener("click", () => busyButton(imp, async () => {
-        try { const r = await api("POST", "/api/sources/proxmox/guests/import", { node: g.node, vmid: g.vmid }); toast("Registered " + r.slug, "ok"); loaders.proxmox(); loadOverview(); }
+        try { const r = await api("POST", "/api/pull/proxmox/guests/import", { node: g.node, vmid: g.vmid }); toast("Registered " + r.slug, "ok"); loaders.proxmox(); loadOverview(); }
         catch (e) { msg("px-msg", err(e), "error"); }
       }));
       return el("tr", null, el("td", null, g.node), el("td", null, g.vmid), el("td", null, g.kind), el("td", null, g.name),
@@ -84,7 +84,7 @@
   $("px-refresh").addEventListener("click", () => busyButton($("px-refresh"), async () => {
     msg("px-msg", "Pulling from Proxmox…");
     try {
-      const r = await api("POST", "/api/sources/proxmox/refresh");
+      const r = await api("POST", "/api/pull/proxmox/refresh");
       const filled = Object.entries(r.addresses.filled).map(([n, a]) => `${n}=${a}`);
       const missing = r.guests.missing.length ? ` Not found in Proxmox: ${r.guests.missing.join(", ")}.` : "";
       const extra = r.guests.unregistered_guests.length ? ` ${r.guests.unregistered_guests.length} guest(s) not registered.` : "";
@@ -96,7 +96,7 @@
   // -- Addresses -----------------------------------------------------------------------------------------
   loaders.ips = async function () {
     let rows;
-    try { rows = await api("GET", "/api/sources/ips"); }
+    try { rows = await api("GET", "/api/pull/ips"); }
     catch (e) { msg("ip-msg", err(e), "error"); return; }
     $("ip-rows").replaceChildren(...(rows.length ? rows.map((r) => el("tr", null,
       el("td", null, el("a", { href: "/services/" + encodeURIComponent(r.slug) }, r.slug)), el("td", null, r.node || "—"), el("td", null, r.guest),
@@ -107,7 +107,7 @@
   async function discover(onlyMissing) {
     msg("ip-msg", "Discovering…");
     try {
-      const r = await api("POST", "/api/sources/ips/discover", { only_missing: onlyMissing });
+      const r = await api("POST", "/api/pull/ips/discover", { only_missing: onlyMissing });
       msg("ip-msg", `Looked at ${r.scanned}, found an address for ${r.found}.`, "ok");
       loaders.ips(); loadOverview();
     } catch (e) { msg("ip-msg", err(e), "error"); }
@@ -123,7 +123,7 @@
   }
   loaders.traefik = async function () {
     let d;
-    try { d = await api("GET", "/api/sources/traefik"); }
+    try { d = await api("GET", "/api/pull/traefik"); }
     catch (e) { msg("tr-msg", err(e), "error"); return; }
     $("tr-unreadable").hidden = d.readable;
     const svcs = await services();
@@ -158,7 +158,7 @@
   $("tr-import").addEventListener("click", () => busyButton($("tr-import"), async () => {
     msg("tr-msg", "Importing…");
     try {
-      const b = await api("POST", "/api/sources/traefik/import");
+      const b = await api("POST", "/api/pull/traefik/import");
       msg("tr-msg", `Updated ${b.updated_count}, found ${b.discovered_count} route(s) with no record.`, "ok");
       loaders.traefik(); loadOverview();
     } catch (e) { msg("tr-msg", err(e), "error"); }
@@ -180,7 +180,7 @@
   loaders.portainer = async function () {
     let d;
     await loadPtInstances();
-    try { d = await api("GET", "/api/sources/portainer" + ptQ("?")); }
+    try { d = await api("GET", "/api/pull/portainer" + ptQ("?")); }
     catch (e) { msg("pt-msg", err(e), "error"); return; }
     $("pt-off").hidden = d.configured;
     if (!d.configured) { $("pt-rows").replaceChildren(emptyRow(6, "Portainer is not set up.")); return; }

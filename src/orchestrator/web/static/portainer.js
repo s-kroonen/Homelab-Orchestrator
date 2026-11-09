@@ -159,7 +159,7 @@
       { key: "containers", label: "Containers", sort: (s) => s.containers_running || 0, render: (s) => [dots(s), el("span", { class: "faint" }, (s.containers_running || 0) + " / " + (s.containers_total || 0))] },
       { key: "source", label: "Source", phone: false, render: (s) => el("span", { class: "mono", style: { fontSize: "12px" }, title: s.git ? s.git.url : null }, sourceText(s)) },
       { key: "updated", label: "Updated", sort: (s) => s.updated_at || "", render: (s) => s.updated_at ? el("span", { class: "faint", title: fmt.time(s.updated_at) }, fmt.ago(s.updated_at)) : "—" },
-      { key: "service", label: "Sub-service", render: (s) => (s.linked_services || []).length ? linkedTo(s.linked_services) : s.loose ? el("span", { class: "faint" }, "—") : [el("span", { class: "faint" }, "not linked"), " · ", el("a", { href: "/sources#portainer" }, "Adopt…")] },
+      { key: "service", label: "Sub-service", render: (s) => (s.linked_services || []).length ? linkedTo(s.linked_services) : s.loose ? el("span", { class: "faint" }, "—") : [el("span", { class: "faint" }, "not linked"), " · ", el("a", { href: "/pull#portainer" }, "Adopt…")] },
       { key: "open", label: "", phone: false, render: (s) => el("a", { class: "btn ghost small", href: pageOf(s) }, "Open →") },
     ],
     chips: [
@@ -174,7 +174,7 @@
       { label: "Stop", onClick: () => stackAction([s], "stop") },
       { label: "Restart", onClick: () => stackAction([s], "restart") },
       s.git ? { label: "Redeploy", onClick: () => redeploy(s) } : null,
-      (s.linked_services || []).length ? { label: "Open " + s.linked_services[0], href: "/services/" + enc(s.linked_services[0]) } : { label: "Adopt as a sub-service…", href: "/sources#portainer" },
+      (s.linked_services || []).length ? { label: "Open " + s.linked_services[0], href: "/services/" + enc(s.linked_services[0]) } : { label: "Adopt as a sub-service…", href: "/pull#portainer" },
       s.open_url ? { label: "Open in Portainer ↗", href: s.open_url } : null,
       "-",
       { label: "Delete…", danger: true, onClick: () => deleteStack(s) },
@@ -198,7 +198,7 @@
     if (!status.ok) {
       banners.push(el("div", { class: "banner sys-banner" }, el("span", { class: "pill " + (status.configured ? "fail" : "off") }, status.configured ? "down" : "not set up"), " ",
         el("strong", {}, "Portainer" + (S.instances.length > 1 ? " " + (S.instances.find((i) => i.id === status.instance) || {}).name : "")), " " + status.detail + " ",
-        el("a", { class: "btn secondary small", href: "/infra/connections" }, status.configured ? "Check connection" : "Set it up")));
+        el("a", { class: "btn secondary small", href: "/sources" }, status.configured ? "Check connection" : "Set it up")));
       return { stacks: [], banners };
     }
     const envs = await api.get(u("/api/portainer/environments"), { suppressToast: true }).catch(() => []);

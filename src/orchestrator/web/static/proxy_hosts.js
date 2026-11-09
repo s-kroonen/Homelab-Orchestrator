@@ -116,7 +116,7 @@
     empty: {
       title: "No proxy hosts yet",
       text: "Add one, or import the routes Traefik Manager already has.",
-      action: el("a", { class: "btn small", href: "/sources#traefik" }, "Import from Traefik"),
+      action: el("a", { class: "btn small", href: "/pull#traefik" }, "Import from Traefik"),
     },
   });
 

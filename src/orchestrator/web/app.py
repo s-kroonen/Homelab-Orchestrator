@@ -68,7 +68,6 @@ from orchestrator.web.routers import (
     health,
     hooks,
     infra,
-    infra_overview,
     linked,
     maintenance,
     mcp_endpoint,
@@ -79,6 +78,7 @@ from orchestrator.web.routers import (
     push,
     setup,
     shell,
+    source_pages,
     sources,
     stacks,
     system,
@@ -227,16 +227,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             "registry.path.invalid",
             path=str(settings.services_yaml_path),
             error=str(exc),
-            impact="No services are registered. Backups and wakes cannot run "
-            "until this is fixed.",
+            impact="No services are registered. Backups and wakes cannot run until this is fixed.",
         )
     except Exception as exc:
         log.error(
             "registry.reconcile.failed",
             path=str(settings.services_yaml_path),
             error=str(exc),
-            impact="No services are registered. Backups and wakes cannot run "
-            "until this is fixed.",
+            impact="No services are registered. Backups and wakes cannot run until this is fixed.",
         )
 
     try:
@@ -397,12 +395,16 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     conn_watcher = ConnectionsWatcher(adapters)
     conn_watcher.start()
     app.state.connections_watcher = conn_watcher
+    from orchestrator.connectors import status as source_status
+
+    status_task = asyncio.create_task(source_status.keep_fresh(adapters))
 
     try:
         yield
     finally:
         log.info("orchestrator.stop")
         encrypt_task.cancel()
+        status_task.cancel()
         notify_hooks.install(None)
         await conn_watcher.shutdown()
         await autosaver.shutdown()
@@ -477,9 +479,10 @@ def create_app() -> FastAPI:
     app.include_router(deploys.router)
     app.include_router(dumps.router)
     app.include_router(sources.router)
+    app.include_router(source_pages.pages)
+    app.include_router(source_pages.api)
     app.include_router(archive.router)
     app.include_router(connections.router)
-    app.include_router(infra_overview.router)
     app.include_router(hooks.router)
     app.include_router(events.router)
     app.include_router(stacks.router)

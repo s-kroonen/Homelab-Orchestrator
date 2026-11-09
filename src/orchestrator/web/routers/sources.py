@@ -37,7 +37,7 @@ from orchestrator.web.auth import CurrentAdmin, require_admin
 from orchestrator.web.deps import AdaptersDep, SessionDep, SettingsDep
 
 log = get_logger(__name__)
-router = APIRouter(prefix="/api/sources", tags=["sources"], dependencies=[Depends(require_admin)])
+router = APIRouter(prefix="/api/pull", tags=["sources"], dependencies=[Depends(require_admin)])
 
 _SETTING = "sources.refreshed"
 _background: set[asyncio.Task[None]] = set()

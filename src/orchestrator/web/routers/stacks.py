@@ -45,7 +45,7 @@ class AdoptIn(BaseModel):
     stack: str
     slug: str
     parent: str
-    #: The Portainer connection (Connections page); blank = the default one.
+    #: The Portainer connection (a source); blank = the default one.
     instance: str = ""
     name: str = ""
     group: str = ""

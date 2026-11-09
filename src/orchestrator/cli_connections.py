@@ -1,4 +1,4 @@
-"""``orchestrator-cli connections`` - the same connections as the dashboard's Connections page.
+"""``orchestrator-cli connections`` - the same connections as the dashboard's Sources.
 
 It edits ``connections.yaml`` directly (run it where the state directory is, i.e. inside the
 container); a running orchestrator notices the change within a few seconds. Secrets are never

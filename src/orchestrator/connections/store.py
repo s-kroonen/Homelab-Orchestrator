@@ -30,7 +30,7 @@ KEEP_BACKUPS = 5
 _lock = threading.RLock()
 
 _HEADER = (
-    "# Connections: what this orchestrator talks to. Edited from the dashboard (Connections) or\n"
+    "# Connections: what this orchestrator talks to. Edited from the dashboard (Sources) or\n"
     "# `orchestrator-cli connections`; applied without a restart. Holds credentials: keep it\n"
     "# private (the file is written readable by its owner only).\n"
 )

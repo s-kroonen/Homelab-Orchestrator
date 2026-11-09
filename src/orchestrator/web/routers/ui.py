@@ -348,32 +348,23 @@ async def traffic_geo_page(slug: str | None = None, range: str | None = None) ->
     return RedirectResponse("/traffic" + ("?" + query if query else ""), status_code=303)
 
 
-@router.get("/sources", response_model=None)
+@router.get("/pull", response_model=None)
 async def sources_page(request: Request, session: SessionDep) -> HTMLResponse | RedirectResponse:
     """What is pulled from Proxmox, Traefik Manager, Portainer and the guests - the actions that
-    refresh or import it live here (client-rendered from ``/api/sources``)."""
+    refresh or import it live here (client-rendered from ``/api/pull``)."""
     admin = get_current_admin(request, session)
     if admin is None:
         return login_redirect(request)
     return _templates.TemplateResponse(request, "sources.html", {"admin": admin})
 
 
-@router.get("/sources/format", response_model=None)
+@router.get("/pull/format", response_model=None)
 async def format_page(request: Request, session: SessionDep) -> HTMLResponse | RedirectResponse:
     """Plan and run the rewrite of old routes into the standard shape (its own page)."""
     admin = get_current_admin(request, session)
     if admin is None:
         return login_redirect(request)
     return _templates.TemplateResponse(request, "format.html", {"admin": admin})
-
-
-@router.get("/infra", response_model=None)
-async def infra_status_page(request: Request, session: SessionDep) -> RedirectResponse:
-    """Connectivity's overview is Settings > Connections now: every connection says there
-    whether it answers."""
-    if get_current_admin(request, session) is None:
-        return login_redirect(request)
-    return RedirectResponse("/infra/connections", status_code=303)
 
 
 @router.get("/infra/guests", response_model=None)

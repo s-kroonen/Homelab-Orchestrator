@@ -44,3 +44,16 @@ def asset(path: str) -> str:
 
 templates = Jinja2Templates(directory=str(TEMPLATE_DIR))
 templates.env.globals["asset"] = asset
+
+
+def source_nav() -> list[dict[str, object]]:
+    """The sidebar's Sources section (OR-78): never stops a page from rendering."""
+    try:
+        from orchestrator.web.routers.source_pages import nav_groups
+
+        return nav_groups()
+    except Exception:
+        return []
+
+
+templates.env.globals["source_nav"] = source_nav

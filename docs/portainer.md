@@ -22,7 +22,7 @@ one (the Service column).
 
 ## Setup
 
-Add Portainer on the **Connections** page (or `orchestrator-cli connections add portainer --set
+Add Portainer under **Sources** (*+ Add source*) (or `orchestrator-cli connections add portainer --set
 url=https://portainer.example.lan:9443 --set api_key=ptr_...`) - no restart. You can have
 several; the pages and the CLI take the one to look at (`-i NAME`), and a controller or probe
 names its connection with `instance:` (see [connections.md](connections.md)).
@@ -36,7 +36,7 @@ names its connection with `instance:` (see [connections.md](connections.md)).
 | `read_only` | every write refuses |
 
 An install that still has `PORTAINER_URL` and `PORTAINER_API_KEY` in `.env` keeps working; move it
-into the file from the Connections page.
+into the file from Sources (*Move into the file*).
 
 The token acts as the user that created it, so for reading only a user with **read** access to
 the environments is enough; the write side ([portainer_deploys.md](portainer_deploys.md)) needs

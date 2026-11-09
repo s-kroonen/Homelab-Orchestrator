@@ -65,11 +65,11 @@ def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Any:
 def test_everything_needs_an_admin(client: TestClient) -> None:
     anon = TestClient(client.app)
     for path in ("overview", "proxmox", "ips", "traefik", "portainer"):
-        assert anon.get(f"/api/sources/{path}").status_code == 401
+        assert anon.get(f"/api/pull/{path}").status_code == 401
 
 
 def test_overview_counts_what_is_known(client: TestClient) -> None:
-    out = client.get("/api/sources/overview").json()
+    out = client.get("/api/pull/overview").json()
     assert out["proxmox"] == {"nodes": 1, "guests": 2}
     assert out["ips"]["services"] == 2 and out["ips"]["missing"] >= 0
     assert out["portainer"]["configured"] is True  # the dry-run Portainer
@@ -77,33 +77,33 @@ def test_overview_counts_what_is_known(client: TestClient) -> None:
 
 
 def test_proxmox_lists_nodes_and_guests_and_refresh_pulls_them(client: TestClient) -> None:
-    got = client.get("/api/sources/proxmox").json()
+    got = client.get("/api/pull/proxmox").json()
     assert [n["name"] for n in got["nodes"]] == ["pve1"]
     assert {g["vmid"] for g in got["guests"]} == {101, 102, 200}
     assert next(g for g in got["guests"] if g["vmid"] == 200)["service_slug"] is None
-    done = client.post("/api/sources/proxmox/refresh").json()
+    done = client.post("/api/pull/proxmox/refresh").json()
     assert {"addresses", "nodes", "guests"} <= set(done)
     assert [u["vmid"] for u in done["guests"]["unregistered_guests"]] == [200]
-    assert client.get("/api/sources/overview").json()["refreshed"]["proxmox"]
+    assert client.get("/api/pull/overview").json()["refreshed"]["proxmox"]
 
 
 def test_ips_list_and_bulk_discovery_never_touches_a_manual_address(client: TestClient) -> None:
-    rows = client.get("/api/sources/ips").json()
+    rows = client.get("/api/pull/ips").json()
     by = {r["slug"]: r for r in rows}
     assert by["db-vm"]["manual_ip"] == "10.0.0.22" and by["db-vm"]["effective_ip"] == "10.0.0.22"
-    out = client.post("/api/sources/ips/discover", json={"only_missing": True}).json()
+    out = client.post("/api/pull/ips/discover", json={"only_missing": True}).json()
     assert [r["slug"] for r in out["results"]] == ["web-vm"]  # the one without an address
-    out = client.post("/api/sources/ips/discover", json={}).json()
+    out = client.post("/api/pull/ips/discover", json={}).json()
     assert out["scanned"] == 2
     assert (
-        next(r for r in client.get("/api/sources/ips").json() if r["slug"] == "db-vm")["manual_ip"]
+        next(r for r in client.get("/api/pull/ips").json() if r["slug"] == "db-vm")["manual_ip"]
         == "10.0.0.22"
     )
-    assert client.post("/api/sources/ips/discover", json={"node": "ghost"}).status_code == 404
+    assert client.post("/api/pull/ips/discover", json={"node": "ghost"}).status_code == 404
 
 
 def test_portainer_lists_stacks(client: TestClient) -> None:
-    out = client.get("/api/sources/portainer").json()
+    out = client.get("/api/pull/portainer").json()
     assert out["configured"] and {s["name"] for s in out["stacks"]} >= {"dev-xymbols"}
 
 
@@ -146,7 +146,7 @@ def tm(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, service: Service) -> Any
 
 def test_traefik_view_pairs_routes_with_records(tm: Any) -> None:
     client, _ = tm
-    out = client.get("/api/sources/traefik").json()
+    out = client.get("/api/pull/traefik").json()
     assert out["readable"] is True
     nas = next(r for r in out["routes"] if r["route"] == "nas")
     assert nas["host_id"] is not None and nas["owned"] is False and nas["file"] == "legacy.yml"
@@ -157,9 +157,9 @@ def test_traefik_view_pairs_routes_with_records(tm: Any) -> None:
 
 def test_import_pulls_unknown_routes_into_records(tm: Any) -> None:
     client, _ = tm
-    done = client.post("/api/sources/traefik/import")
+    done = client.post("/api/pull/traefik/import")
     assert done.status_code == 200, done.text
-    assert client.get("/api/sources/overview").json()["refreshed"]["traefik"]
+    assert client.get("/api/pull/overview").json()["refreshed"]["traefik"]
 
 
 def _wait(client: TestClient, run_id: int) -> dict[str, Any]:
@@ -173,11 +173,11 @@ def _wait(client: TestClient, run_id: int) -> dict[str, Any]:
 
 def test_format_plan_then_run_rewrites_the_route_and_records_the_run(tm: Any) -> None:
     client, sim = tm
-    plan = client.post("/api/sources/traefik/format/plan", json={}).json()
+    plan = client.post("/api/pull/traefik/format/plan", json={}).json()
     item = next(i for i in plan["items"] if i["hostname"] == "nas.example.com")
     assert item["status"] == "ready" and item["dropped_middlewares"] == ["redirect-to-https"]
     started = client.post(
-        "/api/sources/traefik/format/run",
+        "/api/pull/traefik/format/run",
         json={"items": [{"hostname": item["hostname"], "fingerprint": item["fingerprint"]}]},
     )
     assert started.status_code == 202, started.text
@@ -186,20 +186,20 @@ def test_format_plan_then_run_rewrites_the_route_and_records_the_run(tm: Any) ->
     assert run["kind"] == "format"
     assert sim.file_of("orchestrator-nas-example-com") == "apps.yml" and sim.file_of("nas") is None
     assert (
-        client.post("/api/sources/traefik/format/plan", json={}).json()["items"][0]["status"]
+        client.post("/api/pull/traefik/format/plan", json={}).json()["items"][0]["status"]
         == "standard"
     )
 
 
 def test_a_stale_plan_is_refused_and_a_second_run_cannot_overlap(tm: Any) -> None:
     client, sim = tm
-    plan = client.post("/api/sources/traefik/format/plan", json={}).json()
+    plan = client.post("/api/pull/traefik/format/plan", json={}).json()
     item = next(i for i in plan["items"] if i["hostname"] == "nas.example.com")
     sim.files["legacy.yml"]["nas"]["mws"].append("changed")
     run = _wait(
         client,
         client.post(
-            "/api/sources/traefik/format/run",
+            "/api/pull/traefik/format/run",
             json={"items": [{"hostname": item["hostname"], "fingerprint": item["fingerprint"]}]},
         ).json()["run_id"],
     )
@@ -214,13 +214,13 @@ def test_kept_middlewares_can_be_chosen_per_host(tm: Any) -> None:
     client, sim = tm
     item = next(
         i
-        for i in client.post("/api/sources/traefik/format/plan", json={}).json()["items"]
+        for i in client.post("/api/pull/traefik/format/plan", json={}).json()["items"]
         if i["hostname"] == "nas.example.com"
     )
     run = _wait(
         client,
         client.post(
-            "/api/sources/traefik/format/run",
+            "/api/pull/traefik/format/run",
             json={
                 "items": [
                     {
@@ -251,38 +251,34 @@ def test_nodes_and_guests_that_exist_only_in_proxmox_can_be_imported(client: Tes
     pve.simulated_guests.append(
         Guest(node="pve2", vmid=300, kind=GuestKind.CT, name="Media Box", status="running")
     )
-    listed = client.get("/api/sources/proxmox").json()
+    listed = client.get("/api/pull/proxmox").json()
     new = next(n for n in listed["nodes"] if n["name"] == "pve2")
     assert new["registered"] is False and new["address"] == "10.0.0.2"
 
     assert (
         client.post(
-            "/api/sources/proxmox/guests/import", json={"node": "pve2", "vmid": 300}
+            "/api/pull/proxmox/guests/import", json={"node": "pve2", "vmid": 300}
         ).status_code
         == 409
     )
-    made = client.post("/api/sources/proxmox/nodes/import", json={"name": "pve2"})
+    made = client.post("/api/pull/proxmox/nodes/import", json={"name": "pve2"})
     assert made.status_code == 201, made.text
     assert made.json()["address"] == "10.0.0.2"
-    assert (
-        client.post("/api/sources/proxmox/nodes/import", json={"name": "pve2"}).status_code == 409
-    )
-    assert (
-        client.post("/api/sources/proxmox/nodes/import", json={"name": "ghost"}).status_code == 404
-    )
+    assert client.post("/api/pull/proxmox/nodes/import", json={"name": "pve2"}).status_code == 409
+    assert client.post("/api/pull/proxmox/nodes/import", json={"name": "ghost"}).status_code == 404
 
-    svc = client.post("/api/sources/proxmox/guests/import", json={"node": "pve2", "vmid": 300})
+    svc = client.post("/api/pull/proxmox/guests/import", json={"node": "pve2", "vmid": 300})
     assert svc.status_code == 201, svc.text
     assert svc.json()["slug"] == "media-box" and svc.json()["guest_id"] == 300
     assert (
         client.post(
-            "/api/sources/proxmox/guests/import", json={"node": "pve2", "vmid": 300}
+            "/api/pull/proxmox/guests/import", json={"node": "pve2", "vmid": 300}
         ).status_code
         == 409
     )
     assert (
         client.post(
-            "/api/sources/proxmox/guests/import", json={"node": "pve2", "vmid": 999}
+            "/api/pull/proxmox/guests/import", json={"node": "pve2", "vmid": 999}
         ).status_code
         == 404
     )
@@ -290,8 +286,8 @@ def test_nodes_and_guests_that_exist_only_in_proxmox_can_be_imported(client: Tes
 
 def test_the_page_renders_and_the_old_pages_point_at_it(client: TestClient) -> None:
     anon = TestClient(client.app)
-    assert anon.get("/sources", follow_redirects=False).status_code == 303
-    page = client.get("/sources")
+    assert anon.get("/pull", follow_redirects=False).status_code == 303
+    page = client.get("/pull")
     assert (
         page.status_code == 200
         and "Data sources" in page.text
@@ -299,25 +295,25 @@ def test_the_page_renders_and_the_old_pages_point_at_it(client: TestClient) -> N
     )
     # Not a page of its own in the navigation any more: its parts are reached from the list
     # they fill (Import from Proxmox on Nodes & guests, the Import tab on Proxy hosts).
-    assert 'href="/sources#proxmox"' in client.get("/nodes").text
-    assert "/sources#" in client.get("/proxy-hosts").text
+    assert 'href="/pull#proxmox"' in client.get("/nodes").text
+    assert "/pull#" in client.get("/proxy-hosts").text
     # Containers links a stack to a service through Data sources (its script builds the link)
-    assert "/sources#portainer" in client.get("/static/portainer.js").text
+    assert "/pull#portainer" in client.get("/static/portainer.js").text
     assert "resync-btn" not in client.get("/proxy-hosts").text
     assert 'id="adopt"' not in client.get("/portainer").text
 
 
 def test_format_has_its_own_page(client: TestClient) -> None:
     anon = TestClient(client.app)
-    r = anon.get("/sources/format", follow_redirects=False)
-    assert r.status_code == 303 and r.headers["location"] == "/login?next=/sources/format"
-    page = client.get("/sources/format")
+    r = anon.get("/pull/format", follow_redirects=False)
+    assert r.status_code == 303 and r.headers["location"] == "/login?next=/pull/format"
+    page = client.get("/pull/format")
     assert page.status_code == 200
     for needle in ('id="fmt-hsts"', 'id="fmt-every"', 'id="fmt-run"', "/static/format.js"):
         assert needle in page.text
-    sources = client.get("/sources").text
-    assert 'href="/sources/format"' in sources and 'id="fmt-run"' not in sources
-    assert 'href="/sources/format"' in client.get("/proxy-hosts").text  # a tab of Proxy hosts
+    sources = client.get("/pull").text
+    assert 'href="/pull/format"' in sources and 'id="fmt-run"' not in sources
+    assert 'href="/pull/format"' in client.get("/proxy-hosts").text  # a tab of Proxy hosts
 
 
 def test_cli_formats_routes_and_pulls(tm: Any) -> None:

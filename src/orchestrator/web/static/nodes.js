@@ -56,7 +56,7 @@
     if (!view.nodes.length) {
       box.append(el("div", { class: "card dt-empty" }, el("strong", {}, "No nodes yet"),
         el("div", {}, "Import them from Proxmox: every node and guest of the cluster, in one go."),
-        el("div", { style: { marginTop: "10px" } }, el("a", { class: "btn small", href: "/sources#proxmox" }, "Import from Proxmox"))));
+        el("div", { style: { marginTop: "10px" } }, el("a", { class: "btn small", href: "/pull#proxmox" }, "Import from Proxmox"))));
       return;
     }
     for (const n of view.nodes) {

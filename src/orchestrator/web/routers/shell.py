@@ -29,13 +29,17 @@ PAGES: list[tuple[str, str, str]] = [
     ("Dashboard", "/", "home overview"),
     ("Map", "/map", "graph path"),
     ("Services", "/services", "list"),
+    (
+        "Sources",
+        "/sources",
+        "connections adapters proxmox portainer proxy pbs power settings connectivity",
+    ),
     ("Nodes & guests", "/nodes", "proxmox vm lxc guests power"),
     ("Proxy hosts", "/proxy-hosts", "traefik routes domains"),
     ("Containers", "/portainer", "portainer stacks docker"),
     ("Backups", "/backup-policies", "pbs policies snapshots dumps"),
     ("Activity", "/activity", "runs log audit"),
     ("Traffic", "/traffic", "requests countries geo"),
-    ("Connections", "/infra/connections", "adapters settings connectivity"),
     ("Notifications", "/notifications", "alerts push ntfy"),
     ("AI assistants", "/assistants", "mcp claude"),
     ("Admins & devices", "/admins", "users passkeys invite"),
@@ -82,14 +86,16 @@ def pending_view(saver: Autosaver, yaml_dirty: bool) -> dict[str, Any]:
 
 @router.get("/pending")
 async def get_pending(
-    session: SessionDep, saver: Autosaver = Depends(_autosaver)  # noqa: B008
+    session: SessionDep,
+    saver: Autosaver = Depends(_autosaver),  # noqa: B008
 ) -> dict[str, Any]:
     return pending_view(saver, compute_registry_diff(session).dirty)
 
 
 @router.post("/pending/retry")
 async def retry_pending(
-    admin: CurrentAdmin, saver: Autosaver = Depends(_autosaver)  # noqa: B008
+    admin: CurrentAdmin,
+    saver: Autosaver = Depends(_autosaver),  # noqa: B008
 ) -> dict[str, Any]:
     await saver.run_once(actor=admin.username)
     with session_scope() as session:

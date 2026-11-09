@@ -3,7 +3,7 @@
 A *connection* is one system the orchestrator talks to: a Proxmox cluster, a Proxmox Backup
 Server, Traefik Manager, a Portainer, Home Assistant, an MQTT broker, an alert channel, the SSH
 settings. They used to be `.env` keys, one of each. They now live in **`config/connections.yaml`**,
-which you edit from the dashboard (**Connections**) or with `orchestrator-cli connections`, and
+which you edit from the dashboard (**Sources**, Notifications and System) or with `orchestrator-cli connections`, and
 which applies **without a restart**. A kind can exist more than once where that makes sense
 (today: Portainer), so two Portainers are two connections.
 
@@ -40,26 +40,19 @@ connections:
 ```
 
 Edit it by hand if you like: the running orchestrator notices the change within seconds. A file
-that cannot be read does not take anything down — the error is shown on the Connections page and
+that cannot be read does not take anything down — the error is shown on Sources and
 the previous settings stay in force.
 
 ## Where it lives in the dashboard
 
-**Settings → Connections** (`/infra/connections`) lists every connection grouped by what it is
-for (machines and backups, containers, proxy, alerts), one row per *connection* (a Proxmox, each
-Portainer, PBS, Traefik Manager...), never the guests, stacks or containers inside it. Each row
-says whether it answers (reachable / unreachable / off / not filled in / not checked in dry-run),
-with **Open**, **Edit** (a drawer built from the kind's fields, with **Test**) and a menu (test,
-make default, delete). **Test all** checks them side by side; the flat command line equivalent
-is still `orchestrator-cli check`. The old `/infra` overview redirects here, and the guests list
-is on **Nodes & guests** (`/infra/guests` redirects there).
+Every connection that is a *source* (Proxmox, PBS, Portainer, Traefik Manager, the Traefik API,
+the power manager, Home Assistant) has its own page under **Sources** (`/sources/<id>`): its data,
+its **Settings** tab (short cards, each saved on its own) and its raw API data. **All sources**
+(`/sources`) lists them with their status, adds new ones and moves `.env` values into the file.
+See [sources.md](sources.md).
 
-**Open** on a card is the connection's own page (`/infra/connections/<id>`): what is up inside it.
-For Portainer its environments (up or down, running and stopped containers, stacks) with a button
-into the Portainer page already set to that instance; for Proxmox its nodes (in the cluster? own
-API answering? version, latency) and how many guests run, with a button to Nodes & guests; for
-PBS the datastore usage and a button to the Snapshots tab of Backups; for Traefik Manager how many routes it knows; for
-the power manager its targets. `/connections` redirects to the Connections page.
+The alert channels (ntfy, e-mail, webhook) are set up on **Notifications**, in its Channels
+card; the SSH and host runner settings on **System**. Both open the same drawer.
 
 ## Editing
 
@@ -106,7 +99,7 @@ and MCP all take the connection to look at. See [portainer.md](portainer.md).
 ## Moving over from `.env`
 
 Nothing breaks on upgrade: a kind that is **not** in the file keeps being read from `.env` (the
-Connections page shows those as *from .env*). Once a kind is in the file, the file owns it and its
+Sources page shows those as *.env*). Once a kind is in the file, the file owns it and its
 `.env` keys are ignored.
 
 * **Move them**: the *Move them into the file* button (or `orchestrator-cli connections

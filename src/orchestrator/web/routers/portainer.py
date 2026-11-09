@@ -158,7 +158,7 @@ def _container_view(
 
 @api.get("/instances")
 async def instances(adapters: AdaptersDep) -> list[dict[str, Any]]:
-    """The Portainer connections (Connections page): what the page's picker offers."""
+    """The Portainer connections (a source): what the page's picker offers."""
     return [
         {
             "id": a.instance_id,

@@ -67,7 +67,7 @@ def client(app: Any, monkeypatch: pytest.MonkeyPatch) -> Any:
         yield c
 
 
-@pytest.mark.parametrize("path", ["/infra", "/infra/guests", "/infra/snapshots"])
+@pytest.mark.parametrize("path", ["/infra/guests", "/infra/snapshots"])
 def test_pages_require_admin(app: Any, path: str) -> None:
     with TestClient(app) as client:
         r = client.get(path, follow_redirects=False)
@@ -75,7 +75,7 @@ def test_pages_require_admin(app: Any, path: str) -> None:
     assert r.headers["location"].startswith("/login")
 
 
-@pytest.mark.parametrize("path", ["/infra", "/infra/guests", "/infra/snapshots"])
+@pytest.mark.parametrize("path", ["/infra/guests", "/infra/snapshots"])
 def test_pages_render_shared_chrome(client: TestClient, path: str) -> None:
     r = client.get(path)
     assert r.status_code == 200, r.text
@@ -84,10 +84,10 @@ def test_pages_render_shared_chrome(client: TestClient, path: str) -> None:
     assert '<aside class="sidebar">' in r.text
 
 
-def test_connections_page_checks_every_connection(client: TestClient) -> None:
-    r = client.get("/infra", follow_redirects=False)
-    assert r.headers["location"] == "/infra/connections"
-    assert '"/api/infra/overview"' in client.get("/static/connections.js").text
+def test_connectivity_lives_on_sources(client: TestClient) -> None:
+    assert client.get("/infra", follow_redirects=False).status_code == 404
+    assert client.get("/api/infra/overview").status_code == 404
+    assert '"/api/sources"' in client.get("/static/dashboard.js").text
 
 
 def test_guests_are_on_nodes_and_guests(client: TestClient) -> None:
