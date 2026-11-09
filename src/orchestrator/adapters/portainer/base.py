@@ -347,6 +347,11 @@ class PortainerAdapter(ABC):
         """The tags images named ``repo`` have on this environment."""
         raise AdapterRequestError("listing images is not supported here")
 
+    async def docker_list(self, endpoint_id: int, what: str) -> list[dict[str, Any]]:
+        """Docker's own list of ``images``, ``volumes`` or ``networks`` on one environment
+        (read only, as Docker answers it)."""
+        raise AdapterRequestError(f"listing {what} is not supported here")
+
     async def remove_image(self, endpoint_id: int, ref: str) -> None:
         """Remove the name ``ref`` (repo:tag); the image goes with its last name."""
         raise AdapterRequestError("removing images is not supported here")

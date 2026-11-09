@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 {% block title %}homelab-orchestrator — {{ name }}{% endblock %}
-{% block crumbs %}Infrastructure / <a href="/portainer">Containers</a> / <span class="here">{{ name }}</span>{% endblock %}
+{% block crumbs %}<a href="/sources">Sources</a> / {{ source.connector.group }} / <a href="{{ source.href }}?tab=stacks">{{ source.name }}</a> / <span class="here">{{ name }}</span>{% endblock %}
 {% block content %}
 <div class="page-header svc-head">
   <h1 id="stk-name">{{ name }}</h1>

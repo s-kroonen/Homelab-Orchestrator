@@ -747,6 +747,15 @@ class LivePortainerAdapter(PortainerAdapter):
                     out.append(tag)
         return sorted(set(out))
 
+    async def docker_list(self, endpoint_id: int, what: str) -> list[dict[str, Any]]:
+        path = {"images": "images/json", "volumes": "volumes", "networks": "networks"}.get(what)
+        if path is None:
+            raise AdapterRequestError(f"there is no Docker list called {what!r}")
+        raw = await self._json(f"/api/endpoints/{endpoint_id}/docker/{path}")
+        if what == "volumes" and isinstance(raw, dict):
+            raw = raw.get("Volumes") or []
+        return [x for x in raw if isinstance(x, dict)] if isinstance(raw, list) else []
+
     async def remove_image(self, endpoint_id: int, ref: str) -> None:
         self._writable()
         await self._request(f"/api/endpoints/{endpoint_id}/docker/images/{ref}", method="DELETE")

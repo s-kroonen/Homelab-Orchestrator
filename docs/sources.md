@@ -77,6 +77,6 @@ A source's own call that fails answers `502` with what went wrong; a switched-of
 
 ## Being built
 
-Sources replaces the Connections page (gone, without a redirect). The kind-wide pages (Nodes &
-guests, Containers, Proxy hosts and the Pull page, [pull.md](pull.md)) move into their sources one
-kind at a time, and go when their kind has moved.
+Sources replaces the Connections and Containers pages (gone, without a redirect). The other
+kind-wide pages (Nodes & guests, Proxy hosts and the Pull page, [pull.md](pull.md)) move into
+their sources one kind at a time, and go when their kind has moved.

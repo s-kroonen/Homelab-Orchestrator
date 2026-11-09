@@ -252,14 +252,20 @@ def _stack_ref(svc: Service) -> dict[str, Any] | None:
 
 
 def stack_ref(instance: str, endpoint: int, name: str) -> dict[str, Any]:
+    """Where a stack's page is: under its Portainer source (a link naming no Portainer is on
+    the default one)."""
     from urllib.parse import quote
 
-    path = f"/portainer/{endpoint}/{quote(name, safe='')}"
+    from orchestrator.connectors.registry import default_source
+
+    if not instance:
+        found = default_source("portainer")
+        instance = found.id if found is not None else "portainer"
     return {
         "instance": instance,
         "endpoint": endpoint,
         "name": name,
-        "href": path + (f"?instance={quote(instance, safe='')}" if instance else ""),
+        "href": f"/sources/{quote(instance, safe='')}/stacks/{endpoint}/{quote(name, safe='')}",
     }
 
 

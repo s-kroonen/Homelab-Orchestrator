@@ -153,3 +153,56 @@ def test_channels_and_ssh_are_edited_where_they_are_used(client: TestClient) -> 
     assert "conn_drawer.js" in system and 'id="ssh-facts"' in system
     assert "window.ConnDrawer.open" in client.get("/static/notifications.js").text
     assert "window.ConnDrawer.open" in client.get("/static/system.js").text
+
+
+def _portainer(client: TestClient, ident: str) -> None:
+    r = client.post(
+        "/api/connections",
+        json={
+            "kind": "portainer",
+            "id": ident,
+            "name": ident,
+            "settings": {"url": f"https://{ident}.example.lan:9443"},
+            "secrets": {"api_key": "ptr-key"},
+        },
+    )
+    assert r.status_code == 201, r.text
+
+
+def test_a_portainer_has_its_stacks_containers_and_docker_lists(client: TestClient) -> None:
+    """OR-79: Containers became tabs of each Portainer's own page; stacks open under it."""
+    _portainer(client, "home")
+    _portainer(client, "offsite")
+    d = client.get("/api/sources/home").json()
+    assert [t["key"] for t in d["tabs"]] == [
+        "overview",
+        "environments",
+        "stacks",
+        "containers",
+        "images",
+        "volumes",
+        "networks",
+        "settings",
+        "raw",
+    ]
+    assert d["resources"]["containers"]["view"] == "portainer.containers"
+    page = client.get("/sources/home")
+    assert "source_portainer.js" in page.text
+
+    for ident in ("home", "offsite"):
+        rows = client.get(f"/api/sources/{ident}/resources/containers").json()["rows"]
+        assert rows and all(r["stack_href"].startswith(f"/sources/{ident}/stacks/") for r in rows)
+        assert all({"running", "stopped"} & set(r["chips"]) for r in rows)
+        stacks = client.get(f"/api/sources/{ident}/resources/stacks").json()["rows"]
+        assert stacks and all(s["href"].startswith(f"/sources/{ident}/stacks/") for s in stacks)
+    for key in ("images", "volumes", "networks"):
+        rows = client.get(f"/api/sources/home/resources/{key}").json()["rows"]
+        assert rows and len({r["id"] for r in rows}) == len(rows), key
+
+    stack = stacks[0]
+    html = client.get(stack["href"]).text
+    assert 'href="/sources/offsite?tab=stacks"' in html and "stack.js" in html
+    assert '"instance": "offsite"' in html
+    assert client.get("/sources/nope/stacks/1/x").status_code == 404
+    _pve(client, "cluster-a", "10.0.0.10")
+    assert client.get("/sources/cluster-a/stacks/1/x").status_code == 404  # not a Portainer

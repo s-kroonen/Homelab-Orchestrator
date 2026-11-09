@@ -267,12 +267,162 @@ async def _pt_environments(ctx: SourceCtx) -> list[dict[str, Any]]:
     ]
 
 
+def _pt_links(ctx: SourceCtx) -> dict[tuple[str, int, str], list[str]]:
+    """(stack | container, environment, name) -> the services linked to it on this Portainer
+    (a link naming no connection is on the default one)."""
+    from sqlmodel import Session, select
+
+    from orchestrator.db.models import Service
+    from orchestrator.db.session import get_engine
+
+    default = getattr(ctx.adapters, "default_portainer", "") if ctx.adapters else ""
+    out: dict[tuple[str, int, str], list[str]] = {}
+    with Session(get_engine()) as session:
+        for svc in session.exec(select(Service)).all():
+            cfg = svc.controller or {}
+            if cfg.get("type") != "portainer":
+                continue
+            if (str(cfg.get("instance") or "") or default) != ctx.conn.id:
+                continue
+            try:
+                eid = int(cfg["endpoint"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            for kind in ("stack", "container"):
+                if cfg.get(kind):
+                    out.setdefault((kind, eid, str(cfg[kind]).lower()), []).append(svc.slug)
+    return out
+
+
+async def _pt_up_envs(ctx: SourceCtx) -> list[Any]:
+    """The environments that can be read now (down ones are left out, not shown as empty)."""
+    return [e for e in await ctx.adapter.list_environments() if e.status != "down"]
+
+
+def _stack_href(ctx: SourceCtx, eid: int, name: str | None) -> str:
+    from urllib.parse import quote
+
+    return f"/sources/{quote(ctx.conn.id)}/stacks/{eid}/{quote(name, safe='') if name else '-'}"
+
+
+async def _pt_containers(ctx: SourceCtx) -> list[dict[str, Any]]:
+    import asyncio
+
+    from orchestrator.adapters.portainer.links import container_url
+
+    envs = await _pt_up_envs(ctx)
+    links = _pt_links(ctx)
+    per_env = await asyncio.gather(
+        *(ctx.adapter.list_containers(e.id) for e in envs), return_exceptions=True
+    )
+    rows: list[dict[str, Any]] = []
+    for env, boxes in zip(envs, per_env, strict=True):
+        if isinstance(boxes, BaseException):
+            continue
+        for c in boxes:
+            linked = links.get(("container", env.id, c.name.lower())) or links.get(
+                ("stack", env.id, (c.stack or "").lower()), []
+            )
+            state = "unhealthy" if c.state == "running" and c.health == "unhealthy" else c.state
+            exit_code = re.search(r"Exited \((\d+)\)", c.status_text or "")
+            chips = ["running" if c.state == "running" else "stopped"]
+            if c.health == "unhealthy":
+                chips.append("unhealthy")
+            if not linked:
+                chips.append("unlinked")
+            rows.append(
+                {
+                    "id": f"{env.id}:{c.id}",
+                    "ref": c.id,
+                    "name": c.name,
+                    "stack": c.stack or "",
+                    "stack_href": _stack_href(ctx, env.id, c.stack),
+                    "endpoint_id": env.id,
+                    "environment": env.name,
+                    "image": c.image,
+                    "state": state,
+                    "state_text": f"{state} ({exit_code.group(1)})" if exit_code else state,
+                    "status_text": c.status_text,
+                    "open_url": container_url(ctx.adapter.base_url, env.id, c.id),
+                    "services": linked,
+                    "service": linked[0] if linked else "",
+                    "chips": chips,
+                }
+            )
+    return rows
+
+
+async def _pt_stacks(ctx: SourceCtx) -> list[dict[str, Any]]:
+    listing = await ctx.adapter.list_stacks()
+    up = {e.id: e.name for e in await _pt_up_envs(ctx)}
+    links = _pt_links(ctx)
+    rows = []
+    for s in listing.stacks:
+        if s.endpoint_id not in up or s.endpoint_id in listing.errors:
+            continue
+        linked = links.get(("stack", s.endpoint_id, s.name.lower()), [])
+        rows.append(
+            {
+                "id": f"{s.endpoint_id}/{s.name}",
+                "name": s.name,
+                "href": _stack_href(ctx, s.endpoint_id, s.name),
+                "environment": up[s.endpoint_id],
+                "state": s.status,
+                "type": s.type,
+                "service": linked[0] if linked else "",
+                "chips": [s.status] + ([] if linked else ["unlinked"]),
+            }
+        )
+    return rows
+
+
+def _docker_rows(what: str) -> Any:
+    async def fetch(ctx: SourceCtx) -> list[dict[str, Any]]:
+        import asyncio
+
+        envs = await _pt_up_envs(ctx)
+        got = await asyncio.gather(
+            *(ctx.adapter.docker_list(e.id, what) for e in envs), return_exceptions=True
+        )
+        rows: list[dict[str, Any]] = []
+        for env, items in zip(envs, got, strict=True):
+            if isinstance(items, BaseException):
+                continue
+            for x in items:
+                labels = x.get("Labels") or {}
+                project = labels.get("com.docker.compose.project", "") if labels else ""
+                if what == "images":
+                    tags = [t for t in x.get("RepoTags") or [] if t != "<none>:<none>"]
+                    name = tags[0] if tags else str(x.get("Id", ""))[7:19] or "untagged"
+                    used = x.get("Containers")
+                    row = {
+                        "name": name,
+                        "size": x.get("Size"),
+                        "used": used if isinstance(used, int) and used >= 0 else None,
+                        "chips": [] if tags else ["dangling"],
+                    }
+                elif what == "volumes":
+                    name = str(x.get("Name", ""))
+                    row = {"name": name, "driver": x.get("Driver", ""), "stack": project}
+                    row["chips"] = [] if project else ["loose"]
+                else:
+                    name = str(x.get("Name", ""))
+                    row = {"name": name, "driver": x.get("Driver", ""), "stack": project}
+                    row["chips"] = ["builtin"] if name in ("bridge", "host", "none") else []
+                row |= {"id": f"{env.id}:{x.get('Id') or name}", "environment": env.name}
+                rows.append(row)
+        return rows
+
+    return fetch
+
+
 class PortainerConnector(Connector):
     kind = "portainer"
     title = "Portainer"
     group = "Portainer"
     family = "apps"
     blurb = "environments, stacks, containers"
+    script = "source_portainer.js"
     resources = (
         Resource(
             "environments",
@@ -283,9 +433,84 @@ class PortainerConnector(Connector):
                 Column("state", "State", "pill"),
                 Column("stacks", "Stacks", "num"),
                 Column("running", "Running", "num"),
+                Column("stopped", "Stopped", "num"),
             ),
             _pt_environments,
             chips=(Chip("down", "Down"),),
+        ),
+        Resource(
+            "stacks",
+            "Stacks",
+            (
+                Column("name", "Stack"),
+                Column("environment", "Environment"),
+                Column("state", "State", "pill"),
+                Column("service", "Service"),
+            ),
+            _pt_stacks,
+            chips=(
+                Chip("active", "Running"),
+                Chip("inactive", "Stopped"),
+                Chip("unlinked", "Not linked"),
+            ),
+            view="portainer.stacks",
+        ),
+        Resource(
+            "containers",
+            "Containers",
+            (
+                Column("name", "Container"),
+                Column("stack", "Stack"),
+                Column("environment", "Environment"),
+                Column("image", "Image", "mono"),
+                Column("state", "State", "pill"),
+                Column("service", "Service"),
+                Column("status_text", "Up"),
+            ),
+            _pt_containers,
+            chips=(
+                Chip("running", "Running"),
+                Chip("stopped", "Stopped"),
+                Chip("unhealthy", "Unhealthy"),
+                Chip("unlinked", "Not linked"),
+            ),
+            view="portainer.containers",
+        ),
+        Resource(
+            "images",
+            "Images",
+            (
+                Column("name", "Image", "mono"),
+                Column("environment", "Environment"),
+                Column("size", "Size", "bytes"),
+                Column("used", "Containers", "num"),
+            ),
+            _docker_rows("images"),
+            chips=(Chip("dangling", "Untagged"),),
+        ),
+        Resource(
+            "volumes",
+            "Volumes",
+            (
+                Column("name", "Volume", "mono"),
+                Column("environment", "Environment"),
+                Column("stack", "Stack"),
+                Column("driver", "Driver"),
+            ),
+            _docker_rows("volumes"),
+            chips=(Chip("loose", "In no stack"),),
+        ),
+        Resource(
+            "networks",
+            "Networks",
+            (
+                Column("name", "Network", "mono"),
+                Column("environment", "Environment"),
+                Column("stack", "Stack"),
+                Column("driver", "Driver"),
+            ),
+            _docker_rows("networks"),
+            chips=(Chip("builtin", "Built in"),),
         ),
     )
     raw = (

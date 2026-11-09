@@ -636,17 +636,18 @@ def test_the_api_and_page_need_a_login() -> None:
     with TestClient(create_app()) as anon:
         assert anon.get("/api/portainer/status").status_code == 401
         assert anon.get("/api/portainer/endpoints/1/containers/x/logs").status_code == 401
-        r = anon.get("/portainer", follow_redirects=False)
+        r = anon.get("/sources/portainer/stacks/1/dev", follow_redirects=False)
         assert r.status_code == 303 and r.headers["location"].startswith("/login")
 
 
-def test_the_page_renders_and_is_in_the_nav(client: TestClient) -> None:
-    r = client.get("/portainer")
-    assert r.status_code == 200 and 'id="stacks"' in r.text and "/static/portainer.js" in r.text
-    js = client.get("/static/portainer.js").text
-    assert "/api/portainer/stacks" in js and "pageOf" in js  # a row opens the stack page
-    assert 'href="/portainer"' in r.text
-    assert client.get("/static/portainer.js").status_code == 200
+def test_stacks_and_containers_live_under_their_source(client: TestClient) -> None:
+    """The Containers page is gone (OR-79): a Portainer's stacks and containers are tabs of its
+    source page, and a row opens the stack under that source."""
+    assert client.get("/portainer", follow_redirects=False).status_code == 404
+    assert client.get("/static/portainer.js").status_code == 404
+    js = client.get("/static/source_portainer.js").text
+    assert '"portainer.stacks"' in js and '"portainer.containers"' in js
+    assert "/api/portainer/stacks" in js and '"/stacks/"' in js
 
 
 def test_connectivity_rows_list_portainer_and_its_environments(client: TestClient) -> None:

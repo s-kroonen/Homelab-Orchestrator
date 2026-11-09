@@ -102,7 +102,6 @@ NAV_GROUPS = [
         [
             ("/nodes", "Nodes &amp; guests"),
             ("/proxy-hosts", "Proxy hosts"),
-            ("/portainer", "Containers"),
         ],
     ),
     ("Activity", [("/activity", "Activity"), ("/traffic", "Traffic")]),

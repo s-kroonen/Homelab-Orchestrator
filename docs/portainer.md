@@ -1,11 +1,14 @@
 # Portainer: what it has, read live
 
-The **Containers** page (Infrastructure → Containers, `/portainer`), `orchestrator-cli portainer ...`
-and `/api/portainer` show what Portainer knows: environments, stacks, containers, logs and stats.
+Each Portainer's own page under **Sources** (`/sources/<id>`, see [sources.md](sources.md)),
+`orchestrator-cli portainer ...` and `/api/portainer` show what Portainer knows: environments,
+stacks, containers, images, volumes, networks, logs and stats.
 
-On the page the stacks are a table (filter, chips for running / stopped / partly running / not
-linked, an environment and, with several Portainers, a Portainer picker). Click a stack to see
-its containers inside it, each with its image, state, published ports, CPU and memory, **Logs**
+The source page has a tab each for **Environments**, **Stacks**, **Containers**, **Images**,
+**Volumes** and **Networks**. Stacks are a table (filter, chips for running / stopped / partly
+running / not linked, an environment, + New stack); Containers are every container by environment
+(chips for running / stopped / unhealthy / not linked; start, stop, restart, open in Portainer).
+Click a stack to see its containers inside it, each with its image, state, published ports, CPU and memory, **Logs**
 (a drawer: lines, follow, timestamps, wrap, filter, download) and **Restart**, the rest in ⋯.
 A stack's ⋯ has Start, Stop, Restart, Link to a service, Open in Portainer and Delete; select
 several to start, stop or restart them together. **+ New stack** opens a drawer that previews the
@@ -47,9 +50,9 @@ configured is a note, not a failure.
 
 ## What is shown
 
-The **Containers** page lists every stack on every Portainer connection (one "(no stack)" row per
-environment for containers outside any stack). A row opens the **stack page**
-(`/portainer/<environment>/<stack>`), built to the Stack and StackEnv wireframes:
+A Portainer's **Stacks** tab lists its stacks (one "(no stack)" row per environment for
+containers outside any stack). A row opens the **stack page** under that Portainer
+(`/sources/<portainer>/stacks/<environment>/<stack>`), built to the Stack and StackEnv wireframes:
 
 * **Containers**: one row each (image, state, uptime, ports, CPU and memory, its check on the
   linked sub-service). Click one for its details (image, start, restart policy, volumes, networks,

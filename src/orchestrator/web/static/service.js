@@ -776,7 +776,7 @@
         }));
     }
     fill($("#stack-actions"), 
-      el("a", { href: "/portainer?q=" + enc(ctl().stack), style: { fontSize: "13px" } }, "Logs"),
+      V.row && V.row.stack ? el("a", { href: V.row.stack.href, style: { fontSize: "13px" } }, "Logs") : null,
       menuButton(() => [
         has ? { label: "Run the guards only", onClick: () => deployNow({ guards: true, guards_only: true }) } : null,
         has ? { label: "Redeploy without guards…", onClick: unguardedDrawer } : null,

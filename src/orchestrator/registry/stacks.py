@@ -6,7 +6,7 @@ the secrets masked, then a confirmed create); deleting asks for the stack's name
 something linked to it is still switched on. Environment values and Git passwords go straight to
 Portainer and are never stored, logged or audited here.
 
-The stack page (``/portainer/<environment>/<stack>``) also reads and changes a stack's
+The stack page (``/sources/<portainer>/stacks/<environment>/<stack>``) also reads and changes a stack's
 environment: values whose name looks secret are only sent when someone reveals one (audited by
 name), and a change redeploys the stack (audited by names: added, changed, removed).
 """

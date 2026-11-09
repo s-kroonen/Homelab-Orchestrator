@@ -297,10 +297,9 @@ def test_the_page_renders_and_the_old_pages_point_at_it(client: TestClient) -> N
     # they fill (Import from Proxmox on Nodes & guests, the Import tab on Proxy hosts).
     assert 'href="/pull#proxmox"' in client.get("/nodes").text
     assert "/pull#" in client.get("/proxy-hosts").text
-    # Containers links a stack to a service through Data sources (its script builds the link)
-    assert "/pull#portainer" in client.get("/static/portainer.js").text
+    # a Portainer source's Stacks tab links a stack to a service through the pull page
+    assert "/pull#portainer" in client.get("/static/source_portainer.js").text
     assert "resync-btn" not in client.get("/proxy-hosts").text
-    assert 'id="adopt"' not in client.get("/portainer").text
 
 
 def test_format_has_its_own_page(client: TestClient) -> None:

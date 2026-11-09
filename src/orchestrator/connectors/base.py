@@ -147,6 +147,9 @@ class Connector:
 
     resources: tuple[Resource, ...] = ()
     raw: tuple[RawEndpoint, ...] = ()
+    #: A static file with this kind's own tab modules (``window.SourceViews``), loaded before
+    #: the source page's script. Blank: every tab uses the generic views.
+    script: str = ""
 
     def tabs(self) -> list[Tab]:
         return [

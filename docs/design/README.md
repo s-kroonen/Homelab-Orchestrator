@@ -69,7 +69,7 @@ containers, proxy hosts. Create, edit, delete and bulk actions happen there, for
 * Old URLs do not redirect.
 * Actions across several sources get their own Bulk actions page (later).
 
-Being built: until each step lands, the pages it replaces (Nodes & guests, Containers, Proxy
+Being built: until each step lands, the pages it replaces (Nodes & guests, Proxy
 hosts) still exist; each is removed, with its wireframe, in the step that
 replaces it.
 
@@ -151,7 +151,6 @@ Something that is off on purpose (a node asleep, its services) is **off**, never
 | Map: one row per node, shared backups, selection sidebar | [PNG](wireframes/Map.png) · [HTML](wireframes/Map.html) |
 | Traffic: one page, countries included | [PNG](wireframes/Traffic.png) · [HTML](wireframes/Traffic.html) |
 | Activity: one feed, run details in the drawer | [PNG](wireframes/Activity.png) · [HTML](wireframes/Activity.html) |
-| Containers: every stack, opens its stack page *(replaced by Sources)* | [PNG](wireframes/Containers.png) · [HTML](wireframes/Containers.html) |
 | Stack: containers, details and logs | [PNG](wireframes/Stack.png) · [HTML](wireframes/Stack.html) |
 | Stack: environment (edit, redeploy) and settings | [PNG](wireframes/StackEnv.png) · [HTML](wireframes/StackEnv.html) |
 | Service: Sub-services tab (parent) | [PNG](wireframes/ServiceSubs.png) · [HTML](wireframes/ServiceSubs.html) |
@@ -168,7 +167,7 @@ Something that is off on purpose (a node asleep, its services) is **off**, never
 | Source page: Proxmox overview | [PNG](wireframes/SourceProxmox.png) · [HTML](wireframes/SourceProxmox.html) |
 | Source page: Proxmox guests (bulk bar, links to other sources) | [PNG](wireframes/SourceGuests.png) · [HTML](wireframes/SourceGuests.html) |
 | Source page: Portainer containers by environment | [PNG](wireframes/SourcePortainer.png) · [HTML](wireframes/SourcePortainer.html) |
-| A stack under its source (where a deploy alert lands) | [PNG](wireframes/SourceStack.png) · [HTML](wireframes/SourceStack.html) |
+| A stack under its source (where a deploy alert lands): its place and header; the tabs are the Stack wireframes above | [PNG](wireframes/SourceStack.png) · [HTML](wireframes/SourceStack.html) |
 | Source page: a proxy's proxy hosts (create, edit, link) | [PNG](wireframes/SourceProxy.png) · [HTML](wireframes/SourceProxy.html) |
 | Source page: a bare-metal machine over SSH | [PNG](wireframes/SourceMachine.png) · [HTML](wireframes/SourceMachine.html) |
 | Source page: Settings tab | [PNG](wireframes/SourceSettings.png) · [HTML](wireframes/SourceSettings.html) |

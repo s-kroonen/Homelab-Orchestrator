@@ -24,6 +24,7 @@ validates, encrypts, audits and applies without a restart.
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
@@ -116,6 +117,55 @@ async def source_page(
         request,
         "source.html",
         {"admin": admin, "source": source, "initial": _detail(session, settings, source)},
+    )
+
+
+@pages.get("/sources/{ident}/stacks/{endpoint_id}/{name}", response_model=None)
+async def stack_page(
+    ident: str,
+    endpoint_id: int,
+    name: str,
+    request: Request,
+    session: SessionDep,
+    adapters: AdaptersDep,
+) -> HTMLResponse | RedirectResponse:
+    """One stack under its Portainer (the SourceStack wireframe): its containers, logs,
+    environment, settings and history, read live by the page. ``-`` is the containers of the
+    environment that are in no stack."""
+    admin = get_current_admin(request, session)
+    if admin is None:
+        return login_redirect(request)
+    found = get_source(ident)
+    if found is not None and found.kind != "portainer":
+        raise HTTPException(status.HTTP_404_NOT_FOUND, f"{found.name} has no stacks")
+    adapter = adapters.portainer_for(ident) if found is None else None
+    if found is None and (adapter is None or adapter.instance_id != ident):
+        raise HTTPException(status.HTTP_404_NOT_FOUND, f"there is no Portainer called {ident!r}")
+    # a Portainer with no connection of its own (dry-run sample data) has no source page
+    source: Any = found or SimpleNamespace(
+        id=ident,
+        name=adapter.instance_name if adapter else ident,
+        href="/sources",
+        connector=SimpleNamespace(group="Portainer"),
+    )
+    loose = name == "-"
+    initial = {
+        "endpoint": endpoint_id,
+        "name": "" if loose else name,
+        "instance": source.id,
+        "source_name": source.name,
+        "source_href": source.href,
+        "back": f"{source.href}?tab=stacks" if found else "/sources",
+    }
+    return templates.TemplateResponse(
+        request,
+        "stack.html",
+        {
+            "admin": admin,
+            "initial": initial,
+            "source": source,
+            "name": "(no stack)" if loose else name,
+        },
     )
 
 

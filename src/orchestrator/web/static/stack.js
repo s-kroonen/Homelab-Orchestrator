@@ -50,11 +50,11 @@
     const pill = $("#stk-state"); pill.className = "pill " + st.cls; pill.textContent = st.label;
     if (!D) return;
     if (LOOSE) {
-      fill($("#stk-sub"), "Containers on Portainer environment " + (envName || I.endpoint) + " that are in no stack.");
-      clear($("#stk-actions")).append(el("a", { class: "btn secondary", href: "/portainer" }, "All stacks"));
+      fill($("#stk-sub"), "Containers on ", el("a", { href: I.source_href }, I.source_name), ", environment " + (envName || I.endpoint) + ", that are in no stack.");
+      clear($("#stk-actions")).append(el("a", { class: "btn secondary", href: I.back }, "All stacks"));
       return;
     }
-    fill($("#stk-sub"), "Portainer environment " + (envName || I.endpoint),
+    fill($("#stk-sub"), "on ", el("a", { href: I.source_href }, I.source_name), " · environment " + (envName || I.endpoint),
       L && L.parent ? [" on ", el("a", { href: "/services/" + enc(L.parent.slug) }, L.parent.name)] : "",
       D.git ? " · " + gitText(D.git) : D.managed ? " · " + (D.kind || "compose") : " · not created through Portainer",
       L ? [" · sub-service ", el("a", { href: "/services/" + enc(L.slug) }, L.name)] : [" · ", el("span", { class: "faint" }, "not linked to a service")]);
@@ -110,7 +110,7 @@
     try {
       const r = await window.apiFetch("DELETE", withQ(stackApi), { confirm_name: I.name, take_down: down.checked, remove_services: !keep.checked }, { suppressToast: true });
       toast("Deleted " + r.stack + " (volumes kept)." + (r.warnings.length ? " " + r.warnings.join(" ") : ""), "ok");
-      location.href = "/portainer";
+      location.href = I.back;
     } catch (e) { toast(e.message, "error"); }
   }
   async function containerAction(c, verb) {

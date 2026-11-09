@@ -36,7 +36,6 @@ PAGES: list[tuple[str, str, str]] = [
     ),
     ("Nodes & guests", "/nodes", "proxmox vm lxc guests power"),
     ("Proxy hosts", "/proxy-hosts", "traefik routes domains"),
-    ("Containers", "/portainer", "portainer stacks docker"),
     ("Backups", "/backup-policies", "pbs policies snapshots dumps"),
     ("Activity", "/activity", "runs log audit"),
     ("Traffic", "/traffic", "requests countries geo"),
