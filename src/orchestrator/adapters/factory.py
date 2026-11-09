@@ -48,11 +48,26 @@ class AdapterBundle:
     portainer: PortainerAdapter | None = None
     portainers: dict[str, PortainerAdapter] = field(default_factory=dict)
     default_portainer: str = ""
+    #: Adapters for the other enabled connections of a kind (a second Proxmox cluster, a second
+    #: proxy...), by connection id. The default one of each kind is the attribute above.
+    instances: dict[str, Any] = field(default_factory=dict)
+    #: Connection id -> kind attribute ("proxmox", "pbs", "proxy", "power") of the default ones.
+    defaults: dict[str, str] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if self.portainer is not None and not self.portainers:
             self.default_portainer = self.default_portainer or "portainer"
             self.portainers = {self.default_portainer: self.portainer}
+
+    def for_source(self, source_id: str) -> Any | None:
+        """The adapter of one source (a connection id), whatever its kind; None if there is
+        none (switched off, or not an adapter kind)."""
+        if source_id in self.portainers:
+            return self.portainers[source_id]
+        if source_id in self.instances:
+            return self.instances[source_id]
+        attr = self.defaults.get(source_id)
+        return getattr(self, attr) if attr else None
 
     def portainer_for(self, instance: str | None = None) -> PortainerAdapter | None:
         """The Portainer a connection id names (None/blank: the default one)."""
@@ -67,6 +82,8 @@ class AdapterBundle:
         await self.proxy.start()
         for adapter in self.portainers.values():
             await adapter.start()
+        for adapter in self.instances.values():
+            await adapter.start()
 
     async def stop_all(self) -> None:
         await self.power.stop()
@@ -74,6 +91,8 @@ class AdapterBundle:
         await self.pbs.stop()
         await self.proxy.stop()
         for adapter in self.portainers.values():
+            await adapter.stop()
+        for adapter in self.instances.values():
             await adapter.stop()
 
     async def reload(self, settings: Settings | None = None) -> None:
@@ -87,6 +106,7 @@ class AdapterBundle:
             fresh.pbs,
             fresh.proxy,
             *fresh.portainers.values(),
+            *fresh.instances.values(),
         ):
             await adapter.start()
         old: list[Any] = []
@@ -94,6 +114,9 @@ class AdapterBundle:
             handle = getattr(self, name)
             old.append(handle.swap(getattr(fresh, name)))
         old.extend(self.portainers.values())
+        old.extend(self.instances.values())
+        self.instances = fresh.instances
+        self.defaults = fresh.defaults
         self.portainers = fresh.portainers
         self.default_portainer = fresh.default_portainer
         self.portainer = fresh.portainers.get(fresh.default_portainer)
@@ -119,6 +142,8 @@ class _Raw:
     notifier: Notifier
     portainers: dict[str, PortainerAdapter]
     default_portainer: str
+    instances: dict[str, Any] = field(default_factory=dict)
+    defaults: dict[str, str] = field(default_factory=dict)
 
 
 def build_notifier(settings: Settings) -> Notifier:
@@ -167,71 +192,85 @@ def build_notifier(settings: Settings) -> Notifier:
     return MultiNotifier(channels)
 
 
-def _build_raw(settings: Settings) -> _Raw:
-
-    power: PowerAdapter
+def make_power(settings: Settings) -> PowerAdapter:
     if settings.resolve_adapter(settings.power_adapter) is AdapterMode.DRY_RUN:
-        power = DryRunPowerAdapter()
-    elif not MqttPowerAdapter.IMPLEMENTED:
-        # Phase 3 has not landed. Returning the stub here would raise from
-        # start() and crash-loop the container, taking Proxmox and PBS — which
-        # DO work — down with it. Substitute dry-run and say so loudly.
+        return DryRunPowerAdapter()
+    if not MqttPowerAdapter.IMPLEMENTED:
+        # Returning the stub here would raise from start() and crash-loop the container,
+        # taking Proxmox and PBS - which DO work - down with it. Substitute dry-run and say so.
         log.warning(
             "adapters.power.not_implemented",
             requested=settings.power_adapter,
             using="DryRunPowerAdapter",
             impact="Wake and power-off are logged no-ops. Backups against real "
             "Proxmox/PBS still work; nodes will not actually be powered on.",
-            fix="Lands in phase 3.",
         )
-        power = DryRunPowerAdapter()
-    else:
-        power = MqttPowerAdapter(settings)
+        return DryRunPowerAdapter()
+    return MqttPowerAdapter(settings)
 
-    proxmox: ProxmoxAdapter
+
+def make_proxmox(settings: Settings) -> ProxmoxAdapter:
     if settings.resolve_adapter(settings.proxmox_adapter) is AdapterMode.DRY_RUN:
-        proxmox = DryRunProxmoxAdapter()
-    else:
-        proxmox = LiveProxmoxAdapter(settings)
+        return DryRunProxmoxAdapter()
+    return LiveProxmoxAdapter(settings)
 
-    pbs: PbsAdapter
+
+def make_pbs(settings: Settings) -> PbsAdapter:
     if settings.resolve_adapter(settings.pbs_adapter) is AdapterMode.DRY_RUN:
-        pbs = DryRunPbsAdapter()
-    else:
-        pbs = LivePbsAdapter(settings)
+        return DryRunPbsAdapter()
+    return LivePbsAdapter(settings)
 
-    proxy: ProxyAdapter
+
+def make_proxy(settings: Settings) -> ProxyAdapter:
     if settings.resolve_adapter(settings.proxy_adapter) is AdapterMode.DRY_RUN:
-        proxy = DryRunProxyAdapter()
-    elif not settings.traefik_manager_url.strip():
-        # A live proxy_adapter needs TRAEFIK_MANAGER_URL to do anything at
-        # all — getting PROXY_ADAPTER and the URL in sync is an easy
-        # footgun: the operator sets PROXY_ADAPTER=traefik_manager but
-        # forgets the URL (or vice versa). Rather than handing back an
-        # adapter whose every call immediately degrades to "unconfigured"
-        # anyway (list_routes returns None, ensure/remove_maintenance_
-        # fallback return []), substitute dry-run and say so loudly — same
-        # "substitute + warn" convention MqttPowerAdapter.IMPLEMENTED uses
-        # above for a not-yet-landed power adapter. ORCHESTRATOR_PUBLIC_URL
-        # does NOT gate this: it only affects the maintenance-fallback
-        # write path, which already no-ops gracefully on its own when
-        # that's unset (see TraefikManagerProxyAdapter.
-        # ensure_maintenance_fallback) — drift detection and Resync work
-        # fine without it.
+        return DryRunProxyAdapter()
+    if not settings.traefik_manager_url.strip():
+        # A live proxy adapter without TRAEFIK_MANAGER_URL would degrade every call to
+        # "unconfigured": substitute dry-run and say so (same convention as power above).
         log.warning(
             "adapters.proxy.not_configured",
             requested=settings.proxy_adapter,
             using="DryRunProxyAdapter",
             impact="Drift detection reads as 'unknown', Resync answers 503, and "
-            "the maintenance-page fallback middleware is never injected. "
-            "Every other feature is unaffected.",
-            fix="Set TRAEFIK_MANAGER_URL (and ORCHESTRATOR_PUBLIC_URL, for the "
-            "maintenance-page fallback specifically).",
+            "the maintenance-page fallback middleware is never injected.",
+            fix="Set the Traefik Manager URL on the proxy's connection.",
         )
-        proxy = DryRunProxyAdapter()
-    else:
-        proxy = TraefikManagerProxyAdapter(settings)
+        return DryRunProxyAdapter()
+    return TraefikManagerProxyAdapter(settings)
 
+
+#: Kinds with one adapter per enabled connection: (bundle attribute, builder).
+MAKERS: dict[str, tuple[str, Any]] = {
+    "power": ("power", make_power),
+    "proxmox": ("proxmox", make_proxmox),
+    "pbs": ("pbs", make_pbs),
+    "proxy": ("proxy", make_proxy),
+}
+
+
+def _extra_instances(settings: Settings) -> tuple[dict[str, Any], dict[str, str]]:
+    """Adapters for the enabled connections that are not the default of their kind, and which
+    connection id each default attribute stands for."""
+    from orchestrator.connections import runtime
+
+    instances: dict[str, Any] = {}
+    defaults: dict[str, str] = {}
+    for kind, (attr, make) in MAKERS.items():
+        conns = runtime.instances_for(settings, kind)
+        chosen = runtime.pick_default(conns)
+        if chosen is not None:
+            defaults[chosen.id] = attr
+        for conn in conns:
+            if chosen is not None and conn.id != chosen.id:
+                instances[conn.id] = make(runtime.settings_for(settings, conn))
+    return instances, defaults
+
+
+def _build_raw(settings: Settings) -> _Raw:
+    power = make_power(settings)
+    proxmox = make_proxmox(settings)
+    pbs = make_pbs(settings)
+    proxy = make_proxy(settings)
     portainers, default_portainer = _build_portainers(settings)
 
     notifier = build_notifier(settings)
@@ -245,7 +284,10 @@ def _build_raw(settings: Settings) -> _Raw:
         notifier=type(notifier).__name__,
         dry_run_flag=settings.dry_run,
     )
-    return _Raw(power, proxmox, pbs, proxy, notifier, portainers, default_portainer)
+    instances, defaults = _extra_instances(settings)
+    return _Raw(
+        power, proxmox, pbs, proxy, notifier, portainers, default_portainer, instances, defaults
+    )
 
 
 def _build_portainers(settings: Settings) -> tuple[dict[str, PortainerAdapter], str]:
@@ -287,6 +329,8 @@ def build_adapters(settings: Settings | None = None) -> AdapterBundle:
         portainer=raw.portainers[raw.default_portainer],
         portainers=raw.portainers,
         default_portainer=raw.default_portainer,
+        instances=raw.instances,
+        defaults=raw.defaults,
     )
     set_shared_portainer(bundle)
     return bundle

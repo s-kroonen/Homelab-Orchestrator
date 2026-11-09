@@ -245,6 +245,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         log.error("vault.refused", error=str(exc))
         raise
     encrypt_task = asyncio.create_task(_encrypt_later(settings, log))
+    from orchestrator.connectors.ownership import claim_now
+
+    claim_now()  # nodes and proxy hosts from before sources had owners (OR-77)
     _announce_setup_link(settings, log)
 
     # Startup failures past this point must never be silent. uvicorn runs with

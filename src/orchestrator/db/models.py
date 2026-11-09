@@ -78,6 +78,9 @@ class Node(SQLModel, table=True):
     # not silently disable a wake-on-hit an operator deliberately turned on
     # at the proxy-host level.
     wake_on_hit_enabled: bool = Field(default=True)
+    #: The source (connection id) this node belongs to: its Proxmox cluster, or for a machine
+    #: without Proxmox its own source. Blank until claimed (connectors/ownership.py).
+    source_id: str = Field(default="", index=True)
     created_at: datetime = Field(default_factory=_utcnow)
     updated_at: datetime = Field(default_factory=_utcnow)
 
@@ -273,6 +276,8 @@ class ProxyHost(SQLModel, table=True):
     )
     hostname: str = Field(index=True)
     upstream: str = ""
+    #: The proxy (connection id) this host is pushed to. Blank until claimed.
+    source_id: str = Field(default="", index=True)
     router_provider: RouterProvider = Field(default=RouterProvider.TRAEFIK)
     extra: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))
     last_seen_at: datetime | None = None

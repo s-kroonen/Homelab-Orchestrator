@@ -78,8 +78,8 @@ class KindSpec:
     #: Settings attribute that picks live vs dry-run for this kind, if it has one, and the value
     #: that means live. Having an enabled connection is what chooses live now.
     selector: tuple[str, str] | None = None
-    #: May several be enabled at once? Today only Portainer can; the rest are one active
-    #: connection each (the model allows more - the multi-network step switches them on).
+    #: May several be enabled at once? Each one is a source with its own adapter (OR-77): the
+    #: default one stands in for code that names none.
     multi: bool = False
     #: A "notifier channel" kind: it is part of the combined notifier, not an adapter of its own.
     channel: bool = False
@@ -124,6 +124,7 @@ KINDS: tuple[KindSpec, ...] = (
         ),
         marker="host",
         selector=("proxmox_adapter", "live"),
+        multi=True,
     ),
     KindSpec(
         "pbs",
@@ -141,6 +142,7 @@ KINDS: tuple[KindSpec, ...] = (
         ),
         marker="host",
         selector=("pbs_adapter", "live"),
+        multi=True,
     ),
     KindSpec(
         "proxy",
@@ -179,6 +181,7 @@ KINDS: tuple[KindSpec, ...] = (
         ),
         marker="url",
         selector=("proxy_adapter", "traefik_manager"),
+        multi=True,
     ),
     KindSpec(
         "traefik_api",
@@ -212,6 +215,7 @@ KINDS: tuple[KindSpec, ...] = (
         ),
         marker="host",
         selector=("power_adapter", "mqtt"),
+        multi=True,
     ),
     KindSpec(
         "portainer",

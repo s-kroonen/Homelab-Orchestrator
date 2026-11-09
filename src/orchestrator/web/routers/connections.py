@@ -89,6 +89,9 @@ async def _apply(settings: Settings, adapters: AdaptersDep) -> None:
     """Put the file in force: settings first, then the adapters built from them."""
     current = reload_settings()
     await adapters.reload(current)
+    from orchestrator.connectors.ownership import claim_now
+
+    claim_now()  # a new default source claims the rows nobody owns yet
 
 
 def _kinds() -> list[dict[str, Any]]:

@@ -89,11 +89,14 @@ def test_validation_and_duplicates(client: TestClient) -> None:
     assert bad.status_code == 422
     r = client.post("/api/connections", json={"kind": "portainer", "id": "x"})
     assert r.status_code == 422 and "required" in r.json()["detail"]
-    # only one Proxmox may be on
+    # several Proxmox clusters may be on (each is a source); Home Assistant only once
     one = {"kind": "proxmox", "settings": {"host": "pve1", "token_id": "a@b!c"}}
     one["secrets"] = {"token_secret": "s"}
     assert client.post("/api/connections", json={**one, "id": "pve1"}).status_code == 201
-    r = client.post("/api/connections", json={**one, "id": "pve2"})
+    assert client.post("/api/connections", json={**one, "id": "pve2"}).status_code == 201
+    ha = {"kind": "haos", "settings": {"url": "http://ha"}, "secrets": {"token": "t"}}
+    assert client.post("/api/connections", json={**ha, "id": "ha1"}).status_code == 201
+    r = client.post("/api/connections", json={**ha, "id": "ha2"})
     assert r.status_code == 422
 
 
