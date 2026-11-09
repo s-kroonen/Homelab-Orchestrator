@@ -178,7 +178,7 @@
     const gate = V.health.guest;
     fill($("#facts"), facts([
       ["Runs on", isRoot()
-        ? [S.node ? el("a", { href: "/nodes?q=" + enc(S.node.name) }, S.node.name) : "no node", hasGuest() ? [" › ", S.guest_kind.toUpperCase() + " " + S.guest_id, gate ? [" ", el("span", { class: "pill " + (gate.guest_state === "running" ? "ok" : "off") }, gate.guest_state)] : ""] : ""]
+        ? [S.node ? el("a", { href: S.node.href || "/sources" }, S.node.name) : "no node", hasGuest() ? [" › ", S.guest_kind.toUpperCase() + " " + S.guest_id, gate ? [" ", el("span", { class: "pill " + (gate.guest_state === "running" ? "ok" : "off") }, gate.guest_state)] : ""] : ""]
         : [el("a", { href: "/services/" + enc(S.parent) }, S.parent), " (sub-service)"]],
       ["Address", ip.effective_ip ? [el("span", { class: "mono" }, ip.effective_ip), el("span", { class: "faint" }, " · " + (ip.effective_source_label || "") + (ip.ip_discovered_at && ip.effective_source !== "manual" ? " " + fmt.ago(ip.ip_discovered_at) : ""))] : el("span", { class: "faint" }, ip.has_guest ? "not found yet" : "none")],
       ["Proxy hosts", (S.proxy_hosts || []).length ? (S.proxy_hosts || []).map((h) => el("div", {}, el("a", { href: "/proxy-hosts?q=" + enc(h.hostname), class: "mono" }, h.hostname), " ", syncPill(h))) : el("span", { class: "faint" }, "none")],

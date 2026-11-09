@@ -206,3 +206,47 @@ def test_a_portainer_has_its_stacks_containers_and_docker_lists(client: TestClie
     assert client.get("/sources/nope/stacks/1/x").status_code == 404
     _pve(client, "cluster-a", "10.0.0.10")
     assert client.get("/sources/cluster-a/stacks/1/x").status_code == 404  # not a Portainer
+
+
+def test_two_proxmox_clusters_each_show_and_act_on_their_own(client: TestClient) -> None:
+    """OR-80: Nodes & guests became tabs of each Proxmox source; node and guest actions go to
+    the cluster that owns the node."""
+    from sqlmodel import Session
+
+    from orchestrator.adapters.proxmox.base import ClusterNode, ClusterStatus, Guest
+    from orchestrator.connectors.ownership import proxmox_for_node
+    from orchestrator.db.models import Node
+    from orchestrator.db.session import get_engine
+    from orchestrator.domain.enums import GuestKind
+
+    _pve(client, "cluster-a", "10.0.0.10", default=True)
+    _pve(client, "cluster-b", "10.0.1.10")
+    adapters = client.app.state.adapters  # type: ignore[attr-defined]
+    for ident, node, vmid in (("cluster-a", "node-a", 100), ("cluster-b", "node-c", 200)):
+        pve = adapters.for_source(ident)
+        pve.simulated_cluster = ClusterStatus(nodes=[ClusterNode(node, True)])
+        pve.simulated_guests = [
+            Guest(node=node, vmid=vmid, kind=GuestKind.VM, name=f"vm-{vmid}", status="running")
+        ]
+    with Session(get_engine()) as s:
+        s.add(Node(name="node-a"))  # unowned: the default cluster's
+        s.add(Node(name="node-c", source_id="cluster-b"))
+        s.commit()
+        assert proxmox_for_node(s, adapters, "node-c") is adapters.for_source("cluster-b")
+        assert proxmox_for_node(s, adapters, "node-a") is adapters.proxmox
+
+    def names(path: str) -> list[str]:
+        return [n["name"] for n in client.get(path).json()["nodes"]]
+
+    assert names("/api/views/nodes?source=cluster-a") == ["node-a"]
+    assert names("/api/views/nodes?source=cluster-b") == ["node-c"]
+    assert names("/api/infra/nodes/status?source=cluster-b") == ["node-c"]
+    guests = client.get("/api/infra/proxmox/guests?source=cluster-b").json()
+    assert [g["vmid"] for g in guests] == [200]
+    node_c = client.get("/api/views/nodes?source=cluster-b").json()["nodes"][0]
+    assert node_c["href"] == "/sources/cluster-b?tab=nodes"
+
+    d = client.get("/api/sources/cluster-a").json()
+    assert d["resources"]["guests"]["view"] == "proxmox.guests"
+    assert "source_proxmox.js" in client.get("/sources/cluster-a").text
+    assert client.get("/nodes", follow_redirects=False).status_code == 404

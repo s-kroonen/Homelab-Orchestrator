@@ -66,7 +66,7 @@
     empty: {
       title: "No services yet",
       text: "Import your Proxmox guests, or add a service by hand.",
-      action: el("a", { class: "btn small", href: "/nodes" }, "Import from Proxmox"),
+      action: el("a", { class: "btn small", href: "/pull#proxmox" }, "Import from Proxmox"),
     },
   });
 

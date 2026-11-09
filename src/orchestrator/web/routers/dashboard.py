@@ -30,6 +30,7 @@ from sqlmodel import Session, col, select
 from orchestrator.adapters.errors import AdapterError
 from orchestrator.audit import log as audit
 from orchestrator.config import get_settings
+from orchestrator.connectors.ownership import node_href
 from orchestrator.db.models import (
     BackupPolicy,
     HealthScanSample,
@@ -242,6 +243,7 @@ def _node_dict(node: Node) -> dict[str, Any]:
         "notes": node.notes,
         "address": node.address,
         "wake_on_hit_enabled": node.wake_on_hit_enabled,
+        "href": node_href(node),
     }
 
 

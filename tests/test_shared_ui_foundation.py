@@ -82,14 +82,12 @@ def client(app: Any, monkeypatch: pytest.MonkeyPatch) -> Any:
 ADMIN_PAGES = [
     "/",
     "/services",
-    "/nodes",
     "/admins",
     "/backup-policies",
     "/proxy-hosts",
     "/traffic",
     "/activity",
     "/sources",
-    "/infra/guests",
     "/infra/snapshots",
 ]
 
@@ -100,7 +98,6 @@ NAV_GROUPS = [
     (
         "Infrastructure",
         [
-            ("/nodes", "Nodes &amp; guests"),
             ("/proxy-hosts", "Proxy hosts"),
         ],
     ),
@@ -139,7 +136,6 @@ def test_admin_pages_share_one_grouped_sidebar(client: TestClient) -> None:
     for path, current_href in [
         ("/", "/"),
         ("/services", "/services"),
-        ("/nodes", "/nodes"),
         ("/admins", "/admins"),
         ("/backup-policies", "/backup-policies"),
         ("/proxy-hosts", "/proxy-hosts"),
@@ -147,8 +143,7 @@ def test_admin_pages_share_one_grouped_sidebar(client: TestClient) -> None:
         ("/activity", "/activity"),
         # Every connection is a source (OR-78) ...
         ("/sources", "/sources"),
-        # ... guests live under Nodes & guests, snapshots under Backups.
-        ("/infra/guests", "/nodes"),
+        # ... snapshots under Backups.
         ("/infra/snapshots", "/backup-policies"),
     ]:
         r = client.get(path)

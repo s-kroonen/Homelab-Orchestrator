@@ -367,17 +367,6 @@ async def format_page(request: Request, session: SessionDep) -> HTMLResponse | R
     return _templates.TemplateResponse(request, "format.html", {"admin": admin})
 
 
-@router.get("/infra/guests", response_model=None)
-async def infra_guests_page(
-    request: Request, session: SessionDep, node: str | None = None, vmid: str | None = None
-) -> RedirectResponse:
-    """The guests are on Nodes & guests now; an old link (an alert's) lands on the guest."""
-    if get_current_admin(request, session) is None:
-        return login_redirect(request)
-    q = (vmid or node or "").strip()
-    return RedirectResponse("/nodes" + (f"?{urlencode({'q': q})}" if q else ""), status_code=303)
-
-
 @router.get("/activity", response_model=None)
 async def activity_page(
     request: Request,

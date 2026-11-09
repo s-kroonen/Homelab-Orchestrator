@@ -517,8 +517,9 @@ def test_links_name_the_page_and_the_spot() -> None:
     assert link_for("service", "web", "backup_failed") == "/services/web#backups"
     assert link_for("service", "web", "deploy_failed") == "/services/web#deploys"
     assert link_for("service", "web", "outside_change") == "/services/web#stack"
-    assert link_for("node", "eve2", "down") == "/nodes?q=eve2"
-    assert link_for("guest", "eve1/101", "down") == "/nodes?q=101"
+    # nodes and guests open under their Proxmox source; with none set up, All sources
+    assert link_for("node", "eve2", "down") == "/sources"
+    assert link_for("guest", "eve1/101", "down") == "/sources"
     assert link_for("service", "orchestrator", "update_failed") == "/system"
     assert link_for("service", "x", "test") == "/notifications"
     assert link_for("service", "a b/c", "failed") == "/services/a%20b%2Fc#health"
@@ -537,7 +538,7 @@ async def test_channels_get_the_link_to_the_thing(session: Session) -> None:
     )
     assert rec.urls == [
         "https://orch.example/services/web#health",
-        "https://orch.example/nodes?q=pve2",
+        "https://orch.example/sources",
     ]
 
 

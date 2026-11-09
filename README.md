@@ -70,7 +70,7 @@ working (fail-open).
   service IP") and a `ping` probe pings it. See
   [docs/service_ips.md](docs/service_ips.md)
 * **Guest disks** — how full every running guest's filesystems are (LXC from
-  Proxmox, VMs through the QEMU guest agent), on Nodes & guests, with a warning at
+  Proxmox, VMs through the QEMU guest agent), on each Proxmox source's Guests tab, with a warning at
   85% and an error at 95% through the notifications. See [docs/disks.md](docs/disks.md)
 * FastAPI app: `/healthz`, `/readyz`, `/wake`, `/maintenance`, the dashboard,
   registry, infra, and backup endpoints (the latter four behind login)

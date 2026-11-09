@@ -335,11 +335,11 @@ def test_dashboard_explains_an_unhealthy_badge(app: Any, monkeypatch: pytest.Mon
 
 
 def test_login_redirect_keeps_the_query_of_an_alert_link(app: Any) -> None:
-    """An alert opens /infra/guests?node=eve1&vmid=101; signed out, the way back keeps all of it."""
+    """An alert opens a guest under its source; signed out, the way back keeps all of it."""
     from urllib.parse import parse_qs, urlsplit
 
     with TestClient(app) as anon:
-        r = anon.get("/infra/guests?node=eve1&vmid=101", follow_redirects=False)
+        r = anon.get("/sources/pve?tab=guests&q=101", follow_redirects=False)
         assert r.status_code == 303
         back = parse_qs(urlsplit(r.headers["location"]).query)["next"]
-        assert back == ["/infra/guests?node=eve1&vmid=101"]
+        assert back == ["/sources/pve?tab=guests&q=101"]

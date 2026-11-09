@@ -108,8 +108,8 @@ the webhook, and the target in the Notifications feed and on the Activity page.
 | deploy | `/services/<slug>#deploys` |
 | database dump | `/services/<slug>#dumps` |
 | switch failed, outside change | `/services/<slug>#stack` |
-| node | `/nodes?q=<node>` (Nodes & guests, its guests listed) |
-| guest, or a guest's disk | `/nodes?q=<vmid>` (Nodes & guests, filtered to that guest) |
+| node | `/sources/<proxmox>?tab=nodes` (its Proxmox source, the Nodes tab) |
+| guest, or a guest's disk | `/sources/<proxmox>?tab=guests&q=<vmid>` (its Proxmox source's guests, filtered to that guest) |
 | self-update | `/system` |
 | a request waiting for approval | its approval page (always wins over the above) |
 

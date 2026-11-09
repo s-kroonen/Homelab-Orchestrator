@@ -11,9 +11,10 @@ the channels that live outside the browser (ntfy, e-mail, webhook).
 
 from __future__ import annotations
 
-from urllib.parse import quote, urlencode
+from urllib.parse import quote
 
 from orchestrator.config import Settings
+from orchestrator.connectors.ownership import node_href_by_name
 
 #: Event -> the part of a service's page that shows it (an element id on that page; the
 #: page opens the tab that holds it). Anything not listed lands on the health strip.
@@ -50,13 +51,13 @@ def link_for(level: str, target: str, event: str = "") -> str | None:
         spot = _SERVICE_SPOT.get(event, "health")
         return f"/services/{quote(target, safe='')}#{spot}"
     if level == "node":
-        return f"/nodes?{urlencode({'q': target})}" if target else None
+        return node_href_by_name(target) if target else None
     if level in ("guest", "disk"):
-        # Nodes & guests, its guest list filtered to this one.
+        # its Proxmox source's guest list, filtered to this one
         node, _, vmid = target.partition("/")
         if not node:
             return None
-        return f"/nodes?{urlencode({'q': vmid or node})}"
+        return node_href_by_name(node, tab="guests", find=vmid or node)
     return None
 
 

@@ -15,6 +15,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, Request
 from sqlmodel import select
 
+from orchestrator.connectors.ownership import node_href
 from orchestrator.db.models import Node, ProxyHost, Service
 from orchestrator.db.session import session_scope
 from orchestrator.registry.autosave import Autosaver
@@ -34,7 +35,6 @@ PAGES: list[tuple[str, str, str]] = [
         "/sources",
         "connections adapters proxmox portainer proxy pbs power settings connectivity",
     ),
-    ("Nodes & guests", "/nodes", "proxmox vm lxc guests power"),
     ("Proxy hosts", "/proxy-hosts", "traefik routes domains"),
     ("Backups", "/backup-policies", "pbs policies snapshots dumps"),
     ("Activity", "/activity", "runs log audit"),
@@ -105,7 +105,8 @@ async def retry_pending(
 @router.get("/search")
 async def search_index(session: SessionDep) -> dict[str, Any]:
     items: list[dict[str, str]] = []
-    nodes = {n.id: n.name for n in session.exec(select(Node)).all()}
+    rows = session.exec(select(Node)).all()
+    nodes = {n.id: n.name for n in rows}
     for s in session.exec(select(Service).order_by(Service.slug)).all():
         items.append(
             {
@@ -115,8 +116,8 @@ async def search_index(session: SessionDep) -> dict[str, Any]:
                 "href": f"/services/{s.slug}",
             }
         )
-    for name in sorted(nodes.values()):
-        items.append({"kind": "node", "label": name, "sub": "", "href": f"/nodes?q={name}"})
+    for node in sorted(rows, key=lambda n: n.name):
+        items.append({"kind": "node", "label": node.name, "sub": "", "href": node_href(node)})
     for ph in session.exec(select(ProxyHost).order_by(ProxyHost.hostname)).all():
         items.append(
             {

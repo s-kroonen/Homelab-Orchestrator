@@ -63,4 +63,67 @@ def owned_by(session: Session, model: Any, source_id: str, *, default: bool) -> 
     return list(session.exec(query).all())
 
 
-__all__ = ["OWNERS", "claim_now", "claim_unowned", "owned_by"]
+def nodes_of(session: Session, source_id: str) -> list[Node]:
+    """The nodes of one Proxmox source (the default one also has the unowned ones)."""
+    from orchestrator.connectors.registry import default_source
+
+    found = default_source("proxmox")
+    is_default = found is not None and found.id == source_id
+    return sorted(owned_by(session, Node, source_id, default=is_default), key=lambda n: n.name)
+
+
+def node_href(node: Node | None, *, tab: str = "nodes", find: str = "") -> str:
+    """The page that shows a node (``tab="guests"``: its guests, ``find`` filtering them): its
+    Proxmox source's page. An unowned node is the default source's; with no Proxmox source at
+    all, All sources."""
+    from urllib.parse import quote, urlencode
+
+    from orchestrator.connectors.registry import default_source
+
+    owner = node.source_id if node is not None else ""
+    if not owner:
+        found = default_source("proxmox")
+        owner = found.id if found is not None else ""
+    if not owner:
+        return "/sources"
+    query = {"tab": tab} | ({"q": find} if find else {})
+    return f"/sources/{quote(owner, safe='')}?{urlencode(query)}"
+
+
+def node_href_by_name(name: str, *, tab: str = "nodes", find: str = "") -> str:
+    """:func:`node_href` for a node known only by name (an alert's target)."""
+    from orchestrator.db.session import get_engine
+
+    try:
+        with Session(get_engine()) as session:
+            node = session.exec(select(Node).where(Node.name == name)).first()
+    except Exception:  # no database to ask (a link is never worth failing an alert for)
+        node = None
+    return node_href(node, tab=tab, find=find)
+
+
+def proxmox_of(adapters: Any, source_id: str) -> Any:
+    """The Proxmox adapter of one source; the default one when it names none (or none that
+    has an adapter)."""
+    found = adapters.for_source(source_id) if source_id else None
+    return found if found is not None else adapters.proxmox
+
+
+def proxmox_for_node(session: Session, adapters: Any, node_name: str) -> Any:
+    """The Proxmox adapter of the cluster a node belongs to: guest actions on that node go
+    there, not to the default cluster."""
+    node = session.exec(select(Node).where(Node.name == node_name)).first()
+    return proxmox_of(adapters, node.source_id if node is not None else "")
+
+
+__all__ = [
+    "OWNERS",
+    "claim_now",
+    "claim_unowned",
+    "node_href",
+    "node_href_by_name",
+    "nodes_of",
+    "owned_by",
+    "proxmox_for_node",
+    "proxmox_of",
+]

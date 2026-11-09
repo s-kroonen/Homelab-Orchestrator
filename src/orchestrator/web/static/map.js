@@ -127,7 +127,7 @@
       el("div", { class: "map-node-sub", onclick: () => select("node:" + n.name) }, bits),
       list.length ? list.map(svcRow)
         : (q || problems) ? el("p", { class: "faint map-none" }, "Nothing here matches.")
-          : el("p", { class: "faint map-none" }, "No services on this node yet. ", el("a", { href: "/nodes?q=" + enc(n.name) }, "Import its guests")));
+          : el("p", { class: "faint map-none" }, "No services on this node yet. ", el("a", { href: n.href || "/sources" }, "Import its guests")));
   }
 
   function backupsCard(rowsCount) {
@@ -421,7 +421,7 @@
     const primary = p === "off" && canWake(node) ? btn("Wake " + name, () => O.nodePower(node, "wake", refresh), true) : null;
     const acts = [
       btn("Check", () => nodeStatus.refresh()),
-      link("Open on Nodes & guests", "/nodes?q=" + enc(name)),
+      link("Open in its Proxmox", node.href || "/sources"),
       node.id != null ? btn("Edit…", () => O.nodeDrawer({ node, onSaved: refresh })) : null,
     ].filter(Boolean);
     const more = [
@@ -441,7 +441,7 @@
         ["Proxmox", h && h.reachable ? [h.version || "answers", h.latency_ms != null ? " · " + Math.round(h.latency_ms) + " ms" : ""] : live ? "not answering" : "checking…"],
       ])),
       section("Services (" + mine.length + ")", mine.length ? el("div", { class: "map-chips" }, mine.map((t) => el("div", {}, pick("svc:" + t.svc.slug, row(t.svc.slug).name), " ", el("span", { class: "faint mono" }, guestLabel(t.guest)), " ", pill(row(t.svc.slug).state.cls, row(t.svc.slug).state.label))))
-        : el("p", { class: "faint" }, "None yet. ", el("a", { href: "/nodes?q=" + enc(name) }, "Import its guests"))),
+        : el("p", { class: "faint" }, "None yet. ", el("a", { href: node.href || "/sources" }, "Import its guests"))),
       section("Backups", targets.length ? kv([["Guests backed up", String(targets.length)], ["Policies", [...new Set(targets.map((t) => t.policy).filter(Boolean))].join(", ") || "none"]])
         : el("p", { class: "faint" }, "Nothing on this node is backed up yet.")));
   }

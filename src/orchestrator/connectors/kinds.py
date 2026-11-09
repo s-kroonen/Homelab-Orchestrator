@@ -99,6 +99,7 @@ class ProxmoxConnector(Connector):
     group = "Proxmox"
     family = "machines"
     blurb = "nodes, VMs and containers"
+    scripts = ("objects.js", "source_proxmox.js")
     resources = (
         Resource(
             "nodes",
@@ -422,7 +423,7 @@ class PortainerConnector(Connector):
     group = "Portainer"
     family = "apps"
     blurb = "environments, stacks, containers"
-    script = "source_portainer.js"
+    scripts = ("source_portainer.js",)
     resources = (
         Resource(
             "environments",

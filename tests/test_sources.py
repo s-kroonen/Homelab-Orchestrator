@@ -294,8 +294,8 @@ def test_the_page_renders_and_the_old_pages_point_at_it(client: TestClient) -> N
         and 'data-tab="traefik"' in page.text
     )
     # Not a page of its own in the navigation any more: its parts are reached from the list
-    # they fill (Import from Proxmox on Nodes & guests, the Import tab on Proxy hosts).
-    assert 'href="/pull#proxmox"' in client.get("/nodes").text
+    # they fill (Import from Proxmox on a Proxmox source's Nodes tab, Proxy hosts' Import tab).
+    assert 'href: "/pull#proxmox"' in client.get("/static/source_proxmox.js").text
     assert "/pull#" in client.get("/proxy-hosts").text
     # a Portainer source's Stacks tab links a stack to a service through the pull page
     assert "/pull#portainer" in client.get("/static/source_portainer.js").text

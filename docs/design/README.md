@@ -69,9 +69,8 @@ containers, proxy hosts. Create, edit, delete and bulk actions happen there, for
 * Old URLs do not redirect.
 * Actions across several sources get their own Bulk actions page (later).
 
-Being built: until each step lands, the pages it replaces (Nodes & guests, Proxy
-hosts) still exist; each is removed, with its wireframe, in the step that
-replaces it.
+Being built: until its step lands, the Proxy hosts page still exists; it is removed, with its
+wireframe, in the step that replaces it.
 
 Header on every page: breadcrumb, global search (`/`), the pending pill when something is
 pending, the live indicator, the user menu.
@@ -140,7 +139,6 @@ Something that is off on purpose (a node asleep, its services) is **off**, never
 |---|---|
 | Dashboard: what needs attention, nodes, recent activity | [PNG](wireframes/Main.png) · [HTML](wireframes/Main.html) |
 | Services list: filters, bulk bar, row menu (its *Sub-services* tab is the same table, one row per sub-service) | [PNG](wireframes/Services.png) · [HTML](wireframes/Services.html) |
-| Nodes & guests *(replaced by Sources)* | [PNG](wireframes/Nodes.png) · [HTML](wireframes/Nodes.html) |
 | Service: Overview tab | [PNG](wireframes/ServiceOverview.png) · [HTML](wireframes/ServiceOverview.html) |
 | Service: Configuration tab, editing in the drawer | [PNG](wireframes/ServiceConfig.png) · [HTML](wireframes/ServiceConfig.html) |
 | Service: Related tab (on/off chain, proxy, stack, backups) | [PNG](wireframes/ServiceRelated.png) · [HTML](wireframes/ServiceRelated.html) |
