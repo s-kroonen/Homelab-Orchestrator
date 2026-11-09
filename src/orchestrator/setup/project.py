@@ -80,7 +80,10 @@ def save_values(
     backups: list[Path] = []
     if moved:
         try:
-            backup = write_file(conns_path, _merge(existing, moved))
+            # Plain on purpose: `init` runs in the setup container, which does not have the
+            # orchestrator's master key. The orchestrator encrypts the file after its first
+            # start (vault.py, SECRETS_ENCRYPT_DELAY_S).
+            backup = write_file(conns_path, _merge(existing, moved), encrypt=False)
         except ConnectionError as exc:
             raise EnvFileError(str(exc)) from exc
         if backup is not None:

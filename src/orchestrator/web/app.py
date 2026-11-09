@@ -17,6 +17,7 @@ Shutdown reverses 10 then 9 then 8 then 7 then 6 then 5.
 
 from __future__ import annotations
 
+import asyncio
 import traceback
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -27,7 +28,7 @@ from fastapi import FastAPI
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.middleware.sessions import SessionMiddleware
 
-from orchestrator import __version__
+from orchestrator import __version__, vault
 from orchestrator.adapters.factory import build_adapters
 from orchestrator.config import Settings, get_settings
 from orchestrator.connections.watch import ConnectionsWatcher
@@ -146,6 +147,18 @@ def _fold_stacks(settings: Settings) -> None:
         )
 
 
+async def _encrypt_later(settings: Any, log: Any) -> None:
+    """Encrypt the plain-text secrets left from before OR-70, once an update can no longer be
+    rolled back to a version that would not read them (``SECRETS_ENCRYPT_DELAY_S``)."""
+    try:
+        await asyncio.sleep(max(0, settings.secrets_encrypt_delay_s))
+        await asyncio.to_thread(vault.startup, settings)
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        log.error("vault.encrypt_failed", error=str(exc), hint="orchestrator-cli secrets encrypt")
+
+
 def _announce_setup_link(settings: Any, log: Any) -> None:
     """While no admin exists, print the one-time link the first admin registers with (OR-58).
     Without it registration is closed, so whoever reaches /login first cannot claim the
@@ -226,6 +239,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             "until this is fixed.",
         )
 
+    try:
+        vault.boot(settings)  # a missing or wrong master key stops the start (OR-70)
+    except vault.VaultError as exc:
+        log.error("vault.refused", error=str(exc))
+        raise
+    encrypt_task = asyncio.create_task(_encrypt_later(settings, log))
     _announce_setup_link(settings, log)
 
     # Startup failures past this point must never be silent. uvicorn runs with
@@ -380,6 +399,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         yield
     finally:
         log.info("orchestrator.stop")
+        encrypt_task.cancel()
         notify_hooks.install(None)
         await conn_watcher.shutdown()
         await autosaver.shutdown()
@@ -400,6 +420,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 def create_app() -> FastAPI:
     settings = get_settings()
+    try:
+        vault.boot(settings)  # before anything reads a secret, the session key included
+    except vault.VaultError as exc:
+        get_logger(__name__).error("vault.refused", error=str(exc))
+        raise RuntimeError(f"The orchestrator will not start: {exc}") from exc
     app = FastAPI(
         title="homelab-orchestrator",
         version=__version__,
@@ -419,7 +444,7 @@ def create_app() -> FastAPI:
     # deployment, but Starlette can't see past its own TLS-terminated hop.
     app.add_middleware(
         SessionMiddleware,
-        secret_key=settings.session_secret.get_secret_value(),
+        secret_key=vault.session_secret(settings),
         same_site="lax",
         https_only=False,
     )

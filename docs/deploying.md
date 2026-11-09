@@ -176,9 +176,17 @@ docker compose up -d
 The container's `RUN_MIGRATIONS_ON_START=true` handles Alembic on startup;
 the pre-migration SQLite snapshot lands in `/data` (the named volume).
 
+**The master key.** The first start of a version with encrypted secrets makes a master key in
+`/data/keys/master.key`, or uses a Docker secret. Back it up once:
+`docker compose exec orchestrator orchestrator-cli secrets export-key`
+(see [secrets.md](secrets.md)).
+
 ## Rollback
 
-Keep the previous tag around — rollback is just re-pointing:
+Keep the previous tag around — rollback is just re-pointing. Going back to a version from
+before stored secrets were encrypted (OR-70)? First run
+`docker compose exec orchestrator orchestrator-cli secrets decrypt`, or every connection fails:
+see [secrets.md](secrets.md).
 
 ```bash
 export ORCHESTRATOR_IMAGE=ghcr.io/s-kroonen/homelab-orchestrator:1.0.0

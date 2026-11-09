@@ -18,6 +18,7 @@
                 wake SLUG                 wake the node, start the guest, wait until healthy
                 bulk services|proxy-hosts ACTION --all|--group|--slug
                                           one action on many items, per-item report
+    Secrets     secrets status | encrypt | rotate | export-key   the master key (vault.py)
     Recover     admin invite [--for NAME]  a one-time link: a new admin, or a passkey for NAME
                 admin passkeys [--remove ID]  list passkeys; remove a lost or stolen one
                 admin list | disable NAME | enable NAME   who can sign in; lock one out
@@ -51,6 +52,7 @@ from orchestrator.cli_ip import ip_group
 from orchestrator.cli_mcp import mcp as mcp_group
 from orchestrator.cli_notify import notify as notify_group
 from orchestrator.cli_portainer import portainer as portainer_group
+from orchestrator.cli_secrets import secrets as secrets_group
 from orchestrator.cli_setup import config_group, init, scaffold
 from orchestrator.cli_sources import sources as sources_group
 from orchestrator.cli_stack import stack as stack_group
@@ -69,6 +71,13 @@ from orchestrator.registry.loader import reconcile_yaml_into_db
 def _bootstrap() -> None:
     configure_logging()
     build_engine()
+    from orchestrator import vault
+    from orchestrator.config import get_settings as _settings
+
+    try:  # refuses a missing or wrong master key, as the app does
+        vault.boot(_settings())
+    except vault.VaultError as exc:
+        raise click.ClickException(str(exc)) from exc
 
 
 def _run(coro: Any) -> Any:
@@ -1202,6 +1211,7 @@ cli.add_command(notify_group, name="notify")
 cli.add_command(admin_group, name="admin")
 cli.add_command(mcp_group, name="mcp")
 cli.add_command(sources_group, name="sources")
+cli.add_command(secrets_group, name="secrets")
 
 
 if __name__ == "__main__":

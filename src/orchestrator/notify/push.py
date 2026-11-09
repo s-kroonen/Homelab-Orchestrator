@@ -49,16 +49,18 @@ def _public_b64(vapid: Vapid02) -> str:
 def get_vapid(session: Session) -> tuple[Vapid02, str]:
     """This orchestrator's VAPID key pair and its public key as the browser wants it
     (base64url, uncompressed point). Created and stored on first call."""
+    from orchestrator import vault
+
     row = session.get(Setting, SETTING_PUSH_VAPID)
     pem = (row.value or {}).get("private_pem") if row else None
     if pem:
-        vapid = Vapid02.from_pem(str(pem).encode())
+        vapid = Vapid02.from_pem(vault.decrypt(str(pem)).encode())
         return vapid, _public_b64(vapid)
     vapid = Vapid02()
     vapid.generate_keys()
     public = _public_b64(vapid)
     row = row or Setting(key=SETTING_PUSH_VAPID)
-    row.value = {"private_pem": vapid.private_pem().decode(), "public_key": public}
+    row.value = {"private_pem": vault.encrypt(vapid.private_pem().decode()), "public_key": public}
     row.updated_at = datetime.now(UTC)
     session.add(row)
     session.commit()

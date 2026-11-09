@@ -133,6 +133,17 @@ ENV_SECTIONS: tuple[EnvSection, ...] = (
                 secret=True,
             ),
             EnvKey(
+                "ORCHESTRATOR_MASTER_KEY_FILE",
+                "The master key that encrypts stored credentials. Blank: a Docker secret at\n"
+                "/run/secrets/orchestrator_master_key, else STATE_DIR/keys/master.key (made on\n"
+                "first start). Back it up: orchestrator-cli secrets export-key",
+            ),
+            EnvKey(
+                "SECRETS_ENCRYPT_DELAY_S",
+                "Seconds after start before plain-text secrets left from an older version are\n"
+                "encrypted (an update is past its rollback window by then)",
+            ),
+            EnvKey(
                 "INVITE_TTL_HOURS",
                 "How long an admin-invite link (dashboard > Invite another admin) stays valid.",
             ),

@@ -71,6 +71,14 @@ class Settings(BaseSettings):
     webauthn_origin: str = "http://localhost:8080"
 
     session_secret: SecretStr = SecretStr("dev-only-change-me")
+    # The master key that encrypts every stored credential (orchestrator/vault.py). Blank: a
+    # Docker secret at /run/secrets/orchestrator_master_key, else STATE_DIR/keys/master.key
+    # (made on first start). Keep a copy outside this host: `orchestrator-cli secrets export-key`.
+    orchestrator_master_key_file: str = ""
+    # Plain-text secrets left from before encryption are encrypted this long after start: by
+    # then an update has passed the updater's health check and will not be rolled back to a
+    # version that cannot read them. New secrets are encrypted at once.
+    secrets_encrypt_delay_s: int = 300
 
     # How long an admin-invite link (generated from the dashboard, used to add
     # another admin's passkey) stays valid before it must be re-issued.

@@ -14,8 +14,9 @@ session secret, the dashboard's hostname.
 
 `config/connections.yaml`, next to `services.yaml` (the directory every container mounts, so the
 `setup` container can write it too; `CONNECTIONS_PATH` points it somewhere else). It holds
-credentials: it is written readable by its owner only, git-ignored, and the last five copies are
-kept in `config/connections-backups/`. Like `.env` it is **not** part of the System page's
+credentials, stored encrypted with the master key ([secrets.md](secrets.md)): a secret field
+reads `enc:v1:…` in the file. It is written readable by its owner only, git-ignored, and the last
+five copies are kept in `config/connections-backups/`. Like `.env` it is **not** part of the System page's
 backups (those can be downloaded); back it up with the rest of `config/` on the host.
 
 ```yaml

@@ -15,6 +15,7 @@ import pytest
 from sqlmodel import Session
 
 from orchestrator import config as config_module
+from orchestrator import vault
 from orchestrator.db import session as session_module
 from orchestrator.db.models import Node, Service
 from orchestrator.domain.enums import GuestKind
@@ -50,11 +51,12 @@ def _isolated_settings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Itera
     monkeypatch.setenv("BACKUP_POWER_OFF_GRACE_S", "0")
     monkeypatch.setenv("SESSION_SECRET", "test-only")
     # Don't inherit any developer's stray adapter config.
-    for key in ("POWER_ADAPTER", "PROXMOX_ADAPTER", "PBS_ADAPTER"):
+    for key in ("POWER_ADAPTER", "PROXMOX_ADAPTER", "PBS_ADAPTER", "ORCHESTRATOR_MASTER_KEY_FILE"):
         os.environ.pop(key, None)
 
     config_module.reset_settings_cache()
     session_module.reset_engine_cache()
+    vault.use(None)  # each test opens (and makes) its own master key under its STATE_DIR
     remember_network(None)  # the last network check is process-wide: no test inherits one
     # The health cycle's own network check would reach out to real hosts: tests get "nothing
     # configured" (the old rules) unless they hand a NetworkStatus in (tests/test_detection.py).
@@ -70,6 +72,7 @@ def _isolated_settings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Itera
     open_apps.close_all()
     session_module.reset_engine_cache()
     config_module.reset_settings_cache()
+    vault.use(None)
 
 
 @pytest.fixture

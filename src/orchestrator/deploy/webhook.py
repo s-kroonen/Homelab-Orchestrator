@@ -41,9 +41,11 @@ def has_secret(session: Session, slug: str) -> bool:
 def rotate_secret(session: Session, slug: str) -> str:
     """Make a new secret (replacing any old one) and return it. This is the only time it
     is ever shown."""
+    from orchestrator import vault
+
     secret = secrets.token_urlsafe(32)
     row = session.get(Setting, _key(slug)) or Setting(key=_key(slug))
-    row.value = {"secret": secret}
+    row.value = {"secret": vault.encrypt(secret)}  # at rest only encrypted (OR-70)
     row.updated_at = datetime.now(UTC)
     session.add(row)
     session.commit()
@@ -60,8 +62,11 @@ def remove_secret(session: Session, slug: str) -> bool:
 
 
 def _secret(session: Session, slug: str) -> str:
+    from orchestrator import vault
+
     row = session.get(Setting, _key(slug))
-    return str((row.value or {}).get("secret", "")) if row else ""
+    stored = str((row.value or {}).get("secret", "")) if row else ""
+    return vault.decrypt(stored) if stored else ""
 
 
 def reveal_secret(session: Session, slug: str) -> str:

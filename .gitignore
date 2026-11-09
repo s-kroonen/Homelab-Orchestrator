@@ -41,6 +41,9 @@ config/*.tmp
 *.decrypted.*
 secrets/*.yaml
 !secrets/*.enc.yaml
+# The master key (docs/secrets.md), whatever it is called. Never commit it.
+secrets/orchestrator_master_key*
+*.key
 
 # Editor / OS
 .vscode/
