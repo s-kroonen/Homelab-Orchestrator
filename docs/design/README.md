@@ -39,24 +39,51 @@ not show.
 ## Navigation
 
 ```
-Overview        Dashboard · Map
-Services        Services (list) → service detail
-Infrastructure  Nodes & guests · Proxy hosts · Containers · Backups
-Activity        Activity · Traffic
-Settings        Connections · Notifications · AI assistants · Admins & devices · System · Archive
+Overview   Dashboard · Map · Inventory
+Services   Services (list) → service detail · Backups
+Sources +  All sources
+           ▾ Proxmox    ● cluster-a  ● cluster-b
+           ▸ Portainer 2  ●          (folded; a dot when something in it is wrong)
+           ● Proxy · gateway          (one instance: one line)
+           ● Backups · pbs-main
+           ● Power · mqtt
+           ▾ Machines   ● nas-01  ● backup-pi
+Activity   Activity · Traffic
+Settings   General · Notifications · AI assistants · Admins & devices · System · Archive
 ```
 
+**Sources first.** Every connection (a Proxmox cluster, a Portainer, a proxy, a PBS, a power
+manager, a bare-metal machine, later Pterodactyl, Nextcloud or TrueNAS) is a *source* with its own
+page. A source page is the one home of what that source has: its nodes and guests, stacks and
+containers, proxy hosts. Create, edit, delete and bulk actions happen there, for that source only.
+
+* **Inventory** is the secondary view across sources: one list per kind of thing, linked to a
+  service or not, every row linked to its source page.
+* **Global search** finds anything in any source, plus services, settings and pages.
+* **Links between sources are always shown and clickable**: the VM a Portainer environment runs
+  on, the proxy host pointing at a guest, the machine hosting an environment.
+* **Linking works from both sides**: *Link to a service…* or *Create a service from this…* on a
+  stack, guest, container or proxy host; *Where it runs* on a service picks them per source.
+* **Notifications open the nearest page**: the item under its source (a failed deploy opens
+  Sources / Portainer / home / wiki), never a page across sources.
+* Old URLs do not redirect.
+* Actions across several sources get their own Bulk actions page (later).
+
+Being built: until each step lands, the pages it replaces (Nodes & guests, Containers, Proxy
+hosts, Connections) still exist; each is removed, with its wireframe, in the pull request that
+replaces it.
+
 Header on every page: breadcrumb, global search (`/`), the pending pill when something is
-pending, the live indicator, the user menu. Old URLs redirect, so links in notifications keep
-working.
+pending, the live indicator, the user menu.
 
 ## Page layouts
 
 | Layout | Used for | Shape |
 |---|---|---|
-| **List** | Services, Nodes & guests, Proxy hosts, Containers, Backups | Title with count and one primary action · filter box + filter chips · table with sortable columns · `⋯` row menu for the rest · bulk bar when rows are selected · footer with count and age |
-| **Detail** | A service, a node, a connection | Title, status and the primary actions in the header, the rest in `⋯` · tabs *Overview · Configuration · Related · History* (tabs in the URL) · facts column on wide screens |
-| **Settings** | Connections, Notifications, System… | Short cards, each saved on its own; help folded behind a link |
+| **List** | Services, Backups, Inventory, every resource tab of a source page | Title with count and one primary action · filter box + filter chips · table with sortable columns · `⋯` row menu for the rest · bulk bar when rows are selected · footer with count and age |
+| **Source** | Every source | Name, kind, status, address and "used by" in the header with *Test* and `⋯` · tabs *Overview* · one tab per kind of resource · *Settings* · *Raw* (tabs in the URL) · the resource tabs are List layouts |
+| **Detail** | A service, a stack, a guest, a machine | Title, status and the primary actions in the header, the rest in `⋯` · tabs *Overview · Configuration · Related · History* (tabs in the URL) · facts column on wide screens |
+| **Settings** | A source's Settings tab, General, Notifications, System… | Short cards, each saved on its own; help folded behind a link |
 | **Drawer** | Every create and edit | From the right, 480–520 px, dims the page; title says what is edited; *Test* where it can be tested; footer says what Save will do |
 | **Confirm** | Every destructive action | Centred dialog that names what else is affected; destructive ones (power off, delete, restore) ask to type the name |
 | **Selection sidebar** | Map | Full-height panel on the right with the selected item's state, why, actions, details, path, backups, recent |
@@ -113,19 +140,19 @@ Something that is off on purpose (a node asleep, its services) is **off**, never
 |---|---|
 | Dashboard: what needs attention, nodes, recent activity | [PNG](wireframes/Main.png) · [HTML](wireframes/Main.html) |
 | Services list: filters, bulk bar, row menu (its *Sub-services* tab is the same table, one row per sub-service) | [PNG](wireframes/Services.png) · [HTML](wireframes/Services.html) |
-| Nodes & guests | [PNG](wireframes/Nodes.png) · [HTML](wireframes/Nodes.html) |
+| Nodes & guests *(replaced by Sources)* | [PNG](wireframes/Nodes.png) · [HTML](wireframes/Nodes.html) |
 | Service: Overview tab | [PNG](wireframes/ServiceOverview.png) · [HTML](wireframes/ServiceOverview.html) |
 | Service: Configuration tab, editing in the drawer | [PNG](wireframes/ServiceConfig.png) · [HTML](wireframes/ServiceConfig.html) |
 | Service: Related tab (on/off chain, proxy, stack, backups) | [PNG](wireframes/ServiceRelated.png) · [HTML](wireframes/ServiceRelated.html) |
-| Proxy hosts: list, tabs for import and format | [PNG](wireframes/ProxyHosts.png) · [HTML](wireframes/ProxyHosts.html) |
+| Proxy hosts: list, tabs for import and format *(replaced by Sources)* | [PNG](wireframes/ProxyHosts.png) · [HTML](wireframes/ProxyHosts.html) |
 | Proxy host: create / edit drawer | [PNG](wireframes/ProxyEdit.png) · [HTML](wireframes/ProxyEdit.html) |
 | Confirm a destructive action | [PNG](wireframes/ConfirmPowerOff.png) · [HTML](wireframes/ConfirmPowerOff.html) |
-| Settings: Connections | [PNG](wireframes/Connections.png) · [HTML](wireframes/Connections.html) |
+| Settings: Connections *(replaced by Sources)* | [PNG](wireframes/Connections.png) · [HTML](wireframes/Connections.html) |
 | Backups: policies, snapshots, dumps, orchestrator backups | [PNG](wireframes/Backups.png) · [HTML](wireframes/Backups.html) |
 | Map: one row per node, shared backups, selection sidebar | [PNG](wireframes/Map.png) · [HTML](wireframes/Map.html) |
 | Traffic: one page, countries included | [PNG](wireframes/Traffic.png) · [HTML](wireframes/Traffic.html) |
 | Activity: one feed, run details in the drawer | [PNG](wireframes/Activity.png) · [HTML](wireframes/Activity.html) |
-| Containers: every stack, opens its stack page | [PNG](wireframes/Containers.png) · [HTML](wireframes/Containers.html) |
+| Containers: every stack, opens its stack page *(replaced by Sources)* | [PNG](wireframes/Containers.png) · [HTML](wireframes/Containers.html) |
 | Stack: containers, details and logs | [PNG](wireframes/Stack.png) · [HTML](wireframes/Stack.html) |
 | Stack: environment (edit, redeploy) and settings | [PNG](wireframes/StackEnv.png) · [HTML](wireframes/StackEnv.html) |
 | Service: Sub-services tab (parent) | [PNG](wireframes/ServiceSubs.png) · [HTML](wireframes/ServiceSubs.html) |
@@ -137,6 +164,20 @@ Something that is off on purpose (a node asleep, its services) is **off**, never
 | Settings: Admins & devices (passkeys, admins, invites) | [PNG](wireframes/Admins.png) · [HTML](wireframes/Admins.html) |
 | Phone: dashboard | [PNG](wireframes/PhoneDashboard.png) · [HTML](wireframes/PhoneDashboard.html) |
 | Phone: service | [PNG](wireframes/PhoneService.png) · [HTML](wireframes/PhoneService.html) |
+| Sources: every source, its status and what it has | [PNG](wireframes/Sources.png) · [HTML](wireframes/Sources.html) |
+| Sources: add a source | [PNG](wireframes/SourceAdd.png) · [HTML](wireframes/SourceAdd.html) |
+| Source page: Proxmox overview | [PNG](wireframes/SourceProxmox.png) · [HTML](wireframes/SourceProxmox.html) |
+| Source page: Proxmox guests (bulk bar, links to other sources) | [PNG](wireframes/SourceGuests.png) · [HTML](wireframes/SourceGuests.html) |
+| Source page: Portainer containers by environment | [PNG](wireframes/SourcePortainer.png) · [HTML](wireframes/SourcePortainer.html) |
+| A stack under its source (where a deploy alert lands) | [PNG](wireframes/SourceStack.png) · [HTML](wireframes/SourceStack.html) |
+| Source page: a proxy's proxy hosts (create, edit, link) | [PNG](wireframes/SourceProxy.png) · [HTML](wireframes/SourceProxy.html) |
+| Source page: a bare-metal machine over SSH | [PNG](wireframes/SourceMachine.png) · [HTML](wireframes/SourceMachine.html) |
+| Source page: Settings tab | [PNG](wireframes/SourceSettings.png) · [HTML](wireframes/SourceSettings.html) |
+| Source page: Raw data | [PNG](wireframes/SourceRaw.png) · [HTML](wireframes/SourceRaw.html) |
+| Link a stack, guest or proxy host to a service | [PNG](wireframes/SourceLink.png) · [HTML](wireframes/SourceLink.html) |
+| Service: where it runs (guest, stack, proxy hosts per source) | [PNG](wireframes/ServiceWhere.png) · [HTML](wireframes/ServiceWhere.html) |
+| Inventory: everything across sources, linked or not | [PNG](wireframes/Inventory.png) · [HTML](wireframes/Inventory.html) |
+| Global search | [PNG](wireframes/Search.png) · [HTML](wireframes/Search.html) |
 
 ## Updating the wireframes
 
