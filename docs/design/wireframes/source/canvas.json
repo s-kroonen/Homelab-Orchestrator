@@ -30,21 +30,7 @@
     "Stack.dc.html": {"x": 0, "y": 13558, "w": 1440, "h": 1240, "title": "Stack — containers, details and logs", "expand": "fill"},
     "StackEnv.dc.html": {"x": 1520, "y": 13558, "w": 1440, "h": 1060, "title": "Stack — environment (edit, redeploy) and settings", "expand": "fill"},
     "ServiceSubs.dc.html": {"x": 3040, "y": 13558, "w": 1440, "h": 1000, "title": "Service — Sub-services tab (parent)", "expand": "fill"},
-    "SubRollup.dc.html": {"x": 4560, "y": 13558, "w": 1440, "h": 1040, "title": "Sub-services in lists (Services, Dashboard, Map)", "expand": "fill"},
-    "Sources.dc.html": {"x": 0, "y": 15098, "w": 1440, "h": 900, "title": "Sources — every connection, one page each", "expand": "fill"},
-    "SourceAdd.dc.html": {"x": 1520, "y": 15098, "w": 1440, "h": 900, "title": "Sources — add a source", "expand": "fill"},
-    "SourcePortainer.dc.html": {"x": 3040, "y": 15098, "w": 1440, "h": 860, "title": "Source page — Portainer, containers by environment", "expand": "fill"},
-    "SourceProxmox.dc.html": {"x": 4560, "y": 15098, "w": 1440, "h": 900, "title": "Source page — Proxmox overview", "expand": "fill"},
-    "SourceSettings.dc.html": {"x": 0, "y": 16118, "w": 1440, "h": 940, "title": "Source page — Settings tab", "expand": "fill"},
-    "SourceRaw.dc.html": {"x": 1520, "y": 16118, "w": 1440, "h": 820, "title": "Source page — Raw data (Pterodactyl, a later source)", "expand": "fill"},
-    "SourceProxy.dc.html": {"x": 3040, "y": 16118, "w": 1440, "h": 900, "title": "Source page — a proxy's proxy hosts (create, edit, link)", "expand": "fill"},
-    "SourceLink.dc.html": {"x": 4560, "y": 16118, "w": 1440, "h": 860, "title": "Link a stack, guest or proxy host to a service", "expand": "fill"},
-    "ServiceWhere.dc.html": {"x": 0, "y": 17178, "w": 1440, "h": 860, "title": "Service — where it runs: guest, stack and proxy hosts per source", "expand": "fill"},
-    "SourceGuests.dc.html": {"x": 1520, "y": 17178, "w": 1440, "h": 860, "title": "Source page — Proxmox guests: bulk bar, links to other sources", "expand": "fill"},
-    "SourceMachine.dc.html": {"x": 3040, "y": 17178, "w": 1440, "h": 900, "title": "Source page — a bare-metal machine over SSH", "expand": "fill"},
-    "Inventory.dc.html": {"x": 4560, "y": 17178, "w": 1440, "h": 860, "title": "Inventory — every source's things in one list, linked or not", "expand": "fill"},
-    "Search.dc.html": {"x": 0, "y": 18198, "w": 1440, "h": 860, "title": "Global search across services, sources, settings and pages", "expand": "fill"},
-    "SourceStack.dc.html": {"x": 1520, "y": 18198, "w": 1440, "h": 820, "title": "A stack under its source — where a deploy alert lands", "expand": "fill"}
+    "SubRollup.dc.html": {"x": 4560, "y": 13558, "w": 1440, "h": 1040, "title": "Sub-services in lists (Services, Dashboard, Map)", "expand": "fill"}
   },
   "order": [
     "Main.dc.html", "Services.dc.html", "Nodes.dc.html",
@@ -55,14 +41,9 @@
     "Map.dc.html", "Traffic.dc.html",
     "Activity.dc.html", "Containers.dc.html", "Notifications.dc.html",
     "Assistants.dc.html", "System.dc.html", "Archive.dc.html", "Admins.dc.html",
-    "Stack.dc.html", "StackEnv.dc.html", "ServiceSubs.dc.html", "SubRollup.dc.html",
-    "Sources.dc.html", "SourceAdd.dc.html", "SourcePortainer.dc.html", "SourceProxmox.dc.html",
-    "SourceSettings.dc.html", "SourceRaw.dc.html", "SourceProxy.dc.html", "SourceLink.dc.html",
-    "ServiceWhere.dc.html", "SourceGuests.dc.html", "SourceMachine.dc.html", "Inventory.dc.html",
-    "Search.dc.html", "SourceStack.dc.html"
+    "Stack.dc.html", "StackEnv.dc.html", "ServiceSubs.dc.html", "SubRollup.dc.html"
   ],
   "notes": {
-    "tSrc": {"x": 0, "y": 14938, "text": "Sources: one page per connection, Inventory and search across them", "kind": "title1", "maxW": 5960},
     "t1": {"x": 0, "y": -260, "text": "Overview: start from what needs attention", "kind": "title1", "maxW": 4480},
     "t2": {"x": 0, "y": 1203, "text": "One service: header actions, four tabs, edit in a drawer", "kind": "title1", "maxW": 4480},
     "t3": {"x": 0, "y": 2786, "text": "Every list and every edit works the same way", "kind": "title1", "maxW": 4480},
