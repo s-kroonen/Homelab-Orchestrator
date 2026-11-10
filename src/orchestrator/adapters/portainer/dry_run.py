@@ -228,6 +228,16 @@ class DryRunPortainerAdapter(PortainerAdapter):
             None,
         )
 
+    async def stack_file(self, stack: Stack) -> str:
+        if stack.id is None:
+            return ""
+        boxes = [c for c in self._containers if (c.stack or "").lower() == stack.name.lower()]
+        lines = ["services:"]
+        for c in boxes:
+            lines += [f"  {c.service or c.name}:", f"    image: {c.image}", "    environment:"]
+            lines += [f"      DB_PASSWORD: sample-{c.service or c.name}-password", "      TZ: UTC"]
+        return "\n".join(lines) + "\n"
+
     async def stack_kind(self, stack: Stack) -> str:
         return _KINDS.get(stack.name, "unknown")
 

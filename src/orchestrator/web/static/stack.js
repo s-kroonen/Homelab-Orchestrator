@@ -18,7 +18,11 @@
   // "(no stack)": the containers of this environment outside any stack - no stack actions,
   // environment or settings, only the containers.
   const LOOSE = !I.name;
-  if (LOOSE) for (const t of ["environment", "settings", "history"]) $("#stk-tabs").querySelector('[data-tab="' + t + '"]').hidden = true;
+  // protected (its Portainer's Safety settings): stopping, restarting or redeploying asks for the name
+  const PROT = new Set((I.protected || []).map((x) => x.toLowerCase()));
+  const stackProt = () => !LOOSE && PROT.has(I.name.toLowerCase());
+  const boxProt = (c) => stackProt() || PROT.has(c.name.toLowerCase());
+  if (LOOSE) for (const t of ["environment", "compose", "settings", "history"]) $("#stk-tabs").querySelector('[data-tab="' + t + '"]').hidden = true;
 
   let D = null;        // the stack and its containers, live
   let L = null;        // what the orchestrator keeps about it (link)
@@ -77,9 +81,9 @@
   // --- stack actions ------------------------------------------------------------------------------------
   async function stackAction(verb) {
     if (verb !== "start" && !await confirm({ title: (verb === "stop" ? "Stop " : "Restart ") + I.name + "?",
-      body: verb === "stop" ? "Its containers stop; whatever uses them stops answering." : "Its containers restart; anyone using them is cut off for a moment.",
-      action: verb === "stop" ? "Stop" : "Restart", danger: verb === "stop" })) return;
-    try { const r = await api.post(withQ(stackApi + "/" + verb), undefined, { suppressToast: true }); toast(r.message || verb + " sent", "ok"); }
+      body: (stackProt() ? "It is protected: type its name. " : "") + (verb === "stop" ? "Its containers stop; whatever uses them stops answering." : "Its containers restart; anyone using them is cut off for a moment."),
+      typeName: stackProt() ? I.name : null, action: verb === "stop" ? "Stop" : "Restart", danger: verb === "stop" })) return;
+    try { const r = await api.post(withQ(stackApi + "/" + verb) + (stackProt() ? "&confirm=" + enc(I.name) : ""), undefined, { suppressToast: true }); toast(r.message || verb + " sent", "ok"); }
     catch (e) { toast(e.message, "error"); }
     setTimeout(refreshAll, 800);
   }
@@ -88,10 +92,10 @@
     if (!await confirm({ title: "Redeploy " + I.name + "?",
       body: guarded ? "Runs its deploy: the checks before, a pull of " + gitText(D.git) + " and a redeploy, then the checks after (the sub-service's deploy settings)."
         : "Portainer pulls " + gitText(D.git) + " and its images again and recreates the containers.",
-      action: "Redeploy", danger: false })) return;
+      typeName: stackProt() && !guarded ? I.name : null, action: "Redeploy", danger: false })) return;
     try {
       if (guarded) { await api.post("/api/services/" + enc(L.slug) + "/deploy", { guards: true }, { suppressToast: true }); toast("Deploy started: follow it in History", "ok"); }
-      else { const r = await api.post(withQ(stackApi + "/redeploy"), undefined, { suppressToast: true }); toast(r.message, "ok"); }
+      else { const r = await api.post(withQ(stackApi + "/redeploy") + (stackProt() ? "&confirm=" + enc(I.name) : ""), undefined, { suppressToast: true }); toast(r.message, "ok"); }
     } catch (e) { toast(e.message, "error"); }
     setTimeout(refreshAll, 1500);
   }
@@ -116,8 +120,9 @@
   async function containerAction(c, verb) {
     const words = { stop: "Stop", restart: "Restart", kill: "Kill", recreate: "Recreate" };
     const why = { stop: "It stops; whatever uses it stops answering.", restart: "Anyone using it is cut off for a moment.", kill: "It is stopped at once, without a chance to shut down cleanly.", recreate: "Its image is pulled again and the container is created anew with the same settings." };
-    if (verb !== "start" && !await confirm({ title: words[verb] + " " + c.name + "?", body: why[verb], action: words[verb], danger: verb === "stop" || verb === "kill" })) return;
-    try { const r = await api.post(withQ("/api/containers/" + I.endpoint + "/" + enc(c.name) + "/" + verb), undefined, { suppressToast: true }); toast(r.message || verb + " sent", "ok"); }
+    if (verb !== "start" && !await confirm({ title: words[verb] + " " + c.name + "?", body: (boxProt(c) ? "It is protected: type its name. " : "") + why[verb],
+      typeName: boxProt(c) ? c.name : null, action: words[verb], danger: verb === "stop" || verb === "kill" })) return;
+    try { const r = await api.post(withQ("/api/containers/" + I.endpoint + "/" + enc(c.name) + "/" + verb) + (boxProt(c) ? "&confirm=" + enc(c.name) : ""), undefined, { suppressToast: true }); toast(r.message || verb + " sent", "ok"); }
     catch (e) { toast(e.message, "error"); }
     details.delete(c.name);
     setTimeout(refreshAll, 800);
@@ -379,6 +384,37 @@
   });
 
   // --- history --------------------------------------------------------------------------------------------------------
+  // --- compose and raw ------------------------------------------------------------------------------
+  let composeText = "";
+  async function loadCompose() {
+    const box = clear($("#compose"));
+    try {
+      const r = await api.get(withQ(stackApi + "/compose"), { suppressToast: true });
+      composeText = r.compose;
+      box.append(r.compose ? el("pre", { class: "raw-json" }, r.compose)
+        : el("p", { class: "faint", style: { margin: 0 } }, "Portainer keeps no compose file for it: it was not created through Portainer."));
+    } catch (e) { box.append(el("p", { class: "field-error", style: { margin: 0 } }, e.message)); }
+  }
+  const copy = async (text) => { try { await navigator.clipboard.writeText(text); toast("Copied", "ok"); } catch (_e) { toast("Could not copy", "error"); } };
+  $("#compose-copy").addEventListener("click", () => copy(composeText));
+  $("#raw-copy").addEventListener("click", () => copy($("#raw").textContent));
+  function drawRaw() { $("#raw").textContent = D ? JSON.stringify(D, null, 2) : ""; }
+
+  // --- the last deploy, when it failed (SourceStack wireframe) -----------------------------------------
+  async function drawDeployBanner() {
+    const box = $("#stk-deploy");
+    if (!L || !L.deploy || !L.deploy.enabled) { clear(box); return; }
+    let runs = [];
+    try { runs = await api.get("/api/services/" + enc(L.slug) + "/deploys?limit=1", { suppressToast: true }); } catch (_e) { return; }
+    const run = runs[0];
+    if (!run || run.status !== "failed") { clear(box); return; }
+    fill(box, el("div", { class: "banner fail", style: { display: "flex", gap: "10px", alignItems: "center", flexWrap: "wrap" } },
+      el("span", { class: "pill fail" }, fmt.time(run.started_at).split(" ").pop().slice(0, 5)),
+      el("span", { style: { flex: "1", minWidth: "0" } }, "Deploy failed" + (run.error ? ": " + run.error : ".") + " The pre-deploy image tag and database dump are kept when its deploy keeps them."),
+      el("button", { type: "button", class: "small", onclick: redeploy }, "Deploy again"),
+      el("a", { href: "/services/" + enc(L.slug) + "#deploys" }, "Open the run")));
+  }
+
   async function loadHistory() {
     const box = clear($("#history"));
     const asks = [api.get("/api/activity?limit=50&q=" + enc(I.name), { suppressToast: true })];
@@ -416,12 +452,12 @@
   });
   const link = region(el("div"), {
     load: () => (LOOSE ? Promise.resolve({ link: null }) : api.get(withQ(stackApi + "/link"), { suppressToast: true })),
-    render: (d) => { L = d.link; drawAll(); recent.refresh(); },
+    render: (d) => { L = d.link; drawAll(); recent.refresh(); drawDeployBanner(); },
     topics: ["health", "registry"], wait: 1500,
   });
-  function drawAll() { drawHeader(); drawContainers(); drawSettings(); if (E) drawEnv(); else $("#n-env").textContent = D ? String((D.env_names || []).length) : ""; }
+  function drawAll() { drawHeader(); drawContainers(); drawSettings(); if (tab === "raw") drawRaw(); if (E) drawEnv(); else $("#n-env").textContent = D ? String((D.env_names || []).length) : ""; }
   function refreshAll() { stack.refresh(); link.refresh(); }
-  T = tabs($("#stk-tabs"), { onChange: (t) => { tab = t; if (t === "logs") allLogs.start(); else allLogs.stop(); if (t === "environment") loadEnv(); if (t === "history") loadHistory(); } });
+  T = tabs($("#stk-tabs"), { onChange: (t) => { tab = t; if (t === "logs") allLogs.start(); else allLogs.stop(); if (t === "environment") loadEnv(); if (t === "history") loadHistory(); if (t === "compose") loadCompose(); if (t === "raw") drawRaw(); } });
   $("#to-history").addEventListener("click", (ev) => { ev.preventDefault(); T.show("history"); window.scrollTo({ top: 0 }); });
   api.get(withQ("/api/portainer/environments"), { suppressToast: true }).then((envs) => { const e = envs.find((x) => x.id === I.endpoint); envName = e ? e.name : ""; drawAll(); }, () => {});
   void q;

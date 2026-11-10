@@ -165,7 +165,7 @@ Something that is off on purpose (a node asleep, its services) is **off**, never
 | Source page: Proxmox overview | [PNG](wireframes/SourceProxmox.png) · [HTML](wireframes/SourceProxmox.html) |
 | Source page: Proxmox guests (bulk bar, links to other sources) | [PNG](wireframes/SourceGuests.png) · [HTML](wireframes/SourceGuests.html) |
 | Source page: Portainer containers by environment | [PNG](wireframes/SourcePortainer.png) · [HTML](wireframes/SourcePortainer.html) |
-| A stack under its source (where a deploy alert lands): its place and header; the tabs are the Stack wireframes above | [PNG](wireframes/SourceStack.png) · [HTML](wireframes/SourceStack.html) |
+| A stack under its source (where a deploy alert lands). It keeps the Logs and History tabs of the Stack wireframes, and a failed deploy offers *Deploy again*, not a roll back (deploys do not roll back, [portainer_deploys.md](../portainer_deploys.md)) | [PNG](wireframes/SourceStack.png) · [HTML](wireframes/SourceStack.html) |
 | Source page: a proxy's proxy hosts (create, edit, link) | [PNG](wireframes/SourceProxy.png) · [HTML](wireframes/SourceProxy.html) |
 | Source page: a bare-metal machine over SSH | [PNG](wireframes/SourceMachine.png) · [HTML](wireframes/SourceMachine.html) |
 | Source page: Settings tab | [PNG](wireframes/SourceSettings.png) · [HTML](wireframes/SourceSettings.html) |

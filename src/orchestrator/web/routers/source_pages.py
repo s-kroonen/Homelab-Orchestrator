@@ -121,6 +121,12 @@ async def source_page(
     )
 
 
+def adapter_protected(adapters: Any, ident: str) -> frozenset[str]:
+    """The stacks and containers of one Portainer that ask for their name (its Safety)."""
+    adapter = adapters.portainer_for(ident)
+    return adapter.protected if adapter is not None else frozenset()
+
+
 @pages.get("/sources/{ident}/stacks/{endpoint_id}/{name}", response_model=None)
 async def stack_page(
     ident: str,
@@ -154,6 +160,7 @@ async def stack_page(
         "endpoint": endpoint_id,
         "name": "" if loose else name,
         "instance": source.id,
+        "protected": sorted(adapter_protected(adapters, source.id)),
         "source_name": source.name,
         "source_href": source.href,
         "back": f"{source.href}?tab=stacks" if found else "/sources",

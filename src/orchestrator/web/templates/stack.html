@@ -10,13 +10,16 @@
 </div>
 <p class="page-sub" id="stk-sub"></p>
 <div id="stk-banners"></div>
+<div id="stk-deploy"></div>
 
 <div class="tabs" role="tablist" aria-label="Stack" id="stk-tabs">
   <button role="tab" data-tab="containers">Containers <span class="n" id="n-containers"></span></button>
   <button role="tab" data-tab="logs">Logs</button>
   <button role="tab" data-tab="environment">Environment <span class="n" id="n-env"></span></button>
+  <button role="tab" data-tab="compose">Compose</button>
   <button role="tab" data-tab="settings">Settings</button>
   <button role="tab" data-tab="history">History</button>
+  <button role="tab" data-tab="raw">Raw</button>
 </div>
 
 <div role="tabpanel" data-tab="containers" hidden>
@@ -46,6 +49,13 @@
   </section>
 </div>
 
+<div role="tabpanel" data-tab="compose" hidden>
+  <section class="card" aria-labelledby="h-compose">
+    <div class="card-head"><h2 id="h-compose">Compose file</h2><span class="faint card-sub">As Portainer keeps it, read only. Values whose name looks secret are hidden.</span><span style="flex:1"></span><button type="button" class="secondary small" id="compose-copy">Copy</button></div>
+    <div id="compose"></div>
+  </section>
+</div>
+
 <div role="tabpanel" data-tab="settings" hidden>
   <section class="card" aria-labelledby="h-pset">
     <div class="card-head"><h2 id="h-pset">Stack settings in Portainer</h2><span style="flex:1"></span><button type="button" class="secondary small" id="git-edit" hidden>Edit…</button></div>
@@ -61,6 +71,12 @@
   <section class="card flush" aria-labelledby="h-hist">
     <div class="card-head"><h2 id="h-hist">History</h2><span style="flex:1"></span><a id="hist-all" href="/activity">All of it in Activity →</a></div>
     <div id="history"></div>
+  </section>
+</div>
+<div role="tabpanel" data-tab="raw" hidden>
+  <section class="card" aria-labelledby="h-raw">
+    <div class="card-head"><h2 id="h-raw">Raw</h2><span class="faint card-sub">The stack and its containers as the orchestrator reads them from Portainer, credentials left out.</span><span style="flex:1"></span><button type="button" class="secondary small" id="raw-copy">Copy</button></div>
+    <pre class="raw-json" id="raw"></pre>
   </section>
 </div>
 <script type="application/json" id="initial">{{ initial | tojson }}</script>

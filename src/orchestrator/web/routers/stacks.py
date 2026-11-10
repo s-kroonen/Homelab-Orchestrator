@@ -338,6 +338,17 @@ async def stack_link(
         raise fail(exc) from exc
 
 
+@router.get("/stacks/{endpoint_id}/{name}/compose")
+async def stack_compose(
+    endpoint_id: int, name: str, adapters: AdaptersDep, instance: str | None = None
+) -> dict[str, Any]:
+    """The compose file, values whose key looks secret replaced by •••."""
+    try:
+        return await stack_ops.compose_view(adapters, endpoint_id, name, instance)
+    except StackError as exc:
+        raise fail(exc) from exc
+
+
 @router.get("/stacks/{endpoint_id}/{name}/env")
 async def stack_env(
     endpoint_id: int, name: str, adapters: AdaptersDep, instance: str | None = None

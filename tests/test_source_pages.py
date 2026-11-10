@@ -337,3 +337,20 @@ def test_proxmox_storage_backup_jobs_tasks_and_overview(client: TestClient) -> N
         "href"
     ] == "?tab=nodes"
     assert client.get("/api/sources/cluster-a/recent").json()[0]["action"] == "connection.created"
+
+
+def test_stack_page_has_compose_and_raw_and_knows_what_is_protected(client: TestClient) -> None:
+    """The SourceStack wireframe: Compose and Raw tabs, the deploy-failed banner's place, and
+    the protected names its buttons ask for."""
+    _portainer(client, "home")
+    client.put("/api/connections/home", json={"settings": {"protected": "dev-xymbols"}})
+    html = client.get("/sources/home/stacks/1/dev-xymbols").text
+    for tab in ("containers", "logs", "environment", "compose", "settings", "history", "raw"):
+        assert f'data-tab="{tab}"' in html, tab
+    assert 'id="stk-deploy"' in html and '"protected": ["dev-xymbols"]' in html
+
+    compose = client.get("/api/stacks/1/dev-xymbols/compose?instance=home").json()
+    assert "services:" in compose["compose"]
+    assert "DB_PASSWORD: •••" in compose["compose"] and "password" not in compose["compose"]
+    js = client.get("/static/stack.js").text
+    assert "Deploy again" in js and '"/compose"' in js and "typeName: stackProt()" in js

@@ -281,6 +281,11 @@ class PortainerAdapter(ABC):
         container's, so credentials never pass through here. Refuses when
         ``PORTAINER_READ_ONLY=true``."""
 
+    async def stack_file(self, stack: Stack) -> str:
+        """The stack's compose file as Portainer keeps it ("" when it keeps none: a compose
+        project it did not create). Callers hide the values that look secret."""
+        return ""
+
     @abstractmethod
     async def stack_kind(self, stack: Stack) -> str:
         """``image`` | ``build`` | ``mixed`` | ``unknown`` - read from the compose file,

@@ -91,8 +91,8 @@ pre.json{margin:0;padding:14px 16px;font:12.5px/1.55 'JetBrains Mono',ui-monospa
         <button class="btn" type="button">Redeploy</button>
         <button class="btn" type="button">⋯</button>
       </div>
-      <div class="banner fail"><span class="pill fail">12:40</span><span>Deploy failed: <span class="mono">wiki-app</span> exited with code 1 after the new image started. The previous image is kept.</span><span style="margin-left: auto"></span><button class="btn small" type="button">Roll back</button><a href="#">Open the run</a></div>
-      <div class="tabs"><span class="on">Containers <span class="faint" style="font-weight:500">2</span></span><span>Environment</span><span>Compose</span><span>Settings</span><span>Raw</span></div>
+      <div class="banner fail"><span class="pill fail">12:40</span><span>Deploy failed: <span class="mono">wiki-app</span> exited with code 1 after the new image started. The pre-deploy image tag and database dump are kept.</span><span style="margin-left: auto"></span><button class="btn small" type="button">Deploy again</button><a href="#">Open the run</a></div>
+      <div class="tabs"><span class="on">Containers <span class="faint" style="font-weight:500">2</span></span><span>Logs</span><span>Environment</span><span>Compose</span><span>Settings</span><span>History</span><span>Raw</span></div>
       <section class="card"><table><thead><tr><th>Container</th><th>Image</th><th>State</th><th>Ports</th><th></th></tr></thead><tbody><tr><td><strong>wiki-app</strong></td><td><span class="mono">ghcr.io/example/wiki:2.4</span></td><td><span class="pill fail">exited (1)</span></td><td><span class="mono">3000→3000</span></td><td class="faint" style="text-align:right">⋯</td></tr><tr><td><strong>wiki-db</strong></td><td><span class="mono">postgres:16</span></td><td><span class="pill ok">running</span></td><td><span class="faint">—</span></td><td class="faint" style="text-align:right">⋯</td></tr></tbody></table>
         <div style="padding: 10px 18px; font-size: 12.5px; color: #8a94a5">A notification about this stack opens this page: Sources / Portainer / home / wiki.</div>
       </section>

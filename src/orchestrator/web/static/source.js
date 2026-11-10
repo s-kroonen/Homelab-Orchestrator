@@ -136,7 +136,7 @@
     const age = el("span", { class: "faint", style: { fontSize: "12.5px" } });
     const facts = el("dl", { class: "facts" });
     const recentBox = el("div");
-    const sectionsBox = el("div", { class: "lane", style: { gap: "18px" } });
+    const sectionsBox = el("div", { class: "src-list", style: { gap: "18px" } });
     // a link to another tab of this page opens the tab instead of loading the page again
     const tabLink = (href, label) => el("a", { href, onclick: (ev) => { const m = /^\?tab=(\w+)$/.exec(href); if (m) { ev.preventDefault(); tabCtl.show(m[1]); } } }, label);
     fill(p,
@@ -152,7 +152,7 @@
             el("a", { href: "/activity" }, "Activity")), recentBox))));
     region(recentBox, {
       load: () => api.get(base + "/recent", { suppressToast: true }), every: 60000, topics: ["audit"],
-      render: (rows) => fill(recentBox, rows.length ? el("div", { class: "lane", style: { gap: "6px", fontSize: "13px" } }, rows.map((r) =>
+      render: (rows) => fill(recentBox, rows.length ? el("div", { class: "src-list", style: { gap: "6px", fontSize: "13px" } }, rows.map((r) =>
         el("div", {}, el("span", { class: "faint", title: fmt.time(r.at) }, fmt.ago(r.at)), " ", el("strong", {}, r.action.replace(/[._]/g, " ")), " ",
           el("span", { class: "mono faint" }, r.target.replace(/^\w+:/, "")), r.result !== "ok" ? [" ", el("span", { class: "pill fail" }, r.result)] : null, " · " + r.actor)))
         : el("p", { class: "faint", style: { margin: "0" } }, "Nothing yet.")),
@@ -164,7 +164,7 @@
         fill(tilesBox, (ov.tiles || []).map(tile)); tilesBox.hidden = !(ov.tiles || []).length;
         const items = ov.attention || [];
         $("#att-n").textContent = items.length ? String(items.length) : "";
-        fill(attention, items.length ? el("div", { class: "lane" }, items.map((a) => el("div", { style: { display: "flex", gap: "10px", alignItems: "baseline", flexWrap: "wrap" } },
+        fill(attention, items.length ? el("div", { class: "src-list" }, items.map((a) => el("div", { style: { display: "flex", gap: "10px", alignItems: "baseline", flexWrap: "wrap" } },
           el("span", { class: "pill " + (a.tone || "warn") }, a.label || ""), el("span", { style: { flex: "1", minWidth: "0" } }, a.text),
           a.href ? tabLink(a.href, a.action || "Open") : null))) : el("p", { class: "faint", style: { margin: "0" } }, "Nothing. All is well."));
         fill(sectionsBox, (ov.sections || []).map((sec) => el("div", { class: "card flush" },

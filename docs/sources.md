@@ -46,10 +46,23 @@ default, Switch on / off and Remove. Tabs (kept in the URL as `?tab=`):
 |---|---|
 | **Overview** | Tiles (nodes online, guests running...), what needs attention, and this source's settings at a glance |
 | one per resource | Nodes, Guests, Environments, Datastores...: a list with filter chips, its own table where a kind has one |
-| **Settings** | Short cards, each with its own Save and Undo: *Connection* (name, address, credentials), *Behaviour* (ports, timeouts, switches, "default for new services"), *Where it lives* (site, scope, notes). On the side: *Status* with Test now, and *Remove* |
+| **Settings** | Short cards, each with its own Save and Undo: *Connection* (name, address, credentials), *Behaviour* (timeouts, refresh, "default for new services"), *Safety* (Dry run, read only, protected names), *Where it lives* (site, scope, notes). Each field of a kind says which card it is on. On the side: *Status* (last check, last change, Test now) and *Remove* |
 | **Raw** | What the API has, as it returns it: pick an endpoint, read it as a table or JSON, filter, copy. Credentials are hidden (`•••`). Read only |
 
 A switched-off source keeps its page and settings; its data tabs say it is off.
+
+The Overview has tiles, what needs attention, small tables (a Proxmox's nodes), the source's
+settings at a glance and **Recent**: the last things done to or through it, from the audit log.
+
+## Safety, per source
+
+* **Dry run**: this source pretends. Reads come from sample data and nothing is sent; the
+  others stay live. `DRY_RUN=true` still makes every one pretend.
+* **Read only** (Portainer): everything is shown, nothing is started, stopped, deployed or edited.
+* **Protected** (Portainer): stacks and containers, by name. Stopping, restarting, redeploying or
+  deleting one (or a container of a protected stack) asks for its name. The API answers `409`
+  without `?confirm=<name>`, the CLI takes `--confirm <name>`, and the assistant is refused.
+  A guarded deploy (a push, the deploy button of a linked service) is not held back by it.
 
 ## Status
 

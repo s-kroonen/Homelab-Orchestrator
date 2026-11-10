@@ -321,6 +321,12 @@ class LivePortainerAdapter(PortainerAdapter):
                 return s
         return None
 
+    async def stack_file(self, stack: Stack) -> str:
+        if stack.id is None:
+            return ""
+        data = await self._json(f"/api/stacks/{stack.id}/file")
+        return str((data or {}).get("StackFileContent", ""))
+
     async def stack_kind(self, stack: Stack) -> str:
         if stack.id is None:
             return "unknown"

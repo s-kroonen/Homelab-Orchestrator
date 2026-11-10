@@ -13,6 +13,7 @@ name), and a change redeploys the stack (audited by names: added, changed, remov
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from types import SimpleNamespace
 from typing import Any
@@ -360,6 +361,33 @@ def looks_secret(name: str) -> bool:
     """A variable whose value is hidden until someone reveals it."""
     upper = name.upper()
     return any(word in upper for word in _SECRET)
+
+
+_ASSIGN = re.compile(r"^(\s*-?\s*([A-Za-z_][\w.-]*)\s*[:=]\s*)(\S.*)$")
+
+
+def hide_secrets(compose: str) -> str:
+    """A compose file with the values of keys that look secret replaced by •••."""
+    out = []
+    for line in compose.splitlines():
+        m = _ASSIGN.match(line)
+        if m and looks_secret(m.group(2)) and not m.group(3).startswith("${"):
+            line = m.group(1) + "•••"
+        out.append(line)
+    return "\n".join(out) + ("\n" if compose.endswith("\n") else "")
+
+
+async def compose_view(
+    adapters: AdapterBundle, endpoint_id: int, name: str, instance: str | None = None
+) -> dict[str, Any]:
+    """The stack's compose file for its Compose tab, values that look secret hidden."""
+    adapter = _adapter(adapters, instance)
+    stack = await _stack(adapter, endpoint_id, name)
+    try:
+        text = await adapter.stack_file(stack)
+    except AdapterError as exc:
+        raise StackError(str(exc), 502) from exc
+    return {"name": stack.name, "managed": stack.managed, "compose": hide_secrets(text)}
 
 
 async def env_view(
