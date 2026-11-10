@@ -715,7 +715,7 @@ def owned_hosts(session: Session, adapters: AdapterBundle) -> list[ProxyHost]:
     """The proxy hosts of the proxy ``adapters.proxy`` stands for (every one when the bundle
     is not scoped to a proxy: a single proxy). Unowned hosts are the default proxy's."""
     hosts = list(session.exec(select(ProxyHost).order_by(ProxyHost.hostname)).all())
-    mine = adapters.proxy_source
+    mine = getattr(adapters, "proxy_source", "")  # a bundle built by hand has one proxy
     if not mine:
         return hosts
     default = adapters.default_proxy
@@ -769,12 +769,12 @@ class ProxyPusher:
         out: list[PushResult] = []
         hosts = _select(owned_hosts(session, adapters), only)
         services = services_by_id(session)
-        mine = adapters.proxy_source or adapters.default_proxy
+        scoped = getattr(adapters, "proxy_source", "")
         tombstones = [
             t
             for t in pending_deletes(session)
             if (not only or str(t.get("hostname", "")).lower() in {o.strip().lower() for o in only})
-            and (not adapters.proxy_source or (t.get("source") or adapters.default_proxy) == mine)
+            and (not scoped or (t.get("source") or adapters.default_proxy) == scoped)
         ]
         routes = await adapters.proxy.list_routes()
 
