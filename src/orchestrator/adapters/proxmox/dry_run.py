@@ -85,6 +85,76 @@ class DryRunProxmoxAdapter(ProxmoxAdapter):
     async def list_backup_storages(self) -> list[BackupStorage]:
         return list(self.simulated_backup_storages)
 
+    async def cluster_resources(self, kind: str) -> list[dict[str, Any]]:
+        """Sample usage for the nodes the simulated guests are on."""
+        nodes = [n.name for n in (await self.cluster_status()).nodes]
+        if kind == "node":
+            return [
+                {
+                    "node": n,
+                    "type": "node",
+                    "status": "online",
+                    "cpu": 0.18 + 0.05 * i,
+                    "maxcpu": 8,
+                    "mem": (12 + 4 * i) * 2**30,
+                    "maxmem": 32 * 2**30,
+                }
+                for i, n in enumerate(nodes)
+            ]
+        if kind == "storage":
+            return [
+                row
+                for i, n in enumerate(nodes)
+                for row in (
+                    {
+                        "node": n,
+                        "storage": "local",
+                        "plugintype": "dir",
+                        "status": "available",
+                        "disk": (20 + 5 * i) * 2**30,
+                        "maxdisk": 100 * 2**30,
+                        "shared": 0,
+                    },
+                    {
+                        "node": n,
+                        "storage": "local-lvm",
+                        "plugintype": "lvmthin",
+                        "status": "available",
+                        "disk": (300 + 90 * i) * 2**30,
+                        "maxdisk": 500 * 2**30,
+                        "shared": 0,
+                    },
+                )
+            ]
+        return []
+
+    async def backup_jobs(self) -> list[dict[str, Any]]:
+        return [
+            {
+                "id": "backup-nightly",
+                "schedule": "02:00",
+                "storage": "pbs",
+                "all": 1,
+                "enabled": 1,
+                "mode": "snapshot",
+            },
+        ]
+
+    async def recent_tasks(self) -> list[dict[str, Any]]:
+        return [
+            {
+                "upid": f"UPID:{g.node}:sample{g.vmid}",
+                "node": g.node,
+                "type": "qmstart",
+                "id": str(g.vmid),
+                "user": "orchestrator@pve",
+                "starttime": 1_760_000_000 + g.vmid,
+                "endtime": 1_760_000_005 + g.vmid,
+                "status": "OK",
+            }
+            for g in self.simulated_guests[:10]
+        ]
+
     async def guest_filesystems(self, node: str, vmid: int, kind: GuestKind) -> GuestFilesystems:
         return self.simulated_filesystems.get(
             vmid, GuestFilesystems(error="no guest agent answered (install qemu-guest-agent)")

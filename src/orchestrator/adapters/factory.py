@@ -297,9 +297,15 @@ def _build_portainers(settings: Settings) -> tuple[dict[str, PortainerAdapter], 
     from orchestrator.connections import runtime
 
     def make(s: Settings) -> PortainerAdapter:
+        adapter: PortainerAdapter
         if s.resolve_adapter(s.portainer_adapter) is AdapterMode.DRY_RUN:
-            return DryRunPortainerAdapter(s)
-        return LivePortainerAdapter(s)
+            adapter = DryRunPortainerAdapter(s)
+        else:
+            adapter = LivePortainerAdapter(s)
+        adapter.protected = frozenset(
+            x.strip().lower() for x in s.portainer_protected.split(",") if x.strip()
+        )
+        return adapter
 
     conns = runtime.instances_for(settings, "portainer")
     if not conns:

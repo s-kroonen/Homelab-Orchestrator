@@ -55,6 +55,35 @@ async def _stack(adapter: PortainerAdapter, endpoint_id: int, name: str) -> Stac
 # -- control -----------------------------------------------------------------------------------
 
 
+async def _names(adapter: PortainerAdapter, kind: str, endpoint_id: int, ref: str) -> set[str]:
+    """What protects a stack or container: its own name, and for a container its stack's."""
+    if kind == "stack":
+        return {ref.lower()}
+    names = {ref.lower()}
+    try:
+        detail = await adapter.get_container(endpoint_id, ref)
+    except AdapterError:
+        detail = None
+    if detail is not None:
+        names.add(detail.container.name.lower())
+        if detail.container.stack:
+            names.add(detail.container.stack.lower())
+    return names
+
+
+async def check_protected(
+    adapter: PortainerAdapter, kind: str, endpoint_id: int, ref: str, confirm_name: str
+) -> None:
+    """A protected stack or container is only stopped, restarted or removed when the caller
+    typed its name (``portainer_protected``)."""
+    if not adapter.protected:
+        return
+    names = await _names(adapter, kind, endpoint_id, ref)
+    hit = sorted(names & adapter.protected)
+    if hit and confirm_name.strip().lower() not in names:
+        raise StackError(f"{hit[0]} is protected: type its name to confirm", 409)
+
+
 async def control(
     session: Session,
     adapters: AdapterBundle,
@@ -65,15 +94,18 @@ async def control(
     ref: str,
     action: str,
     instance: str | None = None,
+    confirm_name: str = "",
 ) -> str:
     """start | stop | restart | redeploy one stack, or start | stop | restart | kill | recreate
-    one container, audited."""
+    one container, audited. Anything but start on a protected one needs its name."""
     allowed = {"start", "stop", "restart"} | (
         {"redeploy"} if kind == "stack" else {"kill", "recreate"}
     )
     if action not in allowed:
         raise StackError(f"unknown action {action!r}", 400)
     adapter = _adapter(adapters, instance)
+    if action != "start":
+        await check_protected(adapter, kind, endpoint_id, ref, confirm_name)
     try:
         if kind == "stack" and action == "redeploy":
             stack = await _stack(adapter, endpoint_id, ref)
@@ -97,7 +129,7 @@ async def control(
             action=f"{kind}.{action}",
             target=f"portainer:{endpoint_id}/{ref}",
             result=AuditResult.ERROR,
-            details={"error": str(exc)},
+            details={"error": str(exc), "instance": adapter.instance_id},
         )
         session.commit()
         raise StackError(str(exc), 502) from exc
@@ -106,7 +138,7 @@ async def control(
         actor=actor,
         action=f"{kind}.{action}",
         target=f"portainer:{endpoint_id}/{ref}",
-        details={"message": message},
+        details={"message": message, "instance": adapter.instance_id},
     )
     session.commit()
     return message
@@ -215,6 +247,7 @@ async def delete(
     adapter = _adapter(adapters, instance)
     if confirm_name != name:
         raise StackError(f"type the stack's name ({name!r}) to confirm deleting it", 400)
+    await check_protected(adapter, "stack", endpoint_id, name, confirm_name)
     stack = await _stack(adapter, endpoint_id, name)
     result = DeleteResult(stack=stack.name)
 

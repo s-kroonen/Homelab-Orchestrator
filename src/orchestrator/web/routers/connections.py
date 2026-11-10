@@ -107,6 +107,7 @@ def _kinds() -> list[dict[str, Any]]:
                     "help": f.help,
                     "choices": list(f.choices),
                     "default": "" if f.is_secret else f.default,
+                    "card": f.card,
                 }
                 for f in s.fields
             ],

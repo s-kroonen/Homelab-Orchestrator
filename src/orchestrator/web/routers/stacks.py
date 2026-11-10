@@ -250,6 +250,7 @@ async def stack_action(
     adapters: AdaptersDep,
     admin: CurrentAdmin,
     instance: str | None = None,
+    confirm: str = "",
 ) -> dict[str, Any]:
     try:
         message = await stack_ops.control(
@@ -261,6 +262,7 @@ async def stack_action(
             ref=name,
             action=action,
             instance=instance,
+            confirm_name=confirm,
         )
     except StackError as exc:
         raise fail(exc) from exc
@@ -276,6 +278,7 @@ async def container_action(
     adapters: AdaptersDep,
     admin: CurrentAdmin,
     instance: str | None = None,
+    confirm: str = "",
 ) -> dict[str, Any]:
     try:
         message = await stack_ops.control(
@@ -287,6 +290,7 @@ async def container_action(
             ref=ref,
             action=action,
             instance=instance,
+            confirm_name=confirm,
         )
     except StackError as exc:
         raise fail(exc) from exc

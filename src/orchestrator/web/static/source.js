@@ -135,14 +135,28 @@
     const attention = el("div");
     const age = el("span", { class: "faint", style: { fontSize: "12.5px" } });
     const facts = el("dl", { class: "facts" });
+    const recentBox = el("div");
+    const sectionsBox = el("div", { class: "lane", style: { gap: "18px" } });
+    // a link to another tab of this page opens the tab instead of loading the page again
+    const tabLink = (href, label) => el("a", { href, onclick: (ev) => { const m = /^\?tab=(\w+)$/.exec(href); if (m) { ev.preventDefault(); tabCtl.show(m[1]); } } }, label);
     fill(p,
       tilesBox,
       el("div", { class: "grid-2" },
         el("div", { class: "col-main stack" },
+          sectionsBox,
           el("div", { class: "card" }, el("div", { class: "card-head" }, el("h2", {}, "Needs attention"), el("span", { class: "n faint", id: "att-n" }), el("div", { style: { flex: "1" } }), age), attention)),
-        el("div", { class: "col-side" },
+        el("div", { class: "col-side", style: { display: "flex", flexDirection: "column", gap: "18px" } },
           el("div", { class: "card" }, el("div", { class: "card-head" }, el("h2", {}, "This source"), el("div", { style: { flex: "1" } }),
-            el("a", { href: "?tab=settings", onclick: (ev) => { ev.preventDefault(); tabCtl.show("settings"); } }, "Settings")), facts))));
+            el("a", { href: "?tab=settings", onclick: (ev) => { ev.preventDefault(); tabCtl.show("settings"); } }, "Settings")), facts),
+          el("div", { class: "card" }, el("div", { class: "card-head" }, el("h2", {}, "Recent"), el("div", { style: { flex: "1" } }),
+            el("a", { href: "/activity" }, "Activity")), recentBox))));
+    region(recentBox, {
+      load: () => api.get(base + "/recent", { suppressToast: true }), every: 60000, topics: ["audit"],
+      render: (rows) => fill(recentBox, rows.length ? el("div", { class: "lane", style: { gap: "6px", fontSize: "13px" } }, rows.map((r) =>
+        el("div", {}, el("span", { class: "faint", title: fmt.time(r.at) }, fmt.ago(r.at)), " ", el("strong", {}, r.action.replace(/[._]/g, " ")), " ",
+          el("span", { class: "mono faint" }, r.target.replace(/^\w+:/, "")), r.result !== "ok" ? [" ", el("span", { class: "pill fail" }, r.result)] : null, " · " + r.actor)))
+        : el("p", { class: "faint", style: { margin: "0" } }, "Nothing yet.")),
+    });
     region(attention, {
       age, every: 60000,
       load: () => api.get(base + "/overview", { suppressToast: true }),
@@ -152,7 +166,13 @@
         $("#att-n").textContent = items.length ? String(items.length) : "";
         fill(attention, items.length ? el("div", { class: "lane" }, items.map((a) => el("div", { style: { display: "flex", gap: "10px", alignItems: "baseline", flexWrap: "wrap" } },
           el("span", { class: "pill " + (a.tone || "warn") }, a.label || ""), el("span", { style: { flex: "1", minWidth: "0" } }, a.text),
-          a.href ? el("a", { href: a.href }, a.action || "Open") : null))) : el("p", { class: "faint", style: { margin: "0" } }, "Nothing. All is well."));
+          a.href ? tabLink(a.href, a.action || "Open") : null))) : el("p", { class: "faint", style: { margin: "0" } }, "Nothing. All is well."));
+        fill(sectionsBox, (ov.sections || []).map((sec) => el("div", { class: "card flush" },
+          el("div", { class: "card-head" }, el("h2", {}, sec.title), el("div", { style: { flex: "1" } }), sec.href ? tabLink(sec.href, "All") : null),
+          el("div", { class: "dt-scroll" }, el("table", { class: "dt" },
+            el("thead", {}, el("tr", {}, sec.columns.map((c) => el("th", { scope: "col", class: ["num", "pct", "bytes"].includes(c.kind) ? "num" : null }, c.label)))),
+            el("tbody", {}, sec.rows.map((r) => el("tr", {}, sec.columns.map((c, i) => el("td", { class: i === 0 ? "first" : null, "data-label": i ? c.label : null }, i === 0 ? el("strong", {}, String(r[c.key])) : cell(c, r) || "—"))))))))));
+        sectionsBox.hidden = !(ov.sections || []).length;
         fill(facts, (ov.facts || []).map(([k, v]) => [el("dt", {}, k), el("dd", { class: /^[\w.-]+:\/\/|^\d+\.\d+\.\d+\.\d+|^[\w.-]+\.(lan|local|com|net|org|io)\b|^[\w.-]+@[\w.!-]+$/.test(v) ? "mono" : null }, v)]));
       },
       onError(e) { fill(facts, el("dt", {}, "Error"), el("dd", { class: "field-error" }, e.message)); },
@@ -235,6 +255,23 @@
           body.append(el("div", { class: "field check", style: { gridColumn: "1 / -1" } }, input, el("label", { for: id }, f.label), help));
           continue;
         }
+        if (f.type === "list") {
+          // a comma-separated list, shown as chips with an Add box
+          const items = () => String(now[f.key] || "").split(",").map((x) => x.trim()).filter(Boolean);
+          const set = (list) => { now[f.key] = list.join(","); refresh(); draw(); };
+          const add = el("input", { id, type: "text", placeholder: "+ Add", readonly, style: { width: "9rem" }, "aria-label": "Add to " + f.label });
+          add.addEventListener("keydown", (ev) => {
+            if (ev.key !== "Enter" || !add.value.trim()) return;
+            ev.preventDefault();
+            set(items().concat(add.value.split(",").map((x) => x.trim()).filter(Boolean)));
+            setTimeout(() => { const again = body.querySelector("#" + id); if (again) again.focus(); }, 0);
+          });
+          body.append(el("div", { class: "field", style: { gridColumn: "1 / -1" } }, el("label", { for: id }, f.label),
+            el("div", { style: { display: "flex", gap: "6px", flexWrap: "wrap", alignItems: "center" } },
+              items().map((x, i) => el("span", { class: "chip" }, x, readonly ? null : el("button", { type: "button", class: "ghost small", "aria-label": "Remove " + x, style: { padding: "0 0 0 6px" },
+                onclick: () => set(items().filter((_y, j) => j !== i)) }, "×"))), readonly ? null : add), help));
+          continue;
+        }
         if (f.type === "select") {
           input = el("select", { id, disabled: readonly }, f.options.map((x) => typeof x === "object" ? el("option", { value: x.value }, x.label) : el("option", { value: x }, x)));
           input.value = now[f.key] == null ? "" : String(now[f.key]);
@@ -272,13 +309,14 @@
     return card;
   }
   function settingField(f) {
-    const base2 = { key: "s_" + f.name, name: f.name, label: f.label, help: f.help || null, required: f.required, setting: true };
+    const base2 = { key: "s_" + f.name, name: f.name, label: f.label, help: f.help || null, required: f.required, setting: true, card: f.card || "connection" };
     if (f.type === "secret") {
       return Object.assign(base2, { setting: false, secret: true, type: "password", get: () => "",
         placeholder: S.connection.secrets_set[f.name] ? "set · leave blank to keep" : "not set",
         help: (f.help ? f.help + " " : "") + "Stored encrypted; never shown again." });
     }
     const get = (c) => (c.settings[f.name] ?? f.default ?? "");
+    if (f.type === "list") return Object.assign(base2, { type: "list", get: (c) => String(c.settings[f.name] ?? "") });
     if (f.type === "bool") return Object.assign(base2, { type: "checkbox", get: (c) => !!c.settings[f.name] });
     if (f.type === "choice") return Object.assign(base2, { type: "select", options: f.choices, get });
     if (f.type === "int" || f.type === "float") return Object.assign(base2, { type: "number", step: f.type === "float" ? "any" : "1", get });
@@ -287,8 +325,9 @@
   function renderSettings() {
     if (!settingsPanel || !started.has("settings")) return;
     const fields = S.fields.map(settingField);
-    const conn = fields.filter((f) => f.type !== "checkbox" && f.type !== "number" && f.type !== "select");
-    const behaviour = fields.filter((f) => f.type === "checkbox" || f.type === "number" || f.type === "select");
+    const conn = fields.filter((f) => f.card === "connection");
+    const behaviour = fields.filter((f) => f.card === "behaviour");
+    const safety = fields.filter((f) => f.card === "safety");
     const nameField = { key: "name", label: "Name", required: true, get: (c) => c.name, help: "How it is called everywhere, e.g. in the sidebar." };
     const st = S.status;
     const side = el("div", { class: "col-side", style: { display: "flex", flexDirection: "column", gap: "18px" } },
@@ -297,6 +336,7 @@
           el("dt", {}, "Last check"), el("dd", {}, st.checked_at ? fmt.ago(new Date(st.checked_at * 1000).toISOString()) + " · " + (st.label || st.state) : "not checked yet"),
           st.has ? [el("dt", {}, "Has"), el("dd", {}, st.has)] : null,
           st.detail ? [el("dt", {}, "Detail"), el("dd", { class: st.state === "fail" ? "field-error" : null }, st.detail)] : null,
+          el("dt", {}, "Last change"), el("dd", {}, S.last_change ? fmt.ago(S.last_change.at) + " by " + S.last_change.actor : "never, here"),
           el("dt", {}, "Id"), el("dd", { class: "mono" }, S.id)),
         el("div", { style: { marginTop: "12px" } }, el("button", { type: "button", class: "secondary small", onclick: testNow }, "Test now"))),
       S.from_env ? null : el("section", { class: "card" }, el("div", { class: "card-head" }, el("h2", {}, "Remove")),
@@ -311,6 +351,7 @@
       behaviour.length || S.multi ? cardFor("Behaviour", [...behaviour, ...(S.multi ? [{ key: "default", label: "Default for new services", type: "checkbox", readonly: S.default, local: true,
         help: S.default ? "A service that names no " + S.kind_title + " uses this one. Make another one the default to change it." : "A service that names no " + S.kind_title + " uses the default one.",
         get: (c) => !!c.default }] : [])], { cols: true, onSave: async (now, was) => { if (now.default && !was.default) await api.post("/api/connections/" + enc(ID) + "/default", {}, { suppressToast: true }); } }) : null,
+      safety.length ? cardFor("Safety", safety, { cols: true }) : null,
       cardFor("Where it lives", [
         { key: "site", label: "Site", placeholder: "home, offsite…", get: (c) => c.site || "" },
         { key: "scope", label: "Scope", type: "select", options: [{ value: "local", label: "Local: only this orchestrator" }, { value: "shared", label: "Shared: every orchestrator" }], get: (c) => c.scope || "local" },

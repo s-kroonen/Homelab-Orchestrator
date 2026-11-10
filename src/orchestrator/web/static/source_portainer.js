@@ -17,6 +17,10 @@
 
   const gitText = (g) => (g ? "git " + ((g.reference || "").replace("refs/heads/", "") || "?") + (g.hash ? " @ " + g.hash.slice(0, 7) : "") : "");
   const linkedTo = (slugs) => slugs.map((x, i) => [i ? ", " : "", el("a", { href: "/services/" + enc(x) }, x)]);
+  // the source's own settings: how often its lists are read again, and what is protected
+  const refreshMs = (ctx) => (Number(ctx.source.connection.settings.refresh_s) || 30) * 1000;
+  const protectedSet = (ctx) => new Set(String(ctx.source.connection.settings.protected || "").split(",").map((x) => x.trim().toLowerCase()).filter(Boolean));
+  const protTag = el.bind(null, "span", { class: "tag", title: "Stopping or removing it asks for its name" }, "protected");
 
   // --- Stacks ---------------------------------------------------------------------------------------
   window.SourceViews["portainer.stacks"] = function (panel, ctx) {
@@ -26,6 +30,8 @@
     const stackUrl = (s, rest) => u("/api/stacks/" + s.endpoint_id + "/" + enc(s.name) + (rest || ""));
     const pageOf = (s) => "/sources/" + enc(SRC) + "/stacks/" + s.endpoint_id + "/" + (s.loose ? "-" : enc(s.name));
     const envs = {};
+    const prot = protectedSet(ctx);
+    const isProt = (s) => !s.loose && prot.has(s.name.toLowerCase());
     function stateOf(s) {
       const total = s.containers_total || 0, run = s.containers_running || 0;
       if (total && run === total) return { cls: "ok", label: "running" };
@@ -41,15 +47,18 @@
         body: verb === "stop" ? "Their containers stop; services that use them stop answering." : "Their containers restart; anyone using them is cut off for a moment.",
         affectedLabel: rows.length > 1 ? "Stacks" : null, affected: rows.length > 1 ? rows.map((r) => r.name) : null, action: verb === "stop" ? "Stop" : "Restart", danger: verb === "stop" })) return;
       for (const s of rows) {
-        try { const r = await api.post(stackUrl(s, "/" + verb), undefined, { suppressToast: true }); toast(r.message || s.name + ": " + verb + " sent", "ok"); }
+        // a protected stack asks for its name, one at a time
+        if (verb !== "start" && isProt(s) && !await confirm({ title: s.name + " is protected", body: "Type its name to " + verb + " it.", typeName: s.name, action: verb === "stop" ? "Stop" : "Restart" })) continue;
+        try { const r = await api.post(stackUrl(s, "/" + verb) + (isProt(s) ? "&confirm=" + enc(s.name) : ""), undefined, { suppressToast: true }); toast(r.message || s.name + ": " + verb + " sent", "ok"); }
         catch (e) { toast(s.name + ": " + e.message, "error"); }
       }
       t.clearSelection();
       setTimeout(() => view.refresh(), 800);
     }
     async function redeploy(s) {
-      if (!await confirm({ title: "Redeploy " + s.name + "?", body: "Portainer pulls " + gitText(s.git) + " and its images again and recreates the containers. A linked sub-service's deploy (with its checks) is on the stack page.", action: "Redeploy", danger: false })) return;
-      try { const r = await api.post(stackUrl(s, "/redeploy"), undefined, { suppressToast: true }); toast(r.message, "ok"); } catch (e) { toast(e.message, "error"); }
+      if (!await confirm({ title: "Redeploy " + s.name + "?", body: "Portainer pulls " + gitText(s.git) + " and its images again and recreates the containers. A linked sub-service's deploy (with its checks) is on the stack page.",
+        typeName: isProt(s) ? s.name : null, action: "Redeploy", danger: false })) return;
+      try { const r = await api.post(stackUrl(s, "/redeploy") + (isProt(s) ? "&confirm=" + enc(s.name) : ""), undefined, { suppressToast: true }); toast(r.message, "ok"); } catch (e) { toast(e.message, "error"); }
       setTimeout(() => view.refresh(), 1200);
     }
     async function deleteStack(s) {
@@ -161,6 +170,7 @@
       columns: [
         { key: "name", label: "Stack", sort: (s) => (s.loose ? "~" : s.name.toLowerCase()),
           render: (s) => [el("a", { href: pageOf(s), style: { fontWeight: "600", color: "var(--text)" } }, s.name),
+            isProt(s) ? [" ", protTag()] : null,
             el("span", { class: "sub" }, envs[s.endpoint_id] || "environment " + s.endpoint_id, s.loose ? [" · ", el("span", { class: "tag" }, "loose containers")] : !s.managed ? [" · ", el("span", { class: "tag" }, "not in Portainer's stack list")] : null)] },
         { key: "state", label: "State", sort: (s) => stateOf(s).label, render: (s) => { const x = stateOf(s); return el("span", { class: "pill " + x.cls }, x.label); } },
         { key: "containers", label: "Containers", sort: (s) => s.containers_running || 0, render: (s) => [dots(s), el("span", { class: "faint" }, (s.containers_running || 0) + " / " + (s.containers_total || 0))] },
@@ -211,7 +221,7 @@
       return { stacks: r.stacks.concat(loose), notes };
     }
     const view = region(el("div"), {
-      load, every: 60000, poll: true, age,
+      load, every: refreshMs(ctx), poll: true, age,
       render: (d) => { fill(banners, d.notes); t.setRows(d.stacks); ctx.setCount(d.stacks.filter((s) => !s.loose).length); },
       onError: (e) => fill(banners, el("div", { class: "banner fail" }, e.message)),
     });
@@ -230,13 +240,15 @@
     fill(panel, el("div", { style: { display: "flex", alignItems: "center", gap: "10px", flexWrap: "wrap", marginBottom: "12px" } },
       el("span", { class: "faint", style: { fontSize: "13px" } }, "Environment"), envBar), box);
     const TONE = { running: "ok", unhealthy: "warn", restarting: "warn", paused: "warn", dead: "fail" };
+    const prot = protectedSet(ctx);
+    const isProt = (r) => prot.has(r.name.toLowerCase()) || (!!r.stack && prot.has(r.stack.toLowerCase()));
 
     async function act(r, verb) {
       if (verb !== "start" && !await confirm({ title: (verb === "stop" ? "Stop " : "Restart ") + r.name + "?",
-        body: verb === "stop" ? "It stops; whatever uses it stops answering." : "Anyone using it is cut off for a moment.",
-        action: verb === "stop" ? "Stop" : "Restart", danger: verb === "stop" })) return;
+        body: (isProt(r) ? "It is protected: type its name. " : "") + (verb === "stop" ? "It stops; whatever uses it stops answering." : "Anyone using it is cut off for a moment."),
+        typeName: isProt(r) ? r.name : null, action: verb === "stop" ? "Stop" : "Restart", danger: verb === "stop" })) return;
       try {
-        const res = await api.post("/api/containers/" + r.endpoint_id + "/" + enc(r.ref) + "/" + verb + "?instance=" + enc(SRC), undefined, { suppressToast: true });
+        const res = await api.post("/api/containers/" + r.endpoint_id + "/" + enc(r.ref) + "/" + verb + "?instance=" + enc(SRC) + (isProt(r) ? "&confirm=" + enc(r.name) : ""), undefined, { suppressToast: true });
         toast(res.message || r.name + ": " + verb + " sent", "ok");
       } catch (e) { toast(r.name + ": " + e.message, "error"); }
       setTimeout(() => view.refresh(), 800);
@@ -247,7 +259,7 @@
       search: (r) => [r.name, r.image, r.stack, r.environment, r.service].join(" "),
       sort: { key: "name", dir: 1 },
       columns: [
-        { key: "name", label: "Container", sort: (r) => r.name.toLowerCase(), render: (r) => el("strong", {}, r.name) },
+        { key: "name", label: "Container", sort: (r) => r.name.toLowerCase(), render: (r) => [el("strong", {}, r.name), isProt(r) ? [" ", protTag()] : null] },
         { key: "stack", label: "Stack", sort: (r) => r.stack, render: (r) => r.stack ? el("a", { href: r.stack_href }, r.stack) : el("a", { href: r.stack_href, class: "faint" }, "no stack") },
         { key: "environment", label: "Environment", sort: (r) => r.environment, render: (r) => r.environment },
         { key: "image", label: "Image", sort: (r) => r.image, render: (r) => el("span", { class: "mono", style: { fontSize: "12.5px" } }, r.image) },
@@ -275,7 +287,7 @@
     }
     const shown = () => (env ? rows.filter((r) => r.environment === env) : rows);
     const view = region(el("div"), {
-      load: ctx.load, every: 60000, age,
+      load: ctx.load, every: refreshMs(ctx), age,
       render: (d) => { rows = d; drawEnv(); t.setRows(shown()); },
       onError: (e) => fill(box, el("div", { class: "region-error" }, "Could not load: " + e.message)),
     });

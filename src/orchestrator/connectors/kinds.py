@@ -93,6 +93,101 @@ async def _pve_guests(ctx: SourceCtx) -> list[dict[str, Any]]:
     ]
 
 
+def _pct(used: Any, total: Any) -> int | None:
+    try:
+        return round(100 * float(used) / float(total)) if float(total) else None
+    except (TypeError, ValueError):
+        return None
+
+
+async def _pve_storage(ctx: SourceCtx) -> list[dict[str, Any]]:
+    rows = await ctx.adapter.cluster_resources("storage")
+    out = []
+    for r in rows:
+        pct = _pct(r.get("disk"), r.get("maxdisk"))
+        chips = []
+        if pct is not None and pct >= 85:
+            chips.append("full")
+        if r.get("status") not in (None, "available"):
+            chips.append("unavailable")
+        out.append(
+            {
+                "id": f"{r.get('node', '')}/{r.get('storage', '')}",
+                "name": r.get("storage", ""),
+                "node": r.get("node", ""),
+                "type": r.get("plugintype", ""),
+                "state": r.get("status", ""),
+                "pct": pct,
+                "used": r.get("disk"),
+                "total": r.get("maxdisk"),
+                "shared": "shared" if r.get("shared") else "",
+                "chips": chips,
+            }
+        )
+    return sorted(out, key=lambda r: (r["node"], r["name"]))
+
+
+async def _pve_backup_jobs(ctx: SourceCtx) -> list[dict[str, Any]]:
+    out = []
+    for j in await ctx.adapter.backup_jobs():
+        on = bool(j.get("enabled", 1))
+        what = "every guest" if j.get("all") else f"guests {j.get('vmid', '')}".strip()
+        if j.get("exclude"):
+            what += f", except {j['exclude']}"
+        out.append(
+            {
+                "id": str(j.get("id", "")),
+                "name": str(j.get("id", "")),
+                "schedule": j.get("schedule", ""),
+                "storage": j.get("storage", ""),
+                "what": what,
+                "mode": j.get("mode", ""),
+                "state": "on" if on else "off",
+                "chips": [] if on else ["off"],
+            }
+        )
+    return out
+
+
+async def _pve_tasks(ctx: SourceCtx) -> list[dict[str, Any]]:
+    from datetime import UTC, datetime
+
+    def at(ts: Any) -> str | None:
+        try:
+            return datetime.fromtimestamp(int(ts), UTC).isoformat()
+        except (TypeError, ValueError):
+            return None
+
+    out = []
+    for t in await ctx.adapter.recent_tasks():
+        status = str(t.get("status", "") or ("running" if not t.get("endtime") else ""))
+        failed = status not in ("OK", "running", "")
+        out.append(
+            {
+                "id": str(t.get("upid", "")),
+                "name": f"{t.get('type', '')} {t.get('id', '')}".strip(),
+                "node": t.get("node", ""),
+                "user": t.get("user", ""),
+                "started": at(t.get("starttime")),
+                "state": "failed" if failed else ("running" if status == "running" else "ok"),
+                "status": status,
+                "chips": ["failed"] if failed else (["running"] if status == "running" else []),
+            }
+        )
+    return sorted(out, key=lambda r: r["started"] or "", reverse=True)
+
+
+def _pve_node_names(ctx: SourceCtx) -> set[str]:
+    """The names of the nodes this Proxmox owns (the default one also has the unowned)."""
+    from sqlmodel import Session
+
+    from orchestrator.connectors.ownership import nodes_of
+    from orchestrator.db.session import get_engine
+
+    with Session(get_engine()) as session:
+        return {n.name for n in nodes_of(session, ctx.conn.id)}
+
+
 class ProxmoxConnector(Connector):
     kind = "proxmox"
     title = "Proxmox VE"
@@ -128,6 +223,49 @@ class ProxmoxConnector(Connector):
             chips=(Chip("running", "Running"), Chip("stopped", "Stopped")),
             view="proxmox.guests",
         ),
+        Resource(
+            "storage",
+            "Storage",
+            (
+                Column("name", "Storage", "mono"),
+                Column("node", "Node"),
+                Column("type", "Type"),
+                Column("pct", "Used", "pct"),
+                Column("used", "Used", "bytes"),
+                Column("total", "Size", "bytes"),
+                Column("shared", "Shared"),
+            ),
+            _pve_storage,
+            chips=(Chip("full", "Filling up"), Chip("unavailable", "Unavailable")),
+        ),
+        Resource(
+            "backup_jobs",
+            "Backup jobs",
+            (
+                Column("name", "Job", "mono"),
+                Column("schedule", "Schedule", "mono"),
+                Column("what", "What"),
+                Column("storage", "Storage"),
+                Column("mode", "Mode"),
+                Column("state", "State", "pill"),
+            ),
+            _pve_backup_jobs,
+            chips=(Chip("off", "Switched off"),),
+        ),
+        Resource(
+            "tasks",
+            "Tasks",
+            (
+                Column("name", "Task", "mono"),
+                Column("node", "Node"),
+                Column("user", "By"),
+                Column("started", "Started", "ago"),
+                Column("state", "Result", "pill"),
+                Column("status", "Status"),
+            ),
+            _pve_tasks,
+            chips=(Chip("failed", "Failed"), Chip("running", "Running")),
+        ),
     )
     raw = (
         RawEndpoint(
@@ -148,8 +286,29 @@ class ProxmoxConnector(Connector):
             "GET /storage",
             lambda ctx: ctx.adapter.list_backup_storages(),
         ),
+        RawEndpoint(
+            "resources",
+            "node usage",
+            "GET /cluster/resources?type=node",
+            lambda ctx: ctx.adapter.cluster_resources("node"),
+        ),
+        RawEndpoint(
+            "backup",
+            "backup jobs",
+            "GET /cluster/backup",
+            lambda ctx: ctx.adapter.backup_jobs(),
+        ),
+        RawEndpoint("tasks", "tasks", "GET /cluster/tasks", lambda ctx: ctx.adapter.recent_tasks()),
         RawEndpoint("version", "version", "GET /version", lambda ctx: ctx.adapter.version()),
     )
+
+    def about(self, ctx: SourceCtx, target: str, details: dict[str, Any]) -> bool:
+        if Connector.about(self, ctx, target, details):
+            return True
+        kind, _, rest = target.partition(":")
+        if kind not in ("node", "guest"):
+            return False
+        return rest.split("/")[0] in _pve_node_names(ctx)
 
     async def summary(self, ctx: SourceCtx) -> Summary:
         async def has() -> str:
@@ -171,6 +330,68 @@ class ProxmoxConnector(Connector):
             {"label": "Nodes", "value": online, "of": len(status.nodes), "sub": "online"},
             {"label": "Guests", "value": running, "of": len(guests), "sub": "running"},
         ]
+        usage = await ctx.adapter.cluster_resources("node")
+        cpus = [float(u["cpu"]) for u in usage if u.get("cpu") is not None]
+        mem = [(u.get("mem") or 0, u.get("maxmem") or 0) for u in usage]
+        if cpus:
+            ov.tiles.append({"label": "CPU", "value": f"{round(100 * sum(cpus) / len(cpus))}%"})
+        mem_pct = _pct(sum(m for m, _ in mem), sum(t for _, t in mem))
+        if mem_pct is not None:
+            ov.tiles.append({"label": "Memory", "value": f"{mem_pct}%"})
+        stores = [r for r in await _pve_storage(ctx) if r["pct"] is not None]
+        if stores:
+            worst = max(stores, key=lambda r: r["pct"])
+            tone = "fail" if worst["pct"] >= 95 else "warn" if worst["pct"] >= 85 else None
+            ov.tiles.append(
+                {
+                    "label": "Fullest storage",
+                    "value": f"{worst['pct']}%",
+                    "sub": f"{worst['name']} on {worst['node']}",
+                    "tone": tone,
+                }
+            )
+            if tone:
+                ov.attention.append(
+                    {
+                        "tone": tone,
+                        "label": f"{worst['pct']}% full",
+                        "text": f"{worst['name']} on {worst['node']} is filling up",
+                        "href": "?tab=storage",
+                        "action": "Open storage",
+                    }
+                )
+        by_node = {u.get("node"): u for u in usage}
+        ov.sections.append(
+            {
+                "title": "Nodes",
+                "columns": [
+                    {"key": "name", "label": "Node", "kind": "text"},
+                    {"key": "state", "label": "State", "kind": "pill"},
+                    {"key": "guests", "label": "Guests", "kind": "num"},
+                    {"key": "cpu", "label": "CPU", "kind": "pct"},
+                    {"key": "mem", "label": "Memory", "kind": "pct"},
+                ],
+                "rows": [
+                    {
+                        "id": n.name,
+                        "name": n.name,
+                        "state": "online" if n.online else "offline",
+                        "guests": sum(1 for g in guests if g.node == n.name),
+                        "cpu": (
+                            round(100 * float(by_node[n.name]["cpu"]))
+                            if by_node.get(n.name, {}).get("cpu") is not None
+                            else None
+                        ),
+                        "mem": _pct(
+                            by_node.get(n.name, {}).get("mem"),
+                            by_node.get(n.name, {}).get("maxmem"),
+                        ),
+                    }
+                    for n in status.nodes
+                ],
+                "href": "?tab=nodes",
+            }
+        )
         if status.cluster_name:
             ov.facts.insert(0, ("Cluster", status.cluster_name))
         for n in status.nodes:
@@ -523,6 +744,14 @@ class PortainerConnector(Connector):
         ),
         RawEndpoint("stacks", "stacks", "GET /api/stacks", lambda ctx: ctx.adapter.list_stacks()),
     )
+
+    def about(self, ctx: SourceCtx, target: str, details: dict[str, Any]) -> bool:
+        if Connector.about(self, ctx, target, details):
+            return True
+        if not target.startswith("portainer:"):
+            return False
+        default = getattr(ctx.adapters, "default_portainer", "") if ctx.adapters else ""
+        return (details.get("instance") or default) == ctx.conn.id
 
     async def summary(self, ctx: SourceCtx) -> Summary:
         async def has() -> str:

@@ -101,7 +101,9 @@ class LivePortainerAdapter(PortainerAdapter):
         self._public = settings.portainer_public_url.strip().rstrip("/") or self._url
         self._key = settings.portainer_api_key.get_secret_value()
         self._verify = settings.portainer_verify_tls
-        self._timeout = float(settings.controller_timeout_s)
+        self._timeout = float(
+            getattr(settings, "portainer_timeout_s", settings.controller_timeout_s)
+        )
         self._long = float(getattr(settings, "portainer_deploy_timeout_s", 900))
         self._read_only = settings.portainer_read_only
         self._transport = transport

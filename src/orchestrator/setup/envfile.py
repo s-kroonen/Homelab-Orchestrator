@@ -103,6 +103,14 @@ ENV_SECTIONS: tuple[EnvSection, ...] = (
                 "docs/proxy_hosts.md.",
             ),
             EnvKey(
+                "PROXMOX_DRY_RUN",
+                "true = this source only pretends (set per source on its Settings tab).",
+            ),
+            EnvKey("PBS_DRY_RUN"),
+            EnvKey("PROXY_DRY_RUN"),
+            EnvKey("POWER_DRY_RUN"),
+            EnvKey("PORTAINER_DRY_RUN"),
+            EnvKey(
                 "NOTIFIER_ADAPTER",
                 "null (log only) | auto (every channel configured below) | ntfy | email | webhook.\n"
                 "DRY_RUN=true keeps it silent whatever this says. See docs/notifications.md.",
@@ -247,6 +255,13 @@ ENV_SECTIONS: tuple[EnvSection, ...] = (
                 "PORTAINER_DEPLOY_TIMEOUT_S",
                 "Seconds to wait for Portainer to start, redeploy or create a stack (it may build "
                 "or pull images first).",
+            ),
+            EnvKey("PORTAINER_TIMEOUT_S", "Seconds an ordinary Portainer request may take."),
+            EnvKey("PORTAINER_REFRESH_S", "How often a Portainer's page reads it again (seconds)."),
+            EnvKey(
+                "PORTAINER_PROTECTED",
+                "Comma-separated stacks and containers that are only stopped or removed when "
+                "someone types the name.",
             ),
             EnvKey("HAOS_URL", "e.g. http://10.0.0.6:8123. For `controller: {type: haos ...}`."),
             EnvKey(

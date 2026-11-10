@@ -110,6 +110,9 @@ def test_a_source_page_has_its_tabs_and_never_its_secrets(client: TestClient) ->
         "overview",
         "resource:nodes",
         "resource:guests",
+        "resource:storage",
+        "resource:backup_jobs",
+        "resource:tasks",
         "settings",
         "raw",
     ]
@@ -125,7 +128,7 @@ def test_a_source_page_has_its_tabs_and_never_its_secrets(client: TestClient) ->
 def test_overview_resources_and_raw_answer(client: TestClient) -> None:
     _pve(client, "cluster-a", "10.0.0.10")
     ov = client.get("/api/sources/cluster-a/overview").json()
-    assert set(ov) == {"tiles", "attention", "facts"}
+    assert set(ov) == {"tiles", "attention", "facts", "sections"}
     assert all(v != "s3cr3t-cluster-a" for _, v in ov["facts"])
     rows = client.get("/api/sources/cluster-a/resources/nodes").json()
     assert rows["key"] == "nodes" and isinstance(rows["rows"], list)
@@ -250,3 +253,87 @@ def test_two_proxmox_clusters_each_show_and_act_on_their_own(client: TestClient)
     assert d["resources"]["guests"]["view"] == "proxmox.guests"
     assert "source_proxmox.js" in client.get("/sources/cluster-a").text
     assert client.get("/nodes", follow_redirects=False).status_code == 404
+
+
+def test_settings_cards_dry_run_and_protected_stacks(client: TestClient) -> None:
+    """The Settings tab's Behaviour and Safety cards: fields say which card they are on, Dry run
+    makes one source pretend, and a protected stack is only stopped when its name is typed."""
+    from orchestrator.adapters.portainer.dry_run import DryRunPortainerAdapter
+
+    _portainer(client, "home")
+    d = client.get("/api/sources/home").json()
+    cards = {f["name"]: f["card"] for f in d["fields"]}
+    assert cards["url"] == "connection" and cards["timeout_s"] == "behaviour"
+    assert cards["read_only"] == "safety" and cards["protected"] == "safety"
+    assert cards["dry_run"] == "safety"
+    assert {f["name"]: f["type"] for f in d["fields"]}["protected"] == "list"
+    assert d["last_change"]["actor"]  # adding it was a change
+
+    r = client.put(
+        "/api/connections/home",
+        json={"settings": {"protected": "dev-xymbols, gateway", "timeout_s": 7}},
+    )
+    assert r.status_code == 200, r.text
+    adapter = client.app.state.adapters.portainer_for("home")  # type: ignore[attr-defined]
+    assert isinstance(adapter, DryRunPortainerAdapter)  # DRY_RUN in tests: every one pretends
+    assert adapter.protected == frozenset({"dev-xymbols", "gateway"})
+
+    stop = "/api/stacks/1/dev-xymbols/stop?instance=home"
+    refused = client.post(stop)
+    assert refused.status_code == 409 and "protected" in refused.json()["detail"]
+    assert client.post(stop + "&confirm=dev-xymbols").status_code == 200
+    assert client.post("/api/stacks/1/dev-xymbols/start?instance=home").status_code == 200
+    # a container of a protected stack is protected too
+    containers = client.get("/api/sources/home/resources/containers").json()["rows"]
+    box = next(c for c in containers if c["stack"] == "dev-xymbols")
+    url = f"/api/containers/1/{box['ref']}/restart?instance=home"
+    assert client.post(url).status_code == 409
+    assert client.post(url + f"&confirm={box['name']}").status_code == 200
+
+    recent = client.get("/api/sources/home/recent").json()
+    actions = [x["action"] for x in recent]
+    assert "container.restart" in actions and "stack.stop" in actions
+    assert "connection.updated" in actions
+
+
+def test_dry_run_switch_makes_one_source_pretend() -> None:
+    from orchestrator.connections.kinds import BY_KIND
+    from orchestrator.connections.model import Connection
+    from orchestrator.connections.runtime import values_to_settings
+
+    spec = BY_KIND["proxmox"]
+    live = Connection(id="a", kind="proxmox", settings={"host": "10.0.0.10"})
+    pretend = Connection(id="b", kind="proxmox", settings={"host": "10.0.0.11", "dry_run": True})
+    assert values_to_settings(spec, live)["proxmox_adapter"] == "live"
+    assert values_to_settings(spec, pretend)["proxmox_adapter"] == "dry_run"
+
+
+def test_proxmox_storage_backup_jobs_tasks_and_overview(client: TestClient) -> None:
+    """The SourceProxmox wireframe: Storage, Backup jobs and Tasks tabs; CPU, Memory and
+    Fullest storage tiles; a nodes table and a Recent card on the overview."""
+    from orchestrator.adapters.proxmox.base import ClusterNode, ClusterStatus
+
+    _pve(client, "cluster-a", "10.0.0.10")
+    pve = client.app.state.adapters.for_source("cluster-a")  # type: ignore[attr-defined]
+    pve.simulated_cluster = ClusterStatus(
+        nodes=[ClusterNode("node-a", True), ClusterNode("node-b", True)]
+    )
+    storage = client.get("/api/sources/cluster-a/resources/storage").json()["rows"]
+    assert {r["node"] for r in storage} == {"node-a", "node-b"}
+    assert all(r["pct"] is not None for r in storage)
+    assert not any("full" in r["chips"] for r in storage)  # the fullest is 78%
+    jobs = client.get("/api/sources/cluster-a/resources/backup_jobs").json()["rows"]
+    assert jobs[0]["what"] == "every guest" and jobs[0]["state"] == "on"
+    assert isinstance(client.get("/api/sources/cluster-a/resources/tasks").json()["rows"], list)
+
+    ov = client.get("/api/sources/cluster-a/overview").json()
+    labels = [t["label"] for t in ov["tiles"]]
+    assert labels == ["Nodes", "Guests", "CPU", "Memory", "Fullest storage"]
+    fullest = ov["tiles"][-1]
+    assert fullest["value"] == "78%" and fullest["sub"] == "local-lvm on node-b"
+    assert fullest["tone"] is None  # under 85%: nothing needs attention
+    (nodes,) = ov["sections"]
+    assert [r["name"] for r in nodes["rows"]] == ["node-a", "node-b"] and nodes[
+        "href"
+    ] == "?tab=nodes"
+    assert client.get("/api/sources/cluster-a/recent").json()[0]["action"] == "connection.created"

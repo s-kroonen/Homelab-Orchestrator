@@ -201,6 +201,9 @@ class PortainerAdapter(ABC):
     #: The connection this adapter serves (set when it is built from one).
     instance_id: str = "portainer"
     instance_name: str = "Portainer"
+    #: Stack and container names (lower case) that are only stopped, restarted or removed when
+    #: the caller typed the name (``portainer_protected``).
+    protected: frozenset[str] = frozenset()
 
     async def start(self) -> None:
         return None

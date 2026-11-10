@@ -108,6 +108,8 @@ class Overview:
     tiles: list[dict[str, Any]] = field(default_factory=list)
     attention: list[dict[str, Any]] = field(default_factory=list)
     facts: list[tuple[str, str]] = field(default_factory=list)
+    #: Small tables: {title, columns: [{key, label, kind}], rows, href (where the full list is)}.
+    sections: list[dict[str, Any]] = field(default_factory=list)
 
 
 # -- one source at work -------------------------------------------------------------------------
@@ -198,6 +200,11 @@ class Connector:
         """Where it answers, for the header and lists (the marker field)."""
         value = conn.value(conn.spec.field(conn.spec.marker))
         return str(value or "")
+
+    def about(self, ctx: SourceCtx, target: str, details: dict[str, Any]) -> bool:
+        """Is an audit entry about this source (its Recent card)? Default: changes to its
+        connection. Kinds add what they act on."""
+        return target == f"connection:{ctx.conn.id}"
 
     async def links(self, ctx: SourceCtx) -> list[dict[str, Any]]:
         """What this source's things are elsewhere. Empty by default."""

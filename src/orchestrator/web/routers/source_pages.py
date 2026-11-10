@@ -29,13 +29,14 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import HTMLResponse, RedirectResponse
-from sqlmodel import Session
+from sqlmodel import Session, select
 
 from orchestrator.config import Settings
 from orchestrator.connections import service as conn_service
 from orchestrator.connectors import status as source_status
 from orchestrator.connectors.kinds import raw_payload
 from orchestrator.connectors.registry import Source, all_sources, connectors, context, get_source
+from orchestrator.db.models import AuditEntry
 from orchestrator.web.auth import get_current_admin, login_redirect, require_admin
 from orchestrator.web.deps import AdaptersDep, SessionDep, SettingsDep
 from orchestrator.web.routers.connections import _kinds
@@ -189,9 +190,19 @@ def _kind_choices() -> list[dict[str, Any]]:
     ]
 
 
+def _last_change(session: Session, source: Source) -> dict[str, Any] | None:
+    row = session.exec(
+        select(AuditEntry)
+        .where(AuditEntry.target == f"connection:{source.id}")
+        .order_by(AuditEntry.id.desc())  # type: ignore[union-attr]
+    ).first()
+    return {"at": row.created_at.isoformat(), "actor": row.actor} if row else None
+
+
 def _detail(session: Session, settings: Settings, source: Source) -> dict[str, Any]:
     kind = next((k for k in _kinds() if k["kind"] == source.kind), None)
     return {
+        "last_change": _last_change(session, source),
         **_row(session, settings, source),
         "connection": source.conn.public(),
         "fields": kind["fields"] if kind else [],
@@ -271,7 +282,12 @@ async def _guarded(call: Any) -> Any:
 async def overview(ident: str, settings: SettingsDep, adapters: AdaptersDep) -> dict[str, Any]:
     source, ctx = _ctx(ident, settings, adapters)
     ov = await _guarded(source.connector.overview(ctx))
-    return {"tiles": ov.tiles, "attention": ov.attention, "facts": ov.facts}
+    return {
+        "tiles": ov.tiles,
+        "attention": ov.attention,
+        "facts": ov.facts,
+        "sections": ov.sections,
+    }
 
 
 @api.get("/{ident}/resources/{key}")
@@ -284,6 +300,27 @@ async def resource(
         raise HTTPException(status.HTTP_404_NOT_FOUND, f"{source.name} has no {key!r}")
     rows = await _guarded(res.fetch(ctx))
     return {"key": res.key, "label": res.label, "rows": rows}
+
+
+@api.get("/{ident}/recent")
+async def recent(
+    ident: str, session: SessionDep, settings: SettingsDep, adapters: AdaptersDep
+) -> list[dict[str, Any]]:
+    """The last things done to or through this source (its Recent card), from the audit log."""
+    source = _source_or_404(ident)
+    ctx = context(source, settings, adapters)
+    rows = session.exec(select(AuditEntry).order_by(AuditEntry.id.desc()).limit(500)).all()  # type: ignore[union-attr]
+    mine = [r for r in rows if source.connector.about(ctx, r.target, r.details or {})][:8]
+    return [
+        {
+            "at": r.created_at.isoformat(),
+            "actor": r.actor,
+            "action": r.action,
+            "target": r.target,
+            "result": r.result.value,
+        }
+        for r in mine
+    ]
 
 
 @api.get("/{ident}/raw")

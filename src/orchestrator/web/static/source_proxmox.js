@@ -181,6 +181,28 @@
       t.clearSelection();
       setTimeout(() => guestsRegion.refresh(), 2500);
     }
+    // several guests' Start at boot at once; each keeps its own order and waits
+    function bootMany(rows) {
+      drawer({
+        title: "Start at boot for " + rows.length + " guest" + (rows.length === 1 ? "" : "s"),
+        sub: "Written to Proxmox for each one (its node must be on). Their order and waits stay as they are.",
+        values: { onboot: true },
+        saveLabel: "Save in Proxmox",
+        fields: [{ key: "onboot", label: "Proxmox starts them when their node boots", type: "checkbox" }],
+        async onSave(v) {
+          const failed = [];
+          for (const g of rows) {
+            const b = g.boot || {};
+            try {
+              await api.put("/api/infra/guests/" + enc(g.node) + "/" + g.vmid + "/boot",
+                { onboot: !!v.onboot, order: v.onboot ? b.order ?? null : null, up_s: v.onboot ? b.up_s ?? null : null, down_s: b.down_s ?? null }, { suppressToast: true });
+            } catch (e) { failed.push(g.name + ": " + e.message); }
+          }
+          window.toast(failed.length ? failed.join(" · ") : "Saved for " + rows.length + " guest" + (rows.length === 1 ? "" : "s"), failed.length ? "error" : "ok");
+          t.clearSelection(); guestsRegion.refresh();
+        },
+      });
+    }
     async function checkDisks() {
       try { await api.post("/api/infra/disks/check", undefined, { suppressToast: true }); window.toast("Disks checked", "ok"); }
       catch (e) { window.toast(e.message, "error"); return; }
@@ -239,6 +261,7 @@
       bulk: (rows) => [
         { label: "Start", onClick: () => power(rows.filter((g) => g.status !== "running"), "start") },
         { label: "Shut down…", onClick: () => power(rows.filter((g) => g.status === "running"), "stop") },
+        { label: "Start at boot…", onClick: () => bootMany(rows) },
         { label: "Check disks", onClick: checkDisks },
       ],
       empty: { title: "No guests", text: ctx.source.name + " lists no guests, or cannot be reached." },
