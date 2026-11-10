@@ -69,8 +69,8 @@
       var p = el("p", null, v.hint);
       if (listUnmatched) {
         p.appendChild(document.createTextNode(" "));
-        var a = el("a", null, "Proxy hosts → Resync");
-        a.href = "/proxy-hosts";
+        var a = el("a", null, "Import its routes");
+        a.href = "/find/proxy-host?tab=import";
         p.appendChild(a);
       }
       box.appendChild(p);

@@ -10,7 +10,6 @@
     "ServiceOverview.dc.html": {"x": 0, "y": 1463, "w": 1440, "h": 1240, "title": "Service — Overview tab", "expand": "fill"},
     "ServiceConfig.dc.html": {"x": 1520, "y": 1463, "w": 1440, "h": 1180, "title": "Service — Configuration tab, editing in the drawer", "expand": "fill"},
     "ServiceRelated.dc.html": {"x": 3040, "y": 1463, "w": 1440, "h": 1180, "title": "Service — Related tab (proxy, stack, guest, backups)", "expand": "fill"},
-    "ProxyHosts.dc.html": {"x": 0, "y": 3046, "w": 1440, "h": 980, "title": "Proxy hosts — list, row menu, bulk bar", "expand": "fill"},
     "ProxyEdit.dc.html": {"x": 1520, "y": 3046, "w": 1440, "h": 980, "title": "Proxy host — create / edit drawer", "expand": "fill"},
     "ConfirmPowerOff.dc.html": {"x": 3040, "y": 3046, "w": 1440, "h": 980, "title": "Confirm a destructive action", "expand": "fill"},
     "Backups.dc.html": {"x": 1520, "y": 4369, "w": 1440, "h": 1020, "title": "Backups — one place, four tabs", "expand": "fill"},
@@ -46,7 +45,7 @@
   "order": [
     "Main.dc.html", "Services.dc.html",
     "ServiceOverview.dc.html", "ServiceConfig.dc.html", "ServiceRelated.dc.html",
-    "ProxyHosts.dc.html", "ProxyEdit.dc.html", "ConfirmPowerOff.dc.html",
+    "ProxyEdit.dc.html", "ConfirmPowerOff.dc.html",
     "Backups.dc.html",
     "PhoneDashboard.dc.html", "PhoneService.dc.html",
     "Map.dc.html", "Traffic.dc.html",

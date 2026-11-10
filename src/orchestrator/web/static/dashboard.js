@@ -70,7 +70,7 @@
     fill($("#tiles"),
       tile("Services", String(V.services.total), parts([[by.ok, "healthy"], [by.fail, "failed"], [by.warn, "warning"], [by.off, "off"]]) || "none yet", "/services"),
       tile("Nodes", String(V.nodes.length), live ? (on === V.nodes.length ? (V.nodes.length === 2 ? "both on" : "all on") : on + " on, " + (V.nodes.length - on) + " off or unknown") : "checking…", "/sources"),
-      tile("Proxy hosts", String(V.proxy_hosts), changed.length ? changed.length + " changed in Traefik" : "", "/proxy-hosts"),
+      tile("Proxy hosts", String(V.proxy_hosts), changed.length ? changed.length + " changed in Traefik" : "", "/find/proxy-host"),
       tile("Backups last 24 h", V.backups.runs ? V.backups.ok + "/" + V.backups.runs : "—", V.backups.next_run ? "next " + fmt.time(V.backups.next_run).split(" ").pop().slice(0, 5) + " · " + V.backups.next_policy : "nothing scheduled", "/backup-policies"),
       tile("Sources", conns ? (counted ? up + "/" + counted : "—") : "…", conns ? (!counted ? "none checked yet" : up === counted ? "all reachable" : (counted - up) + " with problems") : "checking…", "/sources"));
   }

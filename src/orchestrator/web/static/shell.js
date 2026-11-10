@@ -127,7 +127,7 @@
         pending.autosave ? "Changes are written to services.yaml and pushed to Traefik Manager by themselves; this is what did not work."
           : "Automatic saving is off (REGISTRY_AUTOSAVE=false): write and push here."),
       el("div", { style: { display: "flex", gap: "8px", justifyContent: "flex-end" } },
-        el("a", { class: "btn secondary small", href: "/proxy-hosts" }, "Proxy hosts"),
+        el("a", { class: "btn secondary small", href: "/find/proxy-host" }, "Proxy hosts"),
         el("button", { type: "button", class: "small", disabled: !!pending.running, onclick: retry }, pending.autosave ? "Retry" : "Save and push")));
   }
   async function loadPending() {

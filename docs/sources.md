@@ -90,5 +90,14 @@ A source's own call that fails answers `502` with what went wrong; a switched-of
 
 ## Being built
 
-Sources replaces the Connections, Containers and Nodes & guests pages (gone, without a
-redirect). Proxy hosts and the Pull page ([pull.md](pull.md)) move into their sources next.
+Sources replaces the Connections, Containers, Nodes & guests, Proxy hosts and Format routes pages
+(gone, without a redirect). The Pull page ([pull.md](pull.md)) keeps its Proxmox import,
+Addresses and Portainer adopt tabs until linking both ways lands.
+
+## Several proxies
+
+Each proxy host belongs to one proxy (`source_id`; an unowned one is the default proxy's). A
+proxy's page lists, imports, formats and pushes its own hosts only, and every action on a host
+(edit, on/off, delete, move, push) goes to the proxy that owns it. A push of everything runs once
+per proxy. Pages that only know a hostname link to `/find/proxy-host?hostname=…`, which opens it
+on its proxy.

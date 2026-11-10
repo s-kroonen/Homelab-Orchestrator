@@ -15,7 +15,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, Request
 from sqlmodel import select
 
-from orchestrator.connectors.ownership import node_href
+from orchestrator.connectors.ownership import node_href, proxy_host_href
 from orchestrator.db.models import Node, ProxyHost, Service
 from orchestrator.db.session import session_scope
 from orchestrator.registry.autosave import Autosaver
@@ -35,7 +35,6 @@ PAGES: list[tuple[str, str, str]] = [
         "/sources",
         "connections adapters proxmox portainer proxy pbs power settings connectivity",
     ),
-    ("Proxy hosts", "/proxy-hosts", "traefik routes domains"),
     ("Backups", "/backup-policies", "pbs policies snapshots dumps"),
     ("Activity", "/activity", "runs log audit"),
     ("Traffic", "/traffic", "requests countries geo"),
@@ -124,7 +123,7 @@ async def search_index(session: SessionDep) -> dict[str, Any]:
                 "kind": "proxy host",
                 "label": ph.hostname,
                 "sub": ph.upstream or "",
-                "href": f"/proxy-hosts?q={ph.hostname}",
+                "href": proxy_host_href(ph, q=ph.hostname),
             }
         )
     for label, href, words in PAGES:

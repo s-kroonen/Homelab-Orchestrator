@@ -450,11 +450,11 @@ def test_edit_page_has_the_enable_switch(service: Service, monkeypatch: pytest.M
     client = _client(monkeypatch, fake)
     pid = _adopted_host(service)
     # The on/off switch sits in every row of the list.
-    js = client.get("/static/proxy_hosts.js").text
+    js = client.get("/static/source_proxy.js").text
     assert 'class: "switch", role: "switch"' in js and "/enabled" in js
-    assert '"enabled": true' in client.get("/proxy-hosts").text
+    assert client.get(f"/api/proxy-hosts/{pid}").json()["enabled"] is True
     client.post(f"/api/proxy-hosts/{pid}/enabled", json={"enabled": False})
-    assert '"enabled": false' in client.get("/proxy-hosts").text
+    assert client.get(f"/api/proxy-hosts/{pid}").json()["enabled"] is False
 
 
 def test_link_buttons_keep_their_colour_when_visited() -> None:

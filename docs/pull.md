@@ -9,7 +9,8 @@ a node or a guest here (they are made in Proxmox), so none of that is typed in o
 It is **pulled**.
 
 The **Pull** page (`/pull`) is where that
-happens: a tab per source, each listing what was fetched and holding the actions that refresh or
+happens for Proxmox, addresses and Portainer (a proxy's routes are imported and formatted on its
+own page now: its **Import** and **Format routes** tabs). It has a tab per source, each listing what was fetched and holding the actions that refresh or
 import it. What only the orchestrator knows (probes, policies, power targets, deploy settings) stays
 on its own pages.
 
@@ -17,13 +18,13 @@ on its own pages.
 |-----|-------|---------|
 | **Proxmox** | nodes (state, address, power target) and guests (and which service has each) | *Pull from Proxmox* (fill blank node addresses, check every node, re-read every guest, scan the services on them); *Import* a node or a guest the orchestrator does not know yet |
 | **Addresses** | every service with a guest: effective address, where it came from, manual vs discovered, last result | *Discover all* / *only those without an address* (guest agent / LXC, then ARP, then DHCP; a stopped guest is skipped; an address typed in by hand is never touched) |
-| **Traefik Manager** | every route (file, shape: standard / hand-written, on or parked) next to its record; records with no route yet | *Import from Traefik Manager* (adopt routes that have no record, adopt upstream and on/off state); **Format routes** |
 | **Portainer** | stacks, status, what they are linked to | *Pull stacks*; *Adopt…* a stack (and its containers) as sub-services, with proxy hosts, probes and deploy settings |
 
 The same actions exist as `orchestrator-cli sources pull proxmox|ips|traefik`, `orchestrator-cli
 proxy format`, and as API under `/api/pull/*` (`overview`, `proxmox`, `proxmox/refresh`,
 `proxmox/nodes/import`, `proxmox/guests/import`, `ips`, `ips/discover`, `traefik`,
-`traefik/import`, `traefik/format/plan`, `traefik/format/run`, `portainer`). The import buttons that
+`traefik/import`, `traefik/format/plan`, `traefik/format/run`, `portainer`; the `traefik` ones take
+`?source=<proxy>`). The import buttons that
 used to be on the dashboard (*Fill addresses*, *Add node*, per-node *Resync guests*), the Proxy hosts
 page (*Resync from Traefik*, *Discovered*) and the Portainer page (*Adopt*) moved here; those pages
 link to it. Browsing containers and logs, and creating or deleting a stack, stay on the Portainer
@@ -31,8 +32,8 @@ page.
 
 ## Format routes
 
-Format has its own page, **Format routes** (`/pull/format`, in the navigation and linked from the
-Traefik Manager tab). It plans as soon as it opens.
+Format is a tab of each proxy's page, **Format routes** (`/sources/<proxy>?tab=format`), and works
+on that proxy's routes only. It plans as soon as it opens.
 
 Old routes carry the syntax of whatever made them: hand-written files, an NPM migration (a "force
 SSL" redirect middleware on the HTTPS router, HSTS and friends), names of their own, files nobody

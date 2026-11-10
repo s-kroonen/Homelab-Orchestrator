@@ -354,3 +354,63 @@ def test_stack_page_has_compose_and_raw_and_knows_what_is_protected(client: Test
     assert "DB_PASSWORD: •••" in compose["compose"] and "password" not in compose["compose"]
     js = client.get("/static/stack.js").text
     assert "Deploy again" in js and '"/compose"' in js and "typeName: stackProt()" in js
+
+
+def test_two_proxies_each_list_and_push_their_own_hosts(client: TestClient) -> None:
+    """OR-81: a proxy's Proxy hosts, Import and Format routes tabs; a host added on one proxy is
+    listed and pushed there only, and every action on it goes to that proxy."""
+    from sqlmodel import Session
+
+    from orchestrator.db.models import Service
+    from orchestrator.db.session import get_engine
+
+    _proxy(client, "gateway")
+    _proxy(client, "edge")
+    with Session(get_engine()) as s:
+        svc = Service(slug="web", name="Web")
+        s.add(svc)
+        s.commit()
+        sid = svc.id
+    adapters = client.app.state.adapters  # type: ignore[attr-defined]
+    edge, gateway = adapters.for_source("edge"), adapters.for_source("gateway")
+    assert edge is not None and gateway is not None and edge is not gateway
+
+    body = {"hostname": "app.example.lan", "upstream": "http://10.0.0.9:8080", "service_id": sid}
+    made = client.post("/api/proxy-hosts?source=edge", json=body)
+    assert made.status_code == 201, made.text
+    host_id = made.json()["id"]
+    assert [h["hostname"] for h in client.get("/api/proxy-hosts?source=edge").json()] == [
+        "app.example.lan"
+    ]
+    assert client.get("/api/proxy-hosts?source=gateway").json() == []
+
+    pushed = client.post("/api/push", json={"hostnames": ["app.example.lan"]})
+    assert pushed.status_code == 200, pushed.text
+    assert [c["hostname"] for c in edge.created] == ["app.example.lan"]
+    assert gateway.created == []  # never sent to the other proxy
+
+    # its routes are the edge proxy's: Import lists them there only
+    routes = client.get("/api/pull/traefik?source=edge").json()["routes"]
+    assert [r["hostnames"] for r in routes] == [["app.example.lan"]]
+    assert client.get("/api/pull/traefik?source=gateway").json()["routes"] == []
+    off = client.post(f"/api/proxy-hosts/{host_id}/enabled", json={"enabled": False})
+    assert off.status_code == 200
+    assert client.post("/api/push", json={}).status_code == 200  # everything, once per proxy
+    assert edge.toggles and not gateway.toggles
+
+    d = client.get("/api/sources/edge").json()
+    assert [t["key"] for t in d["tabs"]] == [
+        "overview",
+        "hosts",
+        "middlewares",
+        "import",
+        "format",
+        "settings",
+        "raw",
+    ]
+    page = client.get("/sources/edge")
+    assert "source_proxy.js" in page.text and "format_routes.js" in page.text
+    found = client.get("/find/proxy-host?hostname=app.example.lan", follow_redirects=False)
+    assert found.headers["location"] == "/sources/edge?tab=hosts&q=app.example.lan"
+    new = client.get(f"/find/proxy-host?new=1&service_id={sid}", follow_redirects=False)
+    assert new.headers["location"].startswith("/sources/gateway?tab=hosts&new=1")  # the default

@@ -21,6 +21,7 @@ from orchestrator.connectors.base import (
     Resource,
     SourceCtx,
     Summary,
+    Tab,
 )
 from orchestrator.connectors.registry import register
 
@@ -769,12 +770,90 @@ class PortainerConnector(Connector):
 # -- Traefik Manager (the proxy) -----------------------------------------------------------------------
 
 
+def _owned_proxy_hosts(ctx: SourceCtx) -> list[Any]:
+    """This proxy's hosts as kept here (unowned ones are the default proxy's)."""
+    from sqlmodel import Session
+
+    from orchestrator.connectors.ownership import owned_by
+    from orchestrator.db.models import ProxyHost
+    from orchestrator.db.session import get_engine
+
+    default = getattr(ctx.adapters, "default_proxy", "") if ctx.adapters else ""
+    with Session(get_engine()) as session:
+        hosts = owned_by(session, ProxyHost, ctx.conn.id, default=ctx.conn.id == default)
+    return sorted(hosts, key=lambda h: h.hostname)
+
+
+async def _proxy_hosts(ctx: SourceCtx) -> list[dict[str, Any]]:
+    """The tab's own module reads them with Traefik's view; this is the plain list."""
+    return [
+        {
+            "id": h.id,
+            "name": h.hostname,
+            "upstream": h.upstream,
+            "state": "on" if h.enabled else "off",
+            "chips": [] if h.service_id else ["unlinked"],
+        }
+        for h in _owned_proxy_hosts(ctx)
+    ]
+
+
+async def _proxy_middlewares(ctx: SourceCtx) -> list[dict[str, Any]]:
+    names = await ctx.adapter.list_middlewares() or []
+    routes = await ctx.adapter.list_routes() or []
+    rows = []
+    for name in sorted(names):
+        users = sorted(
+            h
+            for r in routes
+            if name in (getattr(r, "middlewares", None) or ())
+            for h in r.hostnames
+        )
+        rows.append(
+            {
+                "id": name,
+                "name": name,
+                "used": len(users),
+                "hosts": ", ".join(users[:4])
+                + (f" and {len(users) - 4} more" if len(users) > 4 else ""),
+                "chips": [] if users else ["unused"],
+            }
+        )
+    return rows
+
+
 class ProxyConnector(Connector):
     kind = "proxy"
     title = "Traefik Manager"
     group = "Proxy"
     family = "network"
     blurb = "proxy hosts, routes and middlewares"
+    scripts = ("objects.js", "format_routes.js", "source_proxy.js")
+    resources = (
+        Resource(
+            "hosts",
+            "Proxy hosts",
+            (
+                Column("name", "Hostname", "mono"),
+                Column("upstream", "Points to", "mono"),
+                Column("state", "On", "pill"),
+            ),
+            _proxy_hosts,
+            chips=(Chip("unlinked", "Not linked"),),
+            view="proxy.hosts",
+        ),
+        Resource(
+            "middlewares",
+            "Middlewares",
+            (
+                Column("name", "Middleware", "mono"),
+                Column("used", "Proxy hosts", "num"),
+                Column("hosts", "Used by"),
+            ),
+            _proxy_middlewares,
+            chips=(Chip("unused", "Unused"),),
+        ),
+    )
     raw = (
         RawEndpoint("routes", "routes", "GET /api/routes", lambda ctx: ctx.adapter.list_routes()),
         RawEndpoint(
@@ -787,6 +866,23 @@ class ProxyConnector(Connector):
             "files", "config files", "GET /api/configs", lambda ctx: ctx.adapter.list_config_files()
         ),
     )
+
+    def tabs(self) -> list[Tab]:
+        """The SourceProxy wireframe: its lists, then Import and Format routes."""
+        tabs = super().tabs()
+        at = next(i for i, t in enumerate(tabs) if t.key == "settings")
+        return [
+            *tabs[:at],
+            Tab("import", "Import", "proxy.import"),
+            Tab("format", "Format routes", "proxy.format"),
+            *tabs[at:],
+        ]
+
+    def about(self, ctx: SourceCtx, target: str, details: dict[str, Any]) -> bool:
+        if Connector.about(self, ctx, target, details):
+            return True
+        kind, _, host = target.partition(":")
+        return kind == "proxy_host" and host in {h.hostname for h in _owned_proxy_hosts(ctx)}
 
     async def summary(self, ctx: SourceCtx) -> Summary:
         async def has() -> str:

@@ -181,7 +181,7 @@
         ? [S.node ? el("a", { href: S.node.href || "/sources" }, S.node.name) : "no node", hasGuest() ? [" › ", S.guest_kind.toUpperCase() + " " + S.guest_id, gate ? [" ", el("span", { class: "pill " + (gate.guest_state === "running" ? "ok" : "off") }, gate.guest_state)] : ""] : ""]
         : [el("a", { href: "/services/" + enc(S.parent) }, S.parent), " (sub-service)"]],
       ["Address", ip.effective_ip ? [el("span", { class: "mono" }, ip.effective_ip), el("span", { class: "faint" }, " · " + (ip.effective_source_label || "") + (ip.ip_discovered_at && ip.effective_source !== "manual" ? " " + fmt.ago(ip.ip_discovered_at) : ""))] : el("span", { class: "faint" }, ip.has_guest ? "not found yet" : "none")],
-      ["Proxy hosts", (S.proxy_hosts || []).length ? (S.proxy_hosts || []).map((h) => el("div", {}, el("a", { href: "/proxy-hosts?q=" + enc(h.hostname), class: "mono" }, h.hostname), " ", syncPill(h))) : el("span", { class: "faint" }, "none")],
+      ["Proxy hosts", (S.proxy_hosts || []).length ? (S.proxy_hosts || []).map((h) => el("div", {}, el("a", { href: "/find/proxy-host?hostname=" + enc(h.hostname), class: "mono" }, h.hostname), " ", syncPill(h))) : el("span", { class: "faint" }, "none")],
       ["Backup", S.backup_excluded ? "never (" + (S.backup_excluded_reason || "excluded") + ")" : !isRoot() ? "with " + S.parent : policy ? [policy.name, row.backup && row.backup.sub ? " · " + row.backup.sub + (row.backup.at ? " " + fmt.ago(row.backup.at) : "") : ""] : el("span", { class: "pill warn" }, "no policy")],
       ["Wake on hit", wakeText()],
       isRoot() && hasGuest() ? ["Starts with its node", bootFact()] : null,
@@ -699,7 +699,7 @@
         el("span", { class: "faint mono", style: { fontSize: "12px", overflowWrap: "anywhere" } }, "→ " + (h.upstream || "nothing yet") + (opts ? " · " + opts : "")),
         menuButton(() => [
           { label: "Edit…", onClick: () => hostDrawer(h) },
-          { label: "Open on Proxy hosts", href: "/proxy-hosts?q=" + enc(h.hostname) },
+          { label: "Open on its proxy", href: "/find/proxy-host?hostname=" + enc(h.hostname) },
           { label: "Unlink from this service", onClick: () => hostCall("del", base + "/proxy-hosts/" + enc(h.hostname), undefined, "Unlinked " + h.hostname) },
           "-",
           { label: "Delete…", danger: true, onClick: () => O.deleteProxyHosts([{ id: h.id, hostname: h.hostname }], () => { view.refresh(); loadHosts(); }).catch(() => {}) },

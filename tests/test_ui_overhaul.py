@@ -120,7 +120,8 @@ def test_search_lists_services_nodes_hosts_and_pages(client: TestClient) -> None
     by_kind = {(i["kind"], i["label"]): i for i in items}
     assert by_kind[("service", "Media")]["href"] == "/services/media"
     assert ("node", "node-a") in by_kind
-    assert by_kind[("proxy host", "tv.example.lan")]["href"] == "/proxy-hosts?q=tv.example.lan"
+    # no proxy source here (dry run): All sources; with one it opens on that proxy's page
+    assert by_kind[("proxy host", "tv.example.lan")]["href"] == "/sources"
     assert by_kind[("page", "Sources")]["href"] == "/sources"
     assert by_kind[("node", "node-a")]["href"] == "/sources"  # no Proxmox source to own it
 

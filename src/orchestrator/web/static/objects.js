@@ -6,6 +6,7 @@
  *   Objects.serviceActions(row, view, refresh)     the ⋯ menu of a service row
  *   Objects.deleteService(row, view, refresh)
  *   Objects.nodeDrawer({node, onSaved})            create (no node) or edit
+ *   Objects.proxyHostDrawer({host, services, source, onSaved})  create (on that proxy) or edit
  *   Objects.nodePower(node, action, view, refresh) wake / restart / power off with a confirm
  */
 (function () {
@@ -351,7 +352,7 @@
         };
         const out = editing
           ? await api.put("/api/proxy-hosts/" + h.id, body, { suppressToast: true })
-          : await api.post("/api/proxy-hosts", body, { suppressToast: true });
+          : await api.post("/api/proxy-hosts" + (o.source ? "?source=" + encodeURIComponent(o.source) : ""), body, { suppressToast: true });
         toast((editing ? "Saved " : "Added ") + body.hostname + (body.upstream ? "; pushing to Traefik Manager" : ""), "ok");
         for (const w of (out && out.warnings) || []) toast(w, "error");
         if (o.onSaved) o.onSaved(out);

@@ -106,6 +106,38 @@ async def sources_page(
     )
 
 
+@pages.get("/find/proxy-host", response_model=None)
+async def find_proxy_host(
+    request: Request,
+    session: SessionDep,
+    hostname: str = "",
+    id: int | None = None,
+    new: int = 0,
+    service_id: int | None = None,
+    tab: str = "hosts",
+) -> RedirectResponse:
+    """Where a proxy host is shown: under the proxy that owns it. Pages that know a hostname
+    (or want to add one for a service) link here instead of knowing which proxy that is."""
+    if get_current_admin(request, session) is None:
+        return login_redirect(request)
+    from orchestrator.connectors.ownership import proxy_host_href
+    from orchestrator.db.models import ProxyHost
+
+    host = None
+    if id is not None:
+        host = session.get(ProxyHost, id)
+    elif hostname:
+        host = session.exec(select(ProxyHost).where(ProxyHost.hostname == hostname.lower())).first()
+    query: dict[str, Any] = {"tab": tab}
+    if new:
+        query |= {"new": 1, "service_id": service_id}
+    elif host is not None:
+        query |= {"edit": host.id} if id is not None else {"q": host.hostname}
+    elif hostname:
+        query |= {"q": hostname}
+    return RedirectResponse(proxy_host_href(host, **query), status.HTTP_303_SEE_OTHER)
+
+
 @pages.get("/sources/{ident}", response_model=None)
 async def source_page(
     ident: str, request: Request, session: SessionDep, settings: SettingsDep

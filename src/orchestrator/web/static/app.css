@@ -1088,3 +1088,15 @@ pre.log .err { color: var(--fail); } pre.log .ts { color: var(--faint); }
   .raw-list button { white-space: nowrap; }
   .src-head .src-actions { width: 100%; }
 }
+
+/* --- a proxy's Format routes tab (format_routes.js) ---------------------------------------- */
+.fmt-chip { display: inline-block; padding: 1px 7px; margin: 0 3px 3px 0; border-radius: 10px; background: var(--off-bg); color: var(--off); font-size: 12px; }
+.fmt-chip.ok { background: var(--ok-bg); color: var(--ok); } .fmt-chip.warn { background: var(--warn-bg); color: var(--warn); } .fmt-chip.bad { background: var(--fail-bg); color: var(--fail); }
+.fmt-item { border: 1px solid var(--line); border-radius: var(--r-btn); padding: 10px 12px; margin-bottom: 10px; background: var(--surface); }
+.fmt-item.blocked { border-color: var(--fail-bg); } .fmt-item.skipped, .fmt-item.standard { opacity: .65; }
+.fmt-item h4 { margin: 0 0 4px; font-size: 14px; }
+.fmt-item ul { margin: 4px 0 6px 18px; padding: 0; font-size: 13px; }
+.fmt-item .why { color: var(--muted); font-size: 13px; }
+.fmt-item dl.kv { display: grid; grid-template-columns: max-content 1fr; gap: 4px 16px; font-size: 13px; margin: 6px 0; }
+.fmt-item dl.kv > div { display: contents; } .fmt-item dl.kv dt { color: var(--faint); } .fmt-item dl.kv dd { margin: 0; overflow-wrap: anywhere; }
+.fmt-item .checks label { display: inline-block; margin: 2px 8px 2px 0; }

@@ -38,7 +38,6 @@
   <div class="tabbar" role="tablist" id="src-tabs">
     <button class="tab" type="button" role="tab" data-tab="proxmox">Proxmox <span class="src-meta" id="m-proxmox"></span></button>
     <button class="tab" type="button" role="tab" data-tab="ips">Addresses <span class="src-meta" id="m-ips"></span></button>
-    <button class="tab" type="button" role="tab" data-tab="traefik">Traefik Manager <span class="src-meta" id="m-traefik"></span></button>
     <button class="tab" type="button" role="tab" data-tab="portainer">Portainer <span class="src-meta" id="m-portainer"></span></button>
   </div>
 
@@ -77,31 +76,6 @@
         <tbody id="ip-rows"><tr><td colspan="8">Loading…</td></tr></tbody>
       </table></div>
     </section>
-  </div>
-
-  <!-- Traefik Manager -->
-  <div class="tabpanel" id="tab-traefik" hidden>
-    <section>
-      <div class="row">
-        <button id="tr-import">Import from Traefik Manager</button>
-        <a class="btn" href="/pull/format">Format routes…</a>
-        <a class="btn secondary" href="/proxy-hosts">Proxy hosts (edit, push)</a>
-        <span class="msg" id="tr-msg">Import records routes that have no record yet and adopts upstream and on/off state for the ones that do.</span>
-      </div>
-      <div id="tr-unreadable" class="banner warn" hidden>Traefik Manager is not configured or could not be read.</div>
-      <h3>Routes in Traefik Manager</h3>
-      <div class="table-scroll"><table>
-        <thead><tr><th>Route</th><th>Host</th><th>Upstream</th><th>File</th><th>Shape</th><th>On</th><th>Record</th><th></th></tr></thead>
-        <tbody id="tr-routes"><tr><td colspan="8">Loading…</td></tr></tbody>
-      </table></div>
-      <div id="tr-noroute-box" hidden>
-        <h3>Records with no route yet</h3>
-        <p class="msg">These hosts exist here but not in Traefik Manager. <strong>Push now</strong> on the
-          <a href="/proxy-hosts">Proxy hosts</a> page creates them (a host switched off is created parked and stays off).</p>
-        <div id="tr-noroute"></div>
-      </div>
-    </section>
-
   </div>
 
   <!-- Portainer -->

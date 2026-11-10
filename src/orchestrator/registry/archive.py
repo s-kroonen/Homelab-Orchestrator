@@ -200,7 +200,7 @@ def describe(row: ArchivedService) -> dict[str, Any]:
     parts: list[str] = []
     if row.kind == KIND_PROXY_HOST:
         spec = snap.get("proxy_host") or {}
-        out["page"] = "/proxy-hosts"
+        out["page"] = "/find/proxy-host"
         parts.append(f"-> {spec.get('upstream') or 'no upstream'}")
         if snap.get("service_slug"):
             parts.append(f"service {snap['service_slug']}")

@@ -116,6 +116,25 @@ def register_pusher(pusher: Pusher) -> None:
     PUSHERS.append(pusher)
 
 
+def scopes(adapters: AdapterBundle) -> list[AdapterBundle]:
+    """One bundle per proxy (each sees its own proxy and proxy hosts); just ``adapters`` when
+    there is one proxy or none."""
+    ids = adapters.proxy_ids() if hasattr(adapters, "proxy_ids") else []
+    return [adapters.with_proxy(i) for i in ids] if len(ids) > 1 else [adapters]
+
+
+def merge(statuses: list[PushStatus]) -> PushStatus:
+    """One status from the statuses of the same target on several proxies."""
+    first = statuses[0]
+    for other in statuses[1:]:
+        first.reachable = first.reachable and other.reachable
+        first.message = "; ".join(m for m in (first.message, other.message) if m)
+        first.in_sync += other.in_sync
+        first.pending.extend(other.pending)
+        first.detached.extend(other.detached)
+    return first
+
+
 def get_pushers(names: Sequence[str] | None = None) -> list[Pusher]:
     # Importing registers the built-in pushers.
     from orchestrator.registry import proxy_push  # noqa: F401
@@ -132,7 +151,7 @@ async def status_all(
     out: list[PushStatus] = []
     for pusher in get_pushers(names):
         try:
-            out.append(await pusher.status(session, adapters))
+            out.append(merge([await pusher.status(session, x) for x in scopes(adapters)]))
         except Exception as exc:  # a broken target must not hide the others
             log.warning("push.status_failed", target=pusher.name, error=str(exc))
             out.append(PushStatus(name=pusher.name, reachable=False, message=str(exc)))
@@ -153,9 +172,10 @@ async def apply_all(
     results: list[PushResult] = []
     for pusher in get_pushers(names):
         try:
-            results.extend(
-                await pusher.apply(session, adapters, only, dry_run=dry_run, actor=actor)
-            )
+            for scoped in scopes(adapters):
+                results.extend(
+                    await pusher.apply(session, scoped, only, dry_run=dry_run, actor=actor)
+                )
         except Exception as exc:
             log.warning("push.apply_failed", target=pusher.name, error=str(exc))
             session.rollback()

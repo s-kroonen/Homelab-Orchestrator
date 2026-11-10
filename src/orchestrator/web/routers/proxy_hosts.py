@@ -65,6 +65,7 @@ from orchestrator.registry.proxy_push import (
     host_enabled,
     is_live_managed,
     move_to_configured_file,
+    owned_hosts,
     pending_deletes,
     ref_of,
     slug_of,
@@ -735,10 +736,12 @@ async def _prepare(
 
 @router.get("")
 async def list_proxy_hosts(
-    session: SessionDep, settings: SettingsDep, adapters: AdaptersDep
+    session: SessionDep, settings: SettingsDep, adapters: AdaptersDep, source: str | None = None
 ) -> list[dict[str, Any]]:
+    """Every proxy host, or (``source``) one proxy's, each read against its own proxy."""
     services = _services_by_id(session)
-    hosts = session.exec(select(ProxyHost).order_by(ProxyHost.hostname)).all()
+    adapters = adapters.with_proxy(source or "")
+    hosts = owned_hosts(session, adapters)
     # One poll for the whole page load, not one per row.
     live = await _live_state(settings, adapters)
     routes = await _sync_routes(settings, adapters, live)
@@ -754,7 +757,8 @@ async def list_proxy_hosts(
 async def get_proxy_host(
     proxy_host_id: int, session: SessionDep, settings: SettingsDep, adapters: AdaptersDep
 ) -> dict[str, Any]:
-    return await _serialize_one(session, settings, adapters, _get_or_404(session, proxy_host_id))
+    ph = _get_or_404(session, proxy_host_id)
+    return await _serialize_one(session, settings, adapters.with_proxy(ph.source_id), ph)
 
 
 @router.post("", status_code=status.HTTP_201_CREATED)
@@ -764,16 +768,20 @@ async def create_proxy_host(
     admin: CurrentAdmin,
     settings: SettingsDep,
     adapters: AdaptersDep,
+    source: str | None = None,
 ) -> dict[str, Any]:
-    """Record a proxy host in the DB. Nothing is written to Traefik Manager
+    """Record a proxy host in the DB (``source``: on that proxy; blank: the default one).
+    Nothing is written to Traefik Manager
     here: a live-managed host becomes ``pending_create`` and is pushed on
     "Save to YAML" / "Push now" (``registry/proxy_push.py``). Everything that
     can be checked read-only IS checked now - hostname, upstream, entry
     points, resolver, route options, conflicts with routes that are not ours -
     so a push does not fail on something the form could have said."""
     svc = _validate_service(session, body)
+    adapters = adapters.with_proxy(source or "")
     prep = await _prepare(session, settings, adapters, body, existing=None)
     ph = ProxyHost(
+        source_id=source or "",
         hostname=prep.hostname,
         upstream=body.upstream,
         router_provider=body.router_provider,
@@ -863,8 +871,8 @@ async def resync_proxy_hosts(
         for hostname in info.hostnames:
             hostname_to_router.setdefault(hostname, info)
 
-    hosts = session.exec(select(ProxyHost)).all()
-    existing_hostnames = {ph.hostname for ph in hosts}
+    hosts = owned_hosts(session, adapters)  # this proxy's
+    existing_hostnames = {ph.hostname for ph in session.exec(select(ProxyHost)).all()}
 
     now = datetime.now(UTC)
     services_map = _services_by_id(session)
@@ -969,6 +977,7 @@ async def update_proxy_host(
     Manager on "Save to YAML" / "Push now" (a disabled host included - the
     push orders enable -> update -> disable so a parked route is safe)."""
     ph = _get_or_404(session, proxy_host_id)
+    adapters = adapters.with_proxy(ph.source_id)
     svc = _validate_service(session, body)
     prep = await _prepare(session, settings, adapters, body, existing=ph)
 
@@ -1056,8 +1065,9 @@ async def delete_proxy_host(
     settings: SettingsDep,
     adapters: AdaptersDep,
 ) -> dict[str, Any]:
+    ph = _get_or_404(session, proxy_host_id)
     return await delete_proxy_host_record(
-        session, admin, settings, adapters, _get_or_404(session, proxy_host_id)
+        session, admin, settings, adapters.with_proxy(ph.source_id), ph
     )
 
 
@@ -1080,6 +1090,7 @@ async def _tombstone(session: Session, adapters: AdapterBundle, ph: ProxyHost) -
         route_ref=ref,
         with_redirect=RouteOptions.from_dict(ph.route_options).http_redirect,
         service_slug=svc.slug if svc else "",
+        source=ph.source_id,
     )
     return True
 
@@ -1219,6 +1230,7 @@ async def move_config_file(
     explicit action like Push now, not a local edit. Refused (409) for a route
     that is not ours, a disabled host, or when the move cannot be verified."""
     ph = _get_or_404(session, proxy_host_id)
+    adapters = adapters.with_proxy(ph.source_id)
     result = await move_to_configured_file(session, adapters, settings, ph, actor=admin.username)
     if not result.ok:
         session.rollback()
@@ -1241,7 +1253,9 @@ async def set_enabled(
 ) -> dict[str, Any]:
     """Enable or disable one proxy host - see :func:`set_proxy_host_enabled`."""
     ph = _get_or_404(session, proxy_host_id)
-    return await set_proxy_host_enabled(session, admin, settings, adapters, ph, body.enabled)
+    return await set_proxy_host_enabled(
+        session, admin, settings, adapters.with_proxy(ph.source_id), ph, body.enabled
+    )
 
 
 catalog_router = APIRouter(

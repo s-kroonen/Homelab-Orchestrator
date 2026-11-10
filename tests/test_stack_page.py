@@ -255,5 +255,5 @@ def test_the_services_list_has_a_sub_services_tab(client: TestClient) -> None:
 
 
 def test_the_proxy_hosts_page_can_push_many(client: TestClient) -> None:
-    r = client.get("/proxy-hosts")
-    assert r.status_code == 200 and 'id="push-all"' in r.text
+    js = client.get("/static/source_proxy.js").text  # a proxy's Proxy hosts tab
+    assert "pushAll" in js and '"Push " + n + " not pushed"' in js

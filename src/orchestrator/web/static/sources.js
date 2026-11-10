@@ -24,7 +24,7 @@
   }
 
   // -- tabs ---------------------------------------------------------------------------------------
-  const TABS = ["proxmox", "ips", "traefik", "portainer"];
+  const TABS = ["proxmox", "ips", "portainer"];
   const loaders = {};
   const loaded = new Set();
   function show(name, force) {
@@ -46,7 +46,6 @@
       const r = o.refreshed || {};
       $("m-proxmox").textContent = `${o.proxmox.nodes} nodes, ${o.proxmox.guests} guests` + (r.proxmox ? ` · ${when(r.proxmox)}` : "");
       $("m-ips").textContent = `${o.ips.missing} without an address` + (r.ips ? ` · ${when(r.ips)}` : "");
-      $("m-traefik").textContent = `${o.traefik.hosts} hosts` + (o.traefik.never_pushed ? `, ${o.traefik.never_pushed} not pushed` : "") + (r.traefik ? ` · ${when(r.traefik)}` : "");
       $("m-portainer").textContent = o.portainer.configured ? (r.portainer ? when(r.portainer) : "") : "not set up";
     } catch (e) { /* the tabs report their own errors */ }
   }
@@ -114,55 +113,6 @@
   }
   $("ip-all").addEventListener("click", () => busyButton($("ip-all"), () => discover(false)));
   $("ip-missing").addEventListener("click", () => busyButton($("ip-missing"), () => discover(true)));
-
-  // -- Traefik Manager -------------------------------------------------------------------------------------
-  let serviceChoices = null;
-  async function services() {
-    if (!serviceChoices) serviceChoices = await api("GET", "/api/registry/services");
-    return serviceChoices;
-  }
-  loaders.traefik = async function () {
-    let d;
-    try { d = await api("GET", "/api/pull/traefik"); }
-    catch (e) { msg("tr-msg", err(e), "error"); return; }
-    $("tr-unreadable").hidden = d.readable;
-    const svcs = await services();
-    $("tr-routes").replaceChildren(...(d.routes.length ? d.routes.map((r) => routeRow(r, svcs)) : [emptyRow(8, d.readable ? "Traefik Manager has no routes." : "Not readable.")]));
-    $("tr-noroute-box").hidden = !d.no_route.length;
-    $("tr-noroute").replaceChildren(...d.no_route.map((h) => el("div", null, code(h.hostname), " ",
-      h.service ? el("a", { href: "/services/" + encodeURIComponent(h.service) }, h.service) : null, " ",
-      h.enabled ? (h.never_pushed ? chip("never pushed", "warn") : chip("route gone", "bad")) : chip("switched off", null))));
-  };
-  function routeRow(r, svcs) {
-    const shape = r.redirect_companion ? chip("redirect router", "ok") : r.owned ? chip("standard", "ok") : chip("hand-written / migrated", "warn");
-    let record;
-    if (r.host_id) record = r.service ? el("a", { href: "/services/" + encodeURIComponent(r.service) }, r.service) : el("span", { className: "muted" }, "record");
-    else if (r.redirect_companion) record = el("span", { className: "muted" }, "—");
-    else {
-      const sel = el("select", null, new Option("— service —", ""), ...svcs.map((s) => new Option(`${s.name} (${s.slug})`, s.slug)));
-      const add = el("button", { className: "small" }, "Add");
-      add.addEventListener("click", async () => {
-        const s = svcs.find((x) => x.slug === sel.value);
-        if (!s) { msg("tr-msg", "Pick a service for " + r.hostnames[0] + " first.", "error"); return; }
-        const full = await api("GET", "/api/registry/services/" + encodeURIComponent(s.slug));
-        try {
-          await api("POST", "/api/proxy-hosts", { hostname: r.hostnames[0], upstream: r.upstream || "", service_id: full.id, entry_points: r.entry_points || [], adopt: true });
-          msg("tr-msg", "Recorded " + r.hostnames[0] + ".", "ok"); loaders.traefik(); loadOverview();
-        } catch (e) { msg("tr-msg", err(e), "error"); }
-      });
-      record = el("span", null, sel, " ", add);
-    }
-    return el("tr", null, el("td", null, code(r.route)), el("td", null, r.hostnames.join(", ") || "—"), el("td", null, r.upstream || "—"),
-      el("td", null, r.file || "—"), el("td", null, shape), el("td", null, r.enabled ? "on" : "parked"), el("td", null, record), el("td", null, ""));
-  }
-  $("tr-import").addEventListener("click", () => busyButton($("tr-import"), async () => {
-    msg("tr-msg", "Importing…");
-    try {
-      const b = await api("POST", "/api/pull/traefik/import");
-      msg("tr-msg", `Updated ${b.updated_count}, found ${b.discovered_count} route(s) with no record.`, "ok");
-      loaders.traefik(); loadOverview();
-    } catch (e) { msg("tr-msg", err(e), "error"); }
-  }));
 
   // -- Portainer -----------------------------------------------------------------------------------------------
   // Which Portainer connection this tab shows (Connections page); blank = the default one.

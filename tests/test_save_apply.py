@@ -41,7 +41,7 @@ def test_service_page_edits_in_drawers(client: TestClient) -> None:
     assert "PrevPage" not in js
 
 
-@pytest.mark.parametrize("path", ["/backup-policies/new", "/proxy-hosts/new"])
+@pytest.mark.parametrize("path", ["/backup-policies/new"])
 def test_old_form_pages_open_the_drawer(client: TestClient, path: str) -> None:
     r = client.get(path, follow_redirects=False)
     assert r.status_code == 303 and r.headers["location"].endswith("?new=1")

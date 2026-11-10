@@ -32,7 +32,7 @@ from orchestrator.ipdiscovery.discovery import ip_view
 from orchestrator.logging_setup import get_logger, new_correlation_id
 from orchestrator.pipelines.steps import StepRecorder
 from orchestrator.registry import route_format as rf
-from orchestrator.registry.proxy_push import ref_of
+from orchestrator.registry.proxy_push import owned_hosts, ref_of
 from orchestrator.web.auth import CurrentAdmin, require_admin
 from orchestrator.web.deps import AdaptersDep, SessionDep, SettingsDep
 
@@ -338,11 +338,14 @@ async def ips_discover(
 
 
 @router.get("/traefik")
-async def traefik(session: SessionDep, adapters: AdaptersDep) -> dict[str, Any]:
-    """Every route Traefik Manager has next to the host record it belongs to."""
+async def traefik(
+    session: SessionDep, adapters: AdaptersDep, source: str | None = None
+) -> dict[str, Any]:
+    """Every route a Traefik Manager has (``source``: that proxy) next to its host record."""
+    adapters = adapters.with_proxy(source or "")
     proxy = adapters.proxy
     routes = await proxy.list_routes()
-    hosts = session.exec(select(ProxyHost).order_by(ProxyHost.hostname)).all()
+    hosts = owned_hosts(session, adapters)
     services = {s.id: s for s in session.exec(select(Service)).all()}
     by_host = {h.hostname.lower(): h for h in hosts}
     rows: list[dict[str, Any]] = []
@@ -391,12 +394,18 @@ async def traefik(session: SessionDep, adapters: AdaptersDep) -> dict[str, Any]:
 
 @router.post("/traefik/import")
 async def traefik_import(
-    session: SessionDep, adapters: AdaptersDep, settings: SettingsDep, admin: CurrentAdmin
+    session: SessionDep,
+    adapters: AdaptersDep,
+    settings: SettingsDep,
+    admin: CurrentAdmin,
+    source: str | None = None,
 ) -> dict[str, Any]:
-    """Pull Traefik Manager's routes into the records (what "Resync from Traefik" did)."""
+    """Pull a Traefik Manager's routes into its records (what "Resync from Traefik" did)."""
     from orchestrator.web.routers import proxy_hosts
 
-    out = await proxy_hosts.resync_proxy_hosts(session, admin, settings, adapters)
+    out = await proxy_hosts.resync_proxy_hosts(
+        session, admin, settings, adapters.with_proxy(source or "")
+    )
     _stamp(session, "traefik")
     session.commit()
     return out
@@ -413,11 +422,19 @@ class PlanIn(BaseModel):
 
 @router.post("/traefik/format/plan")
 async def format_plan(
-    body: PlanIn, session: SessionDep, adapters: AdaptersDep, settings: SettingsDep
+    body: PlanIn,
+    session: SessionDep,
+    adapters: AdaptersDep,
+    settings: SettingsDep,
+    source: str | None = None,
 ) -> dict[str, Any]:
-    """What formatting would do to each host. Changes nothing."""
+    """What formatting would do to each host (``source``: of that proxy). Changes nothing."""
     plan = await rf.build_plan(
-        session, adapters, settings, hostnames=body.hostnames, hsts=body.hsts
+        session,
+        adapters.with_proxy(source or ""),
+        settings,
+        hostnames=body.hostnames,
+        hsts=body.hsts,
     )
     return plan.as_dict()
 
@@ -450,8 +467,11 @@ async def format_run(
     adapters: AdaptersDep,
     settings: SettingsDep,
     admin: CurrentAdmin,
+    source: str | None = None,
 ) -> dict[str, Any]:
-    """Rewrite the chosen hosts, one at a time, in the background. Poll ``/api/runs/{id}``."""
+    """Rewrite the chosen hosts (``source``: of that proxy), one at a time, in the background.
+    Poll ``/api/runs/{id}``."""
+    adapters = adapters.with_proxy(source or "")
     running = session.exec(
         select(PipelineRun).where(
             PipelineRun.kind == PipelineKind.FORMAT, PipelineRun.status == PipelineStatus.RUNNING

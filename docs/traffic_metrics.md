@@ -333,7 +333,7 @@ common case — without also having to flip two more switches elsewhere.
 
 All three are edited where their other toggles already live: `Node` on the
 main dashboard's node table, `Service` on its detail page (`/services/{slug}`),
-`ProxyHost` on the proxy-hosts page (`/proxy-hosts`) — and they all round-trip
+`ProxyHost` on its proxy's Proxy hosts tab — and they all round-trip
 through **Save to YAML** / **Reset to saved** like every other registry field.
 
 None of these three flags affect `POST /wake/{slug}`, the manual button, or

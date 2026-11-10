@@ -846,7 +846,9 @@ async def _move_hosts(
             )
         else:
             out.append(
-                await move_to_configured_file(session, adapters, settings, ph, actor=admin.username)
+                await move_to_configured_file(
+                    session, adapters.with_proxy(ph.source_id), settings, ph, actor=admin.username
+                )
             )
             session.commit()
     return out

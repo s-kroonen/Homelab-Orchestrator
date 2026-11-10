@@ -72,22 +72,36 @@ def nodes_of(session: Session, source_id: str) -> list[Node]:
     return sorted(owned_by(session, Node, source_id, default=is_default), key=lambda n: n.name)
 
 
-def node_href(node: Node | None, *, tab: str = "nodes", find: str = "") -> str:
-    """The page that shows a node (``tab="guests"``: its guests, ``find`` filtering them): its
-    Proxmox source's page. An unowned node is the default source's; with no Proxmox source at
-    all, All sources."""
+def source_page(kind: str, owner: str, query: dict[str, Any] | None = None) -> str:
+    """A source's page (``owner`` blank: the default source of ``kind``); All sources when
+    there is no source of that kind at all."""
     from urllib.parse import quote, urlencode
 
     from orchestrator.connectors.registry import default_source
 
-    owner = node.source_id if node is not None else ""
     if not owner:
-        found = default_source("proxmox")
+        found = default_source(kind)
         owner = found.id if found is not None else ""
     if not owner:
         return "/sources"
-    query = {"tab": tab} | ({"q": find} if find else {})
-    return f"/sources/{quote(owner, safe='')}?{urlencode(query)}"
+    q = {k: v for k, v in (query or {}).items() if v not in (None, "")}
+    return f"/sources/{quote(owner, safe='')}" + (f"?{urlencode(q)}" if q else "")
+
+
+def node_href(node: Node | None, *, tab: str = "nodes", find: str = "") -> str:
+    """The page that shows a node (``tab="guests"``: its guests, ``find`` filtering them): its
+    Proxmox source's page. An unowned node is the default source's."""
+    return source_page(
+        "proxmox", node.source_id if node is not None else "", {"tab": tab, "q": find}
+    )
+
+
+def proxy_host_href(host: ProxyHost | None, **query: Any) -> str:
+    """The page that shows a proxy host (or, with ``new=1``, adds one): its proxy's Proxy hosts
+    tab. An unowned host, or none, is the default proxy's."""
+    return source_page(
+        "proxy", host.source_id if host is not None else "", {"tab": "hosts", **query}
+    )
 
 
 def node_href_by_name(name: str, *, tab: str = "nodes", find: str = "") -> str:
@@ -126,4 +140,6 @@ __all__ = [
     "owned_by",
     "proxmox_for_node",
     "proxmox_of",
+    "proxy_host_href",
+    "source_page",
 ]

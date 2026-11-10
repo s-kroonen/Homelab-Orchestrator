@@ -258,8 +258,8 @@ def test_services_list_can_find_addresses(client: TestClient) -> None:
 def test_proxy_form_offers_use_service_ip(client: TestClient) -> None:
     _seed(("media", 100))
     client.put("/api/registry/services/media", json={"ip_address": "10.0.0.5"})
-    html = client.get("/proxy-hosts?new=1").text
-    assert '"ip": "10.0.0.5"' in html  # the drawer's picker knows each service's address
+    choices = client.get("/api/views/proxy-host-services").json()
+    assert any(c.get("ip") == "10.0.0.5" for c in choices)  # the drawer knows each address
     js = client.get("/static/objects.js").text
     assert "Its service's address is" in js and '"Use it"' in js
 

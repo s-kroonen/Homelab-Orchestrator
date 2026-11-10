@@ -113,6 +113,11 @@
     else if (view === "settings") renderSettings();
     else if (view === "raw") raw(p);
     else if (view.startsWith("resource:")) resource(p, view.slice(9));
+    else if (window.SourceViews && window.SourceViews[view]) {
+      // a kind's own tab that is not a list (a proxy's Import, its Format routes)
+      if (!S.enabled) { off(p); return; }
+      window.SourceViews[view](p, { source: S, key, base, setCount: (n) => setCount(key, n), show: (t) => tabCtl.show(t) });
+    }
   }
   let tabCtl = null;
 
@@ -199,7 +204,7 @@
     const meta = S.resources[key];
     if (!S.enabled) { off(p); return; }
     const custom = window.SourceViews && window.SourceViews[meta.view];
-    const ctx = { source: S, key, meta, base, load: () => api.get(base + "/resources/" + enc(key), { suppressToast: true }).then((d) => { setCount(key, d.rows.length); return d.rows; }), setCount: (n) => setCount(key, n) };
+    const ctx = { source: S, key, meta, base, load: () => api.get(base + "/resources/" + enc(key), { suppressToast: true }).then((d) => { setCount(key, d.rows.length); return d.rows; }), setCount: (n) => setCount(key, n), show: (t) => tabCtl.show(t) };
     if (custom) { custom(p, ctx); return; }
     const box = el("div"); fill(p, box);
     const age = el("span", { class: "faint" });

@@ -17,13 +17,12 @@ from __future__ import annotations
 from typing import Any
 from urllib.parse import urlencode
 
-from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import APIRouter, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from sqlmodel import Session, select
 
 from orchestrator.db.models import (
     Node,
-    ProxyHost,
     Service,
     ServiceState,
 )
@@ -190,57 +189,6 @@ def _ping_transport(raw: str) -> dict[str, Any] | None:
     return block
 
 
-@router.get("/proxy-hosts", response_model=None)
-async def proxy_hosts_page(
-    request: Request, session: SessionDep
-) -> HTMLResponse | RedirectResponse:
-    """The proxy hosts list. It paints from the database (what each host is); the page then
-    asks ``/api/proxy-hosts`` for what Traefik and Traefik Manager say about them. Adding and
-    editing happen in the drawer (``static/objects.js``), not on pages of their own."""
-    admin = get_current_admin(request, session)
-    if admin is None:
-        return login_redirect(request)
-    from orchestrator.web.routers.proxy_hosts import _serialize, _services_by_id
-
-    services = _services_by_id(session)
-    hosts = session.exec(select(ProxyHost).order_by(ProxyHost.hostname)).all()
-    return _templates.TemplateResponse(
-        request,
-        "proxy_hosts.html",
-        {
-            "admin": admin,
-            "initial": {
-                "hosts": [_serialize(ph, services, None) for ph in hosts],
-                "services": _service_choices(session),
-            },
-        },
-    )
-
-
-@router.get("/proxy-hosts/new", response_model=None)
-async def new_proxy_host_page(
-    request: Request, session: SessionDep, service_id: int | None = Query(None)
-) -> HTMLResponse | RedirectResponse:
-    """Old address of the add form: opens the drawer on the list instead."""
-    if get_current_admin(request, session) is None:
-        return login_redirect(request)
-    extra = f"&service_id={service_id}" if service_id is not None else ""
-    return RedirectResponse(f"/proxy-hosts?new=1{extra}", status_code=303)
-
-
-@router.get("/proxy-hosts/{proxy_host_id}/edit", response_model=None)
-async def edit_proxy_host_page(
-    proxy_host_id: int, request: Request, session: SessionDep
-) -> HTMLResponse | RedirectResponse:
-    """Old address of the edit form: opens the drawer on the list instead (a deleted host
-    still answers 404, which says where it went)."""
-    if get_current_admin(request, session) is None:
-        return login_redirect(request)
-    if session.get(ProxyHost, proxy_host_id) is None:
-        raise HTTPException(status_code=404, detail=f"proxy host {proxy_host_id} not found")
-    return RedirectResponse(f"/proxy-hosts?edit={proxy_host_id}", status_code=303)
-
-
 def _range_param(value: str | None) -> str:
     return value if value in RANGES else DEFAULT_RANGE
 
@@ -356,15 +304,6 @@ async def sources_page(request: Request, session: SessionDep) -> HTMLResponse | 
     if admin is None:
         return login_redirect(request)
     return _templates.TemplateResponse(request, "sources.html", {"admin": admin})
-
-
-@router.get("/pull/format", response_model=None)
-async def format_page(request: Request, session: SessionDep) -> HTMLResponse | RedirectResponse:
-    """Plan and run the rewrite of old routes into the standard shape (its own page)."""
-    admin = get_current_admin(request, session)
-    if admin is None:
-        return login_redirect(request)
-    return _templates.TemplateResponse(request, "format.html", {"admin": admin})
 
 
 @router.get("/activity", response_model=None)

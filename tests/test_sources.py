@@ -291,28 +291,28 @@ def test_the_page_renders_and_the_old_pages_point_at_it(client: TestClient) -> N
     assert (
         page.status_code == 200
         and "Data sources" in page.text
-        and 'data-tab="traefik"' in page.text
+        and 'data-tab="traefik"' not in page.text  # a proxy's own Import tab now
     )
     # Not a page of its own in the navigation any more: its parts are reached from the list
     # they fill (Import from Proxmox on a Proxmox source's Nodes tab, Proxy hosts' Import tab).
     assert 'href: "/pull#proxmox"' in client.get("/static/source_proxmox.js").text
-    assert "/pull#" in client.get("/proxy-hosts").text
+    assert '"/api/pull/traefik/import" + q' in client.get("/static/source_proxy.js").text
     # a Portainer source's Stacks tab links a stack to a service through the pull page
     assert "/pull#portainer" in client.get("/static/source_portainer.js").text
-    assert "resync-btn" not in client.get("/proxy-hosts").text
 
 
-def test_format_has_its_own_page(client: TestClient) -> None:
-    anon = TestClient(client.app)
-    r = anon.get("/pull/format", follow_redirects=False)
-    assert r.status_code == 303 and r.headers["location"] == "/login?next=/pull/format"
-    page = client.get("/pull/format")
-    assert page.status_code == 200
-    for needle in ('id="fmt-hsts"', 'id="fmt-every"', 'id="fmt-run"', "/static/format.js"):
-        assert needle in page.text
-    sources = client.get("/pull").text
-    assert 'href="/pull/format"' in sources and 'id="fmt-run"' not in sources
-    assert 'href="/pull/format"' in client.get("/proxy-hosts").text  # a tab of Proxy hosts
+def test_format_is_a_tab_of_each_proxy(client: TestClient) -> None:
+    """Format routes is a proxy's tab now (OR-81): its own page is gone."""
+    assert client.get("/pull/format", follow_redirects=False).status_code == 404
+    fmt = client.get("/static/format_routes.js").text
+    for needle in (
+        'id="fmt-hsts"',
+        'id="fmt-every"',
+        'id="fmt-run"',
+        "/api/pull/traefik/format/plan",
+    ):
+        assert needle in fmt
+    assert "FormatRoutes.mount" in client.get("/static/source_proxy.js").text
 
 
 def test_cli_formats_routes_and_pulls(tm: Any) -> None:

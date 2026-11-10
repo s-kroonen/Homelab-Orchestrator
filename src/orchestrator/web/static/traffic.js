@@ -347,11 +347,11 @@
     tbody.replaceChildren();
     if (!d.hosts.length) {
       var tr0 = h("tr", null, null, tbody);
-      var td0 = h("td", "muted", "No proxy hosts yet — add or resync them on the ", tr0);
+      var td0 = h("td", "muted", "No proxy hosts yet — add them on a proxy's page, or ", tr0);
       td0.colSpan = 8;
-      var a = h("a", null, "Proxy hosts", td0);
-      a.href = "/proxy-hosts";
-      td0.appendChild(document.createTextNode(" page."));
+      var a = h("a", null, "import its routes", td0);
+      a.href = "/find/proxy-host?tab=import";
+      td0.appendChild(document.createTextNode("."));
       return;
     }
     d.hosts.forEach(function (row) {

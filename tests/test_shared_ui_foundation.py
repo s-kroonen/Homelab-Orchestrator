@@ -84,7 +84,6 @@ ADMIN_PAGES = [
     "/services",
     "/admins",
     "/backup-policies",
-    "/proxy-hosts",
     "/traffic",
     "/activity",
     "/sources",
@@ -95,12 +94,6 @@ ADMIN_PAGES = [
 NAV_GROUPS = [
     ("Overview", [("/", "Dashboard"), ("/map", "Map")]),
     ("Services", [("/services", "Services"), ("/backup-policies", "Backups")]),
-    (
-        "Infrastructure",
-        [
-            ("/proxy-hosts", "Proxy hosts"),
-        ],
-    ),
     ("Activity", [("/activity", "Activity"), ("/traffic", "Traffic")]),
     (
         "Settings",
@@ -138,7 +131,6 @@ def test_admin_pages_share_one_grouped_sidebar(client: TestClient) -> None:
         ("/services", "/services"),
         ("/admins", "/admins"),
         ("/backup-policies", "/backup-policies"),
-        ("/proxy-hosts", "/proxy-hosts"),
         ("/traffic", "/traffic"),
         ("/activity", "/activity"),
         # Every connection is a source (OR-78) ...

@@ -758,9 +758,9 @@ def test_dry_run_create_edit_flow_end_to_end(dry_client: TestClient, service: Se
 
 
 def test_the_drawer_has_the_entry_point_controls(dry_client: TestClient, service: Service) -> None:
-    # The add form is a drawer on the list now; its old address opens it.
-    r = dry_client.get("/proxy-hosts/new", follow_redirects=False)
-    assert r.status_code == 303 and r.headers["location"] == "/proxy-hosts?new=1"
+    # The add form is a drawer on a proxy's Proxy hosts tab; /find/proxy-host opens it there.
+    r = dry_client.get("/find/proxy-host?new=1", follow_redirects=False)
+    assert r.status_code == 303
     js = dry_client.get("/static/objects.js").text
     for marker in (
         "/api/proxy/entrypoints",  # the catalog the choices come from
@@ -776,19 +776,16 @@ def test_edit_form_carries_the_stored_selection(dry_client: TestClient, service:
     created = dry_client.post(
         "/api/proxy-hosts", json=_body(service, entry_points=["web"], cert_resolver="")
     ).json()
-    r = dry_client.get(f"/proxy-hosts/{created['id']}/edit", follow_redirects=False)
-    assert r.headers["location"] == f"/proxy-hosts?edit={created['id']}"
-    html = dry_client.get("/proxy-hosts").text
-    assert '"entry_points": ["web"]' in html and '"entry_points_stored": true' in html
+    row = dry_client.get(f"/api/proxy-hosts/{created['id']}").json()
+    assert row["entry_points"] == ["web"] and row["entry_points_stored"] is True
     dry_client.post("/api/proxy-hosts", json=_body(service, hostname="l.example.com", upstream=""))
     # Not stored yet: the drawer pre-selects what the route has in Traefik.
-    assert '"entry_points_stored": false' in dry_client.get("/proxy-hosts").text
+    rows = {h["hostname"]: h for h in dry_client.get("/api/proxy-hosts").json()}
+    assert rows["l.example.com"]["entry_points_stored"] is False
     assert "h.traefik.entry_points" in dry_client.get("/static/objects.js").text
 
 
 def test_list_page_has_entry_point_and_router_status_columns(dry_client: TestClient) -> None:
-    html = dry_client.get("/proxy-hosts").text
-    assert "/static/proxy_hosts.js?v=" in html
-    js = dry_client.get("/static/proxy_hosts.js").text
+    js = dry_client.get("/static/source_proxy.js").text
     # Traefik's verdict on the router, its error text included, in its own column.
     assert 'label: "Traefik"' in js and 'label: "error", sub: t.message' in js

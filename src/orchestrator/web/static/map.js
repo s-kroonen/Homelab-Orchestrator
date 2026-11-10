@@ -397,7 +397,7 @@
         ["Wake on hit", r.wake_on_hit],
       ])),
       section("Proxy hosts", hosts.length ? el("div", { class: "map-chips" }, hosts.map((h) => el("div", {}, pick(h.id, h.hostname, "mono"), " ", pill(h.served ? "ok" : "off", h.served ? "on" : "off"))))
-        : el("p", { class: "faint" }, "No proxy host leads here. ", el("a", { href: "/proxy-hosts?new=1" + (r.id != null ? "&service_id=" + r.id : "") }, "Add one"))),
+        : el("p", { class: "faint" }, "No proxy host leads here. ", el("a", { href: "/find/proxy-host?new=1" + (r.id != null ? "&service_id=" + r.id : "") }, "Add one"))),
       section("The path", pathList(t)),
       section("Backups", kv([
         ["Policy", r.backup.main + (I.policies.get(r.backup.main) && I.policies.get(r.backup.main).next_run ? " · next " + fmt.short(I.policies.get(r.backup.main).next_run) : "")],
@@ -457,9 +457,9 @@
       head(h.hostname, pill(h.served ? "ok" : "off", h.served ? "on" : "off"), "proxy host · " + h.provider, null, { mono: true }),
       h.served ? null : why("off", h.enabled ? "Not routed: the service it leads to is switched off." : "Switched off: Traefik does not route it."),
       el("div", { class: "map-acts" }, el("div", { class: "grid" },
-        h.pk != null ? link("Edit…", "/proxy-hosts?edit=" + h.pk) : null,
+        h.pk != null ? link("Edit…", "/find/proxy-host?id=" + h.pk) : null,
         t ? btn("Select its service", () => select("svc:" + t.svc.slug)) : null,
-        link("All proxy hosts", "/proxy-hosts?q=" + enc(h.hostname)))),
+        link("Open on its proxy", "/find/proxy-host?hostname=" + enc(h.hostname)))),
       section("Details", kv([["Service", t ? pick("svc:" + t.svc.slug, row(t.svc.slug).name) : "none: not linked"], ["Router", h.provider]])),
       section("The path", el("ol", { class: "map-path" }, steps.map((s) => el("li", {}, s)))));
   }

@@ -53,11 +53,42 @@ class AdapterBundle:
     instances: dict[str, Any] = field(default_factory=dict)
     #: Connection id -> kind attribute ("proxmox", "pbs", "proxy", "power") of the default ones.
     defaults: dict[str, str] = field(default_factory=dict)
+    #: Which proxy source ``proxy`` stands for in a bundle from :meth:`with_proxy` ("": the
+    #: default one, and with it every proxy host - one proxy, as before).
+    proxy_source: str = ""
 
     def __post_init__(self) -> None:
         if self.portainer is not None and not self.portainers:
             self.default_portainer = self.default_portainer or "portainer"
             self.portainers = {self.default_portainer: self.portainer}
+
+    @property
+    def default_proxy(self) -> str:
+        """The connection id of the default proxy ("" when it has none)."""
+        return next((ident for ident, attr in self.defaults.items() if attr == "proxy"), "")
+
+    def proxy_ids(self) -> list[str]:
+        """Every proxy source with an adapter, the default first."""
+        from orchestrator.connectors.registry import sources_of
+
+        others = [
+            s.id
+            for s in sources_of("proxy")
+            if s.id in self.instances and s.id != self.default_proxy
+        ]
+        return ([self.default_proxy] if self.default_proxy else []) + others
+
+    def with_proxy(self, source_id: str) -> AdapterBundle:
+        """This bundle with ``proxy`` being one proxy source's adapter, so code written for one
+        proxy (push, sync, import, format) works on that one and its proxy hosts only."""
+        if not source_id:
+            return self
+        found = self.for_source(source_id)
+        if found is None:
+            return self
+        from dataclasses import replace
+
+        return replace(self, proxy=found, proxy_source=source_id)
 
     def for_source(self, source_id: str) -> Any | None:
         """The adapter of one source (a connection id), whatever its kind; None if there is
