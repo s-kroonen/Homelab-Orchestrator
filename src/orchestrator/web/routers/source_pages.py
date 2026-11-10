@@ -29,6 +29,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import HTMLResponse, RedirectResponse
+from pydantic import BaseModel, ConfigDict
 from sqlmodel import Session, select
 
 from orchestrator.config import Settings
@@ -37,7 +38,7 @@ from orchestrator.connectors import status as source_status
 from orchestrator.connectors.kinds import raw_payload
 from orchestrator.connectors.registry import Source, all_sources, connectors, context, get_source
 from orchestrator.db.models import AuditEntry
-from orchestrator.web.auth import get_current_admin, login_redirect, require_admin
+from orchestrator.web.auth import CurrentAdmin, get_current_admin, login_redirect, require_admin
 from orchestrator.web.deps import AdaptersDep, SessionDep, SettingsDep
 from orchestrator.web.routers.connections import _kinds
 from orchestrator.web.templating import templates
@@ -254,7 +255,14 @@ def _detail(session: Session, settings: Settings, source: Source) -> dict[str, A
                 "columns": [{"key": c.key, "label": c.label, "kind": c.kind} for c in r.columns],
                 "chips": [{"key": c.key, "label": c.label} for c in r.chips],
                 "actions": [
-                    {"key": a.key, "label": a.label, "danger": a.danger, "bulk": a.bulk}
+                    {
+                        "key": a.key,
+                        "label": a.label,
+                        "danger": a.danger,
+                        "bulk": a.bulk,
+                        "confirm": a.confirm,
+                        "typed": a.typed,
+                    }
                     for a in r.actions
                 ],
             }
@@ -360,6 +368,47 @@ async def recent(
         }
         for r in mine
     ]
+
+
+class ActIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    ids: list[Any]
+    #: An action that asks for the name typed: the row's name, typed (one row only).
+    confirm: str = ""
+
+
+@api.post("/{ident}/resources/{key}/actions/{action}")
+async def resource_action(
+    ident: str,
+    key: str,
+    action: str,
+    body: ActIn,
+    settings: SettingsDep,
+    adapters: AdaptersDep,
+    admin: CurrentAdmin,
+) -> dict[str, Any]:
+    """One of a list's actions on the chosen rows (Wake on a power target, Verify on a
+    snapshot...). Each row's outcome is reported; one failing never stops the others."""
+    source, ctx = _ctx(ident, settings, adapters)
+    res = source.connector.resource(key)
+    spec = next((a for a in res.actions if a.key == action), None) if res else None
+    if res is None or spec is None or res.act is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, f"{source.name} has no {key}/{action}")
+    rows = await _guarded(res.fetch(ctx))
+    wanted = {str(i) for i in body.ids}
+    chosen = [r for r in rows if str(r.get("id")) in wanted]
+    if len(chosen) != len(wanted):
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "some of these are not there any more")
+    if len(chosen) > 1 and not spec.bulk:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, f"{spec.label} takes one at a time")
+    if spec.typed:
+        name = str(chosen[0].get("name", chosen[0].get("id"))) if chosen else ""
+        if len(chosen) != 1 or body.confirm.strip() != name:
+            raise HTTPException(
+                status.HTTP_409_CONFLICT, f"type {name!r} to {spec.label.lower()} it"
+            )
+    results = await _guarded(res.act(ctx, action, chosen, admin.username))
+    return {"results": [{"id": r.id, "ok": r.ok, "message": r.message} for r in results]}
 
 
 @api.get("/{ident}/raw")

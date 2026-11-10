@@ -70,6 +70,19 @@ class Resource:
     actions: tuple[Action, ...] = ()
     #: Does the page draw it from ``columns`` (generic), or does a page module of its own?
     view: str = "generic"
+    #: Does one of ``actions`` to the chosen rows: ``act(ctx, action, rows, actor)`` returns one
+    #: :class:`ActionResult` per row. The generic table offers the actions; the API checks the
+    #: action exists, asks for a typed name when the action says so, and calls this.
+    act: (
+        Callable[[SourceCtx, str, list[dict[str, Any]], str], Awaitable[list[ActionResult]]] | None
+    ) = None
+
+
+@dataclass
+class ActionResult:
+    id: Any
+    ok: bool
+    message: str = ""
 
 
 @dataclass(frozen=True)
@@ -213,6 +226,7 @@ class Connector:
 
 __all__ = [
     "Action",
+    "ActionResult",
     "Chip",
     "Column",
     "Connector",

@@ -51,6 +51,20 @@ default, Switch on / off and Remove. Tabs (kept in the URL as `?tab=`):
 
 A switched-off source keeps its page and settings; its data tabs say it is off.
 
+What each kind has:
+
+| Kind | Tabs | Actions on its lists |
+|---|---|---|
+| Proxmox | Nodes, Guests, Storage, Backup jobs, Tasks | power and boot settings per node and guest |
+| Portainer | Environments, Stacks, Containers, Images, Volumes, Networks | start, stop, restart, redeploy, delete; each stack has its own page |
+| Proxy (Traefik Manager) | Proxy hosts, Middlewares, Import, Format routes | add, edit, push, on/off, delete; import and format |
+| Proxmox Backup Server | Datastores, Snapshots | Verify, Protect, Unprotect (one or a selection) |
+| Power manager | Power targets (the nodes with a power target, and what it says about each) | Wake (one or a selection); Restart and Power off ask for the node's name |
+
+A kind declares a list's actions next to its columns (`Resource.actions` and `Resource.act`), and
+the generic table offers them in each row's ⋯ and, when an action takes several rows, in the
+selection bar: `POST /api/sources/{id}/resources/{key}/actions/{action}` with `{ids, confirm}`.
+
 The Overview has tiles, what needs attention, small tables (a Proxmox's nodes), the source's
 settings at a glance and **Recent**: the last things done to or through it, from the audit log.
 

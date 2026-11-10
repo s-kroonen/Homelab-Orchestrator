@@ -19,7 +19,8 @@
   const statePill = (st) => el("span", { class: "pill " + (STATE[st.state] || "off"), title: st.detail || "" }, st.label || st.state);
   const toneOf = (v) => {
     const s = String(v == null ? "" : v).toLowerCase();
-    if (/^(ok|online|running|up|healthy|reachable|active|yes|true)$/.test(s)) return "ok";
+    if (/^(ok|on|online|running|up|healthy|reachable|active|yes|true|verified|serving)$/.test(s)) return "ok";
+    if (/^not verified$/.test(s)) return "warn";
     if (/(down|fail|error|unreachable|dead|exited)/.test(s)) return "fail";
     if (/(warn|degraded|partial|paused|full)/.test(s)) return "warn";
     return "off";
@@ -209,7 +210,7 @@
     const box = el("div"); fill(p, box);
     const age = el("span", { class: "faint" });
     let t = null;
-    region(box, {
+    const view = region(box, {
       age, every: 60000, load: ctx.load,
       render(rows) {
         if (t) { t.setRows(rows); return; }
@@ -219,9 +220,29 @@
             (r.links || []).length ? el("div", { class: "faint", style: { fontSize: "12.5px" } }, r.links.map((l, j) => [j ? " · " : "", el("a", { href: l.href }, l.label)])) : null]
             : (r) => cell(c, r),
         }));
+        const acts = meta.actions || [];
+        // one of the list's own actions (Wake, Verify...) on some rows; each row's outcome is told
+        const run = async (a, rs) => {
+          const one = rs.length === 1 ? String(rs[0].name || rs[0].id) : null;
+          if (a.confirm || a.danger || a.typed) {
+            const ok = await confirm({ title: a.label.replace(/…$/, "") + " " + (one || rs.length + " " + meta.label.toLowerCase()) + "?",
+              body: a.typed ? "Type its name to go on." : "This is done in " + S.name + ".", typeName: a.typed ? one : null,
+              action: a.label.replace(/…$/, ""), danger: !!a.danger });
+            if (!ok) return;
+          }
+          try {
+            const res = await api.post(base + "/resources/" + enc(key) + "/actions/" + enc(a.key), { ids: rs.map((r) => r.id), confirm: a.typed ? one : "" }, { suppressToast: true });
+            const bad = res.results.filter((x) => !x.ok);
+            toast(bad.length ? bad.map((x) => x.message).join(" · ") : res.results.map((x) => x.message).join(" · "), bad.length ? "error" : "ok");
+          } catch (e) { toast(e.message, "error"); }
+          if (t) t.clearSelection();
+          view.refresh();
+        };
         t = table(box, {
           rows, key: (r) => r.id, noun: [meta.label.toLowerCase().replace(/s$/, ""), meta.label.toLowerCase()], placeholder: "Filter " + meta.label.toLowerCase(),
           urlState: false, columns: cols, age,
+          menu: acts.length ? (r) => acts.map((a) => ({ label: a.label, danger: !!a.danger, onClick: () => run(a, [r]) })) : null,
+          bulk: acts.some((a) => a.bulk) ? (rs) => acts.filter((a) => a.bulk).map((a) => ({ label: a.label, danger: !!a.danger, onClick: () => run(a, rs) })) : null,
           chips: meta.chips.map((c) => ({ key: c.key, label: c.label, test: (r) => (r.chips || []).includes(c.key) })),
           name: (r) => String(r.name || r.id), href: (r) => r.href || null,
           empty: { title: "No " + meta.label.toLowerCase(), text: S.name + " has none right now." },

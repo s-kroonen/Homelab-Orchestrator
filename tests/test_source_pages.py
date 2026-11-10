@@ -414,3 +414,77 @@ def test_two_proxies_each_list_and_push_their_own_hosts(client: TestClient) -> N
     assert found.headers["location"] == "/sources/edge?tab=hosts&q=app.example.lan"
     new = client.get(f"/find/proxy-host?new=1&service_id={sid}", follow_redirects=False)
     assert new.headers["location"].startswith("/sources/gateway?tab=hosts&new=1")  # the default
+
+
+def _source(client: TestClient, kind: str, ident: str, settings: dict, secrets: dict) -> None:
+    r = client.post(
+        "/api/connections",
+        json={"kind": kind, "id": ident, "name": ident, "settings": settings, "secrets": secrets},
+    )
+    assert r.status_code == 201, r.text
+
+
+def test_a_pbs_lists_snapshots_and_verifies_or_protects_them(client: TestClient) -> None:
+    """OR-82: a PBS has Datastores and Snapshots; Verify, Protect and Unprotect are the
+    Snapshots list's own actions (the generic table offers them)."""
+    from orchestrator.adapters.pbs.base import Snapshot
+
+    _source(
+        client,
+        "pbs",
+        "pbs-main",
+        {"host": "10.0.0.30", "token_id": "orchestrator@pbs!api"},
+        {"token_secret": "x"},
+    )
+    pbs = client.app.state.adapters.for_source("pbs-main")  # type: ignore[attr-defined]
+    pbs.simulated_datastores = ["store"]
+    pbs.simulated_snapshots = [
+        Snapshot("store", "vm", "100", 1_760_000_000, size_bytes=2**30),
+        Snapshot("store", "vm", "101", 1_760_000_100, verified=True),
+    ]
+    d = client.get("/api/sources/pbs-main").json()
+    snaps = d["resources"]["snapshots"]
+    assert [a["key"] for a in snaps["actions"]] == ["verify", "protect", "unprotect"]
+    rows = client.get("/api/sources/pbs-main/resources/snapshots").json()["rows"]
+    assert [r["group"] for r in rows] == ["vm/101", "vm/100"]  # newest first
+    target = next(r for r in rows if r["group"] == "vm/100")
+    assert "unverified" in target["chips"]
+
+    url = "/api/sources/pbs-main/resources/snapshots/actions/"
+    done = client.post(url + "verify", json={"ids": [target["id"]]}).json()["results"]
+    assert done[0]["ok"] is True
+    assert client.post(url + "protect", json={"ids": [target["id"]]}).json()["results"][0]["ok"]
+    assert client.post(url + "nope", json={"ids": [target["id"]]}).status_code == 404
+    assert client.post(url + "verify", json={"ids": ["gone"]}).status_code == 404
+    ov = client.get("/api/sources/pbs-main/overview").json()
+    assert [t["label"] for t in ov["tiles"]][:2] == ["Datastores", "Snapshots"]
+    actions = [x["action"] for x in client.get("/api/sources/pbs-main/recent").json()]
+    assert "pbs.snapshot_verify" in actions and "pbs.snapshot_protect" in actions
+
+
+def test_a_power_manager_wakes_and_asks_for_the_name_to_power_off(client: TestClient) -> None:
+    """OR-82: a power manager lists the nodes with a power target and what it says about each;
+    Wake is one click (several at once), Restart and Power off ask for the node's name."""
+    from sqlmodel import Session
+
+    from orchestrator.db.models import Node
+    from orchestrator.db.session import get_engine
+
+    _source(client, "power", "mqtt", {"host": "10.0.0.40"}, {})
+    with Session(get_engine()) as s:
+        s.add(Node(name="node-a", power_mgr_target="node-a"))
+        s.add(Node(name="node-b", power_mgr_target="node-b"))
+        s.add(Node(name="node-c"))  # no power target: not listed
+        s.commit()
+    rows = client.get("/api/sources/mqtt/resources/targets").json()["rows"]
+    assert [r["name"] for r in rows] == ["node-a", "node-b"]
+    url = "/api/sources/mqtt/resources/targets/actions/"
+    woke = client.post(url + "wake", json={"ids": ["node-a", "node-b"]}).json()["results"]
+    assert all(x["ok"] for x in woke)
+    rows = client.get("/api/sources/mqtt/resources/targets").json()["rows"]
+    assert {r["state"] for r in rows} == {"on"}
+    assert client.post(url + "power_off", json={"ids": ["node-a"]}).status_code == 409
+    assert client.post(url + "power_off", json={"ids": ["node-a", "node-b"]}).status_code == 400
+    off = client.post(url + "power_off", json={"ids": ["node-a"], "confirm": "node-a"})
+    assert off.status_code == 200 and off.json()["results"][0]["ok"]
+    assert "2 power targets" in client.post("/api/sources/mqtt/test").json()["status"]["has"]

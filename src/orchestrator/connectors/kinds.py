@@ -13,6 +13,8 @@ import re
 from typing import Any
 
 from orchestrator.connectors.base import (
+    Action,
+    ActionResult,
     Chip,
     Column,
     Connector,
@@ -425,6 +427,75 @@ async def _pbs_datastores(ctx: SourceCtx) -> list[dict[str, Any]]:
     return out
 
 
+async def _pbs_snapshots(ctx: SourceCtx) -> list[dict[str, Any]]:
+    from datetime import UTC, datetime
+
+    rows = []
+    for store in await ctx.adapter.list_datastores():
+        for snap in await ctx.adapter.list_snapshots(store):
+            chips = ["verified" if snap.verified else "unverified"]
+            if snap.protected:
+                chips.append("protected")
+            rows.append(
+                {
+                    "id": f"{store}:{snap.snapshot_id}",
+                    "name": snap.snapshot_id,
+                    "group": snap.group,
+                    "datastore": store,
+                    "taken": datetime.fromtimestamp(snap.backup_time, UTC).isoformat(),
+                    "size": snap.size_bytes,
+                    "state": "verified" if snap.verified else "not verified",
+                    "protected": "protected" if snap.protected else "",
+                    "chips": chips,
+                    # what the actions need
+                    "_type": snap.backup_type,
+                    "_bid": snap.backup_id,
+                    "_time": snap.backup_time,
+                }
+            )
+    return sorted(rows, key=lambda r: r["taken"], reverse=True)
+
+
+async def _pbs_act(
+    ctx: SourceCtx, action: str, rows: list[dict[str, Any]], actor: str
+) -> list[ActionResult]:
+    """Verify, protect or unprotect snapshots, each audited."""
+    out = []
+    for r in rows:
+        where = {"backup_type": r["_type"], "backup_id": r["_bid"], "backup_time": r["_time"]}
+        try:
+            if action == "verify":
+                ok = await ctx.adapter.verify_snapshot(r["datastore"], **where)
+                message = "verified" if ok else "verify failed"
+            else:
+                await ctx.adapter.set_protected(
+                    r["datastore"], **where, protected=action == "protect"
+                )
+                ok, message = True, ("protected" if action == "protect" else "unprotected")
+        except Exception as exc:
+            ok, message = False, f"{type(exc).__name__}: {exc}"[:200]
+        _audit(actor, f"pbs.snapshot_{action}", f"snapshot:{r['id']}", ok, {"source": ctx.conn.id})
+        out.append(ActionResult(r["id"], ok, f"{r['name']}: {message}"))
+    return out
+
+
+def _audit(actor: str, action: str, target: str, ok: bool, details: dict[str, Any]) -> None:
+    """One audit entry for a source page action."""
+    from orchestrator.audit import log as audit
+    from orchestrator.db.session import session_scope
+    from orchestrator.domain.enums import AuditResult
+
+    with session_scope() as session:
+        audit.record(
+            session,
+            actor=actor,
+            action=action,
+            target=target,
+            result=AuditResult.OK if ok else AuditResult.ERROR,
+            details=details,
+        )
+
+
 class PbsConnector(Connector):
     kind = "pbs"
     title = "Proxmox Backup Server"
@@ -444,6 +515,30 @@ class PbsConnector(Connector):
             _pbs_datastores,
             chips=(Chip("full", "Filling up"),),
         ),
+        Resource(
+            "snapshots",
+            "Snapshots",
+            (
+                Column("name", "Snapshot", "mono"),
+                Column("datastore", "Datastore"),
+                Column("taken", "Taken", "ago"),
+                Column("size", "Size", "bytes"),
+                Column("state", "Verified", "pill"),
+                Column("protected", "Protected"),
+            ),
+            _pbs_snapshots,
+            chips=(
+                Chip("unverified", "Not verified"),
+                Chip("verified", "Verified"),
+                Chip("protected", "Protected"),
+            ),
+            actions=(
+                Action("verify", "Verify", bulk=True),
+                Action("protect", "Protect", bulk=True),
+                Action("unprotect", "Unprotect", bulk=True, confirm=True),
+            ),
+            act=_pbs_act,
+        ),
     )
     raw = (
         RawEndpoint(
@@ -454,6 +549,11 @@ class PbsConnector(Connector):
         ),
         RawEndpoint("version", "version", "GET /version", lambda ctx: ctx.adapter.version()),
     )
+
+    def about(self, ctx: SourceCtx, target: str, details: dict[str, Any]) -> bool:
+        return Connector.about(self, ctx, target, details) or (
+            target.startswith("snapshot:") and details.get("source") == ctx.conn.id
+        )
 
     async def summary(self, ctx: SourceCtx) -> Summary:
         summary = await Connector.summary(self, ctx)
@@ -468,6 +568,62 @@ class PbsConnector(Connector):
         except Exception as exc:
             summary.detail = str(exc)[:200]
         return summary
+
+    async def overview(self, ctx: SourceCtx) -> Overview:
+        ov = Overview(facts=self.facts(ctx))
+        if ctx.adapter is None:
+            return ov
+        stores = await _pbs_datastores(ctx)
+        snaps = await _pbs_snapshots(ctx)
+        unverified = [x for x in snaps if "unverified" in x["chips"]]
+        ov.tiles = [
+            {"label": "Datastores", "value": len(stores)},
+            {"label": "Snapshots", "value": len(snaps), "sub": f"{len(unverified)} not verified"},
+        ]
+        if snaps:
+            ov.tiles.append(
+                {
+                    "label": "Newest",
+                    "value": snaps[0]["group"],
+                    "sub": snaps[0]["taken"][:16].replace("T", " "),
+                }
+            )
+        if stores:
+            worst = max(stores, key=lambda x: x["pct"] or 0)
+            tone = (
+                "fail"
+                if (worst["pct"] or 0) >= 95
+                else "warn" if (worst["pct"] or 0) >= 85 else None
+            )
+            ov.tiles.append(
+                {
+                    "label": "Fullest datastore",
+                    "value": f"{worst['pct'] or 0}%",
+                    "sub": worst["name"],
+                    "tone": tone,
+                }
+            )
+            if tone:
+                ov.attention.append(
+                    {
+                        "tone": tone,
+                        "label": f"{worst['pct']}% full",
+                        "text": f"datastore {worst['name']} is filling up",
+                        "href": "?tab=datastores",
+                        "action": "Open",
+                    }
+                )
+        if unverified:
+            ov.attention.append(
+                {
+                    "tone": "warn",
+                    "label": "not verified",
+                    "text": f"{_count(len(unverified), 'snapshot')} not verified yet",
+                    "href": "?tab=snapshots",
+                    "action": "Open snapshots",
+                }
+            )
+        return ov
 
 
 # -- Portainer ------------------------------------------------------------------------------------
@@ -904,25 +1060,138 @@ class TraefikApiConnector(Connector):
 # -- power -------------------------------------------------------------------------------------------
 
 
+async def _power_targets(ctx: SourceCtx) -> list[dict[str, Any]]:
+    """The nodes with a power target, with what this power manager says about each."""
+    from sqlmodel import Session, select
+
+    from orchestrator.db.models import Node
+    from orchestrator.db.session import get_engine
+
+    with Session(get_engine()) as session:
+        nodes = [
+            n
+            for n in session.exec(select(Node).order_by(Node.name)).all()
+            if n.power_mgr_target.strip()
+        ]
+    check = await ctx.adapter.check([n.power_mgr_target for n in nodes])
+    by_target = {t.target: t for t in check.targets}
+    rows = []
+    for n in nodes:
+        t = by_target.get(n.power_mgr_target)
+        if t is not None and t.state is not None:
+            state = t.state.value
+        elif t is not None and t.online is not None:
+            state = "on" if t.online else "off"  # it only said whether it is online
+        else:
+            state = "unknown"
+        rows.append(
+            {
+                "id": n.name,
+                "name": n.name,
+                "target": n.power_mgr_target,
+                "state": state,
+                "detail": (t.detail if t is not None else "") or "",
+                "always_on": "always on" if n.always_on else "",
+                "chips": [state if state in ("on", "off") else "unknown"]
+                + (["always_on"] if n.always_on else []),
+            }
+        )
+    return rows
+
+
+async def _power_act(
+    ctx: SourceCtx, action: str, rows: list[dict[str, Any]], actor: str
+) -> list[ActionResult]:
+    """Wake, restart or power off nodes through this power manager, each audited."""
+    out = []
+    reason = f"manual dashboard action by {actor}"
+    for r in rows:
+        try:
+            if action == "wake":
+                await ctx.adapter.wake(r["target"], reason=reason)
+            elif action == "restart":
+                await ctx.adapter.restart(r["target"], reason=reason)
+            else:
+                await ctx.adapter.power_off(r["target"], reason=reason)
+            ok, message = True, f"{action.replace('_', ' ')} sent"
+        except Exception as exc:
+            ok, message = False, f"{type(exc).__name__}: {exc}"[:200]
+        _audit(
+            actor,
+            "node.power_action",
+            f"node:{r['name']}",
+            ok,
+            {"action": action, "source": ctx.conn.id},
+        )
+        out.append(ActionResult(r["id"], ok, f"{r['name']}: {message}"))
+    return out
+
+
 class PowerConnector(Connector):
     kind = "power"
     title = "Power manager (MQTT)"
     group = "Power"
     family = "network"
     blurb = "wake and power off nodes"
+    resources = (
+        Resource(
+            "targets",
+            "Power targets",
+            (
+                Column("name", "Node"),
+                Column("target", "Target", "mono"),
+                Column("state", "Power", "pill"),
+                Column("always_on", "Always on"),
+                Column("detail", "Says"),
+            ),
+            _power_targets,
+            chips=(Chip("on", "On"), Chip("off", "Off"), Chip("unknown", "Unknown")),
+            actions=(
+                Action("wake", "Wake", bulk=True),
+                Action("restart", "Restart…", danger=True, confirm=True, typed=True),
+                Action("power_off", "Power off…", danger=True, confirm=True, typed=True),
+            ),
+            act=_power_act,
+        ),
+    )
+
+    def about(self, ctx: SourceCtx, target: str, details: dict[str, Any]) -> bool:
+        return Connector.about(self, ctx, target, details) or details.get("source") == ctx.conn.id
 
     async def summary(self, ctx: SourceCtx) -> Summary:
         summary = await Connector.summary(self, ctx)
         if ctx.adapter is None or summary.state == "fail":
             return summary
         try:
-            check = await ctx.adapter.check()
-            online = getattr(check, "online", None)
-            if isinstance(online, list | tuple | set):
-                summary.has = f"{_count(len(online), 'power target')} online"
+            rows = await _power_targets(ctx)
+            on = sum(1 for r in rows if r["state"] == "on")
+            summary.has = f"{_count(len(rows), 'power target')} · {on} on"
         except Exception as exc:
             summary.detail = str(exc)[:200]
         return summary
+
+    async def overview(self, ctx: SourceCtx) -> Overview:
+        ov = Overview(facts=self.facts(ctx))
+        if ctx.adapter is None:
+            return ov
+        rows = await _power_targets(ctx)
+        on = sum(1 for r in rows if r["state"] == "on")
+        off = sum(1 for r in rows if r["state"] == "off")
+        ov.tiles = [
+            {"label": "Targets", "value": len(rows)},
+            {"label": "On", "value": on, "of": len(rows)},
+            {"label": "Off", "value": off},
+        ]
+        for r in rows:
+            if r["state"] == "unknown":
+                ov.attention.append(
+                    {
+                        "tone": "off",
+                        "label": "unknown",
+                        "text": f"{r['name']}: the power manager says nothing about {r['target']}",
+                    }
+                )
+        return ov
 
 
 # -- Home Assistant ----------------------------------------------------------------------------------
