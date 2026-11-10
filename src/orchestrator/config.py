@@ -55,6 +55,13 @@ class Settings(BaseSettings):
     proxmox_adapter: str = "dry_run"
     pbs_adapter: str = "dry_run"
     proxy_adapter: str = "dry_run"
+    # One source pretends (its connection's "Dry run" switch): reads come from sample data and
+    # nothing is sent. DRY_RUN=true still does it for every one.
+    proxmox_dry_run: bool = False
+    pbs_dry_run: bool = False
+    proxy_dry_run: bool = False
+    power_dry_run: bool = False
+    portainer_dry_run: bool = False
     notifier_adapter: str = "null"
 
     # IANA timezone times are shown in and backup cron schedules run in (e.g.
@@ -71,6 +78,14 @@ class Settings(BaseSettings):
     webauthn_origin: str = "http://localhost:8080"
 
     session_secret: SecretStr = SecretStr("dev-only-change-me")
+    # The master key that encrypts every stored credential (orchestrator/vault.py). Blank: a
+    # Docker secret at /run/secrets/orchestrator_master_key, else STATE_DIR/keys/master.key
+    # (made on first start). Keep a copy outside this host: `orchestrator-cli secrets export-key`.
+    orchestrator_master_key_file: str = ""
+    # Plain-text secrets left from before encryption are encrypted this long after start: by
+    # then an update has passed the updater's health check and will not be rolled back to a
+    # version that cannot read them. New secrets are encrypted at once.
+    secrets_encrypt_delay_s: int = 300
 
     # How long an admin-invite link (generated from the dashboard, used to add
     # another admin's passkey) stays valid before it must be re-issued.
@@ -447,6 +462,13 @@ class Settings(BaseSettings):
     portainer_read_only: bool = False
     # The address people open in a browser, for "Open in Portainer" links (blank: PORTAINER_URL).
     portainer_public_url: str = ""
+    # How long to wait for Portainer's answer to an ordinary request.
+    portainer_timeout_s: int = 20
+    # How often its source page reads stacks and containers again.
+    portainer_refresh_s: int = 30
+    # Stacks and containers (comma-separated names) that are only stopped, restarted or removed
+    # when someone types the name: the dashboard asks for it, other callers are refused.
+    portainer_protected: str = ""
     haos_url: str = ""
     haos_token: SecretStr = SecretStr("")
     haos_verify_tls: bool = True

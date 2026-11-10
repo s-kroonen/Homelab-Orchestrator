@@ -243,7 +243,9 @@ def test_service_page_renders_the_address_block(client: TestClient) -> None:
     assert "10.0.0.21" in html and MAC in html
     js = client.get("/static/service.js").text
     assert '"/ip/discover"' in js and "function addPing" in js  # find now, one-click ping
-    assert 'key: "ip_address", label: "Address by hand"' in js
+    # the address by hand is set in Where it runs (link.js)
+    assert "Link.where" in js
+    assert 'key: "ip_address", label: "Address by hand"' in client.get("/static/link.js").text
     assert 'show: is("ping")' in js  # the probe drawer knows the kind
 
 
@@ -258,8 +260,8 @@ def test_services_list_can_find_addresses(client: TestClient) -> None:
 def test_proxy_form_offers_use_service_ip(client: TestClient) -> None:
     _seed(("media", 100))
     client.put("/api/registry/services/media", json={"ip_address": "10.0.0.5"})
-    html = client.get("/proxy-hosts?new=1").text
-    assert '"ip": "10.0.0.5"' in html  # the drawer's picker knows each service's address
+    choices = client.get("/api/views/proxy-host-services").json()
+    assert any(c.get("ip") == "10.0.0.5" for c in choices)  # the drawer knows each address
     js = client.get("/static/objects.js").text
     assert "Its service's address is" in js and '"Use it"' in js
 

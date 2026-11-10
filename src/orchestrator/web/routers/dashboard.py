@@ -30,6 +30,7 @@ from sqlmodel import Session, col, select
 from orchestrator.adapters.errors import AdapterError
 from orchestrator.audit import log as audit
 from orchestrator.config import get_settings
+from orchestrator.connectors.ownership import node_href
 from orchestrator.db.models import (
     BackupPolicy,
     HealthScanSample,
@@ -175,6 +176,8 @@ class NodeCreate(_Body):
     notes: str = ""
     address: str = ""
     wake_on_hit_enabled: bool = True
+    #: The Proxmox source it belongs to (blank: the default one claims it).
+    source_id: str = ""
 
 
 class NodeUpdate(_Body):
@@ -242,6 +245,7 @@ def _node_dict(node: Node) -> dict[str, Any]:
         "notes": node.notes,
         "address": node.address,
         "wake_on_hit_enabled": node.wake_on_hit_enabled,
+        "href": node_href(node),
     }
 
 
@@ -844,7 +848,9 @@ async def _move_hosts(
             )
         else:
             out.append(
-                await move_to_configured_file(session, adapters, settings, ph, actor=admin.username)
+                await move_to_configured_file(
+                    session, adapters.with_proxy(ph.source_id), settings, ph, actor=admin.username
+                )
             )
             session.commit()
     return out
@@ -1264,6 +1270,7 @@ async def create_node(body: NodeCreate, session: SessionDep, admin: CurrentAdmin
         notes=body.notes,
         address=_check_node_address(body.address),
         wake_on_hit_enabled=body.wake_on_hit_enabled,
+        source_id=body.source_id.strip(),
     )
     session.add(node)
     session.flush()

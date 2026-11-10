@@ -48,7 +48,7 @@ def validate_controller(raw: dict[str, Any] | None) -> dict[str, Any]:
             raise ValueError("portainer 'endpoint' is the endpoint's number") from None
         if bool(cfg.get("container")) == bool(cfg.get("stack")):
             raise ValueError("a portainer controller needs exactly one of 'container' or 'stack'")
-        # Which Portainer connection (Connections page). Absent = the default one.
+        # Which Portainer connection (a source). Absent = the default one.
         instance = str(cfg.get("instance") or "").strip()
         if instance:
             cfg["instance"] = instance

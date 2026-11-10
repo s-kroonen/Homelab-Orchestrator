@@ -82,36 +82,22 @@ def client(app: Any, monkeypatch: pytest.MonkeyPatch) -> Any:
 ADMIN_PAGES = [
     "/",
     "/services",
-    "/nodes",
     "/admins",
     "/backup-policies",
-    "/proxy-hosts",
     "/traffic",
     "/activity",
-    "/infra",
-    "/infra/guests",
-    "/infra/connections",
+    "/sources",
     "/infra/snapshots",
 ]
 
 #: The navigation of docs/design/README.md, grouped the way base.html renders it.
 NAV_GROUPS = [
     ("Overview", [("/", "Dashboard"), ("/map", "Map")]),
-    ("Services", [("/services", "Services")]),
-    (
-        "Infrastructure",
-        [
-            ("/nodes", "Nodes &amp; guests"),
-            ("/proxy-hosts", "Proxy hosts"),
-            ("/portainer", "Containers"),
-            ("/backup-policies", "Backups"),
-        ],
-    ),
+    ("Services", [("/services", "Services"), ("/backup-policies", "Backups")]),
     ("Activity", [("/activity", "Activity"), ("/traffic", "Traffic")]),
     (
         "Settings",
         [
-            ("/infra/connections", "Connections"),
             ("/notifications", "Notifications"),
             ("/assistants", "AI assistants"),
             ("/admins", "Admins &amp; devices"),
@@ -143,17 +129,13 @@ def test_admin_pages_share_one_grouped_sidebar(client: TestClient) -> None:
     for path, current_href in [
         ("/", "/"),
         ("/services", "/services"),
-        ("/nodes", "/nodes"),
         ("/admins", "/admins"),
         ("/backup-policies", "/backup-policies"),
-        ("/proxy-hosts", "/proxy-hosts"),
         ("/traffic", "/traffic"),
         ("/activity", "/activity"),
-        # Connectivity's overview and connections live under Settings > Connections ...
-        ("/infra", "/infra/connections"),
-        ("/infra/connections", "/infra/connections"),
-        # ... its guests under Nodes & guests, snapshots under Backups.
-        ("/infra/guests", "/nodes"),
+        # Every connection is a source (OR-78) ...
+        ("/sources", "/sources"),
+        # ... snapshots under Backups.
         ("/infra/snapshots", "/backup-policies"),
     ]:
         r = client.get(path)
@@ -164,6 +146,7 @@ def test_admin_pages_share_one_grouped_sidebar(client: TestClient) -> None:
             assert f'<div class="nav-heading">{heading}</div>' in nav
             for href, label in links:
                 assert f'<a href="{href}"' in nav and label in nav
+        assert '<div class="nav-heading">Sources' in nav and '<a href="/sources"' in nav
         assert nav.count('class="current"') == 1, path
         assert f'<a href="{current_href}" class="current"' in nav, path
 

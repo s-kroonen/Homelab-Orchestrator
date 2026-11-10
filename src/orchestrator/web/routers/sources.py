@@ -32,12 +32,12 @@ from orchestrator.ipdiscovery.discovery import ip_view
 from orchestrator.logging_setup import get_logger, new_correlation_id
 from orchestrator.pipelines.steps import StepRecorder
 from orchestrator.registry import route_format as rf
-from orchestrator.registry.proxy_push import ref_of
+from orchestrator.registry.proxy_push import owned_hosts, ref_of
 from orchestrator.web.auth import CurrentAdmin, require_admin
 from orchestrator.web.deps import AdaptersDep, SessionDep, SettingsDep
 
 log = get_logger(__name__)
-router = APIRouter(prefix="/api/sources", tags=["sources"], dependencies=[Depends(require_admin)])
+router = APIRouter(prefix="/api/pull", tags=["sources"], dependencies=[Depends(require_admin)])
 
 _SETTING = "sources.refreshed"
 _background: set[asyncio.Task[None]] = set()
@@ -150,6 +150,25 @@ async def proxmox_refresh(
     return {"addresses": filled, "nodes": checks, "guests": resync}
 
 
+@router.get("/proxmox/nodes")
+async def cluster_nodes(
+    session: SessionDep, adapters: AdaptersDep, source: str | None = None
+) -> list[dict[str, Any]]:
+    """The nodes a Proxmox (``source``; blank: the default) lists, and whether each is recorded
+    here (an unrecorded one can be imported)."""
+    from orchestrator.connectors.ownership import proxmox_of
+
+    try:
+        cluster = await proxmox_of(adapters, source or "").cluster_status()
+    except Exception as exc:
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc)) from exc
+    known = {n.name for n in session.exec(select(Node)).all()}
+    return [
+        {"name": n.name, "address": n.ip, "online": n.online, "registered": n.name in known}
+        for n in sorted(cluster.nodes, key=lambda n: n.name)
+    ]
+
+
 class NodeImportIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -163,21 +182,32 @@ async def import_node(
     adapters: AdaptersDep,
     settings: SettingsDep,
     admin: CurrentAdmin,
+    source: str | None = None,
 ) -> dict[str, Any]:
-    """Record a node the cluster has. Its name and address come from Proxmox; what only this
-    orchestrator knows (power target, always on) is set on the dashboard afterwards."""
+    """Record a node a cluster (``source``; blank: the default) has, owned by that cluster. Its
+    name and address come from Proxmox; what only this orchestrator knows (power target,
+    always on) is set on its card afterwards."""
+    from orchestrator.connectors.ownership import proxmox_of
+    from orchestrator.connectors.registry import default_source
     from orchestrator.web.routers import dashboard
 
     try:
-        cluster = await adapters.proxmox.cluster_status()
+        cluster = await proxmox_of(adapters, source or "").cluster_status()
     except Exception as exc:
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc)) from exc
     entry = next((n for n in cluster.nodes if n.name == body.name), None)
     if entry is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, f"Proxmox has no node named {body.name!r}")
-    address = settings.proxmox_host if entry.local and settings.proxmox_host else entry.ip
+    main = default_source("proxmox")
+    owner = source or (main.id if main else "")
+    # PROXMOX_HOST is the address of the default cluster's node it talks to
+    is_default = not source or (main is not None and main.id == source)
+    local = entry.local and is_default and settings.proxmox_host
+    address = settings.proxmox_host if local else entry.ip
     out = await dashboard.create_node(
-        dashboard.NodeCreate(name=entry.name, address=address or ""), session, admin
+        dashboard.NodeCreate(name=entry.name, address=address or "", source_id=owner),
+        session,
+        admin,
     )
     _stamp(session, "proxmox")
     session.commit()
@@ -338,11 +368,14 @@ async def ips_discover(
 
 
 @router.get("/traefik")
-async def traefik(session: SessionDep, adapters: AdaptersDep) -> dict[str, Any]:
-    """Every route Traefik Manager has next to the host record it belongs to."""
+async def traefik(
+    session: SessionDep, adapters: AdaptersDep, source: str | None = None
+) -> dict[str, Any]:
+    """Every route a Traefik Manager has (``source``: that proxy) next to its host record."""
+    adapters = adapters.with_proxy(source or "")
     proxy = adapters.proxy
     routes = await proxy.list_routes()
-    hosts = session.exec(select(ProxyHost).order_by(ProxyHost.hostname)).all()
+    hosts = owned_hosts(session, adapters)
     services = {s.id: s for s in session.exec(select(Service)).all()}
     by_host = {h.hostname.lower(): h for h in hosts}
     rows: list[dict[str, Any]] = []
@@ -391,12 +424,18 @@ async def traefik(session: SessionDep, adapters: AdaptersDep) -> dict[str, Any]:
 
 @router.post("/traefik/import")
 async def traefik_import(
-    session: SessionDep, adapters: AdaptersDep, settings: SettingsDep, admin: CurrentAdmin
+    session: SessionDep,
+    adapters: AdaptersDep,
+    settings: SettingsDep,
+    admin: CurrentAdmin,
+    source: str | None = None,
 ) -> dict[str, Any]:
-    """Pull Traefik Manager's routes into the records (what "Resync from Traefik" did)."""
+    """Pull a Traefik Manager's routes into its records (what "Resync from Traefik" did)."""
     from orchestrator.web.routers import proxy_hosts
 
-    out = await proxy_hosts.resync_proxy_hosts(session, admin, settings, adapters)
+    out = await proxy_hosts.resync_proxy_hosts(
+        session, admin, settings, adapters.with_proxy(source or "")
+    )
     _stamp(session, "traefik")
     session.commit()
     return out
@@ -413,11 +452,19 @@ class PlanIn(BaseModel):
 
 @router.post("/traefik/format/plan")
 async def format_plan(
-    body: PlanIn, session: SessionDep, adapters: AdaptersDep, settings: SettingsDep
+    body: PlanIn,
+    session: SessionDep,
+    adapters: AdaptersDep,
+    settings: SettingsDep,
+    source: str | None = None,
 ) -> dict[str, Any]:
-    """What formatting would do to each host. Changes nothing."""
+    """What formatting would do to each host (``source``: of that proxy). Changes nothing."""
     plan = await rf.build_plan(
-        session, adapters, settings, hostnames=body.hostnames, hsts=body.hsts
+        session,
+        adapters.with_proxy(source or ""),
+        settings,
+        hostnames=body.hostnames,
+        hsts=body.hsts,
     )
     return plan.as_dict()
 
@@ -450,8 +497,11 @@ async def format_run(
     adapters: AdaptersDep,
     settings: SettingsDep,
     admin: CurrentAdmin,
+    source: str | None = None,
 ) -> dict[str, Any]:
-    """Rewrite the chosen hosts, one at a time, in the background. Poll ``/api/runs/{id}``."""
+    """Rewrite the chosen hosts (``source``: of that proxy), one at a time, in the background.
+    Poll ``/api/runs/{id}``."""
+    adapters = adapters.with_proxy(source or "")
     running = session.exec(
         select(PipelineRun).where(
             PipelineRun.kind == PipelineKind.FORMAT, PipelineRun.status == PipelineStatus.RUNNING

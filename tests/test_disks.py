@@ -150,7 +150,7 @@ async def test_a_filling_disk_is_a_warning_then_an_error_then_recovers(session: 
     assert low.event == "disk_low" and low.severity == "warn" and low.level == "disk"
     assert low.title == "Disk on vm-101 is 90% full (/)"
     assert "9.0 GB of 10.0 GB used" in low.body and "threshold is 85%" in low.body
-    assert link_for(low.level, low.target, low.event) == "/nodes?q=101"
+    assert link_for(low.level, low.target, low.event) == "/sources"  # no Proxmox source here
     await cycle(9.7)
     (full,) = await cycle(9.7)
     assert full.event == "disk_full" and full.severity == "error"
@@ -207,7 +207,7 @@ def test_the_guest_list_and_the_api_show_the_last_check(
     assert rows[200]["disk"]["state"] == "ok"
     listing = client.get("/api/infra/disks").json()
     assert listing["warn_pct"] == 85 and listing["guests"][0]["state"] == "full"
-    js = client.get("/static/nodes.js").text
+    js = client.get("/static/source_proxmox.js").text
     assert "Disk filling up" in js and "/api/infra/disks/check" in js
 
 

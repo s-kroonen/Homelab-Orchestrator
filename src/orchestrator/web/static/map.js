@@ -127,7 +127,7 @@
       el("div", { class: "map-node-sub", onclick: () => select("node:" + n.name) }, bits),
       list.length ? list.map(svcRow)
         : (q || problems) ? el("p", { class: "faint map-none" }, "Nothing here matches.")
-          : el("p", { class: "faint map-none" }, "No services on this node yet. ", el("a", { href: "/nodes?q=" + enc(n.name) }, "Import its guests")));
+          : el("p", { class: "faint map-none" }, "No services on this node yet. ", el("a", { href: n.href || "/sources" }, "Import its guests")));
   }
 
   function backupsCard(rowsCount) {
@@ -397,7 +397,7 @@
         ["Wake on hit", r.wake_on_hit],
       ])),
       section("Proxy hosts", hosts.length ? el("div", { class: "map-chips" }, hosts.map((h) => el("div", {}, pick(h.id, h.hostname, "mono"), " ", pill(h.served ? "ok" : "off", h.served ? "on" : "off"))))
-        : el("p", { class: "faint" }, "No proxy host leads here. ", el("a", { href: "/proxy-hosts?new=1" + (r.id != null ? "&service_id=" + r.id : "") }, "Add one"))),
+        : el("p", { class: "faint" }, "No proxy host leads here. ", el("a", { href: "/find/proxy-host?new=1" + (r.id != null ? "&service_id=" + r.id : "") }, "Add one"))),
       section("The path", pathList(t)),
       section("Backups", kv([
         ["Policy", r.backup.main + (I.policies.get(r.backup.main) && I.policies.get(r.backup.main).next_run ? " · next " + fmt.short(I.policies.get(r.backup.main).next_run) : "")],
@@ -421,7 +421,7 @@
     const primary = p === "off" && canWake(node) ? btn("Wake " + name, () => O.nodePower(node, "wake", refresh), true) : null;
     const acts = [
       btn("Check", () => nodeStatus.refresh()),
-      link("Open on Nodes & guests", "/nodes?q=" + enc(name)),
+      link("Open in its Proxmox", node.href || "/sources"),
       node.id != null ? btn("Edit…", () => O.nodeDrawer({ node, onSaved: refresh })) : null,
     ].filter(Boolean);
     const more = [
@@ -441,7 +441,7 @@
         ["Proxmox", h && h.reachable ? [h.version || "answers", h.latency_ms != null ? " · " + Math.round(h.latency_ms) + " ms" : ""] : live ? "not answering" : "checking…"],
       ])),
       section("Services (" + mine.length + ")", mine.length ? el("div", { class: "map-chips" }, mine.map((t) => el("div", {}, pick("svc:" + t.svc.slug, row(t.svc.slug).name), " ", el("span", { class: "faint mono" }, guestLabel(t.guest)), " ", pill(row(t.svc.slug).state.cls, row(t.svc.slug).state.label))))
-        : el("p", { class: "faint" }, "None yet. ", el("a", { href: "/nodes?q=" + enc(name) }, "Import its guests"))),
+        : el("p", { class: "faint" }, "None yet. ", el("a", { href: node.href || "/sources" }, "Import its guests"))),
       section("Backups", targets.length ? kv([["Guests backed up", String(targets.length)], ["Policies", [...new Set(targets.map((t) => t.policy).filter(Boolean))].join(", ") || "none"]])
         : el("p", { class: "faint" }, "Nothing on this node is backed up yet.")));
   }
@@ -457,9 +457,9 @@
       head(h.hostname, pill(h.served ? "ok" : "off", h.served ? "on" : "off"), "proxy host · " + h.provider, null, { mono: true }),
       h.served ? null : why("off", h.enabled ? "Not routed: the service it leads to is switched off." : "Switched off: Traefik does not route it."),
       el("div", { class: "map-acts" }, el("div", { class: "grid" },
-        h.pk != null ? link("Edit…", "/proxy-hosts?edit=" + h.pk) : null,
+        h.pk != null ? link("Edit…", "/find/proxy-host?id=" + h.pk) : null,
         t ? btn("Select its service", () => select("svc:" + t.svc.slug)) : null,
-        link("All proxy hosts", "/proxy-hosts?q=" + enc(h.hostname)))),
+        link("Open on its proxy", "/find/proxy-host?hostname=" + enc(h.hostname)))),
       section("Details", kv([["Service", t ? pick("svc:" + t.svc.slug, row(t.svc.slug).name) : "none: not linked"], ["Router", h.provider]])),
       section("The path", el("ol", { class: "map-path" }, steps.map((s) => el("li", {}, s)))));
   }

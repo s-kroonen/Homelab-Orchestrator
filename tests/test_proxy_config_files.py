@@ -635,7 +635,7 @@ def test_the_form_and_list_carry_the_config_file_ui(
     js = client.get("/static/objects.js").text
     assert 'key: "config_file", label: "Config file"' in js and "config_files" in js
     assert "config_file_template" in js  # the blank default says where it goes
-    listing = client.get("/static/proxy_hosts.js").text
+    listing = client.get("/static/source_proxy.js").text
     assert "config_file_misplaced" in listing and "move-config-file" in listing
 
 

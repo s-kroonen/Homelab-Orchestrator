@@ -1,7 +1,7 @@
 # Guest disks: a warning before one runs full
 
 Every health cycle (10 minutes) the orchestrator reads how full each **running** guest's
-filesystems are, shows it on **Nodes & guests**, and alerts when one is filling up.
+filesystems are, shows it on each Proxmox source's **Guests** tab, and alerts when one is filling up.
 
 ## Where the numbers come from
 
@@ -37,13 +37,13 @@ The alert's text names every filesystem ("/ is 91% full (18.2 GB of 20.0 GB used
 Like every other alert it is debounced (two cycles), flap-damped, grouped by the rules and sent by
 default; a rule can pick level **disk** or the events `disk_low` / `disk_full`, and scope it by
 node, service or group (a guest that is a service carries its slug and group). Tapping it opens
-Nodes & guests filtered to that guest. A guest that is switched off, or cannot be measured, keeps
+its Proxmox source's guests, filtered to that guest. A guest that is switched off, or cannot be measured, keeps
 whatever it was last announced as.
 
 ## Seeing it
 
-* **Nodes & guests**: the *Disk* column (fullest filesystem, its size; hover for all of them),
-  the *Disk filling up* filter, and *⋯ → Check guest disks now*.
+* A Proxmox source's **Guests** tab: the *Disk* column (fullest filesystem, its size; hover for
+  all of them), the *Disk filling up* filter, and *Check disks* for selected guests.
 * **API**: `GET /api/infra/disks` (fullest first, `?node=`), `POST /api/infra/disks/check`
   (read now); each row of `GET /api/infra/proxmox/guests` carries its `disk`.
 * **Assistants**: `disk_usage` (`refresh=true` reads now) - see [mcp.md](mcp.md).

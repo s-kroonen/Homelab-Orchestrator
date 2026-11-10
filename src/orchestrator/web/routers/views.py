@@ -252,14 +252,20 @@ def _stack_ref(svc: Service) -> dict[str, Any] | None:
 
 
 def stack_ref(instance: str, endpoint: int, name: str) -> dict[str, Any]:
+    """Where a stack's page is: under its Portainer source (a link naming no Portainer is on
+    the default one)."""
     from urllib.parse import quote
 
-    path = f"/portainer/{endpoint}/{quote(name, safe='')}"
+    from orchestrator.connectors.registry import default_source
+
+    if not instance:
+        found = default_source("portainer")
+        instance = found.id if found is not None else "portainer"
     return {
         "instance": instance,
         "endpoint": endpoint,
         "name": name,
-        "href": path + (f"?instance={quote(instance, safe='')}" if instance else ""),
+        "href": f"/sources/{quote(instance, safe='')}/stacks/{endpoint}/{quote(name, safe='')}",
     }
 
 
@@ -357,11 +363,15 @@ def _node_boot(session: Session, node: Node) -> dict[str, Any]:
     }
 
 
-def nodes_view(session: Session) -> dict[str, Any]:
+def nodes_view(session: Session, source: str | None = None) -> dict[str, Any]:
+    """The nodes (``source``: of that Proxmox only) with their services and boot sequence."""
+    from orchestrator.connectors.ownership import node_href, nodes_of
+
     services = list(session.exec(select(Service)).all())
     tree = TreeIndex(services)
     out = []
-    for n in session.exec(select(Node).order_by(Node.name)).all():
+    rows = nodes_of(session, source) if source else session.exec(select(Node).order_by(Node.name))
+    for n in rows:
         mine = [s for s in services if tree.root(s).node_id == n.id]
         out.append(
             {
@@ -372,6 +382,7 @@ def nodes_view(session: Session) -> dict[str, Any]:
                 "power_mgr_target": n.power_mgr_target,
                 "notes": n.notes,
                 "wake_on_hit_enabled": n.wake_on_hit_enabled,
+                "href": node_href(n),
                 "services": len(mine),
                 "service_slugs": sorted(s.slug for s in mine if tree.parent(s) is None),
                 "boot": _node_boot(session, n),
@@ -381,24 +392,8 @@ def nodes_view(session: Session) -> dict[str, Any]:
 
 
 @api.get("/nodes")
-async def nodes_api(session: SessionDep) -> dict[str, Any]:
-    return nodes_view(session)
-
-
-@pages.get("/nodes", response_model=None)
-async def nodes_page(request: Request, session: SessionDep) -> HTMLResponse | RedirectResponse:
-    admin = get_current_admin(request, session)
-    if admin is None:
-        return login_redirect(request)
-    return templates.TemplateResponse(
-        request,
-        "nodes.html",
-        {
-            "admin": admin,
-            "initial": nodes_view(session),
-            "services_initial": services_view(session),
-        },
-    )
+async def nodes_api(session: SessionDep, source: str | None = None) -> dict[str, Any]:
+    return nodes_view(session, source)
 
 
 # --- admins & devices -------------------------------------------------------------------------

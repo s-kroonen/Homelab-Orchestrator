@@ -82,8 +82,8 @@ Settings → Notifications (`/notifications`) has, on the left, the **Rules** (+
 open a drawer; the switch turns a rule on or off; ⋯ has the rest) and **Recent alerts**, the
 newest twelve, with what was sent where ("Show folded and unsent" hides what was folded into
 another alert or that no rule wanted; Activity → Alerts has the whole feed). On the right,
-**Channels** says which of ntfy, e-mail, webhook and push are set up (they are set up on
-Connections → Alerts), and **This device** turns alerts on or off for the browser you are using,
+**Channels** says which of ntfy, e-mail, webhook and push are set up (each is set up or edited
+right there, in its drawer), and **This device** turns alerts on or off for the browser you are using,
 installs the dashboard as an app, sends a test, and lists every device with push.
 **Send a test** in the header sends one to every channel.
 
@@ -105,11 +105,14 @@ the webhook, and the target in the Notifications feed and on the Activity page.
 | --- | --- |
 | service / sub-service health (failed, down, recovered, flapping, recovery) | `/services/<slug>#health` |
 | backup or restore | `/services/<slug>#backups` |
-| deploy | `/services/<slug>#deploys` |
+| deploy, outside change, of a service run as a stack | `/sources/<portainer>/stacks/<env>/<stack>` (the stack under its Portainer: what failed and *Deploy again*) |
+| deploy of any other service | `/services/<slug>#deploys` |
 | database dump | `/services/<slug>#dumps` |
-| switch failed, outside change | `/services/<slug>#stack` |
-| node | `/nodes?q=<node>` (Nodes & guests, its guests listed) |
-| guest, or a guest's disk | `/nodes?q=<vmid>` (Nodes & guests, filtered to that guest) |
+| switch failed; outside change of a service not run as a stack | `/services/<slug>#stack` |
+| node | `/sources/<proxmox>?tab=nodes` (its Proxmox source, the Nodes tab) |
+| guest, or a guest's disk | `/sources/<proxmox>?tab=guests&q=<vmid>` (its Proxmox source's guests, filtered to that guest) |
+| a route (its public check) | `/find/proxy-host?hostname=<host>`: the proxy host on the proxy that owns it |
+| the network check (LAN, internet, proxy) | `/system#h-net` (System, the Network card) |
 | self-update | `/system` |
 | a request waiting for approval | its approval page (always wins over the above) |
 

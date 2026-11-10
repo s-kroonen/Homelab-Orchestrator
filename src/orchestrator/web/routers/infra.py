@@ -21,6 +21,7 @@ from sqlmodel import Session, select
 
 from orchestrator.adapters.errors import AdapterError, AdapterUnreachable
 from orchestrator.audit import log as audit
+from orchestrator.connectors.ownership import nodes_of, proxmox_for_node, proxmox_of
 from orchestrator.db.models import Node, Service, ServiceState
 from orchestrator.domain.enums import GuestKind, PowerState
 from orchestrator.registry.tree import TreeIndex
@@ -283,7 +284,8 @@ async def node_health_view(adapters: Any, node: Node) -> dict[str, Any]:
         return {"checked": False, "reachable": None, "error": "no address set"}
     try:
         h = await asyncio.wait_for(
-            adapters.proxmox.node_health(node.name, node.address), _NODE_HEALTH_TIMEOUT_S
+            proxmox_of(adapters, node.source_id).node_health(node.name, node.address),
+            _NODE_HEALTH_TIMEOUT_S,
         )
     except TimeoutError:
         return {"checked": True, "reachable": False, "error": "no answer in time"}
@@ -334,19 +336,29 @@ async def fill_node_addresses(
 
 
 @router.get("/nodes/status")
-async def nodes_status(session: SessionDep, adapters: AdaptersDep) -> dict[str, Any]:
-    """Live power state of every node: the power manager's report (when the
-    node has a power target) and whether Proxmox sees it online. Read-only,
-    never raises for one unreachable source - that source reads ``None``."""
-    nodes = session.exec(select(Node).order_by(Node.name)).all()
+async def nodes_status(
+    session: SessionDep, adapters: AdaptersDep, source: str | None = None
+) -> dict[str, Any]:
+    """Live power state of every node (or one Proxmox source's): the power manager's report
+    (when the node has a power target) and whether its cluster sees it online. Read-only,
+    never raises for one unreachable cluster - its nodes read ``None``."""
+    nodes = (
+        nodes_of(session, source)
+        if source
+        else list(session.exec(select(Node).order_by(Node.name)).all())
+    )
 
+    # each cluster is asked once, for the nodes it owns
     proxmox_error: str | None = None
     online: dict[str, bool] = {}
-    try:
-        cluster = await adapters.proxmox.cluster_status()
-        online = {n.name: n.online for n in cluster.nodes}
-    except Exception as exc:  # unreachable cluster: report it, keep the power view
-        proxmox_error = str(exc)
+    failed: set[str] = set()
+    for owner in sorted({n.source_id for n in nodes}):
+        try:
+            cluster = await proxmox_of(adapters, owner).cluster_status()
+            online |= {n.name: n.online for n in cluster.nodes}
+        except Exception as exc:  # unreachable cluster: report it, keep the power view
+            proxmox_error = str(exc)
+            failed.add(owner)
 
     async def power_of(node: Node) -> tuple[PowerState | None, str | None]:
         if not node.power_mgr_target.strip():
@@ -365,7 +377,7 @@ async def nodes_status(session: SessionDep, adapters: AdaptersDep) -> dict[str, 
     healths = await asyncio.gather(*(node_health_view(adapters, n) for n in nodes))
     out = []
     for node, (power, detail), health in zip(nodes, reports, healths, strict=True):
-        pve = online.get(node.name) if not proxmox_error else None
+        pve = online.get(node.name) if node.source_id not in failed else None
         out.append(
             {
                 "name": node.name,
@@ -466,13 +478,18 @@ def _boot_view(row: Any, slot: Any) -> dict[str, Any] | None:
 
 @router.get("/proxmox/guests")
 async def list_guests(
-    adapters: AdaptersDep, session: SessionDep, node: str | None = None
+    adapters: AdaptersDep,
+    session: SessionDep,
+    node: str | None = None,
+    source: str | None = None,
 ) -> list[dict[str, Any]]:
-    """Every guest Proxmox lists, with the service it is (if any) and its boot settings: start
-    at boot, order, and where it falls in its node's boot sequence. The boot settings of a node
-    that is on are read again when the kept copy is older than ten minutes."""
-    guests = await adapters.proxmox.list_guests(node)
-    await _refresh_boot(session, adapters.proxmox, guests)
+    """Every guest a Proxmox lists (``source``: that one; blank: the default), with the service
+    it is (if any) and its boot settings: start at boot, order, and where it falls in its node's
+    boot sequence. The boot settings of a node that is on are read again when the kept copy is
+    older than ten minutes."""
+    proxmox = proxmox_of(adapters, source or "")
+    guests = await proxmox.list_guests(node)
+    await _refresh_boot(session, proxmox, guests)
     from orchestrator.health import disks as disks_mod
     from orchestrator.registry import boot as boot_mod
 
@@ -602,8 +619,9 @@ async def set_guest_boot(
     for name, value in (("order", body.order), ("up_s", body.up_s), ("down_s", body.down_s)):
         if value is not None and value < 0:
             raise HTTPException(status.HTTP_400_BAD_REQUEST, f"{name} cannot be negative")
+    proxmox = proxmox_for_node(session, adapters, node)
     try:
-        guests = await adapters.proxmox.list_guests(node)
+        guests = await proxmox.list_guests(node)
     except AdapterError as exc:
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc)) from exc
     guest = next((g for g in guests if g.vmid == vmid and g.node == node), None)
@@ -611,7 +629,7 @@ async def set_guest_boot(
         raise HTTPException(status.HTTP_404_NOT_FOUND, f"no guest {vmid} on node {node!r}")
     boot = GuestBoot(onboot=body.onboot, order=body.order, up_s=body.up_s, down_s=body.down_s)
     try:
-        await adapters.proxmox.set_guest_boot(node, vmid, guest.kind, boot)
+        await proxmox.set_guest_boot(node, vmid, guest.kind, boot)
     except AdapterError as exc:
         raise HTTPException(
             status.HTTP_502_BAD_GATEWAY,
@@ -669,8 +687,9 @@ async def guest_power_action(
             session, adapters, admin.username, svc.slug, body.action
         )
 
+    proxmox = proxmox_for_node(session, adapters, node)
     try:
-        guests = await adapters.proxmox.list_guests(node)
+        guests = await proxmox.list_guests(node)
     except AdapterError as exc:
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc)) from exc
     guest = next((g for g in guests if g.vmid == vmid and g.node == node), None)
@@ -678,9 +697,9 @@ async def guest_power_action(
         raise HTTPException(status.HTTP_404_NOT_FOUND, f"no guest {vmid} on node {node!r}")
     try:
         if body.action == "start":
-            handle = await adapters.proxmox.start_guest(node, vmid, guest.kind)
+            handle = await proxmox.start_guest(node, vmid, guest.kind)
         else:
-            handle = await adapters.proxmox.stop_guest(node, vmid, guest.kind)
+            handle = await proxmox.stop_guest(node, vmid, guest.kind)
     except AdapterError as exc:
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc)) from exc
 

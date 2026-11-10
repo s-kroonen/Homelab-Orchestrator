@@ -211,6 +211,26 @@
     pre.hidden = false;
   }
 
+  // --- SSH and host runner: a connection, edited in its drawer (ConnDrawer) -----------------------------
+  async function drawSsh() {
+    let v;
+    try { v = await api.get("/api/connections", { suppressToast: true }); } catch (e) { fill($("#ssh-facts"), el("dd", {}, e.message)); return; }
+    const spec = v.kinds.find((k) => k.kind === "ssh");
+    const conn = v.connections.find((c) => c.kind === "ssh") || null;
+    fill($("#ssh-pill"), el("span", { class: "pill " + (conn && conn.enabled ? "ok" : "off") }, conn ? (conn.enabled ? "on" : "off") : "defaults"));
+    fill($("#ssh-facts"), spec.fields.map((f) => {
+      const val = conn ? conn.settings[f.name] : f.default;
+      const shown = val === true ? "yes" : val === false ? "no" : val == null || val === "" ? "—" : String(val);
+      return [el("dt", {}, f.label), el("dd", { class: typeof val === "string" && val ? "mono" : null }, shown)];
+    }));
+    const btn = $("#ssh-edit");
+    btn.textContent = conn ? "Edit" : "Set up";
+    btn.disabled = !!(conn && conn.source === "env");
+    btn.title = btn.disabled ? "Configured in .env: move it into the file on Sources first" : "";
+    btn.onclick = () => window.ConnDrawer.open({ kind: spec, conn, onSaved: drawSsh, onRemoved: drawSsh });
+  }
+
+  drawSsh();
   drawInfo();
   drawUpdate();
   doCheck(false);

@@ -22,6 +22,13 @@ from orchestrator.mcp.tools import TOOLS, ToolError
 def _bootstrap() -> None:
     configure_logging()
     build_engine()
+    from orchestrator import vault
+    from orchestrator.config import get_settings as _settings
+
+    try:  # refuses a missing or wrong master key, as the app does
+        vault.boot(_settings())
+    except vault.VaultError as exc:
+        raise click.ClickException(str(exc)) from exc
 
 
 def _when(iso: str | None) -> str:

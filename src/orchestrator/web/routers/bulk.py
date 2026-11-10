@@ -302,11 +302,18 @@ async def bulk_proxy_hosts(
         hostname = ph.hostname
         if body.action in ("enable", "disable"):
             await set_proxy_host_enabled(
-                session, admin, settings, adapters, ph, body.action == "enable"
+                session,
+                admin,
+                settings,
+                adapters.with_proxy(ph.source_id),
+                ph,
+                body.action == "enable",
             )
             return f"{hostname} {body.action}d"
         if body.action == "delete":
-            await delete_proxy_host_record(session, admin, settings, adapters, ph)
+            await delete_proxy_host_record(
+                session, admin, settings, adapters.with_proxy(ph.source_id), ph
+            )
             return f"{hostname} deleted"
         on = body.action == "wake_on_hit_on"
         await set_proxy_host_wake_on_hit(session, admin, ph, on)

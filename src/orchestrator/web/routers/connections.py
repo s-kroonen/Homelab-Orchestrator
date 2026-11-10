@@ -11,8 +11,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
-from fastapi.responses import HTMLResponse, PlainTextResponse, RedirectResponse
+from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel, Field
 from sqlmodel import Session, select
 
@@ -24,19 +24,14 @@ from orchestrator.connections.kinds import KINDS
 from orchestrator.connections.model import Connection, Scope
 from orchestrator.connections.store import path_for
 from orchestrator.db.models import Service
-from orchestrator.web.auth import CurrentAdmin, get_current_admin, login_redirect, require_admin
+from orchestrator.web.auth import CurrentAdmin, require_admin
 from orchestrator.web.deps import AdaptersDep, SessionDep, SettingsDep
-from orchestrator.web.templating import templates
 
 api = APIRouter(
     prefix="/api/connections", tags=["connections"], dependencies=[Depends(require_admin)]
 )
-pages = APIRouter(tags=["connections"])
 router = APIRouter()
 router.include_router(api)
-router.include_router(pages)
-
-_templates = templates
 
 
 class ConnectionIn(BaseModel):
@@ -89,6 +84,9 @@ async def _apply(settings: Settings, adapters: AdaptersDep) -> None:
     """Put the file in force: settings first, then the adapters built from them."""
     current = reload_settings()
     await adapters.reload(current)
+    from orchestrator.connectors.ownership import claim_now
+
+    claim_now()  # a new default source claims the rows nobody owns yet
 
 
 def _kinds() -> list[dict[str, Any]]:
@@ -109,6 +107,7 @@ def _kinds() -> list[dict[str, Any]]:
                     "help": f.help,
                     "choices": list(f.choices),
                     "default": "" if f.is_secret else f.default,
+                    "card": f.card,
                 }
                 for f in s.fields
             ],
@@ -129,37 +128,6 @@ def _view(settings: Settings) -> dict[str, Any]:
         "connections": [c.public() for c in snap.all],
         "env_keys": service.env_keys_in_use(settings),
     }
-
-
-@pages.get("/connections", response_model=None)
-async def connections_page_moved() -> RedirectResponse:
-    """The Connections page lives under Settings, at /infra/connections."""
-    return RedirectResponse("/infra/connections", status.HTTP_307_TEMPORARY_REDIRECT)
-
-
-@pages.get("/infra/connections", response_model=None)
-async def connections_page(
-    request: Request, session: SessionDep, settings: SettingsDep
-) -> HTMLResponse | RedirectResponse:
-    admin = get_current_admin(request, session)
-    if admin is None:
-        return login_redirect(request)
-    return _templates.TemplateResponse(
-        request, "connections.html", {"admin": admin, "initial": _view(settings)}
-    )
-
-
-@pages.get("/infra/connections/{ident}", response_model=None)
-async def connection_page(
-    ident: str, request: Request, session: SessionDep
-) -> HTMLResponse | RedirectResponse:
-    """What is up inside one connection (its data comes from ``/api/infra/connections/{id}``)."""
-    admin = get_current_admin(request, session)
-    if admin is None:
-        return login_redirect(request)
-    return _templates.TemplateResponse(
-        request, "infra_connection.html", {"admin": admin, "ident": ident}
-    )
 
 
 @api.get("")

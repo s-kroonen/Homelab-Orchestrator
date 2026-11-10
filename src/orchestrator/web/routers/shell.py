@@ -15,6 +15,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, Request
 from sqlmodel import select
 
+from orchestrator.connectors.ownership import node_href, proxy_host_href
 from orchestrator.db.models import Node, ProxyHost, Service
 from orchestrator.db.session import session_scope
 from orchestrator.registry.autosave import Autosaver
@@ -29,13 +30,14 @@ PAGES: list[tuple[str, str, str]] = [
     ("Dashboard", "/", "home overview"),
     ("Map", "/map", "graph path"),
     ("Services", "/services", "list"),
-    ("Nodes & guests", "/nodes", "proxmox vm lxc guests power"),
-    ("Proxy hosts", "/proxy-hosts", "traefik routes domains"),
-    ("Containers", "/portainer", "portainer stacks docker"),
+    (
+        "Sources",
+        "/sources",
+        "connections adapters proxmox portainer proxy pbs power settings connectivity",
+    ),
     ("Backups", "/backup-policies", "pbs policies snapshots dumps"),
     ("Activity", "/activity", "runs log audit"),
     ("Traffic", "/traffic", "requests countries geo"),
-    ("Connections", "/infra/connections", "adapters settings connectivity"),
     ("Notifications", "/notifications", "alerts push ntfy"),
     ("AI assistants", "/assistants", "mcp claude"),
     ("Admins & devices", "/admins", "users passkeys invite"),
@@ -82,14 +84,16 @@ def pending_view(saver: Autosaver, yaml_dirty: bool) -> dict[str, Any]:
 
 @router.get("/pending")
 async def get_pending(
-    session: SessionDep, saver: Autosaver = Depends(_autosaver)  # noqa: B008
+    session: SessionDep,
+    saver: Autosaver = Depends(_autosaver),  # noqa: B008
 ) -> dict[str, Any]:
     return pending_view(saver, compute_registry_diff(session).dirty)
 
 
 @router.post("/pending/retry")
 async def retry_pending(
-    admin: CurrentAdmin, saver: Autosaver = Depends(_autosaver)  # noqa: B008
+    admin: CurrentAdmin,
+    saver: Autosaver = Depends(_autosaver),  # noqa: B008
 ) -> dict[str, Any]:
     await saver.run_once(actor=admin.username)
     with session_scope() as session:
@@ -100,7 +104,8 @@ async def retry_pending(
 @router.get("/search")
 async def search_index(session: SessionDep) -> dict[str, Any]:
     items: list[dict[str, str]] = []
-    nodes = {n.id: n.name for n in session.exec(select(Node)).all()}
+    rows = session.exec(select(Node)).all()
+    nodes = {n.id: n.name for n in rows}
     for s in session.exec(select(Service).order_by(Service.slug)).all():
         items.append(
             {
@@ -110,15 +115,15 @@ async def search_index(session: SessionDep) -> dict[str, Any]:
                 "href": f"/services/{s.slug}",
             }
         )
-    for name in sorted(nodes.values()):
-        items.append({"kind": "node", "label": name, "sub": "", "href": f"/nodes?q={name}"})
+    for node in sorted(rows, key=lambda n: n.name):
+        items.append({"kind": "node", "label": node.name, "sub": "", "href": node_href(node)})
     for ph in session.exec(select(ProxyHost).order_by(ProxyHost.hostname)).all():
         items.append(
             {
                 "kind": "proxy host",
                 "label": ph.hostname,
                 "sub": ph.upstream or "",
-                "href": f"/proxy-hosts?q={ph.hostname}",
+                "href": proxy_host_href(ph, q=ph.hostname),
             }
         )
     for label, href, words in PAGES:

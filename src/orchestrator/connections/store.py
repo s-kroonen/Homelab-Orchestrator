@@ -1,7 +1,9 @@
 """``connections.yaml``: reading it, writing it, and the connections it implies.
 
 The file is owned by the dashboard (and ``orchestrator-cli connections``): it is written whole,
-atomically, readable by the owner only, and the previous copy is kept. Connections that exist only
+atomically, readable by the owner only, and the previous copy is kept. Secret values are stored
+encrypted with the master key (``orchestrator/vault.py``) and decrypted as the file is read;
+plain text from before is read as it is. Connections that exist only
 as ``.env`` keys (an install from before this file) are worked out on the fly and shown as coming
 from ``.env`` until they are moved.
 """
@@ -28,7 +30,7 @@ KEEP_BACKUPS = 5
 _lock = threading.RLock()
 
 _HEADER = (
-    "# Connections: what this orchestrator talks to. Edited from the dashboard (Connections) or\n"
+    "# Connections: what this orchestrator talks to. Edited from the dashboard (Sources) or\n"
     "# `orchestrator-cli connections`; applied without a restart. Holds credentials: keep it\n"
     "# private (the file is written readable by its owner only).\n"
 )
@@ -63,10 +65,13 @@ def read_file(path: Path) -> list[Connection]:
         raise ConnectionsFileError(
             f"{path}: written by a newer orchestrator (version {doc['version']})"
         )
+    from orchestrator import vault
+
     out: list[Connection] = []
     for index, raw in enumerate(doc.get("connections") or []):
         try:
             conn = Connection.model_validate(raw)
+            conn.secrets = {k: vault.decrypt(str(v)) for k, v in conn.secrets.items()}
             conn.validate_values()
         except Exception as exc:
             ident = raw.get("id") if isinstance(raw, dict) else index
@@ -78,28 +83,57 @@ def read_file(path: Path) -> list[Connection]:
     return out
 
 
-def dump_connections(conns: list[Connection]) -> str:
+def raw_secrets(path: Path) -> list[str]:
+    """The secret values in ``path`` exactly as stored (encrypted or not), for the vault's
+    status and migration. Raises :class:`ConnectionsFileError` when the file is unusable."""
+    if not path.is_file():
+        return []
+    try:
+        doc = YAML(typ="safe").load(path.read_text(encoding="utf-8")) or {}
+    except Exception as exc:
+        raise ConnectionsFileError(f"{path}: not valid YAML ({exc})") from exc
+    out: list[str] = []
+    for raw in (doc.get("connections") or []) if isinstance(doc, dict) else []:
+        if isinstance(raw, dict) and isinstance(raw.get("secrets"), dict):
+            out.extend(str(v) for v in raw["secrets"].values() if v not in (None, ""))
+    return out
+
+
+def dump_connections(conns: list[Connection], *, encrypt: bool = False) -> str:
+    """The file body. ``encrypt``: secrets encrypted with the master key (the file on disk);
+    without it they are plain (an export for another orchestrator, which has its own key)."""
     import io
+
+    from orchestrator import vault
 
     y = YAML()
     y.default_flow_style = False
     y.indent(mapping=2, sequence=4, offset=2)
-    doc: dict[str, Any] = {
-        "version": FILE_VERSION,
-        "connections": [
-            {k: v for k, v in c.model_dump().items() if not (k in {"secrets", "notes"} and not v)}
-            for c in conns
-        ],
-    }
+    rows = []
+    for c in conns:
+        row = {k: v for k, v in c.model_dump().items() if not (k in {"secrets", "notes"} and not v)}
+        if encrypt and row.get("secrets"):
+            row["secrets"] = {k: vault.encrypt(str(v)) for k, v in row["secrets"].items()}
+        rows.append(row)
+    doc: dict[str, Any] = {"version": FILE_VERSION, "connections": rows}
     buf = io.StringIO()
     buf.write(_HEADER)
     y.dump(doc, buf)
     return buf.getvalue()
 
 
-def write_file(path: Path, conns: list[Connection], *, keep: int = KEEP_BACKUPS) -> Path | None:
-    """Write ``conns`` to ``path``: validated, atomic, mode 0600. Returns the backup of the file
-    it replaced (None if there was none)."""
+def write_file(
+    path: Path,
+    conns: list[Connection],
+    *,
+    keep: int = KEEP_BACKUPS,
+    keep_backup: bool = True,
+    encrypt: bool = True,
+) -> Path | None:
+    """Write ``conns`` to ``path``: validated, secrets encrypted, atomic, mode 0600. Returns the
+    backup of the file it replaced (None if there was none, or ``keep_backup`` is off: the
+    vault rewriting a file in place keeps no plain-text copy of it). ``encrypt=False`` only for
+    ``secrets decrypt``, before going back to a version from before encryption."""
     for conn in conns:
         conn.validate_values()
     problems = check_set(conns)
@@ -108,7 +142,7 @@ def write_file(path: Path, conns: list[Connection], *, keep: int = KEEP_BACKUPS)
     with _lock:
         path.parent.mkdir(parents=True, exist_ok=True)
         backup: Path | None = None
-        if path.is_file():
+        if path.is_file() and keep_backup:
             folder = path.parent / "connections-backups"
             folder.mkdir(parents=True, exist_ok=True)
             backup = folder / f"{path.name}.{datetime.now(UTC).strftime('%Y%m%dT%H%M%S%fZ')}"
@@ -121,7 +155,7 @@ def write_file(path: Path, conns: list[Connection], *, keep: int = KEEP_BACKUPS)
         tmp = path.with_name(path.name + ".tmp")
         fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
         with os.fdopen(fd, "w", encoding="utf-8") as fh:
-            fh.write(dump_connections(conns))
+            fh.write(dump_connections(conns, encrypt=encrypt))
         os.replace(tmp, path)
         with contextlib.suppress(OSError):
             path.chmod(0o600)

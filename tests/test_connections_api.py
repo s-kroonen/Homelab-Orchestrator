@@ -89,11 +89,14 @@ def test_validation_and_duplicates(client: TestClient) -> None:
     assert bad.status_code == 422
     r = client.post("/api/connections", json={"kind": "portainer", "id": "x"})
     assert r.status_code == 422 and "required" in r.json()["detail"]
-    # only one Proxmox may be on
+    # several Proxmox clusters may be on (each is a source); Home Assistant only once
     one = {"kind": "proxmox", "settings": {"host": "pve1", "token_id": "a@b!c"}}
     one["secrets"] = {"token_secret": "s"}
     assert client.post("/api/connections", json={**one, "id": "pve1"}).status_code == 201
-    r = client.post("/api/connections", json={**one, "id": "pve2"})
+    assert client.post("/api/connections", json={**one, "id": "pve2"}).status_code == 201
+    ha = {"kind": "haos", "settings": {"url": "http://ha"}, "secrets": {"token": "t"}}
+    assert client.post("/api/connections", json={**ha, "id": "ha1"}).status_code == 201
+    r = client.post("/api/connections", json={**ha, "id": "ha2"})
     assert r.status_code == 422
 
 
@@ -254,14 +257,13 @@ def test_cli_adds_lists_and_hides_secrets(client: TestClient) -> None:
     assert out.exit_code == 0, out.output
 
 
-def test_the_page_renders_for_admins_only(client: TestClient) -> None:
-    page = client.get("/infra/connections")
-    assert page.status_code == 200 and "Connections" in page.text
-    assert 'id="initial"' in page.text and '"kinds": [' in page.text  # paints from the file
-    js = client.get("/static/connections.js").text
-    assert "function connDrawer" in js and '"/api/infra/overview"' in js
-    old = client.get("/connections", follow_redirects=False)
-    assert old.status_code == 307 and old.headers["location"] == "/infra/connections"
+def test_the_old_connections_pages_are_gone(client: TestClient) -> None:
+    """Sources replaced Settings > Connections (OR-78); old URLs do not redirect."""
+    for path in ("/connections", "/infra/connections", "/infra/connections/home", "/infra"):
+        assert client.get(path, follow_redirects=False).status_code == 404, path
+    assert client.get("/static/connections.js").status_code == 404
+    page = client.get("/sources")
+    assert page.status_code == 200 and 'id="initial"' in page.text and '"kinds": [' in page.text
     client.cookies.clear()
-    r = client.get("/infra/connections", follow_redirects=False)
+    r = client.get("/sources", follow_redirects=False)
     assert r.status_code in (302, 303, 307) and "/login" in r.headers["location"]

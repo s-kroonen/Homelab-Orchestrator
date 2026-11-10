@@ -228,6 +228,16 @@ class DryRunPortainerAdapter(PortainerAdapter):
             None,
         )
 
+    async def stack_file(self, stack: Stack) -> str:
+        if stack.id is None:
+            return ""
+        boxes = [c for c in self._containers if (c.stack or "").lower() == stack.name.lower()]
+        lines = ["services:"]
+        for c in boxes:
+            lines += [f"  {c.service or c.name}:", f"    image: {c.image}", "    environment:"]
+            lines += [f"      DB_PASSWORD: sample-{c.service or c.name}-password", "      TZ: UTC"]
+        return "\n".join(lines) + "\n"
+
     async def stack_kind(self, stack: Stack) -> str:
         return _KINDS.get(stack.name, "unknown")
 
@@ -299,6 +309,52 @@ class DryRunPortainerAdapter(PortainerAdapter):
             if c.image.rpartition(":")[0] == repo or c.image == repo
         }
         return sorted(self.tags.get(repo, set()) | base)
+
+    async def docker_list(self, endpoint_id: int, what: str) -> list[dict[str, Any]]:
+        """Sample lists made from the sample containers."""
+        boxes = await self.list_containers(endpoint_id)
+        if what == "images":
+            seen: dict[str, dict[str, Any]] = {}
+            for c in boxes:
+                seen.setdefault(
+                    c.image,
+                    {
+                        "Id": c.image_id or c.image,
+                        "RepoTags": [c.image],
+                        "Size": 120_000_000,
+                        "Created": 1_760_000_000,
+                        "Containers": 0,
+                    },
+                )
+                seen[c.image]["Containers"] += 1
+            return list(seen.values())
+        if what == "volumes":
+            stacks = sorted({c.stack for c in boxes if c.stack})
+            return [
+                {
+                    "Name": f"{st}_data",
+                    "Driver": "local",
+                    "Mountpoint": f"/var/lib/docker/volumes/{st}_data/_data",
+                    "Labels": {"com.docker.compose.project": st},
+                }
+                for st in stacks
+            ]
+        if what == "networks":
+            stacks = sorted({c.stack for c in boxes if c.stack})
+            return [
+                {"Name": n, "Id": n, "Driver": d, "Scope": "local"}
+                for n, d in (("bridge", "bridge"), ("host", "host"))
+            ] + [
+                {
+                    "Name": f"{st}_default",
+                    "Id": f"{st}_default",
+                    "Driver": "bridge",
+                    "Scope": "local",
+                    "Labels": {"com.docker.compose.project": st},
+                }
+                for st in stacks
+            ]
+        raise AdapterRequestError(f"there is no Docker list called {what!r}")
 
     async def remove_image(self, endpoint_id: int, ref: str) -> None:
         self._writable()

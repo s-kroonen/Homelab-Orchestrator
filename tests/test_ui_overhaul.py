@@ -1,5 +1,5 @@
 """The new layout (docs/design/README.md): one save model, the header's pending pill and search,
-and the Services / Nodes & guests / Admins & devices pages with their JSON views."""
+and the Services / Admins & devices pages with their JSON views."""
 
 from __future__ import annotations
 
@@ -58,7 +58,7 @@ def _seed() -> None:
 # --- pages --------------------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("path", ["/services", "/nodes", "/admins"])
+@pytest.mark.parametrize("path", ["/services", "/admins"])
 def test_new_pages_need_a_login(app: Any, path: str) -> None:
     with TestClient(app, follow_redirects=False) as anon:
         r = anon.get(path)
@@ -99,8 +99,8 @@ def test_nodes_view_counts_services_by_their_root(client: TestClient) -> None:
     [node] = client.get("/api/views/nodes").json()["nodes"]
     assert node["name"] == "node-a" and node["services"] == 2
     assert node["service_slugs"] == ["media"]  # what a power-off confirm lists
-    html = client.get("/nodes").text
-    assert 'href="/sources#proxmox"' in html and "/static/nodes.js?v=" in html
+    assert node["href"] == "/sources"  # no Proxmox source yet: All sources
+    assert client.get("/nodes", follow_redirects=False).status_code == 404  # its own page: gone
 
 
 def test_admins_page_holds_devices_and_invites(client: TestClient) -> None:
@@ -120,8 +120,10 @@ def test_search_lists_services_nodes_hosts_and_pages(client: TestClient) -> None
     by_kind = {(i["kind"], i["label"]): i for i in items}
     assert by_kind[("service", "Media")]["href"] == "/services/media"
     assert ("node", "node-a") in by_kind
-    assert by_kind[("proxy host", "tv.example.lan")]["href"] == "/proxy-hosts?q=tv.example.lan"
-    assert by_kind[("page", "Nodes & guests")]["href"] == "/nodes"
+    # no proxy source here (dry run): All sources; with one it opens on that proxy's page
+    assert by_kind[("proxy host", "tv.example.lan")]["href"] == "/sources"
+    assert by_kind[("page", "Sources")]["href"] == "/sources"
+    assert by_kind[("node", "node-a")]["href"] == "/sources"  # no Proxmox source to own it
 
 
 def test_pending_says_what_is_not_written_when_autosave_is_off(client: TestClient) -> None:

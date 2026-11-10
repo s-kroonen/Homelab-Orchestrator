@@ -92,7 +92,10 @@ def values_to_settings(spec: KindSpec, conn: Connection | None) -> dict[str, Any
     out = {f.setting: _setting_value(f, conn) for f in spec.fields}
     if spec.selector is not None:
         attr, live = spec.selector
-        out[attr] = live if conn is not None else "dry_run"
+        pretends = conn is not None and any(
+            f.name == "dry_run" and out[f.setting] for f in spec.fields
+        )
+        out[attr] = live if conn is not None and not pretends else "dry_run"
     return out
 
 

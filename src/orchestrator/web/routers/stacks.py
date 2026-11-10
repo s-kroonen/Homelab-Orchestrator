@@ -45,7 +45,7 @@ class AdoptIn(BaseModel):
     stack: str
     slug: str
     parent: str
-    #: The Portainer connection (Connections page); blank = the default one.
+    #: The Portainer connection (a source); blank = the default one.
     instance: str = ""
     name: str = ""
     group: str = ""
@@ -250,6 +250,7 @@ async def stack_action(
     adapters: AdaptersDep,
     admin: CurrentAdmin,
     instance: str | None = None,
+    confirm: str = "",
 ) -> dict[str, Any]:
     try:
         message = await stack_ops.control(
@@ -261,6 +262,7 @@ async def stack_action(
             ref=name,
             action=action,
             instance=instance,
+            confirm_name=confirm,
         )
     except StackError as exc:
         raise fail(exc) from exc
@@ -276,6 +278,7 @@ async def container_action(
     adapters: AdaptersDep,
     admin: CurrentAdmin,
     instance: str | None = None,
+    confirm: str = "",
 ) -> dict[str, Any]:
     try:
         message = await stack_ops.control(
@@ -287,6 +290,7 @@ async def container_action(
             ref=ref,
             action=action,
             instance=instance,
+            confirm_name=confirm,
         )
     except StackError as exc:
         raise fail(exc) from exc
@@ -330,6 +334,17 @@ async def stack_link(
 ) -> dict[str, Any]:
     try:
         return {"link": stack_ops.link_view(session, adapters, endpoint_id, name, instance)}
+    except StackError as exc:
+        raise fail(exc) from exc
+
+
+@router.get("/stacks/{endpoint_id}/{name}/compose")
+async def stack_compose(
+    endpoint_id: int, name: str, adapters: AdaptersDep, instance: str | None = None
+) -> dict[str, Any]:
+    """The compose file, values whose key looks secret replaced by •••."""
+    try:
+        return await stack_ops.compose_view(adapters, endpoint_id, name, instance)
     except StackError as exc:
         raise fail(exc) from exc
 

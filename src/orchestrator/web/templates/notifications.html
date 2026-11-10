@@ -9,7 +9,7 @@
     <button type="button" id="new-rule">+ Add rule</button>
   </div>
 </div>
-<p class="page-sub">Who hears about what, and where it goes. Channels (ntfy, e-mail, a webhook) are set up on <a href="/infra/connections">Connections</a>.</p>
+<p class="page-sub">Who hears about what, and where it goes. Channels (ntfy, e-mail, a webhook) are set up in the Channels card.</p>
 
 <div class="grid-2">
   <div class="col-main" style="min-width: 0">
@@ -28,7 +28,6 @@
     <section class="card" aria-labelledby="h-channels">
       <div class="card-head"><h2 id="h-channels">Channels</h2></div>
       <div id="channels"><p class="faint">Checking…</p></div>
-      <p style="margin: 10px 0 0; font-size: 13px"><a href="/infra/connections">Set up channels on Connections →</a></p>
     </section>
     <section class="card" aria-labelledby="h-device">
       <div class="card-head"><h2 id="h-device">This device</h2><span id="dev-pill"></span></div>
@@ -40,5 +39,6 @@
 <script type="application/json" id="initial">{{ initial | tojson }}</script>
 {% endblock %}
 {% block scripts %}
+<script src="{{ asset('conn_drawer.js') }}"></script>
 <script src="{{ asset('notifications.js') }}"></script>
 {% endblock %}

@@ -31,6 +31,10 @@ services:
       # replacing them, so a same-port override here collides with this one
       # instead of replacing it ("address already in use").
       - "${ORCHESTRATOR_BIND_ADDR:-127.0.0.1}:8080:8080"
+    # Optional: keep the master key that encrypts every stored credential OUT of the data
+    # volume (docs/secrets.md). Without this it lives at /data/keys/master.key.
+    # secrets:
+    #   - orchestrator_master_key
     volumes:
       - orchestrator_state:/data
       # Mount the config DIRECTORY, not the single file. Two reasons:
@@ -101,3 +105,9 @@ services:
 volumes:
   orchestrator_state:
     name: orchestrator_state
+
+# The master key as a Docker secret (see the orchestrator service above and docs/secrets.md).
+# Make it once: openssl rand -base64 32 > secrets/orchestrator_master_key; chmod 400 it.
+# secrets:
+#   orchestrator_master_key:
+#     file: ./secrets/orchestrator_master_key

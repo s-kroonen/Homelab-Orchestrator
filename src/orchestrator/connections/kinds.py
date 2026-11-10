@@ -31,6 +31,16 @@ class FieldSpec:
     choices: tuple[str, ...] = ()
     #: Show as a password box even when the Settings field is a plain string.
     secret: bool = False
+    #: Which Settings card it is on: connection, behaviour or safety (blank: from its type).
+    group: str = ""
+    #: A comma-separated list, edited as chips.
+    is_list: bool = False
+
+    @property
+    def card(self) -> str:
+        if self.group:
+            return self.group
+        return "behaviour" if self.type in ("int", "float", "choice") else "connection"
 
     @property
     def setting_default(self) -> Any:
@@ -55,6 +65,8 @@ class FieldSpec:
     def type(self) -> str:
         if self.is_secret:
             return "secret"
+        if self.is_list:
+            return "list"
         if self.choices:
             return "choice"
         default = self.default
@@ -78,8 +90,8 @@ class KindSpec:
     #: Settings attribute that picks live vs dry-run for this kind, if it has one, and the value
     #: that means live. Having an enabled connection is what chooses live now.
     selector: tuple[str, str] | None = None
-    #: May several be enabled at once? Today only Portainer can; the rest are one active
-    #: connection each (the model allows more - the multi-network step switches them on).
+    #: May several be enabled at once? Each one is a source with its own adapter (OR-77): the
+    #: default one stands in for code that names none.
     multi: bool = False
     #: A "notifier channel" kind: it is part of the combined notifier, not an adapter of its own.
     channel: bool = False
@@ -95,6 +107,17 @@ def _f(name: str, setting: str, label: str, **kw: Any) -> FieldSpec:
     return FieldSpec(name, setting, label, **kw)
 
 
+def _dry(setting: str) -> FieldSpec:
+    """The Safety card's Dry run switch: this source pretends (see runtime.values_to_settings)."""
+    return _f(
+        "dry_run",
+        setting,
+        "Dry run",
+        group="safety",
+        help="Pretend: reads come from sample data and nothing is sent.",
+    )
+
+
 KINDS: tuple[KindSpec, ...] = (
     KindSpec(
         "proxmox",
@@ -103,7 +126,7 @@ KINDS: tuple[KindSpec, ...] = (
         "exactly when it needs it to wake something.",
         (
             _f("host", "proxmox_host", "Host (ip or name)", required=True),
-            _f("port", "proxmox_port", "API port"),
+            _f("port", "proxmox_port", "API port", group="connection"),
             _f("verify_tls", "proxmox_verify_tls", "Verify its TLS certificate"),
             _f(
                 "token_id",
@@ -121,9 +144,11 @@ KINDS: tuple[KindSpec, ...] = (
                 "Storage id of the PBS datastore",
                 help="Blank = worked out from Proxmox.",
             ),
+            _dry("proxmox_dry_run"),
         ),
         marker="host",
         selector=("proxmox_adapter", "live"),
+        multi=True,
     ),
     KindSpec(
         "pbs",
@@ -131,16 +156,18 @@ KINDS: tuple[KindSpec, ...] = (
         "The orchestrator reads, verifies and prunes backups here.",
         (
             _f("host", "pbs_host", "Host (ip or name)", required=True),
-            _f("port", "pbs_port", "API port"),
+            _f("port", "pbs_port", "API port", group="connection"),
             _f("verify_tls", "pbs_verify_tls", "Verify its TLS certificate"),
             _f("token_id", "pbs_token_id", "API token id", required=True),
             _f("token_secret", "pbs_token_secret", "API token secret", required=True),
             _f("datastore", "pbs_datastore", "Datastore", help="Blank = the only one PBS lists."),
             _f("node_name", "pbs_node_name", "PBS node name", help='"localhost" unless renamed.'),
             _f("protect_enabled", "pbs_protect_enabled", "Pin the last verified backup"),
+            _dry("pbs_dry_run"),
         ),
         marker="host",
         selector=("pbs_adapter", "live"),
+        multi=True,
     ),
     KindSpec(
         "proxy",
@@ -176,9 +203,11 @@ KINDS: tuple[KindSpec, ...] = (
                 "Reverse proxy LOCAL address for HTTP probes",
                 help="e.g. https://10.0.0.2 - blank = probes go direct.",
             ),
+            _dry("proxy_dry_run"),
         ),
         marker="url",
         selector=("proxy_adapter", "traefik_manager"),
+        multi=True,
     ),
     KindSpec(
         "traefik_api",
@@ -199,7 +228,7 @@ KINDS: tuple[KindSpec, ...] = (
         "Wakes and powers off nodes through Home Assistant's MQTT.",
         (
             _f("host", "mqtt_host", "Broker host", required=True),
-            _f("port", "mqtt_port", "Port"),
+            _f("port", "mqtt_port", "Port", group="connection"),
             _f("tls", "mqtt_tls", "Use TLS"),
             _f("username", "mqtt_username", "Username"),
             _f("password", "mqtt_password", "Password"),
@@ -209,9 +238,11 @@ KINDS: tuple[KindSpec, ...] = (
                 "Runtime topic prefix",
                 help="NOT the Home Assistant discovery prefix.",
             ),
+            _dry("power_dry_run"),
         ),
         marker="host",
         selector=("power_adapter", "mqtt"),
+        multi=True,
     ),
     KindSpec(
         "portainer",
@@ -222,10 +253,37 @@ KINDS: tuple[KindSpec, ...] = (
             _f("api_key", "portainer_api_key", "Access token", required=True),
             _f("verify_tls", "portainer_verify_tls", "Verify its TLS certificate"),
             _f(
+                "timeout_s",
+                "portainer_timeout_s",
+                "Request timeout (s)",
+                help="How long an ordinary request may take.",
+            ),
+            _f(
+                "deploy_timeout_s",
+                "portainer_deploy_timeout_s",
+                "Deploy timeout (s)",
+                help="A start, redeploy or create that takes longer fails.",
+            ),
+            _f(
+                "refresh_s",
+                "portainer_refresh_s",
+                "Refresh every (s)",
+                help="How often its page reads stacks and containers again.",
+            ),
+            _f(
                 "read_only",
                 "portainer_read_only",
                 "Read only",
-                help="Nothing is started, stopped, redeployed, created or deleted through it.",
+                group="safety",
+                help="Show everything, change nothing: start, stop, deploy and edits are refused.",
+            ),
+            _f(
+                "protected",
+                "portainer_protected",
+                "Protected stacks and containers",
+                group="safety",
+                is_list=True,
+                help="Stopping or removing these asks for the name, also from the assistant.",
             ),
             _f(
                 "public_url",
@@ -233,6 +291,7 @@ KINDS: tuple[KindSpec, ...] = (
                 "Address people open in a browser",
                 help='For "Open in Portainer" links; blank = the URL.',
             ),
+            _dry("portainer_dry_run"),
         ),
         marker="url",
         selector=("portainer_adapter", "api"),
@@ -266,7 +325,7 @@ KINDS: tuple[KindSpec, ...] = (
         "Alerts by mail.",
         (
             _f("host", "mail_smtp_host", "SMTP host", required=True),
-            _f("port", "mail_smtp_port", "Port"),
+            _f("port", "mail_smtp_port", "Port", group="connection"),
             _f("starttls", "mail_smtp_starttls", "Use STARTTLS"),
             _f("username", "mail_smtp_username", "Username"),
             _f("password", "mail_smtp_password", "Password"),

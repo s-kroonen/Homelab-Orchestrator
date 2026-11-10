@@ -64,7 +64,7 @@ def _instance() -> str | None:
     "--instance",
     "-i",
     default=None,
-    help="Which Portainer connection (its id on the Connections page); default: the default one.",
+    help="Which Portainer connection (its id under Sources); default: the default one.",
 )
 @click.pass_context
 def stack(ctx: click.Context, instance: str | None) -> None:
@@ -357,7 +357,7 @@ def stack_delete(
         click.secho(w, fg="yellow")
 
 
-def _control(kind: str, endpoint: int, ref: str, action: str) -> None:
+def _control(kind: str, endpoint: int, ref: str, action: str, confirm: str = "") -> None:
     async def go(session: Session, adapters: AdapterBundle, settings: Settings) -> Any:
         return await stack_ops.control(
             session,
@@ -368,6 +368,7 @@ def _control(kind: str, endpoint: int, ref: str, action: str) -> None:
             ref=ref,
             action=action,
             instance=_instance(),
+            confirm_name=confirm,
         )
 
     click.echo(_run(go))
@@ -379,16 +380,18 @@ for _action in ("start", "stop", "restart"):
         @stack.command(action, help=f"{action.capitalize()} a stack in Portainer.")
         @click.argument("endpoint", type=int)
         @click.argument("name")
-        def stack_cmd(endpoint: int, name: str) -> None:
-            _control("stack", endpoint, name, action)
+        @click.option("--confirm", default="", help="A protected stack: its name again.")
+        def stack_cmd(endpoint: int, name: str, confirm: str) -> None:
+            _control("stack", endpoint, name, action, confirm)
 
         @stack.command(
             f"{action}-container", help=f"{action.capitalize()} one container in Portainer."
         )
         @click.argument("endpoint", type=int)
         @click.argument("container")
-        def container_cmd(endpoint: int, container: str) -> None:
-            _control("container", endpoint, container, action)
+        @click.option("--confirm", default="", help="A protected container: its name again.")
+        def container_cmd(endpoint: int, container: str, confirm: str) -> None:
+            _control("container", endpoint, container, action, confirm)
 
         return stack_cmd
 

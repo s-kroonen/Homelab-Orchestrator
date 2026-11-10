@@ -16,6 +16,19 @@
   const more = $("#phone-more");
   if (more) more.addEventListener("click", (ev) => { ev.preventDefault(); setNav(true); window.scrollTo({ top: 0 }); });
 
+  // --- Sources folds remember being open (the one holding this page always opens) ----------
+  const FOLDS = "orch.navFolds";
+  let folds = {};
+  try { folds = JSON.parse(localStorage.getItem(FOLDS) || "{}") || {}; } catch (_e) { folds = {}; }
+  document.querySelectorAll(".nav-fold").forEach((d) => {
+    const key = d.dataset.fold;
+    if (!d.dataset.current && folds[key]) d.open = true;
+    d.addEventListener("toggle", () => {
+      folds[key] = d.open;
+      try { localStorage.setItem(FOLDS, JSON.stringify(folds)); } catch (_e) { /* private window */ }
+    });
+  });
+
   // --- live indicator ------------------------------------------------------------------------
   const livePill = $("#live-pill");
   function liveState() {
@@ -114,7 +127,7 @@
         pending.autosave ? "Changes are written to services.yaml and pushed to Traefik Manager by themselves; this is what did not work."
           : "Automatic saving is off (REGISTRY_AUTOSAVE=false): write and push here."),
       el("div", { style: { display: "flex", gap: "8px", justifyContent: "flex-end" } },
-        el("a", { class: "btn secondary small", href: "/proxy-hosts" }, "Proxy hosts"),
+        el("a", { class: "btn secondary small", href: "/find/proxy-host" }, "Proxy hosts"),
         el("button", { type: "button", class: "small", disabled: !!pending.running, onclick: retry }, pending.autosave ? "Retry" : "Save and push")));
   }
   async function loadPending() {

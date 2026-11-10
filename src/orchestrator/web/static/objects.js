@@ -3,9 +3,11 @@
  *
  *   Objects.bulk(resource, action, ids, params)    POST /api/bulk/<resource>, one toast summing up
  *   Objects.serviceDrawer({service, view, prefill, onSaved})   create (no service) or edit
+ *   Objects.nodeDrawer({node, source, onSaved})   add (source: the Proxmox it belongs to) or edit
  *   Objects.serviceActions(row, view, refresh)     the ⋯ menu of a service row
  *   Objects.deleteService(row, view, refresh)
  *   Objects.nodeDrawer({node, onSaved})            create (no node) or edit
+ *   Objects.proxyHostDrawer({host, services, source, onSaved})  create (on that proxy) or edit
  *   Objects.nodePower(node, action, view, refresh) wake / restart / power off with a confirm
  */
 (function () {
@@ -170,7 +172,7 @@
           always_on: !!v.always_on, wake_on_hit_enabled: !!v.wake_on_hit_enabled, notes: v.notes || "",
         };
         if (editing) await api.put("/api/registry/nodes/" + encodeURIComponent(n.name), body, { suppressToast: true });
-        else await api.post("/api/registry/nodes", body, { suppressToast: true });
+        else await api.post("/api/registry/nodes", o.source ? Object.assign({ source_id: o.source }, body) : body, { suppressToast: true });
         toast((editing ? "Saved " : "Added ") + body.name, "ok");
         if (o.onSaved) o.onSaved(body);
       },
@@ -351,7 +353,7 @@
         };
         const out = editing
           ? await api.put("/api/proxy-hosts/" + h.id, body, { suppressToast: true })
-          : await api.post("/api/proxy-hosts", body, { suppressToast: true });
+          : await api.post("/api/proxy-hosts" + (o.source ? "?source=" + encodeURIComponent(o.source) : ""), body, { suppressToast: true });
         toast((editing ? "Saved " : "Added ") + body.hostname + (body.upstream ? "; pushing to Traefik Manager" : ""), "ok");
         for (const w of (out && out.warnings) || []) toast(w, "error");
         if (o.onSaved) o.onSaved(out);

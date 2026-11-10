@@ -1,0 +1,445 @@
+"""Sources: one page per connection (OR-78, the Sources wireframes).
+
+Pages:
+
+* ``GET /sources``: every source with its status, what it has and what uses it.
+* ``GET /sources/{id}?tab=...``: one source: Overview, its resources, Settings, Raw.
+
+API (admins only):
+
+* ``GET  /api/sources``                     every source, its last known status, what uses it
+* ``POST /api/sources/check``               check every source now (Test all)
+* ``GET  /api/sources/kinds``               what can be added (Add source)
+* ``GET  /api/sources/{id}``                one source: its connection, status, tabs
+* ``POST /api/sources/{id}/test``           check it now
+* ``GET  /api/sources/{id}/overview``       tiles, needs attention, facts
+* ``GET  /api/sources/{id}/resources/{key}`` one list: columns, chips, rows
+* ``GET  /api/sources/{id}/raw``            its raw endpoints
+* ``GET  /api/sources/{id}/raw/{key}``      one of them, as the API returns it (credentials
+  redacted)
+
+Changing a source (its settings, enable, default, remove) goes through ``/api/connections``, which
+validates, encrypts, audits and applies without a restart.
+"""
+
+from __future__ import annotations
+
+from types import SimpleNamespace
+from typing import Any
+
+from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi.responses import HTMLResponse, RedirectResponse
+from pydantic import BaseModel, ConfigDict
+from sqlmodel import Session, select
+
+from orchestrator.config import Settings
+from orchestrator.connections import service as conn_service
+from orchestrator.connectors import status as source_status
+from orchestrator.connectors.kinds import raw_payload
+from orchestrator.connectors.registry import Source, all_sources, connectors, context, get_source
+from orchestrator.db.models import AuditEntry
+from orchestrator.web.auth import CurrentAdmin, get_current_admin, login_redirect, require_admin
+from orchestrator.web.deps import AdaptersDep, SessionDep, SettingsDep
+from orchestrator.web.routers.connections import _kinds
+from orchestrator.web.templating import templates
+
+pages = APIRouter(include_in_schema=False)
+api = APIRouter(prefix="/api/sources", tags=["sources"], dependencies=[Depends(require_admin)])
+
+
+def _source_or_404(ident: str) -> Source:
+    source = get_source(ident)
+    if source is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, f"there is no source called {ident!r}")
+    return source
+
+
+def _used_by(session: Session, settings: Settings, source: Source) -> list[str]:
+    try:
+        return conn_service.references(session, settings, source.conn)
+    except Exception:
+        return []
+
+
+def _row(session: Session, settings: Settings, source: Source) -> dict[str, Any]:
+    return {
+        **source.public(),
+        "status": source_status.as_dict(source.id),
+        "used_by": _used_by(session, settings, source),
+    }
+
+
+def list_view(session: Session, settings: Settings) -> list[dict[str, Any]]:
+    return [_row(session, settings, s) for s in all_sources(settings)]
+
+
+def nav_groups() -> list[dict[str, Any]]:
+    """The sidebar's Sources section: kinds in connector order, each with its sources and the
+    worst status among them (shown on a folded kind)."""
+    order = ["fail", "warn", "unknown", "ok", "off"]
+    groups: dict[str, dict[str, Any]] = {}
+    for source in all_sources():
+        st = source_status.as_dict(source.id)["state"]
+        g = groups.setdefault(
+            source.connector.group, {"group": source.connector.group, "sources": [], "worst": "off"}
+        )
+        g["sources"].append(
+            {"id": source.id, "name": source.name, "state": st, "href": source.href}
+        )
+        if order.index(st) < order.index(g["worst"]):
+            g["worst"] = st
+    return list(groups.values())
+
+
+# -- pages ------------------------------------------------------------------------------------------
+
+
+@pages.get("/sources", response_model=None)
+async def sources_page(
+    request: Request, session: SessionDep, settings: SettingsDep
+) -> HTMLResponse | RedirectResponse:
+    admin = get_current_admin(request, session)
+    if admin is None:
+        return login_redirect(request)
+    initial = {"sources": list_view(session, settings), "kinds": _kind_choices()}
+    return templates.TemplateResponse(
+        request, "sources_index.html", {"admin": admin, "initial": initial}
+    )
+
+
+@pages.get("/find/source/{kind}", response_model=None)
+async def find_source(
+    request: Request, session: SessionDep, kind: str, tab: str = ""
+) -> RedirectResponse:
+    """The default source of a kind (``tab``: on that tab); All sources when there is none. For
+    pages that want "the Proxmox" or "the Portainer" without knowing which one that is."""
+    if get_current_admin(request, session) is None:
+        return login_redirect(request)
+    from orchestrator.connectors.ownership import source_page
+
+    return RedirectResponse(source_page(kind, "", {"tab": tab}), status.HTTP_303_SEE_OTHER)
+
+
+@pages.get("/find/proxy-host", response_model=None)
+async def find_proxy_host(
+    request: Request,
+    session: SessionDep,
+    hostname: str = "",
+    id: int | None = None,
+    new: int = 0,
+    service_id: int | None = None,
+    tab: str = "hosts",
+) -> RedirectResponse:
+    """Where a proxy host is shown: under the proxy that owns it. Pages that know a hostname
+    (or want to add one for a service) link here instead of knowing which proxy that is."""
+    if get_current_admin(request, session) is None:
+        return login_redirect(request)
+    from orchestrator.connectors.ownership import proxy_host_href
+    from orchestrator.db.models import ProxyHost
+
+    host = None
+    if id is not None:
+        host = session.get(ProxyHost, id)
+    elif hostname:
+        host = session.exec(select(ProxyHost).where(ProxyHost.hostname == hostname.lower())).first()
+    query: dict[str, Any] = {"tab": tab}
+    if new:
+        query |= {"new": 1, "service_id": service_id}
+    elif host is not None:
+        query |= {"edit": host.id} if id is not None else {"q": host.hostname}
+    elif hostname:
+        query |= {"q": hostname}
+    return RedirectResponse(proxy_host_href(host, **query), status.HTTP_303_SEE_OTHER)
+
+
+@pages.get("/sources/{ident}", response_model=None)
+async def source_page(
+    ident: str, request: Request, session: SessionDep, settings: SettingsDep
+) -> HTMLResponse | RedirectResponse:
+    admin = get_current_admin(request, session)
+    if admin is None:
+        return login_redirect(request)
+    source = _source_or_404(ident)
+    return templates.TemplateResponse(
+        request,
+        "source.html",
+        {"admin": admin, "source": source, "initial": _detail(session, settings, source)},
+    )
+
+
+def adapter_protected(adapters: Any, ident: str) -> frozenset[str]:
+    """The stacks and containers of one Portainer that ask for their name (its Safety)."""
+    adapter = adapters.portainer_for(ident)
+    return adapter.protected if adapter is not None else frozenset()
+
+
+@pages.get("/sources/{ident}/stacks/{endpoint_id}/{name}", response_model=None)
+async def stack_page(
+    ident: str,
+    endpoint_id: int,
+    name: str,
+    request: Request,
+    session: SessionDep,
+    adapters: AdaptersDep,
+) -> HTMLResponse | RedirectResponse:
+    """One stack under its Portainer (the SourceStack wireframe): its containers, logs,
+    environment, settings and history, read live by the page. ``-`` is the containers of the
+    environment that are in no stack."""
+    admin = get_current_admin(request, session)
+    if admin is None:
+        return login_redirect(request)
+    found = get_source(ident)
+    if found is not None and found.kind != "portainer":
+        raise HTTPException(status.HTTP_404_NOT_FOUND, f"{found.name} has no stacks")
+    adapter = adapters.portainer_for(ident) if found is None else None
+    if found is None and (adapter is None or adapter.instance_id != ident):
+        raise HTTPException(status.HTTP_404_NOT_FOUND, f"there is no Portainer called {ident!r}")
+    # a Portainer with no connection of its own (dry-run sample data) has no source page
+    source: Any = found or SimpleNamespace(
+        id=ident,
+        name=adapter.instance_name if adapter else ident,
+        href="/sources",
+        connector=SimpleNamespace(group="Portainer"),
+    )
+    loose = name == "-"
+    initial = {
+        "endpoint": endpoint_id,
+        "name": "" if loose else name,
+        "instance": source.id,
+        "protected": sorted(adapter_protected(adapters, source.id)),
+        "source_name": source.name,
+        "source_href": source.href,
+        "back": f"{source.href}?tab=stacks" if found else "/sources",
+    }
+    return templates.TemplateResponse(
+        request,
+        "stack.html",
+        {
+            "admin": admin,
+            "initial": initial,
+            "source": source,
+            "name": "(no stack)" if loose else name,
+        },
+    )
+
+
+# -- API --------------------------------------------------------------------------------------------
+
+
+def _kind_choices() -> list[dict[str, Any]]:
+    """What Add source offers: every connector, with its kind's fields."""
+    fields = {k["kind"]: k for k in _kinds()}
+    return [
+        {
+            "kind": c.kind,
+            "title": c.title,
+            "group": c.group,
+            "family": c.family,
+            "blurb": c.blurb,
+            "fields": fields.get(c.kind, {}).get("fields", []),
+            "multi": fields.get(c.kind, {}).get("multi", False),
+        }
+        for c in connectors()
+    ]
+
+
+def _last_change(session: Session, source: Source) -> dict[str, Any] | None:
+    row = session.exec(
+        select(AuditEntry)
+        .where(AuditEntry.target == f"connection:{source.id}")
+        .order_by(AuditEntry.id.desc())  # type: ignore[union-attr]
+    ).first()
+    return {"at": row.created_at.isoformat(), "actor": row.actor} if row else None
+
+
+def _detail(session: Session, settings: Settings, source: Source) -> dict[str, Any]:
+    kind = next((k for k in _kinds() if k["kind"] == source.kind), None)
+    return {
+        "last_change": _last_change(session, source),
+        **_row(session, settings, source),
+        "connection": source.conn.public(),
+        "fields": kind["fields"] if kind else [],
+        "multi": bool(kind and kind["multi"]),
+        "tabs": [{"key": t.key, "label": t.label, "view": t.view} for t in source.connector.tabs()],
+        "resources": {
+            r.key: {
+                "label": r.label,
+                "view": r.view,
+                "columns": [{"key": c.key, "label": c.label, "kind": c.kind} for c in r.columns],
+                "chips": [{"key": c.key, "label": c.label} for c in r.chips],
+                "actions": [
+                    {
+                        "key": a.key,
+                        "label": a.label,
+                        "danger": a.danger,
+                        "bulk": a.bulk,
+                        "confirm": a.confirm,
+                        "typed": a.typed,
+                    }
+                    for a in r.actions
+                ],
+            }
+            for r in source.connector.resources
+        },
+        "raw": [
+            {"key": e.key, "label": e.label, "describe": e.describe} for e in source.connector.raw
+        ],
+    }
+
+
+@api.get("")
+async def list_sources(session: SessionDep, settings: SettingsDep) -> list[dict[str, Any]]:
+    return list_view(session, settings)
+
+
+@api.get("/kinds")
+async def kinds() -> list[dict[str, Any]]:
+    return _kind_choices()
+
+
+@api.post("/check")
+async def check_all(
+    session: SessionDep, settings: SettingsDep, adapters: AdaptersDep
+) -> list[dict[str, Any]]:
+    await source_status.refresh_all(settings, adapters)
+    return list_view(session, settings)
+
+
+@api.get("/{ident}")
+async def one_source(ident: str, session: SessionDep, settings: SettingsDep) -> dict[str, Any]:
+    return _detail(session, settings, _source_or_404(ident))
+
+
+@api.post("/{ident}/test")
+async def test_source(
+    ident: str, session: SessionDep, settings: SettingsDep, adapters: AdaptersDep
+) -> dict[str, Any]:
+    source = _source_or_404(ident)
+    await source_status.refresh(source, settings, adapters)
+    return _row(session, settings, source)
+
+
+def _ctx(ident: str, settings: Settings, adapters: Any) -> tuple[Source, Any]:
+    source = _source_or_404(ident)
+    if not source.enabled:
+        raise HTTPException(status.HTTP_409_CONFLICT, f"{source.name} is switched off")
+    return source, context(source, settings, adapters)
+
+
+async def _guarded(call: Any) -> Any:
+    """A source's own call: its failure is the page's 502, with what went wrong."""
+    try:
+        return await call
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(
+            status.HTTP_502_BAD_GATEWAY, f"{type(exc).__name__}: {exc}"[:400]
+        ) from exc
+
+
+@api.get("/{ident}/overview")
+async def overview(ident: str, settings: SettingsDep, adapters: AdaptersDep) -> dict[str, Any]:
+    source, ctx = _ctx(ident, settings, adapters)
+    ov = await _guarded(source.connector.overview(ctx))
+    return {
+        "tiles": ov.tiles,
+        "attention": ov.attention,
+        "facts": ov.facts,
+        "sections": ov.sections,
+    }
+
+
+@api.get("/{ident}/resources/{key}")
+async def resource(
+    ident: str, key: str, settings: SettingsDep, adapters: AdaptersDep
+) -> dict[str, Any]:
+    source, ctx = _ctx(ident, settings, adapters)
+    res = source.connector.resource(key)
+    if res is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, f"{source.name} has no {key!r}")
+    rows = await _guarded(res.fetch(ctx))
+    return {"key": res.key, "label": res.label, "rows": rows}
+
+
+@api.get("/{ident}/recent")
+async def recent(
+    ident: str, session: SessionDep, settings: SettingsDep, adapters: AdaptersDep
+) -> list[dict[str, Any]]:
+    """The last things done to or through this source (its Recent card), from the audit log."""
+    source = _source_or_404(ident)
+    ctx = context(source, settings, adapters)
+    rows = session.exec(select(AuditEntry).order_by(AuditEntry.id.desc()).limit(500)).all()  # type: ignore[union-attr]
+    mine = [r for r in rows if source.connector.about(ctx, r.target, r.details or {})][:8]
+    return [
+        {
+            "at": r.created_at.isoformat(),
+            "actor": r.actor,
+            "action": r.action,
+            "target": r.target,
+            "result": r.result.value,
+        }
+        for r in mine
+    ]
+
+
+class ActIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    ids: list[Any]
+    #: An action that asks for the name typed: the row's name, typed (one row only).
+    confirm: str = ""
+
+
+@api.post("/{ident}/resources/{key}/actions/{action}")
+async def resource_action(
+    ident: str,
+    key: str,
+    action: str,
+    body: ActIn,
+    settings: SettingsDep,
+    adapters: AdaptersDep,
+    admin: CurrentAdmin,
+) -> dict[str, Any]:
+    """One of a list's actions on the chosen rows (Wake on a power target, Verify on a
+    snapshot...). Each row's outcome is reported; one failing never stops the others."""
+    source, ctx = _ctx(ident, settings, adapters)
+    res = source.connector.resource(key)
+    spec = next((a for a in res.actions if a.key == action), None) if res else None
+    if res is None or spec is None or res.act is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, f"{source.name} has no {key}/{action}")
+    rows = await _guarded(res.fetch(ctx))
+    wanted = {str(i) for i in body.ids}
+    chosen = [r for r in rows if str(r.get("id")) in wanted]
+    if len(chosen) != len(wanted):
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "some of these are not there any more")
+    if len(chosen) > 1 and not spec.bulk:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, f"{spec.label} takes one at a time")
+    if spec.typed:
+        name = str(chosen[0].get("name", chosen[0].get("id"))) if chosen else ""
+        if len(chosen) != 1 or body.confirm.strip() != name:
+            raise HTTPException(
+                status.HTTP_409_CONFLICT, f"type {name!r} to {spec.label.lower()} it"
+            )
+    results = await _guarded(res.act(ctx, action, chosen, admin.username))
+    return {"results": [{"id": r.id, "ok": r.ok, "message": r.message} for r in results]}
+
+
+@api.get("/{ident}/raw")
+async def raw_list(ident: str) -> list[dict[str, Any]]:
+    source = _source_or_404(ident)
+    return [{"key": e.key, "label": e.label, "describe": e.describe} for e in source.connector.raw]
+
+
+@api.get("/{ident}/raw/{key}")
+async def raw_one(
+    ident: str, key: str, settings: SettingsDep, adapters: AdaptersDep
+) -> dict[str, Any]:
+    source, ctx = _ctx(ident, settings, adapters)
+    endpoint = next((e for e in source.connector.raw if e.key == key), None)
+    if endpoint is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, f"{source.name} has no raw {key!r}")
+    data = await _guarded(raw_payload(endpoint, ctx))
+    return {"key": key, "describe": endpoint.describe, "data": data}
+
+
+__all__ = ["api", "list_view", "nav_groups", "pages"]

@@ -18,16 +18,12 @@
 {% set path = request.url.path %}
 {% set nav_groups = [
   ("Overview", [("/", "Dashboard", []), ("/map", "Map", [])]),
-  ("Services", [("/services", "Services", ["/services/"])]),
-  ("Infrastructure", [
-    ("/nodes", "Nodes & guests", ["/infra/guests", "/sources"]),
-    ("/proxy-hosts", "Proxy hosts", ["/proxy-hosts/", "/sources/format"]),
-    ("/portainer", "Containers", ["/portainer/"]),
+  ("Services", [
+    ("/services", "Services", ["/services/"]),
     ("/backup-policies", "Backups", ["/backup-policies/", "/infra/snapshots"]),
   ]),
   ("Activity", [("/activity", "Activity", ["/activity/"]), ("/traffic", "Traffic", ["/traffic/"])]),
   ("Settings", [
-    ("/infra/connections", "Connections", ["/infra/connections/"]),
     ("/notifications", "Notifications", []),
     ("/assistants", "AI assistants", ["/assistants/"]),
     ("/admins", "Admins & devices", []),
@@ -36,9 +32,31 @@
   ]),
 ] %}
 {% macro is_current(href, match) -%}
-  {%- set ns = namespace(cur = (path == href) or (href == "/infra/connections" and path == "/infra")) -%}
+  {%- set ns = namespace(cur = (path == href)) -%}
   {%- for m in match -%}{%- if path == m or (m.endswith("/") and path.startswith(m)) or path.startswith(m + "/") -%}{%- set ns.cur = true -%}{%- endif -%}{%- endfor -%}
   {{- "1" if ns.cur else "" -}}
+{%- endmacro %}
+{% macro sources_nav() -%}
+  {# Sources (OR-78): one line for a kind with one source, a folding group for several. #}
+  <div class="nav-group nav-sources">
+    <div class="nav-heading">Sources <a class="nav-add" href="/sources?add=1" title="Add source" aria-label="Add source">+</a></div>
+    <a href="/sources"{% if path == "/sources" %} class="current" aria-current="page"{% endif %}>All sources</a>
+    {% for g in source_nav() %}
+    {% if g.sources | length == 1 %}
+    {% set s = g.sources[0] %}
+    <a href="{{ s.href }}" class="nav-src{% if path == s.href or path.startswith(s.href + '/') %} current{% endif %}"{% if path == s.href %} aria-current="page"{% endif %}><span class="dot {{ s.state }}" aria-label="{{ s.state }}"></span>{{ g.group }} <span class="faint">· {{ s.name }}</span></a>
+    {% else %}
+    {% set ns = namespace(open = false) %}
+    {% for s in g.sources %}{% if path == s.href or path.startswith(s.href + '/') %}{% set ns.open = true %}{% endif %}{% endfor %}
+    <details class="nav-fold" data-fold="{{ g.group }}"{% if ns.open %} open data-current="1"{% endif %}>
+      <summary><span class="nav-fold-name">{{ g.group }}</span> <span class="faint">{{ g.sources | length }}</span>{% if g.worst in ("fail", "warn") %}<span class="dot {{ g.worst }} nav-fold-dot" aria-label="something is wrong"></span>{% endif %}</summary>
+      {% for s in g.sources %}
+      <a href="{{ s.href }}" class="nav-src nav-sub{% if path == s.href or path.startswith(s.href + '/') %} current{% endif %}"{% if path == s.href %} aria-current="page"{% endif %}><span class="dot {{ s.state }}" aria-label="{{ s.state }}"></span>{{ s.name }}</a>
+      {% endfor %}
+    </details>
+    {% endif %}
+    {% endfor %}
+  </div>
 {%- endmacro %}
 <body{% if admin %} class="has-sidebar{% block body_class %}{% endblock %}"{% endif %}>
   {% block header %}
@@ -56,6 +74,7 @@
         <a href="{{ href }}"{% if is_current(href, match) %} class="current" aria-current="page"{% endif %}>{{ label }}</a>
         {% endfor %}
       </div>
+      {% if heading == "Services" %}{{ sources_nav() }}{% endif %}
       {% endfor %}
     </nav>
     {% endblock %}

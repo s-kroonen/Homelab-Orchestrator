@@ -121,7 +121,7 @@ refuses to disable the last active admin.
 
 ## Sessions
 
-A signed cookie (Starlette's `SessionMiddleware`, keyed by `SESSION_SECRET`),
+A signed cookie (Starlette's `SessionMiddleware`, keyed by `SESSION_SECRET` when it is set, otherwise by a key derived from the master key: [secrets.md](secrets.md)),
 not a DB table. It holds:
 
 * the logged-in `admin_id` and the admin's `session_version` at sign-in;

@@ -1027,3 +1027,76 @@ pre.log .err { color: var(--fail); } pre.log .ts { color: var(--faint); }
 .log-view pre.log { overflow: auto; height: auto; min-height: 160px; }
 .log .who { color: var(--link); }
 .log-chips { display: inline-flex; flex-wrap: wrap; gap: 6px; }
+
+/* --- Sources in the sidebar (OR-78): one line per kind with one source, a fold for several -- */
+.nav-heading .nav-add { float: right; padding: 0 4px !important; color: var(--accent) !important; font-size: 14px; line-height: 1; }
+.nav-heading .nav-add:hover { background: none !important; }
+.sidebar nav a.nav-src { display: flex; align-items: center; gap: 8px; white-space: nowrap; min-width: 0; }
+.sidebar nav a.nav-src .faint { color: var(--faint); overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.sidebar nav a.nav-sub { padding-left: 26px; }
+.nav-fold > summary {
+  list-style: none; cursor: pointer; display: flex; align-items: center; gap: 6px;
+  padding: 6px 10px; border-radius: 7px; color: var(--text-2); font-size: 13px;
+}
+.nav-fold > summary::-webkit-details-marker { display: none; }
+.nav-fold > summary::before { content: "▸"; color: var(--faint); font-size: 10px; width: 10px; }
+.nav-fold[open] > summary::before { content: "▾"; }
+.nav-fold > summary:hover { background: var(--hover); color: var(--text); }
+.nav-fold-dot { margin-left: auto; }
+.nav-fold[open] .nav-fold-dot { display: none; }
+
+/* --- Source pages (OR-78) ------------------------------------------------------------------ */
+.kindtag {
+  display: inline-block; padding: 1px 7px; border-radius: 5px; font-size: 12px; font-weight: 600;
+  border: 1px solid var(--line); background: var(--inset); color: var(--text-2);
+  white-space: nowrap; vertical-align: middle;
+}
+.src-head { display: flex; align-items: flex-start; gap: 12px; flex-wrap: wrap; margin-bottom: 14px; }
+.src-head .src-title { flex: 1; min-width: 0; }
+.src-head h1 { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 0 0 4px; }
+.src-head .src-sub { color: var(--muted); font-size: 13px; overflow-wrap: anywhere; }
+.src-head .src-actions { display: flex; gap: 8px; align-items: center; }
+.pick-kind { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 8px; }
+.pick-kind button {
+  text-align: left; display: flex; flex-direction: column; gap: 2px; padding: 10px 12px;
+  background: var(--surface); border: 1px solid var(--line); border-radius: 8px;
+  color: var(--text); font: inherit; cursor: pointer;
+}
+.pick-kind button:hover:not(:disabled) { border-color: var(--accent); }
+.pick-kind button:disabled { opacity: .55; cursor: not-allowed; }
+.pick-kind button .faint { font-size: 12px; color: var(--muted); font-weight: 400; }
+.pick-family { margin: 14px 0 6px; font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: var(--faint); }
+.raw-layout { display: grid; grid-template-columns: 240px minmax(0, 1fr); gap: 16px; }
+.raw-list { display: flex; flex-direction: column; gap: 2px; }
+.raw-list button {
+  display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline; gap: 0 8px;
+  width: 100%; text-align: left; background: none; border: 0; border-radius: 7px; padding: 8px 10px;
+  color: var(--text-2); font: inherit; font-weight: 500; cursor: pointer;
+}
+.raw-list button .faint { font-size: 12px; color: var(--faint); }
+.raw-list button .raw-label { flex-basis: 100%; }
+.raw-list button .raw-label:empty { display: none; }
+.raw-list button[aria-current="true"] { background: var(--selected); color: #fff; box-shadow: inset 3px 0 0 var(--accent); }
+.raw-json {
+  margin: 0; padding: 12px; max-height: 70vh; overflow: auto; font-size: 12px;
+  background: var(--inset); border: 1px solid var(--line); border-radius: 8px; white-space: pre; font-family: var(--mono);
+}
+.src-list { display: flex; flex-direction: column; gap: 16px; }
+@media (max-width: 760px) {
+  .raw-layout { grid-template-columns: 1fr; }
+  .raw-list { flex-direction: row; overflow-x: auto; }
+  .raw-list button { white-space: nowrap; }
+  .src-head .src-actions { width: 100%; }
+}
+
+/* --- a proxy's Format routes tab (format_routes.js) ---------------------------------------- */
+.fmt-chip { display: inline-block; padding: 1px 7px; margin: 0 3px 3px 0; border-radius: 10px; background: var(--off-bg); color: var(--off); font-size: 12px; }
+.fmt-chip.ok { background: var(--ok-bg); color: var(--ok); } .fmt-chip.warn { background: var(--warn-bg); color: var(--warn); } .fmt-chip.bad { background: var(--fail-bg); color: var(--fail); }
+.fmt-item { border: 1px solid var(--line); border-radius: var(--r-btn); padding: 10px 12px; margin-bottom: 10px; background: var(--surface); }
+.fmt-item.blocked { border-color: var(--fail-bg); } .fmt-item.skipped, .fmt-item.standard { opacity: .65; }
+.fmt-item h4 { margin: 0 0 4px; font-size: 14px; }
+.fmt-item ul { margin: 4px 0 6px 18px; padding: 0; font-size: 13px; }
+.fmt-item .why { color: var(--muted); font-size: 13px; }
+.fmt-item dl.kv { display: grid; grid-template-columns: max-content 1fr; gap: 4px 16px; font-size: 13px; margin: 6px 0; }
+.fmt-item dl.kv > div { display: contents; } .fmt-item dl.kv dt { color: var(--faint); } .fmt-item dl.kv dd { margin: 0; overflow-wrap: anywhere; }
+.fmt-item .checks label { display: inline-block; margin: 2px 8px 2px 0; }

@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% block title %}homelab-orchestrator — sources{% endblock %}
+{% block crumbs %}Sources / <span class="here">All sources</span>{% endblock %}
+{% block content %}
+<div class="page-header">
+  <h1>Sources <span class="count" id="src-count">{{ initial.sources | length }}</span></h1>
+  <div class="actions">
+    <button type="button" class="secondary" id="test-all">Test all</button>
+    <span id="more-actions"></span>
+    <button type="button" id="add-source">+ Add source</button>
+  </div>
+</div>
+<p class="page-sub">Everything the orchestrator reads from and acts on. Each source has its own page with its data and every setting.</p>
+<div id="src-banners"></div>
+<div id="src-table"></div>
+<p class="faint" style="font-size: 12.5px; margin: 10px 2px">Each source's nodes, guests, stacks, containers and proxy hosts live on its own page. Alert channels (ntfy, e-mail, webhook) are on <a href="/notifications">Notifications</a>; the SSH settings on <a href="/system">System</a>.</p>
+<script type="application/json" id="initial">{{ initial | tojson }}</script>
+{% endblock %}
+{% block scripts %}
+<script src="{{ asset('conn_drawer.js') }}"></script>
+<script src="{{ asset('sources_index.js') }}"></script>
+{% endblock %}

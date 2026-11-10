@@ -972,7 +972,9 @@ def proxy_push(yes: bool, hostnames: tuple[str, ...], moves: tuple[str, ...]) ->
                         )
                         continue
                     results.append(
-                        await move_to_configured_file(session, adapters, settings, ph, actor="cli")
+                        await move_to_configured_file(
+                            session, adapters.with_proxy(ph.source_id), settings, ph, actor="cli"
+                        )
                     )
                     session.commit()
                 return results

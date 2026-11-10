@@ -97,8 +97,12 @@ def test_rules_over_the_whole_set() -> None:
         secrets={"token_secret": "s"},
         **kw,
     )
-    assert any("only one Proxmox VE" in p for p in check_set([pve("a"), pve("b")]))
-    assert check_set([pve("a"), pve("b", enabled=False)]) == []
+    assert check_set([pve("a"), pve("b")]) == []  # several clusters, each a source (OR-77)
+    ha = lambda i, **kw: Connection(  # noqa: E731
+        id=i, kind="haos", settings={"url": "http://ha"}, secrets={"token": "t"}, **kw
+    )
+    assert any("only one Home Assistant" in p for p in check_set([ha("a"), ha("b")]))
+    assert check_set([ha("a"), ha("b", enabled=False)]) == []
     two_defaults = [portainer(default=True), portainer("second", default=True)]
     assert any("default" in p for p in check_set(two_defaults))
 

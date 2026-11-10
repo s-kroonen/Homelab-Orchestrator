@@ -477,7 +477,7 @@ class AccessLogCollector:
                 "access_log_collector.nothing_matched",
                 parsed=status["parsed"],
                 unmatched_routers=[u["router"] for u in status["unmatched_routers"]],
-                hint="each router's hostname needs a proxy host (/proxy-hosts -> Resync)",
+                hint="each router's hostname needs a proxy host (a proxy's Import tab)",
             )
         log.info(
             "access_log_collector.polled",

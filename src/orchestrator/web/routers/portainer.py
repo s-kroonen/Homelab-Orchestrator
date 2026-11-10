@@ -13,8 +13,7 @@ import re
 from dataclasses import asdict
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlmodel import Session, select
 
 from orchestrator.adapters.errors import (
@@ -27,17 +26,12 @@ from orchestrator.adapters.errors import (
 from orchestrator.adapters.portainer.base import Container, PortainerAdapter, Stack
 from orchestrator.adapters.portainer.links import container_url, env_url, stack_url
 from orchestrator.db.models import Service
-from orchestrator.web.auth import get_current_admin, login_redirect, require_admin
+from orchestrator.web.auth import require_admin
 from orchestrator.web.deps import AdaptersDep, SessionDep
-from orchestrator.web.templating import templates
 
 api = APIRouter(prefix="/api/portainer", tags=["portainer"], dependencies=[Depends(require_admin)])
-pages = APIRouter(tags=["portainer"])
 router = APIRouter()
 router.include_router(api)
-router.include_router(pages)
-
-_templates = templates
 
 #: How many stack compose files are read at once when labelling image/build.
 _KIND_CONCURRENCY = 4
@@ -158,7 +152,7 @@ def _container_view(
 
 @api.get("/instances")
 async def instances(adapters: AdaptersDep) -> list[dict[str, Any]]:
-    """The Portainer connections (Connections page): what the page's picker offers."""
+    """The Portainer connections (a source): what the page's picker offers."""
     return [
         {
             "id": a.instance_id,
@@ -410,37 +404,3 @@ async def container_stats(
         return asdict(await adapter.stats(endpoint_id, ref))
     except AdapterError as exc:
         raise _fail(exc) from exc
-
-
-# -- page ---------------------------------------------------------------------------------------
-
-
-@pages.get("/portainer", response_model=None)
-async def portainer_page(request: Request, session: SessionDep) -> HTMLResponse | RedirectResponse:
-    admin = get_current_admin(request, session)
-    if admin is None:
-        return login_redirect(request)
-    return _templates.TemplateResponse(request, "portainer.html", {"admin": admin})
-
-
-@pages.get("/portainer/{endpoint_id}/{name}", response_model=None)
-async def stack_page(
-    endpoint_id: int,
-    name: str,
-    request: Request,
-    session: SessionDep,
-    instance: str = Query("", description="Portainer connection id; blank = the default"),
-) -> HTMLResponse | RedirectResponse:
-    """One stack: its containers (details, logs, actions), all logs, its environment, its
-    Portainer settings and its history (the Stack and StackEnv wireframes). Everything about
-    the stack is read live by the page; this only hands it which stack."""
-    admin = get_current_admin(request, session)
-    if admin is None:
-        return login_redirect(request)
-    loose = name == "-"  # the containers of this environment that are in no stack
-    initial = {"endpoint": endpoint_id, "name": "" if loose else name, "instance": instance}
-    return _templates.TemplateResponse(
-        request,
-        "stack.html",
-        {"admin": admin, "initial": initial, "name": "(no stack)" if loose else name},
-    )

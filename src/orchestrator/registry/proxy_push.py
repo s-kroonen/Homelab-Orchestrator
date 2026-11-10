@@ -253,6 +253,7 @@ def add_pending_delete(
     route_ref: str,
     with_redirect: bool,
     service_slug: str = "",
+    source: str = "",
 ) -> None:
     items = [i for i in pending_deletes(session) if i.get("route_ref") != route_ref]
     items.append(
@@ -261,6 +262,8 @@ def add_pending_delete(
             "route_ref": route_ref,
             "with_redirect": bool(with_redirect),
             "service_slug": service_slug,
+            # which proxy the route is on ("": the default)
+            "source": source,
         }
     )
     _store_deletes(session, items)
@@ -708,6 +711,17 @@ def config_file_view(
 # ---------------------------------------------------------------------------
 
 
+def owned_hosts(session: Session, adapters: AdapterBundle) -> list[ProxyHost]:
+    """The proxy hosts of the proxy ``adapters.proxy`` stands for (every one when the bundle
+    is not scoped to a proxy: a single proxy). Unowned hosts are the default proxy's."""
+    hosts = list(session.exec(select(ProxyHost).order_by(ProxyHost.hostname)).all())
+    mine = getattr(adapters, "proxy_source", "")  # a bundle built by hand has one proxy
+    if not mine:
+        return hosts
+    default = adapters.default_proxy
+    return [h for h in hosts if h.source_id == mine or (not h.source_id and mine == default)]
+
+
 def _select(hosts: Sequence[ProxyHost], only: Sequence[str] | None) -> list[ProxyHost]:
     if not only:
         return list(hosts)
@@ -720,7 +734,7 @@ class ProxyPusher:
 
     @_overlayed
     async def status(self, session: Session, adapters: AdapterBundle) -> PushStatus:
-        hosts = session.exec(select(ProxyHost).order_by(ProxyHost.hostname)).all()
+        hosts = owned_hosts(session, adapters)
         services = services_by_id(session)
         routes = await adapters.proxy.list_routes()
         status = PushStatus(name=TARGET, reachable=routes is not None)
@@ -753,12 +767,14 @@ class ProxyPusher:
     ) -> list[PushResult]:
         settings = settings or get_settings()
         out: list[PushResult] = []
-        hosts = _select(session.exec(select(ProxyHost).order_by(ProxyHost.hostname)).all(), only)
+        hosts = _select(owned_hosts(session, adapters), only)
         services = services_by_id(session)
+        scoped = getattr(adapters, "proxy_source", "")
         tombstones = [
             t
             for t in pending_deletes(session)
-            if not only or str(t.get("hostname", "")).lower() in {o.strip().lower() for o in only}
+            if (not only or str(t.get("hostname", "")).lower() in {o.strip().lower() for o in only})
+            and (not scoped or (t.get("source") or adapters.default_proxy) == scoped)
         ]
         routes = await adapters.proxy.list_routes()
 

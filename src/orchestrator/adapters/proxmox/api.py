@@ -278,6 +278,18 @@ class LiveProxmoxAdapter(ProxmoxAdapter):
         ]
         return sorted(storages, key=lambda s: s.storage)
 
+    async def cluster_resources(self, kind: str) -> list[dict[str, Any]]:
+        rows = await self._client.request("GET", "/cluster/resources", params={"type": kind})
+        return [r for r in rows or [] if isinstance(r, dict)]
+
+    async def backup_jobs(self) -> list[dict[str, Any]]:
+        rows = await self._client.request("GET", "/cluster/backup")
+        return [r for r in rows or [] if isinstance(r, dict)]
+
+    async def recent_tasks(self) -> list[dict[str, Any]]:
+        rows = await self._client.request("GET", "/cluster/tasks")
+        return [r for r in rows or [] if isinstance(r, dict)]
+
     async def guest_network(self, node: str, vmid: int, kind: GuestKind) -> GuestNetwork:
         """MACs from the guest config (needs VM.Audit), IPs from the QEMU guest
         agent (needs VM.Monitor) or the container's config / interfaces.

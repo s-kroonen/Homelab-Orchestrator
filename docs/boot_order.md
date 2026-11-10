@@ -18,7 +18,7 @@ A node that is off cannot be asked, so the last values read while it was on are 
 (`guest_boot_setting` table, and `onboot_delay_s` / `boot_read_at` on the node's state). They
 are read again:
 
-* by **Nodes & guests** (`GET /api/infra/proxmox/guests`), for every online node whose copy is
+* by a Proxmox source's **Guests** tab (`GET /api/infra/proxmox/guests`), for every online node whose copy is
   older than 10 minutes;
 * by the **wake pipeline**, right after it powered a node on (step `boot_settings`).
 
@@ -26,7 +26,7 @@ Reading never fails anything: a guest whose settings cannot be read keeps its la
 
 ## Seeing and changing them
 
-**Nodes & guests**: each node card says what Proxmox starts when it boots and how long the node
+A Proxmox source's **Nodes** tab: each node card says what Proxmox starts when it boots and how long the node
 usually takes to come up. The guests table has a *Starts with node* column: *yes, 2nd* with the
 order, the wait and roughly when it starts after boot; *no: started when needed*; or *not read
 yet*. A guest's menu has **Boot settings…**, which changes them in Proxmox

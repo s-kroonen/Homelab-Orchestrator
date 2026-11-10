@@ -887,12 +887,12 @@ def test_cli_proxy_push_exits_1_when_an_item_fails(
 
 def test_every_save_button_surfaces_the_push_outcome(dry_client: TestClient) -> None:  # noqa: F811
     # What is not pushed shows in one place: the pending pill in the header, on every page.
-    for path in ("/proxy-hosts", "/", "/backup-policies"):
+    for path in ("/", "/backup-policies"):
         assert 'id="pending-pill"' in dry_client.get(path).text
     shell = dry_client.get("/static/shell.js").text
     assert "/api/pending/retry" in shell and "Save and push" in shell
     for path in ("/", "/backup-policies"):
         assert "PushUI.save" not in dry_client.get(path).text  # no Save to YAML any more
     # The proxy host list offers a push for one host; the drawer says Save pushes.
-    assert "Push now" in dry_client.get("/static/proxy_hosts.js").text
+    assert "Push now" in dry_client.get("/static/source_proxy.js").text
     assert "pushes it to Traefik Manager" in dry_client.get("/static/objects.js").text

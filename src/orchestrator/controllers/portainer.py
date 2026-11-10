@@ -51,7 +51,7 @@ class PortainerController(ServiceController):
     async def _call(self, method: str, path: str, **kw: Any) -> httpx.Response:
         if not self._base or not self._key:
             raise ControllerError(
-                "Portainer is not configured - add it on the Connections page "
+                "Portainer is not configured - add it under Sources "
                 "(or set PORTAINER_URL and PORTAINER_API_KEY)"
             )
         try:

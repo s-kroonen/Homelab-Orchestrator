@@ -42,6 +42,9 @@ class ConnectionsWatcher:
 
         settings = reload_settings()
         await self._adapters.reload(settings)
+        from orchestrator.connectors.ownership import claim_now
+
+        claim_now()
         after = runtime.current()
         log.info("connections.reloaded", path=str(after.path), error=after.error or None)
         return True

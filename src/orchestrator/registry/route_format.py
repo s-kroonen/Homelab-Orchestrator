@@ -25,7 +25,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from sqlmodel import Session, select
+from sqlmodel import Session
 
 from orchestrator.adapters.factory import AdapterBundle
 from orchestrator.adapters.proxy.base import RouteInfo, RouteOptions, RouteRaw, find_route
@@ -42,6 +42,7 @@ from orchestrator.registry.proxy_push import (
     desired_signature,
     host_enabled,
     is_live_managed,
+    owned_hosts,
     ref_of,
     resolve_file_for,
     served_overlay,
@@ -155,7 +156,7 @@ async def build_plan(
     known = await proxy.list_config_files()
     services = services_by_id(session)
     wanted = {h.strip().lower() for h in hostnames or []}
-    hosts = session.exec(select(ProxyHost).order_by(ProxyHost.hostname)).all()
+    hosts = owned_hosts(session, adapters)  # this proxy's
     with served_overlay(session):
         for ph in hosts:
             if wanted and ph.hostname.lower() not in wanted:

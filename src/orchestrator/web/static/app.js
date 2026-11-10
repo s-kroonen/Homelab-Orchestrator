@@ -2,7 +2,7 @@
  *
  * Loaded on every page via base.html. Replaces the bespoke
  * sendJson/errorText/apiError-style helpers that used to be copy-pasted
- * into individual templates (dashboard.html, proxy_hosts.html,
+ * into individual templates (dashboard.html,
  * service_detail.html, backup_policies.html, setup.html) — those all parsed
  * a FastAPI HTTPException body ({"detail": ...}) slightly differently, and
  * none of them showed anything for a plain network failure or an unhandled

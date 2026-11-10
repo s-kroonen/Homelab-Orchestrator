@@ -70,7 +70,7 @@ working (fail-open).
   service IP") and a `ping` probe pings it. See
   [docs/service_ips.md](docs/service_ips.md)
 * **Guest disks** — how full every running guest's filesystems are (LXC from
-  Proxmox, VMs through the QEMU guest agent), on Nodes & guests, with a warning at
+  Proxmox, VMs through the QEMU guest agent), on each Proxmox source's Guests tab, with a warning at
   85% and an error at 95% through the notifications. See [docs/disks.md](docs/disks.md)
 * FastAPI app: `/healthz`, `/readyz`, `/wake`, `/maintenance`, the dashboard,
   registry, infra, and backup endpoints (the latter four behind login)
@@ -102,7 +102,10 @@ probing services the orchestrator cannot reach directly,
 [docs/host_runner.md](docs/host_runner.md) for running credentialed checks
 off-container,
 [docs/service_tree.md](docs/service_tree.md) for sub-services, the tree and the map,
-[docs/connections.md](docs/connections.md) for the Connections page: every adapter and controller (several Portainers included) in one file, edited live,
+[docs/sources.md](docs/sources.md) for Sources: every Proxmox, Portainer, proxy, PBS and power manager with its own page, its data and every setting,
+[docs/connectors.md](docs/connectors.md) for the connector standard every kind of source follows, and adding a new one,
+[docs/connections.md](docs/connections.md) for the file behind them: every adapter and controller in one file, edited live,
+[docs/secrets.md](docs/secrets.md) for the master key that encrypts every stored credential: where it lives, backing it up, rotating it,
 [docs/redundancy.md](docs/redundancy.md) for the design of a second orchestrator at another site,
 [docs/portainer.md](docs/portainer.md) for reading Portainer stacks, containers and logs,
 [docs/portainer_deploys.md](docs/portainer_deploys.md) for stacks as sub-services: one on/off switch,
@@ -110,7 +113,7 @@ adopt / create / delete, guarded deploys and the deploy webhook,
 [docs/pwa_push.md](docs/pwa_push.md) for installing the app and push notifications,
 [docs/live_updates.md](docs/live_updates.md) for pages that update as things change (Server-Sent Events),
 [docs/design/README.md](docs/design/README.md) for the dashboard's design rules and approved wireframes (new pages get a wireframe first),
-[docs/sources.md](docs/sources.md) for the Data sources page: pulling nodes, guests, addresses, routes and stacks, and formatting old routes into the standard shape,
+[docs/pull.md](docs/pull.md) for pulling nodes, guests, addresses, routes and stacks on their sources' pages, and formatting old routes into the standard shape,
 [docs/dumps.md](docs/dumps.md) for dumping a database on its own (through Portainer), kept and checked,
 [docs/archive.md](docs/archive.md) for soft delete: deleted services wait 30 days in the archive and can be restored,
 [docs/mcp.md](docs/mcp.md) for connecting Claude (MCP over OAuth): roles, tokens, history and human approval of dangerous requests,

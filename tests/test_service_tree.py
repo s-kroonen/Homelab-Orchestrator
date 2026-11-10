@@ -292,7 +292,7 @@ def test_services_list_shows_the_sub_service_under_its_parent(client: TestClient
     assert by["nginx"]["depth"] == by["portainer"]["depth"] + 1
     page = client.get("/services/nginx").text
     assert '"parent_choices": ["portainer"]' in page
-    assert 'key: "parent", label: "Part of"' in client.get("/static/service.js").text
+    assert 'key: "parent", label: "Part of"' in client.get("/static/link.js").text  # Where it runs
     # a root cannot be made a child of its own subtree
     assert '"parent_choices": []' in client.get("/services/portainer").text
 

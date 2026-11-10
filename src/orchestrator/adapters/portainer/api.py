@@ -101,7 +101,9 @@ class LivePortainerAdapter(PortainerAdapter):
         self._public = settings.portainer_public_url.strip().rstrip("/") or self._url
         self._key = settings.portainer_api_key.get_secret_value()
         self._verify = settings.portainer_verify_tls
-        self._timeout = float(settings.controller_timeout_s)
+        self._timeout = float(
+            getattr(settings, "portainer_timeout_s", settings.controller_timeout_s)
+        )
         self._long = float(getattr(settings, "portainer_deploy_timeout_s", 900))
         self._read_only = settings.portainer_read_only
         self._transport = transport
@@ -318,6 +320,12 @@ class LivePortainerAdapter(PortainerAdapter):
             if s.name.lower() == name.lower():
                 return s
         return None
+
+    async def stack_file(self, stack: Stack) -> str:
+        if stack.id is None:
+            return ""
+        data = await self._json(f"/api/stacks/{stack.id}/file")
+        return str((data or {}).get("StackFileContent", ""))
 
     async def stack_kind(self, stack: Stack) -> str:
         if stack.id is None:
@@ -746,6 +754,15 @@ class LivePortainerAdapter(PortainerAdapter):
                 if head == repo and tag:
                     out.append(tag)
         return sorted(set(out))
+
+    async def docker_list(self, endpoint_id: int, what: str) -> list[dict[str, Any]]:
+        path = {"images": "images/json", "volumes": "volumes", "networks": "networks"}.get(what)
+        if path is None:
+            raise AdapterRequestError(f"there is no Docker list called {what!r}")
+        raw = await self._json(f"/api/endpoints/{endpoint_id}/docker/{path}")
+        if what == "volumes" and isinstance(raw, dict):
+            raw = raw.get("Volumes") or []
+        return [x for x in raw if isinstance(x, dict)] if isinstance(raw, list) else []
 
     async def remove_image(self, endpoint_id: int, ref: str) -> None:
         self._writable()

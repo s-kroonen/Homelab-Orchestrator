@@ -17,6 +17,7 @@ Shutdown reverses 10 then 9 then 8 then 7 then 6 then 5.
 
 from __future__ import annotations
 
+import asyncio
 import traceback
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -27,7 +28,7 @@ from fastapi import FastAPI
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.middleware.sessions import SessionMiddleware
 
-from orchestrator import __version__
+from orchestrator import __version__, vault
 from orchestrator.adapters.factory import build_adapters
 from orchestrator.config import Settings, get_settings
 from orchestrator.connections.watch import ConnectionsWatcher
@@ -67,7 +68,6 @@ from orchestrator.web.routers import (
     health,
     hooks,
     infra,
-    infra_overview,
     linked,
     maintenance,
     mcp_endpoint,
@@ -78,6 +78,7 @@ from orchestrator.web.routers import (
     push,
     setup,
     shell,
+    source_pages,
     sources,
     stacks,
     system,
@@ -144,6 +145,18 @@ def _fold_stacks(settings: Settings) -> None:
             error=str(exc),
             impact="Stacks keep a sub-service per container until the next start.",
         )
+
+
+async def _encrypt_later(settings: Any, log: Any) -> None:
+    """Encrypt the plain-text secrets left from before OR-70, once an update can no longer be
+    rolled back to a version that would not read them (``SECRETS_ENCRYPT_DELAY_S``)."""
+    try:
+        await asyncio.sleep(max(0, settings.secrets_encrypt_delay_s))
+        await asyncio.to_thread(vault.startup, settings)
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        log.error("vault.encrypt_failed", error=str(exc), hint="orchestrator-cli secrets encrypt")
 
 
 def _announce_setup_link(settings: Any, log: Any) -> None:
@@ -214,18 +227,25 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             "registry.path.invalid",
             path=str(settings.services_yaml_path),
             error=str(exc),
-            impact="No services are registered. Backups and wakes cannot run "
-            "until this is fixed.",
+            impact="No services are registered. Backups and wakes cannot run until this is fixed.",
         )
     except Exception as exc:
         log.error(
             "registry.reconcile.failed",
             path=str(settings.services_yaml_path),
             error=str(exc),
-            impact="No services are registered. Backups and wakes cannot run "
-            "until this is fixed.",
+            impact="No services are registered. Backups and wakes cannot run until this is fixed.",
         )
 
+    try:
+        vault.boot(settings)  # a missing or wrong master key stops the start (OR-70)
+    except vault.VaultError as exc:
+        log.error("vault.refused", error=str(exc))
+        raise
+    encrypt_task = asyncio.create_task(_encrypt_later(settings, log))
+    from orchestrator.connectors.ownership import claim_now
+
+    claim_now()  # nodes and proxy hosts from before sources had owners (OR-77)
     _announce_setup_link(settings, log)
 
     # Startup failures past this point must never be silent. uvicorn runs with
@@ -375,11 +395,16 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     conn_watcher = ConnectionsWatcher(adapters)
     conn_watcher.start()
     app.state.connections_watcher = conn_watcher
+    from orchestrator.connectors import status as source_status
+
+    status_task = asyncio.create_task(source_status.keep_fresh(adapters))
 
     try:
         yield
     finally:
         log.info("orchestrator.stop")
+        encrypt_task.cancel()
+        status_task.cancel()
         notify_hooks.install(None)
         await conn_watcher.shutdown()
         await autosaver.shutdown()
@@ -400,6 +425,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 def create_app() -> FastAPI:
     settings = get_settings()
+    try:
+        vault.boot(settings)  # before anything reads a secret, the session key included
+    except vault.VaultError as exc:
+        get_logger(__name__).error("vault.refused", error=str(exc))
+        raise RuntimeError(f"The orchestrator will not start: {exc}") from exc
     app = FastAPI(
         title="homelab-orchestrator",
         version=__version__,
@@ -419,7 +449,7 @@ def create_app() -> FastAPI:
     # deployment, but Starlette can't see past its own TLS-terminated hop.
     app.add_middleware(
         SessionMiddleware,
-        secret_key=settings.session_secret.get_secret_value(),
+        secret_key=vault.session_secret(settings),
         same_site="lax",
         https_only=False,
     )
@@ -449,9 +479,10 @@ def create_app() -> FastAPI:
     app.include_router(deploys.router)
     app.include_router(dumps.router)
     app.include_router(sources.router)
+    app.include_router(source_pages.pages)
+    app.include_router(source_pages.api)
     app.include_router(archive.router)
     app.include_router(connections.router)
-    app.include_router(infra_overview.router)
     app.include_router(hooks.router)
     app.include_router(events.router)
     app.include_router(stacks.router)

@@ -953,7 +953,7 @@ def test_pages_list_unmatched_routers_when_nothing_matched(client: TestClient) -
     text = client.get("/traffic").text
     assert "notice-warn" in text
     assert "<code>ghost@docker</code>" in text
-    assert 'href="/proxy-hosts"' in text
+    assert 'href="/find/proxy-host?tab=import"' in text
 
 
 def test_dashboard_links_to_traffic_page(client: TestClient) -> None:

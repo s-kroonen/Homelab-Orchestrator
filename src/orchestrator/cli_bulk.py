@@ -266,7 +266,12 @@ def bulk_proxy_hosts(
                         continue
                     try:
                         await set_proxy_host_enabled(
-                            session, actor, settings, adapters, ph, enabled  # type: ignore[arg-type]
+                            session,
+                            actor,  # type: ignore[arg-type]
+                            settings,
+                            adapters.with_proxy(ph.source_id),
+                            ph,
+                            enabled,
                         )
                     except Exception as exc:
                         session.rollback()

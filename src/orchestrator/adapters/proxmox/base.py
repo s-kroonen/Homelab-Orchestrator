@@ -219,6 +219,23 @@ class ProxmoxAdapter(ABC):
     async def list_backup_storages(self) -> list[BackupStorage]:
         """PVE storage entries that point at a PBS datastore."""
 
+    # -- read-only lists for the source page (plain dicts, as Proxmox answers them) ------------
+
+    async def cluster_resources(self, kind: str) -> list[dict[str, Any]]:
+        """``/cluster/resources?type=<kind>``: ``node`` (cpu, mem, maxmem...) or ``storage``
+        (one row per storage per node: disk, maxdisk, plugintype, status, shared)."""
+        return []
+
+    async def backup_jobs(self) -> list[dict[str, Any]]:
+        """``/cluster/backup``: the scheduled backup jobs (id, schedule, storage, vmid or all,
+        enabled, mode)."""
+        return []
+
+    async def recent_tasks(self) -> list[dict[str, Any]]:
+        """``/cluster/tasks``: the cluster's recent tasks (upid, node, type, id, user,
+        starttime, endtime, status)."""
+        return []
+
     @abstractmethod
     async def guest_network(self, node: str, vmid: int, kind: GuestKind) -> GuestNetwork:
         """NIC MACs and (when Proxmox knows them) IPs of one guest. Never raises

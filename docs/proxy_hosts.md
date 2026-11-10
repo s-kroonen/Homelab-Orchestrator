@@ -54,9 +54,10 @@ up "which hostname reaches which service, through what":
 |---------------------------------|--------------------|---------------------------------------|
 | `orchestrator-cli proxy add/list/remove` | `services.yaml` directly | Reconciled into the DB on next boot / Reset |
 | `orchestrator-cli proxy add --entry-point websecure --cert-resolver letsencrypt` | `services.yaml`; validated first with the same rules as the API (entry points checked against the live Traefik when readable) | As above. `orchestrator-cli proxy entrypoints` lists what the manager reports (exit 1 + a message when unavailable); non-interactive runs use the default rule when no `--entry-point` is given |
-| Dashboard → **Data sources → Traefik Manager** (`/sources#traefik`) | pulls routes into records (import / resync) and rewrites old routes into the standard shape — see [sources.md](sources.md) | the import button and the *Discovered* list moved here from the proxy hosts page |
-| Dashboard → **Proxy hosts** (`/proxy-hosts`) — list page | reads the live DB (painted at once), then Traefik's view per host | the Traefik column says serving / not pushed / changed in Traefik / error; the row menu pushes one host, puts back a host changed in Traefik or moves it to its config file; the **On** switch and the bulk bar enable/disable; tabs lead to **Import from Traefik** and **Format routes** (Data sources) |
-| Dashboard → **+ Add proxy host** / **Edit…** — the drawer (`static/objects.js`) | live DB; pushed by the autosaver (or the header pill's **Retry**) | same underlying API as below. The old addresses `/proxy-hosts/new[?service_id=]` and `/proxy-hosts/{id}/edit` open the drawer on the list |
+| Dashboard → a proxy's **Import** tab (`/sources/<proxy>?tab=import`) | pulls its routes into records (import / resync) and records a route that has none — see [sources.md](sources.md) | |
+| Dashboard → a proxy's **Format routes** tab | rewrites its old routes into the standard shape — see [pull.md](pull.md#format-routes) | |
+| Dashboard → a proxy's **Proxy hosts** tab (`/sources/<proxy>?tab=hosts`) | reads the live DB, then that proxy's view per host | the Traefik column says serving / not pushed / changed in Traefik / error; the row menu pushes one host, puts back a host changed in Traefik or moves it to its config file; the **On** switch and the bulk bar enable/disable |
+| Dashboard → **+ Add proxy host** / **Edit…** — the drawer (`static/objects.js`) | live DB, on that proxy; pushed by the autosaver (or the header pill's **Retry**) | same underlying API as below. Other pages link to `/find/proxy-host?hostname=…` (or `?new=1&service_id=…`), which opens the host on the proxy that owns it |
 | Dashboard → a service's own page (`/services/{slug}`), **Proxy hosts** section | read-only list + a link that opens the drawer pre-filled for this service | same create/edit flow as above |
 | `GET/POST/PUT/DELETE /api/proxy-hosts[/{id}]` | live DB only; list/get carry `sync_state` + `sync_changes` | the API every page above calls — see ["Live-managed proxy hosts"](#live-managed-proxy-hosts) |
 | `GET /api/push/status`, `POST /api/push` | status: nothing. Push: Traefik Manager (and any other registered pusher) | **Push now** / the CLI use these — see ["Pushing to Traefik Manager"](#pushing-to-traefik-manager) |
@@ -445,7 +446,7 @@ when Traefik does not have it, and the API refuses the option (`422`,
 options) and the route carries the headers middleware named by `TRAEFIK_HSTS_MIDDLEWARE` (default
 `hsts-headers`, a `headers` middleware with `stsSeconds`). It needs an HTTPS entry point (`422` on `hsts`
 otherwise). If Traefik has no such middleware it is created when the host is pushed (one year, this host
-only; never overwritten when it exists). Off by default. See docs/sources.md.
+only; never overwritten when it exists). Off by default. See docs/pull.md.
 
 Two more things the adapter now gets right on every write:
 
@@ -553,8 +554,8 @@ time, per host, instead of on every edit.
 
 ## Enabling and disabling a host
 
-A proxy host can be switched off without deleting it: the **Enabled** switch on
-`/proxy-hosts`, the bulk **Enable / Disable** actions (see
+A proxy host can be switched off without deleting it: the **On** switch on
+its proxy's Proxy hosts tab, the bulk **Enable / Disable** actions (see
 [bulk_actions.md](bulk_actions.md)), `POST /api/proxy-hosts/{id}/enabled`
 `{"enabled": false}`, or `orchestrator-cli bulk proxy-hosts disable ...`.
 The flag is `ProxyHost.enabled` (migration `0013_proxy_host_enabled`, default
@@ -723,7 +724,7 @@ on the dashboard:
 A poll failure (Traefik down, unreachable, wrong credentials, non-JSON
 response, etc.) is logged and degrades to `unknown` for every host — it never
 raises into the request handler, so a Traefik outage cannot break the
-`/proxy-hosts` dashboard page or the CRUD API.
+proxy's Proxy hosts tab or the CRUD API.
 
 ### What this is not
 
@@ -821,8 +822,8 @@ entirely. Nothing about what Resync itself does (below) changed.
    that one response, never persisted.
 4. The dashboard renders `discovered` as its own table, each row with a
    service picker. Clicking **Add** on a row calls the *existing*
-   `POST /api/proxy-hosts` directly — the same endpoint the dedicated
-   `/proxy-hosts/new` page uses — pre-filled with that row's
+   `POST /api/proxy-hosts` directly — the same endpoint the add drawer
+   uses — pre-filled with that row's
    hostname/upstream plus whichever service was picked (this one row-level
    action stays a direct API call rather than a navigation to that page,
    since it's part of Resync's own bulk flow). There is no second creation
@@ -854,7 +855,7 @@ host should be expected to be replaced the next time someone clicks Resync.
 
 ## Feeding Traefik's view into the service's own HEALTH verdict
 
-Everything above is visible on `/proxy-hosts`, but until now it was
+Everything above is visible on a proxy's Proxy hosts tab, but until now it was
 invisible to a service's own HEALTH page: a route that Traefik had quietly
 dropped never showed up as a probe result on the service it fronts.
 

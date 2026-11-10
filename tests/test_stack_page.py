@@ -1,4 +1,4 @@
-"""The stack page (``/portainer/<env>/<stack>``) and its API: what is linked, the environment
+"""The stack page (``/sources/<portainer>/stacks/<env>/<stack>``) and its API: what is linked, the environment
 (secrets hidden, revealing and changing audited by name), Git settings, container actions; the
 Containers index; and a parent's state taking in its sub-services."""
 
@@ -26,9 +26,11 @@ def _audit(action: str) -> list[AuditEntry]:
 
 
 def test_the_pages_render(client: TestClient) -> None:
-    r = client.get("/portainer/1/dev-xymbols")
+    r = client.get("/sources/portainer/stacks/1/dev-xymbols")
     assert r.status_code == 200 and "stack.js" in r.text and "dev-xymbols" in r.text
-    loose = client.get("/portainer/1/-")
+    assert '<a href="/sources">Sources</a>' in r.text  # the breadcrumb starts at Sources
+    assert client.get("/portainer/1/dev-xymbols").status_code == 404  # old address: gone
+    loose = client.get("/sources/portainer/stacks/1/-")
     assert loose.status_code == 200 and "(no stack)" in loose.text
 
 
@@ -165,12 +167,15 @@ def test_a_failing_sub_service_makes_its_healthy_parent_degraded(client: TestCli
     assert parent["state"]["label"] == "degraded" and parent["sub_failing"] == ["dev-xymbols"]
     stack = _row(rows, "dev-xymbols")
     assert stack["kind"] == "stack" and stack["containers"] == 2
-    assert stack["stack"]["href"] == "/portainer/1/dev-xymbols"
+    assert stack["stack"]["href"] == "/sources/portainer/stacks/1/dev-xymbols"
 
     dash = client.get("/api/views/dashboard").json()
     assert dash["services"]["total"] == 1  # the stack counts in its parent
     item = next(a for a in dash["attention"] if a["slug"] == "portainer-vm")
-    assert item["kind"] == "degraded" and item["stack"]["href"] == "/portainer/1/dev-xymbols"
+    assert (
+        item["kind"] == "degraded"
+        and item["stack"]["href"] == "/sources/portainer/stacks/1/dev-xymbols"
+    )
     assert not any(a["slug"] == "dev-xymbols" for a in dash["attention"])
     group = next(
         g for g in dash["glance"] if any(x["slug"] == "portainer-vm" for x in g["services"])
@@ -250,5 +255,5 @@ def test_the_services_list_has_a_sub_services_tab(client: TestClient) -> None:
 
 
 def test_the_proxy_hosts_page_can_push_many(client: TestClient) -> None:
-    r = client.get("/proxy-hosts")
-    assert r.status_code == 200 and 'id="push-all"' in r.text
+    js = client.get("/static/source_proxy.js").text  # a proxy's Proxy hosts tab
+    assert "pushAll" in js and '"Push " + n + " not pushed"' in js

@@ -11,7 +11,7 @@
   let V = JSON.parse($("#initial").textContent);
   let live = null;      // /api/infra/nodes/status
   let changed = [];     // proxy hosts changed in Traefik (live)
-  let conns = null;     // /api/infra/overview
+  let conns = null;     // /api/sources (last known status of each)
 
   // --- needs attention ----------------------------------------------------------------------
   async function check(slug) { try { await O.bulk("services", "resync", [slug]); } catch (_e) { /* toast */ } view.refresh(); }
@@ -65,20 +65,20 @@
     const on = nodeStates.filter((s) => s === "on").length;
     const tile = (label, value, sub, href) => el(href ? "a" : "div", { class: "stat-tile", href: href || null, style: href ? { color: "inherit", textDecoration: "none" } : null },
       el("div", { class: "stat-label" }, label), el("div", { class: "stat-value" }, value), el("div", { class: "stat-sub" }, sub || ""));
-    const up = conns ? conns.connections.filter((c) => c.state === "up").length : null;
-    const counted = conns ? conns.connections.filter((c) => c.state === "up" || c.state === "down").length : null;
+    const up = conns ? conns.filter((c) => c.status.state === "ok").length : null;
+    const counted = conns ? conns.filter((c) => ["ok", "warn", "fail"].includes(c.status.state)).length : null;
     fill($("#tiles"),
       tile("Services", String(V.services.total), parts([[by.ok, "healthy"], [by.fail, "failed"], [by.warn, "warning"], [by.off, "off"]]) || "none yet", "/services"),
-      tile("Nodes", String(V.nodes.length), live ? (on === V.nodes.length ? (V.nodes.length === 2 ? "both on" : "all on") : on + " on, " + (V.nodes.length - on) + " off or unknown") : "checking…", "/nodes"),
-      tile("Proxy hosts", String(V.proxy_hosts), changed.length ? changed.length + " changed in Traefik" : "", "/proxy-hosts"),
+      tile("Nodes", String(V.nodes.length), live ? (on === V.nodes.length ? (V.nodes.length === 2 ? "both on" : "all on") : on + " on, " + (V.nodes.length - on) + " off or unknown") : "checking…", "/sources"),
+      tile("Proxy hosts", String(V.proxy_hosts), changed.length ? changed.length + " changed in Traefik" : "", "/find/proxy-host"),
       tile("Backups last 24 h", V.backups.runs ? V.backups.ok + "/" + V.backups.runs : "—", V.backups.next_run ? "next " + fmt.time(V.backups.next_run).split(" ").pop().slice(0, 5) + " · " + V.backups.next_policy : "nothing scheduled", "/backup-policies"),
-      tile("Connections", conns ? (counted ? up + "/" + counted : "—") : "…", conns ? (!counted ? "none checked" : up === counted ? "all reachable" : (counted - up) + " not answering") : "checking…", "/infra/connections"));
+      tile("Sources", conns ? (counted ? up + "/" + counted : "—") : "…", conns ? (!counted ? "none checked yet" : up === counted ? "all reachable" : (counted - up) + " with problems") : "checking…", "/sources"));
   }
 
   // --- nodes -----------------------------------------------------------------------------------------
   function drawNodes() {
     const box = clear($("#nodes"));
-    if (!V.nodes.length) { box.append(el("p", { class: "muted", style: { padding: "0 18px 12px", margin: 0 } }, "No nodes yet. ", el("a", { href: "/sources#proxmox" }, "Import them from Proxmox"), ".")); return; }
+    if (!V.nodes.length) { box.append(el("p", { class: "muted", style: { padding: "0 18px 12px", margin: 0 } }, "No nodes yet. ", el("a", { href: "/find/source/proxmox?tab=nodes" }, "Import them from Proxmox"), ".")); return; }
     for (const n of V.nodes) {
       const l = live && live.nodes.find((x) => x.name === n.name);
       const state = !l ? (live ? "unknown" : "…") : l.state || "unknown";
@@ -95,7 +95,7 @@
           ? el("button", { type: "button", class: "secondary small", onclick: () => O.nodePower(n, "wake", refresh) }, "Wake")
           : el("button", { type: "button", class: "secondary small", onclick: () => nodeStatus.refresh() }, "Check"),
         menuButton(() => [
-          { label: "Open on Nodes & guests", href: "/nodes" },
+          { label: "Open in its Proxmox", href: n.href || "/sources" },
           canWake ? { label: "Wake", onClick: () => O.nodePower(n, "wake", refresh) } : null,
           n.power_mgr_target ? { label: "Restart…", onClick: () => O.nodePower(n, "restart", refresh) } : null,
           n.power_mgr_target ? { label: "Power off…", onClick: () => O.nodePower(n, "power_off", refresh) } : null,
@@ -149,6 +149,6 @@
     view.refresh(); nodeStatus.refresh();
   });
   loadHosts();
-  api.get("/api/infra/overview", { suppressToast: true }).then((d) => { conns = d; drawTiles(); }, () => {});
+  api.get("/api/sources", { suppressToast: true }).then((d) => { conns = d; drawTiles(); }, () => {});
   void recent;
 })();

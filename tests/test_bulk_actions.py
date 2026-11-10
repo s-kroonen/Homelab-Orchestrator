@@ -339,12 +339,11 @@ def test_pages_render_the_selection_column_and_bar(client: TestClient) -> None:
     assert '"slug": "media"' in client.get("/services").text
     svc = client.get("/static/services.js").text
     assert 'bulk("services", action, slugs, params)' in svc and "bulk: (rows)" in svc
-    assert 'bulk("nodes"' in client.get("/static/nodes.js").text
-    assert "/static/proxy_hosts.js?v=" in client.get("/proxy-hosts").text
-    ph = client.get("/static/proxy_hosts.js").text
+    assert 'bulk("nodes"' in client.get("/static/source_proxmox.js").text
+    ph = client.get("/static/source_proxy.js").text  # a proxy's Proxy hosts tab
     assert 'bulk("proxy-hosts"' in ph and "bulk: (rows)" in ph  # the shared table's bulk bar
     assert '"/api/bulk/" + resource' in client.get("/static/objects.js").text
-    nodes = client.get("/static/nodes.js").text  # guests: Start / Stop on Nodes & guests
+    nodes = client.get("/static/source_proxmox.js").text  # guests: a Proxmox's Guests tab
     assert '"/api/infra/guests/"' in nodes
     assert "Select all shown" in client.get("/static/ui.js").text  # the shared table's checkbox
 

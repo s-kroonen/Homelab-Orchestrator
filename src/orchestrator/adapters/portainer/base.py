@@ -201,6 +201,9 @@ class PortainerAdapter(ABC):
     #: The connection this adapter serves (set when it is built from one).
     instance_id: str = "portainer"
     instance_name: str = "Portainer"
+    #: Stack and container names (lower case) that are only stopped, restarted or removed when
+    #: the caller typed the name (``portainer_protected``).
+    protected: frozenset[str] = frozenset()
 
     async def start(self) -> None:
         return None
@@ -278,6 +281,11 @@ class PortainerAdapter(ABC):
         container's, so credentials never pass through here. Refuses when
         ``PORTAINER_READ_ONLY=true``."""
 
+    async def stack_file(self, stack: Stack) -> str:
+        """The stack's compose file as Portainer keeps it ("" when it keeps none: a compose
+        project it did not create). Callers hide the values that look secret."""
+        return ""
+
     @abstractmethod
     async def stack_kind(self, stack: Stack) -> str:
         """``image`` | ``build`` | ``mixed`` | ``unknown`` - read from the compose file,
@@ -346,6 +354,11 @@ class PortainerAdapter(ABC):
     async def image_tags(self, endpoint_id: int, repo: str) -> list[str]:
         """The tags images named ``repo`` have on this environment."""
         raise AdapterRequestError("listing images is not supported here")
+
+    async def docker_list(self, endpoint_id: int, what: str) -> list[dict[str, Any]]:
+        """Docker's own list of ``images``, ``volumes`` or ``networks`` on one environment
+        (read only, as Docker answers it)."""
+        raise AdapterRequestError(f"listing {what} is not supported here")
 
     async def remove_image(self, endpoint_id: int, ref: str) -> None:
         """Remove the name ``ref`` (repo:tag); the image goes with its last name."""

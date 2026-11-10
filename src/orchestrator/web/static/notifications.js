@@ -153,17 +153,32 @@
     recent.refresh();
   });
 
-  // --- channels -------------------------------------------------------------------------------------
-  api.get("/api/notifications/channels", { suppressToast: true }).then((c) => {
+  // --- channels: each is a connection, added and edited here in its drawer (ConnDrawer) -----------------
+  async function drawChannels() {
+    let c; let conns;
+    try {
+      [c, conns] = await Promise.all([api.get("/api/notifications/channels", { suppressToast: true }), api.get("/api/connections", { suppressToast: true })]);
+    } catch (e) { fill($("#channels"), el("p", { class: "faint" }, e.message)); return; }
     const on = new Set(c.channels);
     const all = Array.from(new Set(c.known.concat(c.channels)));
-    fill($("#channels"), el("div", { class: "notif-channels" }, all.map((name) => el("div", {},
-      el("span", { class: "pill " + (on.has(name) ? "ok" : "off") }, on.has(name) ? "on" : "not set up"), " ",
-      el("strong", {}, CHANNEL_LABEL[name] || name)))),
-    el("p", { class: "faint", style: { fontSize: "12.5px", margin: "8px 0 0" } },
-      c.dry_run ? "DRY_RUN is on: every channel stays silent, alerts are only logged here."
-        : !c.channels.length ? "No channel is set up: alerts are only logged here." : ""));
-  }, (e) => fill($("#channels"), el("p", { class: "faint" }, e.message)));
+    const specs = conns.kinds.filter((k) => k.channel);
+    const row = (name) => {
+      const spec = specs.find((k) => k.kind === name);
+      const conn = spec && conns.connections.find((x) => x.kind === name);
+      const action = !spec ? null
+        : conn ? el("button", { type: "button", class: "secondary small", disabled: conn.source === "env", title: conn.source === "env" ? "Configured in .env: move it into the file on Sources first" : null,
+          onclick: () => window.ConnDrawer.open({ kind: spec, conn, onSaved: drawChannels, onRemoved: drawChannels }) }, "Edit")
+        : el("button", { type: "button", class: "secondary small", onclick: () => window.ConnDrawer.open({ kind: spec, onSaved: drawChannels }) }, "Set up");
+      return el("div", { style: { display: "flex", alignItems: "center", gap: "8px" } },
+        el("span", { class: "pill " + (on.has(name) ? "ok" : "off") }, on.has(name) ? "on" : conn && !conn.enabled ? "off" : "not set up"),
+        el("strong", { style: { flex: "1" } }, CHANNEL_LABEL[name] || name), action);
+    };
+    fill($("#channels"), el("div", { class: "notif-channels" }, all.map(row)),
+      el("p", { class: "faint", style: { fontSize: "12.5px", margin: "8px 0 0" } },
+        c.dry_run ? "DRY_RUN is on: every channel stays silent, alerts are only logged here."
+          : !c.channels.length ? "No channel is set up: alerts are only logged here." : ""));
+  }
+  drawChannels();
 
   // --- this device (PWA + Web Push) ------------------------------------------------------------------
   const P = window.OrchPush;

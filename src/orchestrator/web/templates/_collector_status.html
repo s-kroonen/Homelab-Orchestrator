@@ -29,7 +29,7 @@
       {% for u in v.unmatched %}<li><code>{{ u.router }}</code> <span class="muted">{{ u.hits }} {{ "hit" if u.hits == 1 else "hits" }}</span></li>{% endfor %}
     </ul>
     {% endif %}
-    {% if v.hint %}<p>{{ v.hint }}{% if v.unmatched and v.matched == 0 %} <a href="/proxy-hosts">Proxy hosts &rarr; Resync</a>{% endif %}</p>{% endif %}
+    {% if v.hint %}<p>{{ v.hint }}{% if v.unmatched and v.matched == 0 %} <a href="/find/proxy-host?tab=import">Import its routes</a>{% endif %}</p>{% endif %}
     {% if v.last_poll_at %}
     <p class="status-meta">Last poll <time datetime="{{ v.last_poll_at }}" data-age>{{ age(v.age_s) }}</time> · {{ v.lines }} lines · {{ v.matched }} matched</p>
     {% endif %}

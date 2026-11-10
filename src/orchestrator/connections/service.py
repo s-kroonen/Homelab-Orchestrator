@@ -1,4 +1,4 @@
-"""Changing connections: the operations behind the Connections page and ``orchestrator-cli
+"""Changing connections: the operations behind Sources and ``orchestrator-cli
 connections``. Everything that writes goes through here so the rules are the same on both.
 
 A write always starts from the file's own connections plus, for the kind being changed, any that
@@ -195,8 +195,15 @@ def update(
 
 
 def references(session: Session, settings: Settings, conn: Connection) -> list[str]:
-    """Slugs of services whose controller or probes use this Portainer connection (a link that
-    names none counts for the default one)."""
+    """Slugs of the services that use this connection (a link that names none counts for the
+    default one):
+
+    * Portainer: services whose controller or probes name it;
+    * Proxmox: services on a node of this cluster;
+    * a proxy: services with a proxy host on this proxy.
+    """
+    if conn.kind in ("proxmox", "proxy"):
+        return _owned_references(session, conn)
     if conn.kind != "portainer":
         return []
     from orchestrator.connections import runtime
@@ -219,6 +226,21 @@ def references(session: Session, settings: Settings, conn: Connection) -> list[s
         ):
             out.add(svc.slug)
     return sorted(out)
+
+
+def _owned_references(session: Session, conn: Connection) -> list[str]:
+    from orchestrator.connections import runtime
+    from orchestrator.db.models import Node, ProxyHost
+
+    primary = runtime.current().primary(conn.kind)
+    mine = {conn.id, ""} if primary is not None and primary.id == conn.id else {conn.id}
+    if conn.kind == "proxmox":
+        node_ids = {n.id for n in session.exec(select(Node)).all() if n.source_id in mine}
+        rows = session.exec(select(Service)).all()
+        return sorted(svc.slug for svc in rows if svc.node_id in node_ids)
+    hosts = [h for h in session.exec(select(ProxyHost)).all() if h.source_id in mine]
+    service_ids = {h.service_id for h in hosts if h.service_id is not None}
+    return sorted(svc.slug for svc in session.exec(select(Service)).all() if svc.id in service_ids)
 
 
 def delete(session: Session, settings: Settings, ident: str, *, force: bool = False) -> Change:
