@@ -105,11 +105,14 @@ the webhook, and the target in the Notifications feed and on the Activity page.
 | --- | --- |
 | service / sub-service health (failed, down, recovered, flapping, recovery) | `/services/<slug>#health` |
 | backup or restore | `/services/<slug>#backups` |
-| deploy | `/services/<slug>#deploys` |
+| deploy, outside change, of a service run as a stack | `/sources/<portainer>/stacks/<env>/<stack>` (the stack under its Portainer: what failed and *Deploy again*) |
+| deploy of any other service | `/services/<slug>#deploys` |
 | database dump | `/services/<slug>#dumps` |
-| switch failed, outside change | `/services/<slug>#stack` |
+| switch failed; outside change of a service not run as a stack | `/services/<slug>#stack` |
 | node | `/sources/<proxmox>?tab=nodes` (its Proxmox source, the Nodes tab) |
 | guest, or a guest's disk | `/sources/<proxmox>?tab=guests&q=<vmid>` (its Proxmox source's guests, filtered to that guest) |
+| a route (its public check) | `/find/proxy-host?hostname=<host>`: the proxy host on the proxy that owns it |
+| the network check (LAN, internet, proxy) | `/system#h-net` (System, the Network card) |
 | self-update | `/system` |
 | a request waiting for approval | its approval page (always wins over the above) |
 
