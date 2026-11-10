@@ -60,6 +60,7 @@
     }
     async function edit(h) { proxyHostDrawer({ host: h, services: await loadServices(), onSaved: () => r.refresh() }); }
     async function add() { proxyHostDrawer({ services: await loadServices(), source: SRC, onSaved: () => r.refresh() }); }
+    const linkHost = (h) => window.Link.proxyHost({ hostname: h.hostname, source: SRC, sourceName: ctx.source.name, service_slug: h.service_slug, onDone: () => { services = null; r.refresh(); } });
     async function push(hosts, verb) {
       hosts = [].concat(hosts);
       const what = hosts.length === 1 ? hosts[0].hostname : hosts.length + " proxy hosts";
@@ -83,7 +84,8 @@
         { key: "hostname", label: "Hostname", sort: (h) => h.hostname.split(".").reverse().join("."),
           render: (h) => el("button", { type: "button", class: "ghost", style: { padding: 0, height: "auto", color: "var(--text)", font: "600 13.5px var(--mono)" }, onclick: () => edit(h) }, h.hostname) },
         { key: "service", label: "Service", sort: (h) => h.service_slug || "~",
-          render: (h) => h.service_slug ? el("a", { href: "/services/" + enc(h.service_slug) }, h.service_slug) : el("span", { class: "faint" }, "not linked") },
+          render: (h) => h.service_slug ? el("a", { href: "/services/" + enc(h.service_slug) }, h.service_slug)
+            : [el("span", { class: "faint" }, "not linked"), " · ", el("button", { type: "button", class: "ghost small", style: { color: "var(--link)", padding: "0" }, onclick: () => linkHost(h) }, "Link…")] },
         { key: "upstream", label: "Points to", sort: true, render: (h) => h.upstream ? el("span", { class: "mono" }, h.upstream) : el("span", { class: "faint" }, "nothing yet") },
         { key: "options", label: "Options", render: options },
         { key: "traefik", label: "Traefik", phone: false, sort: (h) => ["fail", "warn", "pending", "off", "ok"].indexOf(traefikState(h).cls),
@@ -109,6 +111,7 @@
         } } : null,
         { label: h.wake_on_hit ? "Turn wake on hit off" : "Turn wake on hit on", onClick: () => bulk("proxy-hosts", h.wake_on_hit ? "wake_on_hit_off" : "wake_on_hit_on", [h.id]).then(() => r.refresh(), () => {}) },
         h.service_slug ? { label: "Open " + h.service_slug, href: "/services/" + enc(h.service_slug) } : null,
+        { label: h.service_slug ? "Link to another service…" : "Link to a service…", onClick: () => linkHost(h) },
         ctx.source.address ? { label: "Open in Traefik Manager ↗", href: ctx.source.address } : null,
         "-",
         { label: "Delete…", danger: true, onClick: () => deleteProxyHosts([h], () => r.refresh()).catch(() => {}) },

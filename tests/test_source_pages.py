@@ -488,3 +488,36 @@ def test_a_power_manager_wakes_and_asks_for_the_name_to_power_off(client: TestCl
     off = client.post(url + "power_off", json={"ids": ["node-a"], "confirm": "node-a"})
     assert off.status_code == 200 and off.json()["results"][0]["ok"]
     assert "2 power targets" in client.post("/api/sources/mqtt/test").json()["status"]["has"]
+
+
+def test_an_environment_links_to_the_service_and_guest_it_runs_on(client: TestClient) -> None:
+    """OR-84: links between sources. The environment a linked stack is in runs where the
+    stack's parent service runs: that service's page and its Proxmox guest."""
+    _portainer(client, "home")
+    _pve(client, "cluster-a", "10.0.0.10")
+    env = client.get("/api/sources/home/resources/environments").json()["rows"][0]
+    assert client.post("/api/registry/nodes", json={"name": "node-a"}).status_code == 201
+    from sqlmodel import Session, select
+
+    from orchestrator.db.models import Node
+    from orchestrator.db.session import get_engine
+
+    with Session(get_engine()) as session:
+        node_id = session.exec(select(Node).where(Node.name == "node-a")).one().id
+    host = {"slug": "docker-vm", "name": "Docker VM", "node_id": node_id}
+    made = client.post("/api/registry/services", json={**host, "guest_kind": "vm", "guest_id": 111})
+    assert made.status_code == 201, made.text
+    sub = {"slug": "wiki", "name": "Wiki", "parent": "docker-vm"}
+    ctl = {"type": "portainer", "endpoint": env["id"], "stack": "wiki", "instance": "home"}
+    made = client.post("/api/registry/services", json={**sub, "controller": ctl})
+    assert made.status_code == 201, made.text
+
+    env = next(
+        e
+        for e in client.get("/api/sources/home/resources/environments").json()["rows"]
+        if e["id"] == env["id"]
+    )
+    labels = [link["label"] for link in env["links"]]
+    assert labels == ["runs on Docker VM", "node-a · vm 111"]
+    assert env["links"][0]["href"] == "/services/docker-vm"
+    assert "tab=guests" in env["links"][1]["href"] and "q=111" in env["links"][1]["href"]

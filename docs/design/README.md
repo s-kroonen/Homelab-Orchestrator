@@ -69,9 +69,6 @@ containers, proxy hosts. Create, edit, delete and bulk actions happen there, for
 * Old URLs do not redirect.
 * Actions across several sources get their own Bulk actions page (later).
 
-Being built: the old Pull page (`/pull`) keeps its Proxmox import, Addresses and Portainer
-adopt tabs until linking both ways lands; it is removed then.
-
 Header on every page: breadcrumb, global search (`/`), the pending pill when something is
 pending, the live indicator, the user menu.
 

@@ -55,9 +55,9 @@ What each kind has:
 
 | Kind | Tabs | Actions on its lists |
 |---|---|---|
-| Proxmox | Nodes, Guests, Storage, Backup jobs, Tasks | power and boot settings per node and guest |
-| Portainer | Environments, Stacks, Containers, Images, Volumes, Networks | start, stop, restart, redeploy, delete; each stack has its own page |
-| Proxy (Traefik Manager) | Proxy hosts, Middlewares, Import, Format routes | add, edit, push, on/off, delete; import and format |
+| Proxmox | Nodes, Guests, Storage, Backup jobs, Tasks | power and boot settings per node and guest; import nodes; link a guest to a service |
+| Portainer | Environments, Stacks, Containers, Images, Volumes, Networks | start, stop, restart, redeploy, delete, link to a service; each stack has its own page |
+| Proxy (Traefik Manager) | Proxy hosts, Middlewares, Import, Format routes | add, edit, push, on/off, delete, link to a service; import and format |
 | Proxmox Backup Server | Datastores, Snapshots | Verify, Protect, Unprotect (one or a selection) |
 | Power manager | Power targets (the nodes with a power target, and what it says about each) | Wake (one or a selection); Restart and Power off ask for the node's name |
 
@@ -102,11 +102,31 @@ A source's own call that fails answers `502` with what went wrong; a switched-of
 `409`. Changing a source (settings, on / off, default, remove) goes through
 `/api/connections`, which validates, encrypts, audits and applies without a restart.
 
-## Being built
+## Linking
 
-Sources replaces the Connections, Containers, Nodes & guests, Proxy hosts and Format routes pages
-(gone, without a redirect). The Pull page ([pull.md](pull.md)) keeps its Proxmox import,
-Addresses and Portainer adopt tabs until linking both ways lands.
+Linking works from both sides ([link.js](../src/orchestrator/web/static/link.js), the SourceLink
+and ServiceWhere wireframes).
+
+**From a source.** A stack, a guest or a proxy host that is not linked says so in its list with
+**Link…**; one that is has *Link to another service…* in its ⋯. Both open *Link … to a service*:
+
+| | An existing service | A new service |
+|---|---|---|
+| **Stack** (Portainer) | becomes the service's controller (`{type: portainer, endpoint, stack, instance}`) | adopted: a sub-service under the service Portainer runs on, one per container, with the proxy hosts found pointing at its ports and its probes (`/api/stacks/adopt`) |
+| **Guest** (Proxmox) | the service moves to that guest (node, kind, VMID) | a service on that guest |
+| **Proxy host** | linked to it (moved from the one it was on) | a service on a node or under another service, with the host linked |
+
+A container links through its stack (*Link its stack…*). A guest on a node that is not recorded
+yet asks for the node to be imported first (its Proxmox's Nodes tab).
+
+**From a service.** *Where it runs* (the Edit of its Configuration card) picks per source: what it
+is part of, its guest (the Proxmox, then one of its guests), its stack (the Portainer, the
+environment, the stack; *none* for a service straight on its guest) and its proxy hosts (pick one
+a proxy has, or create a new one on it), and the address set by hand. Save applies it all at once.
+
+**Between sources.** A Portainer environment says where it runs: the service its linked stacks live
+under, and that service's Proxmox guest, each a link. Pages that only know a kind link to
+`/find/source/<kind>?tab=…`, which opens the default source of that kind.
 
 ## Several proxies
 

@@ -319,6 +319,8 @@
         ["Part of", S.parent || "nothing: it has its own guest"],
         isRoot() ? ["Node", S.node ? S.node.name : null] : null,
         isRoot() ? ["Guest", hasGuest() ? S.guest_kind.toUpperCase() + " " + S.guest_id : "none"] : null,
+        ["Stack", hasStack() ? (V.row && V.row.stack ? el("a", { href: V.row.stack.href, class: "mono" }, ctl().stack) : el("span", { class: "mono" }, ctl().stack)) : hasContainer() ? ["container ", el("span", { class: "mono" }, ctl().container)] : "none"],
+        ["Proxy hosts", (S.proxy_hosts || []).length ? (S.proxy_hosts || []).map((h, i) => [i ? ", " : "", el("a", { href: "/find/proxy-host?hostname=" + enc(h.hostname), class: "mono" }, h.hostname)]) : "none"],
         !isRoot() ? ["Backup waits for it", S.backup_gate === "required" ? "yes: must be healthy first" : "no"] : null,
         ["Address", S.ip_address ? [el("span", { class: "mono" }, S.ip_address), " (set by hand)"] : ip.discovered_ip ? [el("span", { class: "mono" }, ip.discovered_ip), " (found via " + (ip.ip_source_label || "?") + ")"] : "not known"],
         ip.mac_addresses && ip.mac_addresses.length ? ["NIC MACs", el("span", { class: "mono" }, ip.mac_addresses.join(" "))] : null,
@@ -354,27 +356,9 @@
       onSave: (v) => put({ name: v.name.trim(), description: v.description || "", group: (v.group || "").trim(), enabled: !!v.enabled }),
     });
   }
+  // guest per Proxmox, stack per Portainer, proxy hosts per proxy (link.js, ServiceWhere wireframe)
   function editWhere() {
-    drawer({
-      title: "Where " + (S.name || slug) + " runs",
-      values: { parent: S.parent || "", node_id: S.node_id == null ? "" : String(S.node_id), guest_kind: S.guest_kind, guest_id: S.guest_id, ip_address: S.ip_address || "", backup_gate: S.backup_gate || "ignore" },
-      note: "Saved at once; services.yaml is written by itself.",
-      fields: [
-        { key: "parent", label: "Part of", type: "select", options: [{ value: "", label: "Nothing: it has its own guest" }].concat(V.parent_choices.map((x) => ({ value: x, label: x }))), help: "A sub-service lives on its parent's node and guest and goes dark with it." },
-        { key: "backup_gate", label: "Its parent's backup waits for it", type: "select", options: [{ value: "ignore", label: "No: never checked before a backup" }, { value: "required", label: "Yes: must be healthy first (started if stopped)" }], show: (v) => !!v.parent },
-        { key: "node_id", label: "Node", type: "select", options: V.nodes.map((n) => ({ value: String(n.id), label: n.name })), show: (v) => !v.parent },
-        { key: "guest_kind", label: "Guest", type: "select", options: V.guest_kinds.map((k) => ({ value: k, label: { vm: "VM", lxc: "LXC container", none: "None" }[k] || k })), show: (v) => !v.parent },
-        { key: "guest_id", label: "VMID", type: "number", mono: true, show: (v) => !v.parent && v.guest_kind !== "none" },
-        { key: "ip_address", label: "Address by hand", mono: true, placeholder: (S.ip && S.ip.discovered_ip) || "blank = the one found", help: "Wins over the address found through Proxmox, the guest agent, ARP or DHCP." },
-      ],
-      onSave: (v) => {
-        const body = { ip_address: (v.ip_address || "").trim() };
-        if (v.parent !== (S.parent || "")) body.parent = v.parent;
-        if (v.parent) body.backup_gate = v.backup_gate;
-        else Object.assign(body, { node_id: v.node_id === "" ? null : Number(v.node_id), guest_kind: v.guest_kind, guest_id: v.guest_kind === "none" ? null : v.guest_id });
-        return put(body);
-      },
-    });
+    window.Link.where({ service: S, parents: V.parent_choices, onDone: () => { view.refresh(); loadHosts(); loadCtl(); loadLinked(); } });
   }
   function editPower() {
     drawer({

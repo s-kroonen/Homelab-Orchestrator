@@ -1,34 +1,25 @@
 # Pulling: what is fetched from other systems
 
-*Being replaced:* each source's own page under **Sources** ([sources.md](sources.md)) takes these
-actions over, kind by kind; this page goes when the last one has moved.
-
 Some of what this orchestrator shows is **not its own**: nodes and guests belong to Proxmox, routes
 to Traefik Manager, stacks to Portainer, a guest's address to the guest. There is no way to create
 a node or a guest here (they are made in Proxmox), so none of that is typed in or edited by hand.
-It is **pulled**.
+It is **pulled**, on the page of the source it comes from ([sources.md](sources.md)). What only the
+orchestrator knows (probes, policies, power targets, deploy settings) stays on its own pages.
 
-The **Pull** page (`/pull`) is where that
-happens for Proxmox, addresses and Portainer (a proxy's routes are imported and formatted on its
-own page now: its **Import** and **Format routes** tabs). It has a tab per source, each listing what was fetched and holding the actions that refresh or
-import it. What only the orchestrator knows (probes, policies, power targets, deploy settings) stays
-on its own pages.
-
-| tab | shows | actions |
+| where | what | actions |
 |-----|-------|---------|
-| **Proxmox** | nodes (state, address, power target) and guests (and which service has each) | *Pull from Proxmox* (fill blank node addresses, check every node, re-read every guest, scan the services on them); *Import* a node or a guest the orchestrator does not know yet |
-| **Addresses** | every service with a guest: effective address, where it came from, manual vs discovered, last result | *Discover all* / *only those without an address* (guest agent / LXC, then ARP, then DHCP; a stopped guest is skipped; an address typed in by hand is never touched) |
-| **Portainer** | stacks, status, what they are linked to | *Pull stacks*; *Adopt…* a stack (and its containers) as sub-services, with proxy hosts, probes and deploy settings |
+| a Proxmox's **Nodes** tab | its nodes | *Import from Proxmox* (the nodes the cluster lists that are not recorded yet; each belongs to that cluster); ⋯ *Fill blank addresses and re-read the guests*, *Find the services' addresses* (guest agent / LXC, then ARP, then DHCP; an address typed in by hand is never touched) |
+| a Proxmox's **Guests** tab | its guests, and the service each one is | *Link…*: to an existing service, or a new one on that guest ([Linking](sources.md#linking)) |
+| a Portainer's **Stacks** tab | its stacks and what they are linked to | *Link…*: to an existing service, or adopt it as a new one with its containers, proxy hosts and probes |
+| a proxy's **Import** and **Format routes** tabs | the routes its Traefik Manager has | import them as proxy hosts; format them (below) |
+| a service's **Where it runs** | its address | *Find now* on its Configuration tab; *Address by hand* in the drawer |
 
 The same actions exist as `orchestrator-cli sources pull proxmox|ips|traefik`, `orchestrator-cli
-proxy format`, and as API under `/api/pull/*` (`overview`, `proxmox`, `proxmox/refresh`,
-`proxmox/nodes/import`, `proxmox/guests/import`, `ips`, `ips/discover`, `traefik`,
-`traefik/import`, `traefik/format/plan`, `traefik/format/run`, `portainer`; the `traefik` ones take
-`?source=<proxy>`). The import buttons that
-used to be on the dashboard (*Fill addresses*, *Add node*, per-node *Resync guests*), the Proxy hosts
-page (*Resync from Traefik*, *Discovered*) and the Portainer page (*Adopt*) moved here; those pages
-link to it. Browsing containers and logs, and creating or deleting a stack, stay on the Portainer
-page.
+proxy format`, and as API under `/api/pull/*` (`overview`, `proxmox`, `proxmox/nodes`,
+`proxmox/refresh`, `proxmox/nodes/import`, `proxmox/guests/import`, `ips`, `ips/discover`,
+`traefik`, `traefik/import`, `traefik/format/plan`, `traefik/format/run`, `portainer`). The
+`proxmox/nodes` ones and the `traefik` ones take `?source=<id>`: that Proxmox or that proxy. The
+old Pull page (`/pull`) is gone.
 
 ## Format routes
 

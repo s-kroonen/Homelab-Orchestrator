@@ -243,7 +243,9 @@ def test_service_page_renders_the_address_block(client: TestClient) -> None:
     assert "10.0.0.21" in html and MAC in html
     js = client.get("/static/service.js").text
     assert '"/ip/discover"' in js and "function addPing" in js  # find now, one-click ping
-    assert 'key: "ip_address", label: "Address by hand"' in js
+    # the address by hand is set in Where it runs (link.js)
+    assert "Link.where" in js
+    assert 'key: "ip_address", label: "Address by hand"' in client.get("/static/link.js").text
     assert 'show: is("ping")' in js  # the probe drawer knows the kind
 
 

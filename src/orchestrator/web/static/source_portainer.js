@@ -40,6 +40,7 @@
       return { cls: "off", label: "stopped" };
     }
     const sourceText = (s) => (s.git ? gitText(s.git) : !s.managed ? "compose project" : s.kind || "");
+    const linkStack = (s) => window.Link.stack({ instance: SRC, endpoint_id: s.endpoint_id, name: s.name, env: envs[s.endpoint_id], sourceName: ctx.source.name, onDone: () => view.refresh() });
     const dots = (s) => el("span", { class: "dots", "aria-hidden": "true" }, (s.container_states || []).map((c) => el("i", { class: c.state === "running" ? (c.health === "unhealthy" ? "warn" : "ok") : c.state === "exited" ? "" : "fail", title: c.name + ": " + c.state })));
 
     async function stackAction(rows, verb) {
@@ -176,7 +177,7 @@
         { key: "containers", label: "Containers", sort: (s) => s.containers_running || 0, render: (s) => [dots(s), el("span", { class: "faint" }, (s.containers_running || 0) + " / " + (s.containers_total || 0))] },
         { key: "source", label: "Source", phone: false, render: (s) => el("span", { class: "mono", style: { fontSize: "12px" }, title: s.git ? s.git.url : null }, sourceText(s)) },
         { key: "updated", label: "Updated", sort: (s) => s.updated_at || "", render: (s) => s.updated_at ? el("span", { class: "faint", title: fmt.time(s.updated_at) }, fmt.ago(s.updated_at)) : "—" },
-        { key: "service", label: "Service", render: (s) => (s.linked_services || []).length ? linkedTo(s.linked_services) : s.loose ? el("span", { class: "faint" }, "—") : [el("span", { class: "faint" }, "not linked"), " · ", el("a", { href: "/pull#portainer" }, "Adopt…")] },
+        { key: "service", label: "Service", render: (s) => (s.linked_services || []).length ? linkedTo(s.linked_services) : s.loose ? el("span", { class: "faint" }, "—") : [el("span", { class: "faint" }, "not linked"), " · ", el("button", { type: "button", class: "ghost small", style: { color: "var(--link)", padding: "0" }, onclick: () => linkStack(s) }, "Link…")] },
       ],
       chips: [
         { key: "running", label: "Running", test: (s) => stateOf(s).label === "running" },
@@ -190,7 +191,8 @@
         { label: "Stop", onClick: () => stackAction([s], "stop") },
         { label: "Restart", onClick: () => stackAction([s], "restart") },
         s.git ? { label: "Redeploy", onClick: () => redeploy(s) } : null,
-        (s.linked_services || []).length ? { label: "Open " + s.linked_services[0], href: "/services/" + enc(s.linked_services[0]) } : { label: "Adopt as a sub-service…", href: "/pull#portainer" },
+        (s.linked_services || []).length ? { label: "Open " + s.linked_services[0], href: "/services/" + enc(s.linked_services[0]) } : null,
+        { label: (s.linked_services || []).length ? "Link to another service…" : "Link to a service…", onClick: () => linkStack(s) },
         s.open_url ? { label: "Open in Portainer ↗", href: s.open_url } : null,
         "-",
         { label: "Delete…", danger: true, onClick: () => deleteStack(s) },
@@ -264,7 +266,7 @@
         { key: "environment", label: "Environment", sort: (r) => r.environment, render: (r) => r.environment },
         { key: "image", label: "Image", sort: (r) => r.image, render: (r) => el("span", { class: "mono", style: { fontSize: "12.5px" } }, r.image) },
         { key: "state", label: "State", sort: (r) => r.state, render: (r) => el("span", { class: "pill " + (TONE[r.state] || "off"), title: r.status_text }, r.state_text) },
-        { key: "service", label: "Service", sort: (r) => r.service, render: (r) => r.services.length ? linkedTo(r.services) : [el("span", { class: "faint" }, "not linked"), " · ", el("a", { href: r.stack_href }, "Link…")] },
+        { key: "service", label: "Service", sort: (r) => r.service, render: (r) => r.services.length ? linkedTo(r.services) : [el("span", { class: "faint" }, "not linked"), r.stack ? [" · ", el("button", { type: "button", class: "ghost small", style: { color: "var(--link)", padding: "0" }, onclick: () => linkStack(r) }, "Link its stack…")] : null] },
         { key: "up", label: "Up", phone: false, render: (r) => el("span", { class: "faint" }, (r.status_text || "").replace(/^Up /, "").replace(/ \(.*\)$/, "") || "—") },
       ],
       chips: ctx.meta.chips.map((c) => ({ key: c.key, label: c.label, test: (r) => (r.chips || []).includes(c.key) })),
@@ -273,6 +275,7 @@
         r.state === "running" || r.state === "unhealthy" ? { label: "Stop", onClick: () => act(r, "stop") } : null,
         { label: "Restart", onClick: () => act(r, "restart") },
         { label: "Logs and details", href: r.stack_href },
+        r.stack ? { label: "Link its stack to a service…", onClick: () => linkStack(r) } : null,
         r.open_url ? { label: "Open in Portainer ↗", href: r.open_url } : null,
       ].filter(Boolean),
       empty: { title: "No containers", text: ctx.source.name + " has no containers here." },
@@ -286,6 +289,8 @@
         el("button", { type: "button", "aria-pressed": String(env === k), onclick: () => { env = k; drawEnv(); t.setRows(shown()); } }, label, " ", el("span", { class: "faint" }, String(n)))));
     }
     const shown = () => (env ? rows.filter((r) => r.environment === env) : rows);
+    // a container is linked through its stack
+    const linkStack = (r) => window.Link.stack({ instance: SRC, endpoint_id: r.endpoint_id, name: r.stack, env: r.environment, sourceName: ctx.source.name, onDone: () => view.refresh() });
     const view = region(el("div"), {
       load: ctx.load, every: refreshMs(ctx), age,
       render: (d) => { rows = d; drawEnv(); t.setRows(shown()); },

@@ -6,11 +6,13 @@
  *                   stop, boot settings, make a service.
  * Node cards paint from the database (/api/views/nodes?source=), their live state from
  * /api/infra/nodes/status?source= and the guests from /api/infra/proxmox/guests?source=; guest
- * actions go to the cluster that owns the node. Nothing from Proxmox is put in as HTML. */
+ * actions go to the cluster that owns the node. Import offers the nodes the cluster lists that
+ * are not recorded yet (/api/pull/proxmox/nodes?source=); a guest is linked to a service with
+ * link.js. Nothing from Proxmox is put in as HTML. */
 (function () {
   "use strict";
   const { el, clear, fill, api, fmt, region, table, menuButton, confirm, drawer } = window.UI;
-  const { nodeDrawer, nodePower, deleteNode, serviceDrawer, bulk } = window.Objects;
+  const { nodeDrawer, nodePower, deleteNode, bulk } = window.Objects;
   const enc = encodeURIComponent;
   window.SourceViews = window.SourceViews || {};
 
@@ -22,11 +24,55 @@
     let guests = null; // /api/infra/proxmox/guests
     const box = el("div", { class: "node-grid", "aria-live": "polite" });
     fill(panel, el("div", { style: { display: "flex", gap: "8px", justifyContent: "flex-end", marginBottom: "12px" } },
-      el("a", { class: "btn secondary small", href: "/pull#proxmox" }, "Import from Proxmox"),
+      el("button", { type: "button", class: "secondary small", onclick: importNodes }, "Import from Proxmox"),
       menuButton(() => [
-        { label: "Add a node by hand…", onClick: () => nodeDrawer({ onSaved: () => nodesRegion.refresh() }) },
+        { label: "Add a node by hand…", onClick: () => nodeDrawer({ source: ctx.source.id, onSaved: () => nodesRegion.refresh() }) },
         { label: "Check all nodes", onClick: () => status.refresh() },
+        { label: "Fill blank addresses and re-read the guests", onClick: pullAll },
+        { label: "Find the services' addresses", onClick: findAddresses },
       ], "More actions")), box);
+
+    // the nodes this cluster lists that are not recorded here yet
+    async function importNodes() {
+      let list;
+      try { list = await api.get("/api/pull/proxmox/nodes" + q, { suppressToast: true }); }
+      catch (e) { window.toast(e.message, "error"); return; }
+      const fresh = list.filter((n) => !n.registered);
+      drawer({
+        title: "Import nodes", sub: "From " + ctx.source.name + ". Their power target and the rest are set on their card afterwards.",
+        values: { names: fresh.map((n) => n.name) }, saveLabel: fresh.length ? "Import" : "Close",
+        fields: [{ key: "names", label: "Nodes not recorded here yet", type: "checklist", empty: "Every node of " + ctx.source.name + " is already here.",
+          options: fresh.map((n) => ({ value: n.name, label: n.name, note: (n.address || "no address") + (n.online ? "" : " · offline") })) }],
+        async onSave(v) {
+          const failed = [];
+          for (const name of v.names) {
+            try { await api.post("/api/pull/proxmox/nodes/import" + q, { name }, { suppressToast: true }); } catch (e) { failed.push(name + ": " + e.message); }
+          }
+          if (v.names.length) window.toast(failed.length ? failed.join(" · ") : "Imported " + v.names.join(", "), failed.length ? "error" : "ok");
+          nodesRegion.refresh(); status.refresh();
+        },
+      });
+    }
+    // guest agent / LXC, then ARP, then DHCP, for the services on this cluster's nodes that have no address
+    async function findAddresses() {
+      if (!view) return;
+      window.toast("Looking for addresses…");
+      let scanned = 0, found = 0;
+      for (const n of view.nodes) {
+        try { const r = await api.post("/api/pull/ips/discover", { node: n.name, only_missing: true }, { suppressToast: true }); scanned += r.scanned; found += r.found; }
+        catch (e) { window.toast(n.name + ": " + e.message, "error"); }
+      }
+      window.toast("Looked at " + scanned + " service(s) without an address, found " + found + ". An address set by hand is never touched.", "ok");
+    }
+    async function pullAll() {
+      window.toast("Reading Proxmox…");
+      try {
+        const r = await api.post("/api/pull/proxmox/refresh", undefined, { suppressToast: true });
+        const filled = Object.entries(r.addresses.filled).map(([n, a]) => n + " = " + a);
+        window.toast((filled.length ? "Filled " + filled.join(", ") + ". " : "") + "Re-read " + r.guests.scanned + " service(s)." + (r.guests.missing.length ? " Not found in Proxmox: " + r.guests.missing.join(", ") + "." : ""), r.guests.missing.length ? "error" : "ok");
+      } catch (e) { window.toast(e.message, "error"); }
+      nodesRegion.refresh(); status.refresh();
+    }
 
     const upFor = (s) => { if (!s) return ""; const d = Math.floor(s / 86400); const h = Math.floor((s % 86400) / 3600); return d ? d + " d" : h + " h"; };
     const liveOf = (name) => live && live.nodes.find((n) => n.name === name);
@@ -67,7 +113,7 @@
       if (!view.nodes.length) {
         box.append(el("div", { class: "card dt-empty" }, el("strong", {}, "No nodes yet"),
           el("div", {}, "Import them from Proxmox: every node and guest of the cluster, in one go."),
-          el("div", { style: { marginTop: "10px" } }, el("a", { class: "btn small", href: "/pull#proxmox" }, "Import from Proxmox"))));
+          el("div", { style: { marginTop: "10px" } }, el("button", { type: "button", class: "small", onclick: importNodes }, "Import from Proxmox"))));
         return;
       }
       for (const n of view.nodes) {
@@ -128,15 +174,7 @@
     fill(panel, box);
     const serviceOf = (slug) => svcView && svcView.rows.find((r) => r.slug === slug);
 
-    async function makeService(g) {
-      if (!svcView) svcView = await api.get("/api/views/services", { suppressToast: true });
-      const node = svcView.nodes.find((n) => n.name === g.node);
-      serviceDrawer({
-        view: svcView,
-        prefill: { name: g.name, node_id: node ? node.id : null, guest_kind: g.kind === "lxc" ? "lxc" : "vm", guest_id: g.vmid },
-        onSaved: () => { svcView = null; guestsRegion.refresh(); },
-      });
-    }
+    const linkGuest = (g) => window.Link.guest({ node: g.node, vmid: g.vmid, kind: g.kind, name: g.name, sourceName: ctx.source.name, onDone: () => { svcView = null; guestsRegion.refresh(); } });
     function bootDrawer(g) {
       const b = g.boot || { onboot: false, order: null, up_s: null, down_s: null };
       const num = (v) => (v === "" || v == null ? null : Number(v));
@@ -244,7 +282,7 @@
             : [el("span", {}, "yes, " + fmt.nth(g.boot.position || 0)), el("span", { class: "sub" }, [g.boot.order != null ? "order " + g.boot.order : "no order", g.boot.up_s ? "waits " + g.boot.up_s + " s" : "", g.boot.starts_after_s != null ? "starts ~" + fmt.secs(g.boot.starts_after_s) + " after boot" : ""].filter(Boolean).join(" · "))] },
         { key: "service", label: "Service", sort: (g) => g.service_slug || "~",
           render: (g) => g.service_slug ? el("a", { href: "/services/" + enc(g.service_slug) }, g.service_slug)
-            : [el("span", { class: "faint" }, "not linked"), " · ", el("button", { type: "button", class: "ghost small", style: { color: "var(--link)", padding: "0" }, onclick: () => makeService(g) }, "Make a service…")] },
+            : [el("span", { class: "faint" }, "not linked"), " · ", el("button", { type: "button", class: "ghost small", style: { color: "var(--link)", padding: "0" }, onclick: () => linkGuest(g) }, "Link…")] },
         { key: "disk", label: "Disk", sort: diskSort, phone: "Disk", render: diskCell },
       ],
       chips: [
@@ -254,7 +292,8 @@
         { key: "disk", label: "Disk filling up", test: (g) => !!g.disk && (g.disk.state === "low" || g.disk.state === "full") },
       ],
       menu: (g) => [
-        g.service_slug ? { label: "Open " + g.service_slug, href: "/services/" + enc(g.service_slug) } : { label: "Make a service…", onClick: () => makeService(g) },
+        g.service_slug ? { label: "Open " + g.service_slug, href: "/services/" + enc(g.service_slug) } : null,
+        { label: g.service_slug ? "Link to another service…" : "Link to a service…", onClick: () => linkGuest(g) },
         { label: "Boot settings…", onClick: () => bootDrawer(g) },
         g.status === "running" ? { label: "Shut down…", onClick: () => power([g], "stop") } : { label: "Start", onClick: () => power([g], "start") },
       ],

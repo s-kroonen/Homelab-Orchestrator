@@ -284,21 +284,58 @@ def test_nodes_and_guests_that_exist_only_in_proxmox_can_be_imported(client: Tes
     )
 
 
-def test_the_page_renders_and_the_old_pages_point_at_it(client: TestClient) -> None:
-    anon = TestClient(client.app)
-    assert anon.get("/pull", follow_redirects=False).status_code == 303
-    page = client.get("/pull")
-    assert (
-        page.status_code == 200
-        and "Data sources" in page.text
-        and 'data-tab="traefik"' not in page.text  # a proxy's own Import tab now
-    )
-    # Not a page of its own in the navigation any more: its parts are reached from the list
-    # they fill (Import from Proxmox on a Proxmox source's Nodes tab, Proxy hosts' Import tab).
-    assert 'href: "/pull#proxmox"' in client.get("/static/source_proxmox.js").text
+def test_the_pull_page_is_gone_its_parts_live_on_the_sources(client: TestClient) -> None:
+    """Linking both ways (OR-84): the pull page's tabs moved into the sources they fill."""
+    assert client.get("/pull", follow_redirects=False).status_code == 404
+    proxmox = client.get("/static/source_proxmox.js").text
+    assert "/api/pull/proxmox/nodes" in proxmox and "Link.guest" in proxmox
+    assert "/pull#" not in proxmox
+    portainer = client.get("/static/source_portainer.js").text
+    assert "Link.stack" in portainer and "/pull#" not in portainer
+    assert "Link.proxyHost" in client.get("/static/source_proxy.js").text
     assert '"/api/pull/traefik/import" + q' in client.get("/static/source_proxy.js").text
-    # a Portainer source's Stacks tab links a stack to a service through the pull page
-    assert "/pull#portainer" in client.get("/static/source_portainer.js").text
+    assert "/pull#" not in client.get("/static/stack.js").text
+    assert client.get("/static/sources.js").status_code == 404
+
+
+def test_a_cluster_lists_and_imports_its_own_nodes(client: TestClient) -> None:
+    from orchestrator.adapters.proxmox.base import ClusterNode, ClusterStatus
+
+    pve = client.app.state.adapters.proxmox  # type: ignore[attr-defined]
+    pve.simulated_cluster = ClusterStatus(
+        nodes=[ClusterNode(name="node-c", online=False, ip="10.0.0.3")]
+    )
+    listed = client.get("/api/pull/proxmox/nodes").json()
+    assert listed == [
+        {"name": "node-c", "address": "10.0.0.3", "online": False, "registered": False}
+    ]
+    made = client.post("/api/pull/proxmox/nodes/import", json={"name": "node-c"})
+    assert made.status_code == 201, made.text
+    assert client.get("/api/pull/proxmox/nodes").json()[0]["registered"] is True
+
+
+def test_a_node_added_by_hand_names_its_cluster(client: TestClient) -> None:
+    made = client.post(
+        "/api/registry/nodes", json={"name": "node-x", "address": "", "source_id": "cluster-b"}
+    )
+    assert made.status_code == 201, made.text
+    from sqlmodel import Session, select
+
+    from orchestrator.db.models import Node
+    from orchestrator.db.session import get_engine
+
+    with Session(get_engine()) as session:
+        node = session.exec(select(Node).where(Node.name == "node-x")).one()
+        assert node.source_id == "cluster-b"
+
+
+def test_find_source_opens_the_default_one_of_a_kind(client: TestClient) -> None:
+    got = client.get("/find/source/proxmox?tab=nodes", follow_redirects=False)
+    assert got.status_code == 303
+    assert got.headers["location"].endswith("tab=nodes") or got.headers["location"] == "/sources"
+    assert (
+        client.get("/find/source/nothing", follow_redirects=False).headers["location"] == "/sources"
+    )
 
 
 def test_format_is_a_tab_of_each_proxy(client: TestClient) -> None:

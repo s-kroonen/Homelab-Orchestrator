@@ -107,6 +107,19 @@ async def sources_page(
     )
 
 
+@pages.get("/find/source/{kind}", response_model=None)
+async def find_source(
+    request: Request, session: SessionDep, kind: str, tab: str = ""
+) -> RedirectResponse:
+    """The default source of a kind (``tab``: on that tab); All sources when there is none. For
+    pages that want "the Proxmox" or "the Portainer" without knowing which one that is."""
+    if get_current_admin(request, session) is None:
+        return login_redirect(request)
+    from orchestrator.connectors.ownership import source_page
+
+    return RedirectResponse(source_page(kind, "", {"tab": tab}), status.HTTP_303_SEE_OTHER)
+
+
 @pages.get("/find/proxy-host", response_model=None)
 async def find_proxy_host(
     request: Request,

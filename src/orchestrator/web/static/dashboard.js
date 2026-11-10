@@ -78,7 +78,7 @@
   // --- nodes -----------------------------------------------------------------------------------------
   function drawNodes() {
     const box = clear($("#nodes"));
-    if (!V.nodes.length) { box.append(el("p", { class: "muted", style: { padding: "0 18px 12px", margin: 0 } }, "No nodes yet. ", el("a", { href: "/pull#proxmox" }, "Import them from Proxmox"), ".")); return; }
+    if (!V.nodes.length) { box.append(el("p", { class: "muted", style: { padding: "0 18px 12px", margin: 0 } }, "No nodes yet. ", el("a", { href: "/find/source/proxmox?tab=nodes" }, "Import them from Proxmox"), ".")); return; }
     for (const n of V.nodes) {
       const l = live && live.nodes.find((x) => x.name === n.name);
       const state = !l ? (live ? "unknown" : "…") : l.state || "unknown";

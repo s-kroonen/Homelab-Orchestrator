@@ -296,16 +296,6 @@ async def traffic_geo_page(slug: str | None = None, range: str | None = None) ->
     return RedirectResponse("/traffic" + ("?" + query if query else ""), status_code=303)
 
 
-@router.get("/pull", response_model=None)
-async def sources_page(request: Request, session: SessionDep) -> HTMLResponse | RedirectResponse:
-    """What is pulled from Proxmox, Traefik Manager, Portainer and the guests - the actions that
-    refresh or import it live here (client-rendered from ``/api/pull``)."""
-    admin = get_current_admin(request, session)
-    if admin is None:
-        return login_redirect(request)
-    return _templates.TemplateResponse(request, "sources.html", {"admin": admin})
-
-
 @router.get("/activity", response_model=None)
 async def activity_page(
     request: Request,

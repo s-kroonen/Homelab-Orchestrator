@@ -150,6 +150,25 @@ async def proxmox_refresh(
     return {"addresses": filled, "nodes": checks, "guests": resync}
 
 
+@router.get("/proxmox/nodes")
+async def cluster_nodes(
+    session: SessionDep, adapters: AdaptersDep, source: str | None = None
+) -> list[dict[str, Any]]:
+    """The nodes a Proxmox (``source``; blank: the default) lists, and whether each is recorded
+    here (an unrecorded one can be imported)."""
+    from orchestrator.connectors.ownership import proxmox_of
+
+    try:
+        cluster = await proxmox_of(adapters, source or "").cluster_status()
+    except Exception as exc:
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc)) from exc
+    known = {n.name for n in session.exec(select(Node)).all()}
+    return [
+        {"name": n.name, "address": n.ip, "online": n.online, "registered": n.name in known}
+        for n in sorted(cluster.nodes, key=lambda n: n.name)
+    ]
+
+
 class NodeImportIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -163,21 +182,32 @@ async def import_node(
     adapters: AdaptersDep,
     settings: SettingsDep,
     admin: CurrentAdmin,
+    source: str | None = None,
 ) -> dict[str, Any]:
-    """Record a node the cluster has. Its name and address come from Proxmox; what only this
-    orchestrator knows (power target, always on) is set on the dashboard afterwards."""
+    """Record a node a cluster (``source``; blank: the default) has, owned by that cluster. Its
+    name and address come from Proxmox; what only this orchestrator knows (power target,
+    always on) is set on its card afterwards."""
+    from orchestrator.connectors.ownership import proxmox_of
+    from orchestrator.connectors.registry import default_source
     from orchestrator.web.routers import dashboard
 
     try:
-        cluster = await adapters.proxmox.cluster_status()
+        cluster = await proxmox_of(adapters, source or "").cluster_status()
     except Exception as exc:
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc)) from exc
     entry = next((n for n in cluster.nodes if n.name == body.name), None)
     if entry is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, f"Proxmox has no node named {body.name!r}")
-    address = settings.proxmox_host if entry.local and settings.proxmox_host else entry.ip
+    main = default_source("proxmox")
+    owner = source or (main.id if main else "")
+    # PROXMOX_HOST is the address of the default cluster's node it talks to
+    is_default = not source or (main is not None and main.id == source)
+    local = entry.local and is_default and settings.proxmox_host
+    address = settings.proxmox_host if local else entry.ip
     out = await dashboard.create_node(
-        dashboard.NodeCreate(name=entry.name, address=address or ""), session, admin
+        dashboard.NodeCreate(name=entry.name, address=address or "", source_id=owner),
+        session,
+        admin,
     )
     _stamp(session, "proxmox")
     session.commit()

@@ -613,7 +613,7 @@ def test_dashboard_links_to_detail_and_offers_create_forms(client: TestClient) -
     assert 'id="new-service"' in r.text  # opens the service drawer
     assert '"slug": "media"' in r.text  # at a glance, linking to its page
     assert '"/services/" + enc(s.slug)' in client.get("/static/dashboard.js").text
-    assert 'href="/pull#proxmox"' in client.get("/services").text  # nodes are imported
+    assert "/find/source/proxmox?tab=nodes" in client.get("/services").text  # nodes are imported
 
 
 def test_service_group_round_trips_through_save_and_reset(client: TestClient) -> None:

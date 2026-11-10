@@ -5,7 +5,7 @@
 <div class="page-header">
   <h1>Services <span class="count" id="svc-count">{{ initial.rows | selectattr("parent", "none") | list | length }}</span></h1>
   <div class="actions">
-    <a class="btn secondary" href="/pull#proxmox">Import from Proxmox</a>
+    <a class="btn secondary" href="/find/source/proxmox?tab=nodes">Import from Proxmox</a>
     <button type="button" id="new-service">+ New service</button>
   </div>
 </div>

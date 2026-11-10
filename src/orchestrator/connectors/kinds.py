@@ -631,6 +631,7 @@ class PbsConnector(Connector):
 
 async def _pt_environments(ctx: SourceCtx) -> list[dict[str, Any]]:
     envs = await ctx.adapter.list_environments()
+    runs_on = _pt_runs_on(ctx)
     return [
         {
             "id": e.id,
@@ -641,9 +642,55 @@ async def _pt_environments(ctx: SourceCtx) -> list[dict[str, Any]]:
             "stopped": e.stopped,
             "stacks": e.stacks,
             "chips": ["down"] if e.status == "down" else [],
+            "links": runs_on.get(e.id, []),
         }
         for e in envs
     ]
+
+
+def _pt_runs_on(ctx: SourceCtx) -> dict[int, list[dict[str, str]]]:
+    """Environment -> where it runs: the service its linked stacks live under (the root of
+    their tree) and that service's Proxmox guest, each a link to its own page."""
+    from sqlmodel import Session, select
+
+    from orchestrator.connectors.ownership import node_href
+    from orchestrator.db.models import GuestKind, Node, Service
+    from orchestrator.db.session import get_engine
+    from orchestrator.registry.tree import TreeIndex
+
+    slugs: dict[int, set[str]] = {}
+    for (_kind, eid, _name), linked in _pt_links(ctx).items():
+        slugs.setdefault(eid, set()).update(linked)
+    out: dict[int, list[dict[str, str]]] = {}
+    with Session(get_engine()) as session:
+        services = list(session.exec(select(Service)).all())
+        tree = TreeIndex(services)
+        by_slug = {s.slug: s for s in services}
+        for eid, linked in slugs.items():
+            roots = {
+                tree.root(by_slug[x]).slug: tree.root(by_slug[x]) for x in linked if x in by_slug
+            }
+            links: list[dict[str, str]] = []
+            for root in sorted(roots.values(), key=lambda r: r.slug):
+                if root.slug in linked:
+                    continue  # the stack's own service, not where it runs
+                links.append(
+                    {
+                        "label": "runs on " + (root.name or root.slug),
+                        "href": f"/services/{root.slug}",
+                    }
+                )
+                node = session.get(Node, root.node_id) if root.node_id is not None else None
+                if node is not None and root.guest_kind is not GuestKind.NONE:
+                    links.append(
+                        {
+                            "label": f"{node.name} · {root.guest_kind.value} {root.guest_id}",
+                            "href": node_href(node, tab="guests", find=str(root.guest_id)),
+                        }
+                    )
+            if links:
+                out[eid] = links
+    return out
 
 
 def _pt_links(ctx: SourceCtx) -> dict[tuple[str, int, str], list[str]]:

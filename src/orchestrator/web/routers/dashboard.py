@@ -176,6 +176,8 @@ class NodeCreate(_Body):
     notes: str = ""
     address: str = ""
     wake_on_hit_enabled: bool = True
+    #: The Proxmox source it belongs to (blank: the default one claims it).
+    source_id: str = ""
 
 
 class NodeUpdate(_Body):
@@ -1268,6 +1270,7 @@ async def create_node(body: NodeCreate, session: SessionDep, admin: CurrentAdmin
         notes=body.notes,
         address=_check_node_address(body.address),
         wake_on_hit_enabled=body.wake_on_hit_enabled,
+        source_id=body.source_id.strip(),
     )
     session.add(node)
     session.flush()

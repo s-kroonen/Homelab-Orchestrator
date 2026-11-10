@@ -27,6 +27,7 @@
   let D = null;        // the stack and its containers, live
   let L = null;        // what the orchestrator keeps about it (link)
   let envName = "";
+  const linkIt = () => window.Link.stack({ instance: I.instance || "", endpoint_id: I.endpoint, name: I.name, env: envName, sourceName: I.source_name, onDone: () => { link.refresh(); stack.refresh(); } });
   const stats = new Map();
   const details = new Map();
   let openRow = null;
@@ -72,7 +73,7 @@
       up ? { label: "Start", onClick: () => stackAction("start") } : null,
       D.git ? { label: "Pull images and redeploy", onClick: redeploy } : null,
       D.open_url ? { label: "Open in Portainer ↗", href: D.open_url } : null,
-      L ? { label: "Open the sub-service", href: "/services/" + enc(L.slug) } : { label: "Adopt as a sub-service…", href: "/pull#portainer" },
+      L ? { label: "Open the sub-service", href: "/services/" + enc(L.slug) } : { label: "Link to a service…", onClick: linkIt },
       "-",
       { label: "Delete stack…", danger: true, onClick: deleteStack },
     ].filter(Boolean), "More actions"));
@@ -356,7 +357,7 @@
       ["Created", D.created_at ? fmt.time(D.created_at) + (D.created_by ? " by " + D.created_by : "") : "—"],
       ["Updated", D.updated_at ? fmt.time(D.updated_at) + (D.updated_by ? " by " + D.updated_by : "") : "—"],
     ].map(([a, b]) => [el("dt", {}, a), el("dd", {}, b)])));
-    if (!L) { fill($("#oset"), el("p", { class: "muted", style: { margin: 0 } }, "Not linked to a service here, so nothing checks it, backs it up or deploys it. ", el("a", { href: "/pull#portainer" }, "Adopt it as a sub-service →"))); return; }
+    if (!L) { fill($("#oset"), el("p", { class: "muted", style: { margin: 0 } }, "Not linked to a service here, so nothing checks it, backs it up or deploys it. ", el("button", { type: "button", class: "ghost small", style: { color: "var(--link)", padding: "0" }, onclick: linkIt }, "Link it to a service…"))); return; }
     const waits = L.checks.filter((k) => k.backup_waits).map((k) => k.container || k.name);
     fill($("#oset"), el("dl", { class: "facts" }, [
       ["Sub-service", [el("a", { href: "/services/" + enc(L.slug) }, L.name), L.parent ? [" under ", el("a", { href: "/services/" + enc(L.parent.slug) }, L.parent.name)] : "", " ", el("span", { class: "pill " + (CHECK_CLS[L.verdict] || "off") }, L.verdict)]],

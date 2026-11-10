@@ -25,6 +25,7 @@
 {% endblock %}
 {% block scripts %}
 <script src="{{ asset('conn_drawer.js') }}"></script>
+<script src="{{ asset('link.js') }}"></script>
 {% for script in source.connector.scripts %}<script src="{{ asset(script) }}"></script>
 {% endfor %}
 <script src="{{ asset('source.js') }}"></script>

@@ -3,6 +3,7 @@
  *
  *   Objects.bulk(resource, action, ids, params)    POST /api/bulk/<resource>, one toast summing up
  *   Objects.serviceDrawer({service, view, prefill, onSaved})   create (no service) or edit
+ *   Objects.nodeDrawer({node, source, onSaved})   add (source: the Proxmox it belongs to) or edit
  *   Objects.serviceActions(row, view, refresh)     the ⋯ menu of a service row
  *   Objects.deleteService(row, view, refresh)
  *   Objects.nodeDrawer({node, onSaved})            create (no node) or edit
@@ -171,7 +172,7 @@
           always_on: !!v.always_on, wake_on_hit_enabled: !!v.wake_on_hit_enabled, notes: v.notes || "",
         };
         if (editing) await api.put("/api/registry/nodes/" + encodeURIComponent(n.name), body, { suppressToast: true });
-        else await api.post("/api/registry/nodes", body, { suppressToast: true });
+        else await api.post("/api/registry/nodes", o.source ? Object.assign({ source_id: o.source }, body) : body, { suppressToast: true });
         toast((editing ? "Saved " : "Added ") + body.name, "ok");
         if (o.onSaved) o.onSaved(body);
       },
