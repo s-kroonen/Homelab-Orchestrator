@@ -119,7 +119,11 @@ async def test_list_routes_sends_api_key_header_and_parses_apps(
     assert seen["api_key"] == "secret-key"
     assert routes == [
         RouteInfo(
-            name="r1", route_id="r1", hostnames={"a.example.com"}, upstream="http://10.0.0.9:80"
+            name="r1",
+            route_id="r1",
+            hostnames={"a.example.com"},
+            upstream="http://10.0.0.9:80",
+            rule="Host(`a.example.com`)",
         )
     ]
 
