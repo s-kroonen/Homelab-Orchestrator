@@ -759,7 +759,52 @@ async def _link_proxy_host(ctx: ToolContext, a: dict[str, Any]) -> Any:
     }
 
 
+def _proxy_host_row(ctx: ToolContext, hostname: str) -> Any:
+    from orchestrator.db.models import ProxyHost
+
+    ph = ctx.session.exec(
+        select(ProxyHost).where(ProxyHost.hostname == hostname.strip().lower())
+    ).first()
+    if ph is None:
+        raise ToolError(f"no proxy host {hostname!r}")
+    return ph
+
+
+async def _proxy_backends(ctx: ToolContext, a: dict[str, Any]) -> Any:
+    from orchestrator.web.routers import proxy_hosts
+
+    ph = _proxy_host_row(ctx, a["hostname"])
+    assert ph.id is not None
+    return await _call(proxy_hosts.get_backends(ph.id, ctx.session, ctx.adapters))
+
+
 # -- dangerous ---------------------------------------------------------------------------------
+
+
+async def _edit_proxy_backends(ctx: ToolContext, a: dict[str, Any]) -> Any:
+    from orchestrator.web.routers import proxy_hosts
+
+    ph = _proxy_host_row(ctx, a["hostname"])
+    edits = a.get("edits")
+    if not isinstance(edits, list) or not edits:
+        raise ToolError("edits must be a non-empty list")
+    return await _call(
+        proxy_hosts.apply_backend_edits(ctx.session, ctx.actor, ctx.adapters, ph, edits)
+    )
+
+
+def _edits_text(a: dict[str, Any]) -> str:
+    parts = []
+    for e in a.get("edits") or []:
+        if not isinstance(e, dict):
+            continue
+        what = [
+            k
+            for k in ("servers", "health_check", "primary", "fallback", "weights", "mirrors")
+            if k in e
+        ]
+        parts.append(f"{e.get('service')} ({', '.join(what) or 'nothing'})")
+    return f"CHANGE the backends of {a.get('hostname')}: " + "; ".join(parts)
 
 
 async def _guest_power(ctx: ToolContext, a: dict[str, Any]) -> Any:
@@ -1322,7 +1367,46 @@ TOOLS: dict[str, Tool] = {
             ("hostname", "slug"),
             ACT,
         ),
+        Tool(
+            "proxy_backends",
+            "A proxy host's backends",
+            "For a host with several backends (failover, weighted, mirroring): every service "
+            "of its tree that can be edited, each with its version (an edit must name it), its "
+            "servers and health check (load balancers), primary and fallback (failover), "
+            "weights or mirror percentages, and the services a failover may point at.",
+            "read",
+            _proxy_backends,
+            {"hostname": _s("The proxy host's hostname")},
+            ("hostname",),
+            READ,
+        ),
         # -- dangerous
+        Tool(
+            "edit_proxy_backends",
+            "Change a proxy host's backends",
+            "Change a failover, weighted or mirroring host through Traefik Manager's service "
+            "form: a backend's servers or health check, which backend is primary and which "
+            "fallback, weights, mirror percentages. Read proxy_backends first and pass each "
+            "service's version. Live production routes: always needs a person's approval.",
+            "configure",
+            _edit_proxy_backends,
+            {
+                "hostname": _s("The proxy host's hostname"),
+                "edits": {
+                    "type": "array",
+                    "description": (
+                        "One object per service: {service, version, and one or more of: "
+                        "servers: [urls]; health_check: {path, interval, timeout, hostname} "
+                        "or null to remove it; primary, fallback: service names; weights: "
+                        "{member: int}; mirrors: {mirror: percent}}"
+                    ),
+                    "items": {"type": "object"},
+                },
+            },
+            ("hostname", "edits"),
+            DANGEROUS,
+            _edits_text,
+        ),
         Tool(
             "guest_power",
             "Proxmox guest power",

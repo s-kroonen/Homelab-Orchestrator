@@ -64,6 +64,7 @@ may not use is not even listed to the assistant.
   `linked_state`, `recent_activity`, `list_backups`, `backup_plan`, `list_runs`, `get_run`,
   `deploy_history`, `list_dumps`, `infra_status`, `list_nodes`, `list_guests`, `disk_usage`
   (how full each guest's filesystems are, [disks.md](disks.md)), `list_proxy_hosts`,
+  `proxy_backends` (what of a failover, weighted or mirroring host can be changed, with versions),
   `portainer_stacks`, `portainer_containers`, `container_logs` (secrets redacted), `get_request`.
 * **act** (runs at once, logged, audited as `mcp:<connection>`): `run_backup`, `run_dump`, `propose_restore`,
   `deploy_service` (with its guards), `wake_service`, `node_power wake`, `switch_service`,
@@ -79,7 +80,8 @@ may not use is not even listed to the assistant.
 * **dangerous** (waits for a person, needs `propose`): `guest_power stop`, `node_power power_off` /
   `restart`, `delete_stack`, `deploy_service` with `skip_guards`, `switch_service off` with
   `include_guest`, `service_action stop` / `restart` on a `guest`, `set_dump` with a `command`
-  (it runs a shell command in a container).
+  (it runs a shell command in a container), `edit_proxy_backends` (a live route's backends,
+  [proxy_hosts.md](proxy_hosts.md#changing-a-host-with-several-backends)).
 
 The tools call the same code the dashboard buttons do, so every guard applies unchanged: nothing
 is stopped under a running backup, deploys run their pre-guards, the switch keeps its order.

@@ -302,6 +302,16 @@ class ProxyAdapter(ABC):
         ``serverStatus``. ``None`` when this backend cannot say. Default: it cannot."""
         return None
 
+    async def save_service(self, payload: dict[str, Any]) -> None:
+        """Create or edit one service in the backend's own service form (Traefik Manager:
+        ``POST /api/services``). Raises :class:`NotImplementedError` where there is none."""
+        raise NotImplementedError("this proxy cannot edit services")
+
+    async def adopt_service(self, name: str) -> None:
+        """Let the backend edit a hand-written composite service (Traefik Manager: mark it
+        as managed; the file is not touched). Raises where there is no such thing."""
+        raise NotImplementedError("this proxy cannot edit services")
+
     async def unreadable_files(self) -> list[dict[str, str]] | None:
         """Config files the backend cannot read (``[{"file", "error"}]``); ``None`` when it
         cannot tell. Default: it cannot."""

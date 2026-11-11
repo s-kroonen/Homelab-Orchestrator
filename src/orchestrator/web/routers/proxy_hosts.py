@@ -48,8 +48,9 @@ from orchestrator.adapters.proxy.verify import (
 )
 from orchestrator.audit import log as audit
 from orchestrator.db.models import ProxyHost, Service
-from orchestrator.domain.enums import RouterProvider
+from orchestrator.domain.enums import AuditResult, RouterProvider
 from orchestrator.logging_setup import get_logger
+from orchestrator.registry import backend_edit
 from orchestrator.registry.archive import archive_proxy_host
 from orchestrator.registry.config_files import normalize_config_file, unknown_file_problem
 from orchestrator.registry.host_cascade import host_served
@@ -69,6 +70,7 @@ from orchestrator.registry.proxy_push import (
     pending_deletes,
     ref_of,
     slug_of,
+    stale_ref_route,
     take_pending_delete,
 )
 from orchestrator.registry.proxy_validation import (
@@ -352,6 +354,12 @@ def _serialize(
         "sync_state": sync.state if sync is not None else None,
         "sync_changes": list(sync.changes) if sync is not None else [],
         "sync_pending": bool(sync is not None and sync.pending),
+        # Its own route is gone and a hand-written one serves it: Adopt points it there.
+        "adoptable": bool(
+            sync is not None
+            and sync.state == "external"
+            and any(c.startswith("served by the route ") for c in sync.changes)
+        ),
         "id": ph.id,
         "hostname": ph.hostname,
         "upstream": ph.upstream,
@@ -900,6 +908,14 @@ async def resync_proxy_hosts(
 
     hosts = owned_hosts(session, adapters)  # this proxy's
     existing_hostnames = {ph.hostname for ph in session.exec(select(ProxyHost)).all()}
+    # A host whose own route was replaced by a hand-written one is pointed at that one.
+    adopted: list[dict[str, str]] = []
+    if settings.traefik_manager_url.strip():
+        for ph in hosts:
+            replaced = stale_ref_route(adapters.proxy, ph, routers)
+            if replaced is not None:
+                _adopt_replacement(session, admin.username, ph, replaced)
+                adopted.append({"hostname": ph.hostname, "route": replaced.ref})
 
     now = datetime.now(UTC)
     services_map = _services_by_id(session)
@@ -986,6 +1002,7 @@ async def resync_proxy_hosts(
     return {
         "updated": updated,
         "discovered": discovered,
+        "adopted": adopted,
         "updated_count": len(updated),
         "discovered_count": len(discovered),
     }
@@ -1283,6 +1300,140 @@ async def set_enabled(
     return await set_proxy_host_enabled(
         session, admin, settings, adapters.with_proxy(ph.source_id), ph, body.enabled
     )
+
+
+def _adopt_replacement(session: Session, actor: str, ph: ProxyHost, route: RouteInfo) -> None:
+    """Point ``ph`` at the route that replaced its own one (audited)."""
+    before = ref_of(ph)
+    ph.extra = {**(ph.extra or {}), TRAEFIK_MANAGER_ROUTE_REF_KEY: route.ref}
+    session.add(ph)
+    audit.record(
+        session,
+        actor=actor,
+        action="proxy_host.route_adopted",
+        target=f"proxy_host:{ph.hostname}",
+        details={"from": before, "to": route.ref, "file": route.config_file},
+    )
+
+
+@router.post("/{proxy_host_id}/adopt-route")
+async def adopt_route(
+    proxy_host_id: int, session: SessionDep, admin: CurrentAdmin, adapters: AdaptersDep
+) -> dict[str, Any]:
+    """The host's own route is gone and a route this orchestrator did not create serves its
+    hostname (a hand-written failover, say): point the host at that route. It then reads as
+    ``external`` - its content is never overwritten - instead of a route to re-create."""
+    ph = _get_or_404(session, proxy_host_id)
+    proxy = adapters.with_proxy(ph.source_id).proxy
+    routes = await proxy.list_routes()
+    if routes is None:
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            getattr(proxy, "read_error", None) or "Traefik Manager could not be read",
+        )
+    route = stale_ref_route(proxy, ph, routes)
+    if route is None:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            f"{ph.hostname} does not point at a route that is gone, or no other route serves it",
+        )
+    _adopt_replacement(session, admin.username, ph, route)
+    session.commit()
+    return {"hostname": ph.hostname, "route": route.ref, "file": route.config_file}
+
+
+# --- several backends: failover, weighted, mirroring (registry/backend_edit.py) ----------------
+
+
+async def _backend_state(adapters: AdapterBundle, ph: ProxyHost) -> tuple[Any, Any]:
+    proxy = adapters.with_proxy(ph.source_id).proxy
+    routes = await proxy.list_routes()
+    runtime = await proxy.list_runtime_services() if routes is not None else None
+    return routes, runtime
+
+
+@router.get("/{proxy_host_id}/backends")
+async def get_backends(
+    proxy_host_id: int, session: SessionDep, adapters: AdaptersDep
+) -> dict[str, Any]:
+    """What of this host's backends can be edited (a failover, weighted or mirroring host
+    only), each service with the ``version`` an edit must name."""
+    ph = _get_or_404(session, proxy_host_id)
+    routes, runtime = await _backend_state(adapters, ph)
+    return backend_edit.editable(ph.hostname, routes, runtime).as_dict()
+
+
+class BackendsIn(BaseModel):
+    #: ``[{"service", "version", "servers" | "health_check" | "primary"/"fallback" |
+    #: "weights" | "mirrors"}]`` - see ``registry/backend_edit.py``.
+    edits: list[dict[str, Any]]
+    #: Only say what would change (nothing is sent).
+    preview: bool = False
+
+
+@router.post("/{proxy_host_id}/backends")
+async def edit_backends(
+    proxy_host_id: int,
+    body: BackendsIn,
+    session: SessionDep,
+    admin: CurrentAdmin,
+    adapters: AdaptersDep,
+) -> dict[str, Any]:
+    """Change this host's backends through Traefik Manager's own service form, then read
+    Traefik back until the change shows. ``409`` with the reason when an edit cannot be
+    made (or a service changed since it was read); nothing is sent then."""
+    ph = _get_or_404(session, proxy_host_id)
+    return await apply_backend_edits(
+        session, admin.username, adapters, ph, body.edits, body.preview
+    )
+
+
+async def apply_backend_edits(
+    session: Session,
+    actor: str,
+    adapters: AdapterBundle,
+    ph: ProxyHost,
+    edits: list[dict[str, Any]],
+    preview: bool = False,
+) -> dict[str, Any]:
+    """``POST /api/proxy-hosts/{id}/backends``, callable (the MCP tool uses it)."""
+    proxy = adapters.with_proxy(ph.source_id).proxy
+    routes, runtime = await _backend_state(adapters, ph)
+    found = backend_edit.editable(ph.hostname, routes, runtime)
+    try:
+        the_plan = backend_edit.plan(found, edits, runtime)
+    except backend_edit.EditError as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
+    if preview:
+        return {"hostname": ph.hostname, "changes": the_plan.changes, "applied": False}
+    results = await backend_edit.apply(proxy, the_plan)
+    ok = all(r["ok"] for r in results) and len(results) == len(the_plan.calls)
+    verified = ok and await backend_edit.verify(
+        proxy.list_runtime_services, ph.hostname, routes or [], the_plan
+    )
+    audit.record(
+        session,
+        actor=actor,
+        action="proxy_host.backends_edited",
+        target=f"proxy_host:{ph.hostname}",
+        result=AuditResult.OK if ok else AuditResult.ERROR,
+        details={"changes": the_plan.changes, "results": results, "verified": verified},
+    )
+    session.commit()
+    if not ok:
+        failed = next(r for r in results if not r["ok"])
+        raise HTTPException(
+            status.HTTP_502_BAD_GATEWAY,
+            f"Traefik Manager refused the change to {failed['service']}: {failed['message']}"
+            + ("" if len(results) == 1 else " (the changes before it were saved)"),
+        )
+    return {
+        "hostname": ph.hostname,
+        "changes": the_plan.changes,
+        "results": results,
+        "applied": True,
+        "verified": verified,
+    }
 
 
 catalog_router = APIRouter(

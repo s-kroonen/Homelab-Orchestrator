@@ -103,7 +103,13 @@
       ],
       menu: (h) => [
         { label: "Edit…", onClick: () => edit(h) },
+        h.adoptable ? { label: "Adopt the route that serves it", onClick: async () => {
+          try { const a = await api.post("/api/proxy-hosts/" + h.id + "/adopt-route", undefined, { suppressToast: true }); toast("Adopted " + a.route + " for " + h.hostname, "ok"); }
+          catch (e) { toast(e.message, "error"); }
+          r.refresh();
+        } } : null,
         h.service_model && h.service_model.routers.length ? { label: "Backends…", onClick: () => window.Objects.backendsDrawer(h) } : null,
+        h.service_model && ["failover", "weighted", "mirroring", "mixed"].includes(h.service_model.strategy) ? { label: "Change backends…", onClick: () => window.Objects.editBackends(h, () => r.refresh()) } : null,
         h.sync_pending ? { label: "Push now", onClick: () => push(h, "Pushed") } : null,
         h.sync_state === "detached" ? { label: "Put back as configured here", onClick: () => push(h, "Put back") } : null,
         h.config_file_movable ? { label: "Move to " + h.config_file_resolved, onClick: async () => {

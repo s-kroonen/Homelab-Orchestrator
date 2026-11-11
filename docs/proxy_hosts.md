@@ -1329,3 +1329,55 @@ read*, with the reason. When the list fails, each config file is opened on its o
 the API (`GET /api/routes/<file>::<probe>/raw`: 404 when it can be read, an error when it
 cannot), so the reason names the file. The proxy's source status turns red (*cannot list
 routes*), and the infra status has a `proxy` row with `unreadable_files`.
+
+## Changing a host with several backends
+
+A failover, weighted or mirroring host can be changed here, nothing else hand-written: on the
+proxy's page *Change backends…* (in the row's ⋯ and in *Backends…*), through the API
+(`GET` / `POST /api/proxy-hosts/{id}/backends`) or the MCP tool `edit_proxy_backends`, which
+always waits for a person's approval. What can change, per service of the host's tree that
+Traefik reads from its files:
+
+| Service | What |
+|---|---|
+| a backend (load balancer) | its server URLs; its health check: on or off, path, interval, timeout, the hostname it checks as |
+| a failover | which service is the primary and which the fallback (any HTTP service of the files) |
+| a weighted service | the weight of each member |
+| a mirroring service | the share mirrored to each mirror |
+
+A host with one backend is a plain proxy host and is edited as one. The server list of a backend
+whose servers carry their own settings (a weight, `preservePath`) is not offered: the form would
+drop them.
+
+**How it is written.** Through Traefik Manager's own service form (`POST /api/services`). It
+edits the service where it stands in its file: the keys it is sent replace theirs (`servers`, the
+`healthCheck` when it is changed, `service` / `fallback`, `services`, `mirrors`), every other key
+(`passHostHeader`, `serversTransport`, a failover's own health check...) and the rest of the
+file stay as they are, comments included, and it backs the file up first. A composite service is
+first marked as managed by Traefik Manager (`POST /api/services/<name>/ownership`): that is a note
+in its settings, the file is not touched. A health check is sent whole (Traefik Manager drops the
+known fields it is not sent), without Traefik's defaults (`mode: http`, `interval: 30s`,
+`timeout: 5s`, `followRedirects: true`), so they are not added to the file.
+
+**Safety.** Every edit is checked before anything is sent: addresses, durations, paths, a
+primary that is not its own fallback, no failover that would loop back on itself
+(`registry/backend_edit.py`). Each service carries a version (a fingerprint of what Traefik runs);
+an edit names the version it was made against and is refused (`409`) when the service changed
+since. The page shows every change, before and after, and saves only on *Save to Traefik*. The
+services are sent one at a time and the first refusal stops the rest. Afterwards Traefik is read
+again until the change shows (`verified`); the edit is audited as `proxy_host.backends_edited`.
+
+Not through Traefik Manager's API, so not here: `passHostHeader`, the servers transport (and its
+`serverName`), a router's rule or priority. Its per-route raw save rewrites the file with that
+route's service moved and comments shifted, which this orchestrator does not do to a hand-written
+file.
+
+## When a hand-written route replaced the orchestrator's own
+
+A host whose own route (`orchestrator-*`, pushed before) is gone from Traefik Manager while a
+route the orchestrator did not create serves its hostname - a hand-written failover that took
+its place, say - is not "re-created" next to it. It reads `external`, *served by the route <name>,
+which this orchestrator did not create*, with nothing to push. **Adopt the route that serves it**
+(the row's ⋯, `POST /api/proxy-hosts/{id}/adopt-route`) points the host at that route; *Resync
+from Traefik* does the same for every such host. Audited as `proxy_host.route_adopted`. A host
+that was never pushed and finds its hostname taken still gets the push's refusal instead.

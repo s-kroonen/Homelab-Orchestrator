@@ -459,8 +459,92 @@
             el("td", {}, tr(u.servers_transport)))))))
           : el("p", { class: "faint", style: { margin: 0 } }, r.display))),
       el("p", { class: "faint", style: { fontSize: "12px" } }, "Read from Traefik's running configuration. A transport's serverName shows when Traefik's own API (TRAEFIK_API_URL) is set."));
+    const edit = ["failover", "weighted", "mirroring", "mixed"].includes(m.strategy) && h.id != null
+      ? el("button", { type: "button", class: "secondary small", onclick: () => editBackends(h) }, "Change backends…") : null;
+    if (edit) body.prepend(el("div", { style: { display: "flex", justifyContent: "flex-end", marginBottom: "10px" } }, edit));
     drawer({ title: "Backends of " + h.hostname, sub: m.display, wide: true, intro: body, fields: [], saveLabel: "Close", note: "", onSave: () => {} });
   }
 
-  window.Objects = { subList, subKind, bulk, slugify, serviceDrawer, serviceActions, deleteService, nodeDrawer, nodePower, deleteNode, proxyHostDrawer, deleteProxyHosts, catalogFor, describeEvent, eventRow, pointsTo, backendsDrawer };
+  // Change a failover / weighted / mirroring host (GET/POST /api/proxy-hosts/{id}/backends): a
+  // backend's servers and health check, primary and fallback, weights, mirror shares. Saved
+  // through Traefik Manager's own service form after a before -> after confirmation.
+  const showVal = (v) => v == null ? "none" : Array.isArray(v) ? v.map((x) => typeof x === "object" ? x.name + " " + (x.weight != null ? "x" + x.weight : x.percent + "%") : x).join(", ")
+    : typeof v === "object" ? Object.entries(v).map(([k, x]) => k + " " + x).join(", ") : String(v);
+  async function editBackends(h, onDone) {
+    let d;
+    try { d = await api.get("/api/proxy-hosts/" + h.id + "/backends", { suppressToast: true }); }
+    catch (e) { toast(e.message, "error"); return; }
+    if (!d.editable) { toast(h.hostname + ": " + d.reason, "error"); return; }
+    const values = {}; const fields = [];
+    const choices = d.choices.map((c) => ({ value: c, label: c }));
+    d.nodes.forEach((n, i) => {
+      const k = "n" + i + "_";
+      fields.push({ type: "section", label: n.name + " · " + ({ loadBalancer: "backend", failover: "failover", weighted: "weighted", mirroring: "mirroring" }[n.kind] || n.kind) });
+      if (n.kind === "loadBalancer") {
+        values[k + "servers"] = n.servers.join("\n");
+        const hc = n.health_check || {};
+        values[k + "hc"] = !!n.health_check;
+        for (const f of ["path", "interval", "timeout", "hostname"]) values[k + f] = hc[f] || "";
+        fields.push({ key: k + "servers", label: "Servers, one per line", type: "textarea", rows: Math.max(2, n.servers.length), readonly: !!n.servers_locked, help: n.servers_locked ? "Not editable here: " + n.servers_locked + "." : null });
+        fields.push({ key: k + "hc", label: "Health check: Traefik stops sending to it while the check fails", type: "checkbox" });
+        fields.push({ key: k + "path", label: "Check path", mono: true, placeholder: "/health", show: (v) => v[k + "hc"] });
+        fields.push({ key: k + "interval", label: "Every", mono: true, placeholder: "30s", show: (v) => v[k + "hc"] });
+        fields.push({ key: k + "timeout", label: "Timeout", mono: true, placeholder: "5s", show: (v) => v[k + "hc"] });
+        fields.push({ key: k + "hostname", label: "Check as hostname", mono: true, placeholder: "the server's own", show: (v) => v[k + "hc"], help: "Sent as the Host header of the check." });
+      } else if (n.kind === "failover") {
+        values[k + "primary"] = n.primary.split("@")[0]; values[k + "fallback"] = n.fallback.split("@")[0];
+        fields.push({ key: k + "primary", label: "Primary: serves while it is healthy", type: "select", options: choices });
+        fields.push({ key: k + "fallback", label: "Fallback: takes over when the primary's check fails", type: "select", options: choices });
+      } else if (n.kind === "weighted") {
+        n.members.forEach((m, j) => { values[k + "w" + j] = String(m.weight); fields.push({ key: k + "w" + j, label: "Weight of " + m.name, type: "number", min: 0, max: 1000 }); });
+      } else if (n.kind === "mirroring") {
+        n.mirrors.forEach((m, j) => { values[k + "m" + j] = String(m.percent); fields.push({ key: k + "m" + j, label: "Share mirrored to " + m.name + " (%)", type: "number", min: 0, max: 100 }); });
+      }
+    });
+    const editsFrom = (v) => d.nodes.map((n, i) => {
+      const k = "n" + i + "_"; const e = { service: n.name, version: n.version };
+      if (n.kind === "loadBalancer") {
+        const servers = String(v[k + "servers"] || "").split("\n").map((x) => x.trim()).filter(Boolean);
+        if (servers.join("\n") !== n.servers.join("\n")) e.servers = servers;
+        const hc = n.health_check || {};
+        if (!v[k + "hc"]) { if (n.health_check) e.health_check = null; }
+        else {
+          const asked = {}; let changed = !n.health_check;
+          for (const f of ["path", "interval", "timeout", "hostname"]) { const x = String(v[k + f] || "").trim(); asked[f] = x; if (x !== (hc[f] || "")) changed = true; }
+          if (changed) e.health_check = asked;
+        }
+      } else if (n.kind === "failover") {
+        if (v[k + "primary"] !== n.primary.split("@")[0] || v[k + "fallback"] !== n.fallback.split("@")[0]) { e.primary = v[k + "primary"]; e.fallback = v[k + "fallback"]; }
+      } else if (n.kind === "weighted") {
+        const w = {}; n.members.forEach((m, j) => { if (Number(v[k + "w" + j]) !== Number(m.weight)) w[m.name] = Number(v[k + "w" + j]); });
+        if (Object.keys(w).length) e.weights = w;
+      } else if (n.kind === "mirroring") {
+        const p = {}; n.mirrors.forEach((m, j) => { if (Number(v[k + "m" + j]) !== Number(m.percent)) p[m.name] = Number(v[k + "m" + j]); });
+        if (Object.keys(p).length) e.mirrors = p;
+      }
+      return Object.keys(e).length > 2 ? e : null;
+    }).filter(Boolean);
+    const url = "/api/proxy-hosts/" + h.id + "/backends";
+    drawer({
+      title: "Change the backends of " + h.hostname, sub: "Live route: every change is shown before it is saved.", wide: true,
+      values, fields, saveLabel: "Review…",
+      note: "Saved through Traefik Manager's service form, which backs the file up and keeps its comments.",
+      async onSave(v) {
+        const edits = editsFrom(v);
+        if (!edits.length) throw new Error("Nothing changed.");
+        const pre = await api.post(url, { edits, preview: true }, { suppressToast: true });
+        const ok = await confirm({
+          title: "Change " + h.hostname + "?",
+          body: el("ul", {}, pre.changes.map((c) => el("li", {}, el("strong", {}, c.service + " " + c.what), ": ", showVal(c.before), " → ", showVal(c.after)))),
+          action: "Save to Traefik", danger: false,
+        });
+        if (!ok) throw new Error("Not saved.");
+        const r = await api.post(url, { edits }, { suppressToast: true });
+        toast(r.verified ? "Saved: Traefik runs the change" : "Saved in Traefik Manager; Traefik did not show it yet", r.verified ? "ok" : "error");
+        if (onDone) onDone();
+      },
+    });
+  }
+
+  window.Objects = { subList, subKind, bulk, slugify, serviceDrawer, serviceActions, deleteService, nodeDrawer, nodePower, deleteNode, proxyHostDrawer, deleteProxyHosts, catalogFor, describeEvent, eventRow, pointsTo, backendsDrawer, editBackends };
 })();
