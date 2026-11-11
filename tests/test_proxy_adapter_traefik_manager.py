@@ -119,7 +119,11 @@ async def test_list_routes_sends_api_key_header_and_parses_apps(
     assert seen["api_key"] == "secret-key"
     assert routes == [
         RouteInfo(
-            name="r1", route_id="r1", hostnames={"a.example.com"}, upstream="http://10.0.0.9:80"
+            name="r1",
+            route_id="r1",
+            hostnames={"a.example.com"},
+            upstream="http://10.0.0.9:80",
+            rule="Host(`a.example.com`)",
         )
     ]
 
@@ -160,7 +164,7 @@ async def test_list_routes_returns_none_on_401(monkeypatch: pytest.MonkeyPatch) 
 RAW_ROUTE_WITH_EXTRAS = """\
 http:
   routers:
-    media-router:
+    orchestrator-media-example-com:
       rule: Host(`media.example.com`)
       service: media-service
       entryPoints:
@@ -195,8 +199,8 @@ def _router_calls(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
                 json={
                     "apps": [
                         {
-                            "id": "media-router",
-                            "name": "media-router",
+                            "id": "orchestrator-media-example-com",
+                            "name": "orchestrator-media-example-com",
                             "protocol": "http",
                             "rule": "Host(`media.example.com`)",
                         }
@@ -205,7 +209,7 @@ def _router_calls(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
                     "services": {"http": [SHARED_BACKEND_SERVICE_REF], "tcp": [], "udp": []},
                 },
             )
-        if path == "/api/routes/media-router/raw":
+        if path == "/api/routes/orchestrator-media-example-com/raw":
             if request.method == "GET":
                 return httpx.Response(200, json={"raw": state["raw"], "configFile": "a.yml"})
             if request.method == "POST":
@@ -327,8 +331,8 @@ async def test_remove_maintenance_fallback_removes_injection_leaves_middleware_d
                 json={
                     "apps": [
                         {
-                            "id": "media-router",
-                            "name": "media-router",
+                            "id": "orchestrator-media-example-com",
+                            "name": "orchestrator-media-example-com",
                             "protocol": "http",
                             "rule": "Host(`media.example.com`)",
                         }
@@ -337,9 +341,9 @@ async def test_remove_maintenance_fallback_removes_injection_leaves_middleware_d
                     "services": {"http": [SHARED_BACKEND_SERVICE_REF], "tcp": [], "udp": []},
                 },
             )
-        if path == "/api/routes/media-router/raw" and request.method == "GET":
+        if path == "/api/routes/orchestrator-media-example-com/raw" and request.method == "GET":
             return httpx.Response(200, json={"raw": state["raw"]})
-        if path == "/api/routes/media-router/raw" and request.method == "POST":
+        if path == "/api/routes/orchestrator-media-example-com/raw" and request.method == "POST":
             state["raw"] = json.loads(request.read())["content"]
             return httpx.Response(200, json={"ok": True})
         return httpx.Response(404, json={"ok": False})
@@ -825,3 +829,42 @@ async def test_shared_backend_without_a_host_is_reported_not_posted(
             hostname="media.example.com", service_slug="media", raise_errors=True
         )
     assert posted == []
+
+
+async def test_a_hand_written_route_never_gets_the_maintenance_rule(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Traefik Manager's per-route save rewrites the whole file (the service moves, comments
+    end up on the wrong block), so only routes the orchestrator created are edited."""
+    saved: list[str] = []
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/routes":
+            return httpx.Response(
+                200,
+                json={
+                    "apps": [
+                        {
+                            "id": "media.yml::media",
+                            "name": "media",
+                            "protocol": "http",
+                            "rule": "Host(`media.example.com`)",
+                        }
+                    ],
+                    "middlewares": [],
+                    "services": {"http": [SHARED_BACKEND_SERVICE_REF], "tcp": [], "udp": []},
+                },
+            )
+        if request.method == "POST":
+            saved.append(request.url.path)
+        return httpx.Response(200, json={"ok": True})
+
+    _patch_transport(monkeypatch, handle)
+    adapter = TraefikManagerProxyAdapter(_settings())
+    events = await adapter.ensure_maintenance_fallback(
+        hostname="media.example.com", service_slug="media"
+    )
+    assert not any(e.action == "middleware.injected" for e in events)
+    assert not [p for p in saved if p.endswith("/raw")]
+    assert adapter.owns_route_ref("media.yml::orchestrator-media-example-com")
+    assert not adapter.owns_route_ref("media.yml::media")

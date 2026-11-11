@@ -375,6 +375,13 @@ def _routes_to_route_info(apps: Any, dangling: set[str] | None = None) -> list[R
                 # ONLY handle toggle/delete/edit understand; `name` is bare.
                 route_id=route_id if isinstance(route_id, str) and route_id else name,
                 config_file=config_file if isinstance(config_file, str) else "",
+                service=(
+                    app["service_name"]
+                    if isinstance(app.get("service_name"), str) and app["service_name"]
+                    else None
+                ),
+                rule=rule,
+                priority=app["priority"] if isinstance(app.get("priority"), int) else None,
                 hostnames=hostnames,
                 upstream=upstream or None,
                 entry_points=(
@@ -654,17 +661,95 @@ class TraefikManagerProxyAdapter(ProxyAdapter):
     # -- ProxyAdapter: read path --------------------------------------------
 
     async def list_routes(self) -> list[RouteInfo] | None:
+        """Every route, or ``None`` with :attr:`read_error` saying why. A config file that
+        does not parse counts as a failed read too: Traefik Manager leaves its routes out
+        (reporting it in ``configErrors``), and those routes are not gone, only unreadable."""
         if not self._settings.traefik_manager_url.strip():
+            self.read_error = None
             return None
         try:
             response = await self._get_routes()
         except TraefikManagerNotConfigured:
+            self.read_error = None
             return None
         except TraefikManagerError as exc:
             log.warning("traefik_manager.poll_failed", error=str(exc))
+            self.read_error = await self._explain_read_failure(exc)
             return None
+        errors = response.get("configErrors") if isinstance(response, dict) else None
+        bad = [e for e in errors if isinstance(e, dict)] if isinstance(errors, list) else []
+        if bad:
+            self.read_error = (
+                "a config file does not parse, so its routes are not listed: "
+                + "; ".join(f"{e.get('file', '?')}: {e.get('error', '?')}" for e in bad)
+            )
+            log.warning("traefik_manager.config_errors", errors=bad)
+            return None
+        self.read_error = None
         apps = response.get("apps") if isinstance(response, dict) else None
         return _routes_to_route_info(apps, _dangling_middlewares(response))
+
+    async def _explain_read_failure(self, exc: Exception) -> str:
+        """The read error, plus the files Traefik Manager cannot open when that is the cause
+        (one unreadable file fails ``/api/routes`` for every host)."""
+        text = str(exc)
+        if "returned 5" not in text:
+            return text
+        files = await self.unreadable_files()
+        if files:
+            names = ", ".join(f["file"] for f in files)
+            return (
+                f"Traefik Manager cannot read {names}, so it lists no route at all. Give the user "
+                f"Traefik Manager runs as read and write access to that file ({text})"
+            )
+        return text
+
+    async def list_runtime_services(self) -> list[dict[str, Any]] | None:
+        """``GET /api/traefik/services``: Traefik Manager passes Traefik's own runtime
+        services through (every page of them), so failover, weighted and mirroring trees,
+        health checks, transports and each server's UP/DOWN come from Traefik itself."""
+        if not self._settings.traefik_manager_url.strip():
+            return None
+        try:
+            async with self._client() as client:
+                payload = await self._get_json(client, "/api/traefik/services")
+        except TraefikManagerError as exc:
+            log.warning("traefik_manager.runtime_services_failed", error=str(exc))
+            return None
+        http = payload.get("http") if isinstance(payload, dict) else None
+        if not isinstance(http, list) or payload.get("reachable") is False:
+            return None
+        return [s for s in http if isinstance(s, dict)]
+
+    #: A router name no file has: asking for it inside one file makes Traefik Manager open
+    #: just that file - 404 when it can, an error when it cannot.
+    _PROBE_ROUTE = "__orchestrator_read_probe__"
+
+    async def unreadable_files(self) -> list[dict[str, str]] | None:
+        """Each config file Traefik Manager cannot open (``GET /api/configs``, then one
+        ``GET /api/routes/<file>::<probe>/raw`` per file). ``None`` when the list of files
+        cannot be read."""
+        try:
+            async with self._client() as client:
+                listed = await self._get_json(client, "/api/configs")
+                files = [
+                    f.get("label")
+                    for f in (listed.get("files") or [] if isinstance(listed, dict) else [])
+                    if isinstance(f, dict) and isinstance(f.get("label"), str)
+                ]
+                out: list[dict[str, str]] = []
+                for name in files:
+                    try:
+                        await self._get_json(
+                            client, f"/api/routes/{quote(name, safe='')}::{self._PROBE_ROUTE}/raw"
+                        )
+                    except TraefikManagerNotFound:
+                        continue  # it opened the file and found no such router: readable
+                    except TraefikManagerError as exc:
+                        out.append({"file": name, "error": str(exc)})
+                return out
+        except TraefikManagerError:
+            return None
 
     # -- ProxyAdapter: maintenance-fallback write path ----------------------
 
@@ -846,6 +931,10 @@ class TraefikManagerProxyAdapter(ProxyAdapter):
         return True
 
     async def _routes_matching_hostname(self, hostname: str) -> list[str]:
+        """The routes of ours (``orchestrator-*``) that serve ``hostname``. A hand-written
+        route is never edited: Traefik Manager's per-route save rewrites its file with the
+        service moved and comments left on the wrong block, so the maintenance page is only
+        put on routes the orchestrator created."""
         routes = await self._get_routes()
         apps = routes.get("apps") if isinstance(routes, dict) else None
         matched: list[str] = []
@@ -861,6 +950,7 @@ class TraefikManagerProxyAdapter(ProxyAdapter):
                 isinstance(rule, str)
                 and isinstance(route_id, str)
                 and target in extract_hostnames(rule)
+                and self.owns_route_ref(route_id)
             ):
                 matched.append(route_id)
         return matched
@@ -1180,8 +1270,9 @@ class TraefikManagerProxyAdapter(ProxyAdapter):
     def owns_route_ref(self, route_ref: str) -> bool:
         # Everything this adapter creates is prefixed (see
         # route_name_for_hostname); anything else was adopted from a
-        # hand-written setup and is never overwritten or deleted.
-        return route_ref.startswith("orchestrator-")
+        # hand-written setup and is never overwritten or deleted. With several
+        # config files the id is "<file>::<name>": the name decides.
+        return route_ref.rsplit("::", 1)[-1].startswith("orchestrator-")
 
     async def ensure_hsts_middleware(self) -> SyncEvent | None:
         """Create the HSTS headers middleware when Traefik does not have it yet, so a route

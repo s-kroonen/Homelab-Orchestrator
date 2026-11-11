@@ -1055,12 +1055,11 @@ def test_resync_via_traefik_manager_updates_matched_host(
     assert refreshed["upstream"] == "http://10.0.0.5:8080"
 
 
-def test_create_proxy_host_injects_maintenance_middleware_and_audits_it(
+def test_a_hand_written_route_never_gets_the_maintenance_middleware(
     service: Service, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The maintenance fallback is applied at PUSH time: a host with no
-    upstream of its own that a hand-written route already serves gets the
-    middleware injected (and audited) on Save/Push - not on create."""
+    """A host with no upstream of its own that a hand-written route serves: nothing is
+    written into that route, on create or on push."""
     from tests.push_helpers import push
 
     client = _tm_client(
@@ -1121,21 +1120,14 @@ def test_create_proxy_host_injects_maintenance_middleware_and_audits_it(
     )
     assert r.status_code == 201, r.text
     assert writes == []  # creating only touches the DB
-    assert r.json()["sync_state"] == "local" and r.json()["sync_pending"] is True
+    # A hand-written route (not ours) is left exactly as it is: Traefik Manager's per-route
+    # save would reorder its file and move its comments.
+    assert r.json()["sync_state"] == "local" and r.json()["sync_pending"] is False
 
-    result = push(client)
-    assert [(i["action"], i["ok"]) for i in result["results"]] == [("fallback", True)]
-
-    mw_name = maintenance_middleware_name(service.slug)
-    assert mw_name in state["raw"]
-    assert "existing-mw" in state["raw"]  # untouched
-
-    actions = _audit_actions_all()
-    assert "middleware.created" in actions
-    assert "middleware.injected" in actions
-
-    # Applied once: the next push has nothing to do.
     assert push(client)["results"] == []
+    mw_name = maintenance_middleware_name(service.slug)
+    assert mw_name not in state["raw"]
+    assert "middleware.injected" not in _audit_actions_all()
 
 
 def test_resync_via_traefik_manager_surfaces_503_when_unreachable(

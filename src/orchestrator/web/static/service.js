@@ -680,7 +680,7 @@
       box.append(el("div", { class: "event-row", style: { gridTemplateColumns: "minmax(0,auto) auto minmax(0,1fr) auto" } },
         el("button", { type: "button", class: "ghost", style: { padding: 0, height: "auto", font: "600 13.5px var(--mono)", color: "var(--link)" }, onclick: () => hostDrawer(h) }, h.hostname),
         syncPill(h),
-        el("span", { class: "faint mono", style: { fontSize: "12px", overflowWrap: "anywhere" } }, "→ " + (h.upstream || "nothing yet") + (opts ? " · " + opts : "")),
+        el("span", { class: "faint", style: { fontSize: "12px", overflowWrap: "anywhere" } }, "→ ", O.pointsTo(Object.assign({}, h, live)), opts ? " · " + opts : ""),
         menuButton(() => [
           { label: "Edit…", onClick: () => hostDrawer(h) },
           { label: "Open on its proxy", href: "/find/proxy-host?hostname=" + enc(h.hostname) },

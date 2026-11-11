@@ -112,6 +112,21 @@ async def _traefik_get(client: httpx.AsyncClient, url: str) -> Any | None:
         return None
 
 
+async def fetch_servers_transports(settings: Settings) -> dict[str, dict[str, Any]] | None:
+    """Traefik's runtime HTTP servers transports by name (``serverName``,
+    ``insecureSkipVerify``...). ``None`` when ``TRAEFIK_API_URL`` is unset or the read fails:
+    Traefik Manager does not pass these through, so without Traefik's own API a transport
+    is known by its name only."""
+    base_url = settings.traefik_api_url.strip()
+    if not base_url:
+        return None
+    async with _traefik_client(settings) as client:
+        rows = await _traefik_get(client, base_url.rstrip("/") + "/api/http/serversTransports")
+    if not isinstance(rows, list):
+        return None
+    return {str(r["name"]): dict(r) for r in rows if isinstance(r, dict) and r.get("name")}
+
+
 async def fetch_router_hostnames(settings: Settings) -> set[str] | None:
     """Return every hostname Traefik currently has an HTTP router for.
 

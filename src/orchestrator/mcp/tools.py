@@ -315,6 +315,7 @@ async def _proxy_hosts(ctx: ToolContext, a: dict[str, Any]) -> Any:
     keep = (
         "hostname",
         "upstream",
+        "service_model",
         "enabled",
         "router_provider",
         "service_slug",
@@ -971,7 +972,10 @@ TOOLS: dict[str, Tool] = {
             "List proxy hosts",
             "The reverse-proxy hosts: hostname, upstream, enabled, which service, and where each "
             "stands against Traefik Manager (sync_state: in_sync, pending_create = not pushed "
-            "yet, pending_update, detached, external, local) with what differs.",
+            "yet, pending_update, detached, external, local) with what differs. service_model "
+            "is what the live route really points at: its routers (by priority) and, for each, "
+            "the strategy (single, failover, weighted, mirroring, internal) with every backend "
+            "server, its role, health check, passHostHeader, transport and UP/DOWN.",
             "read",
             _proxy_hosts,
         ),

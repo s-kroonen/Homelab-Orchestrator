@@ -78,7 +78,7 @@
       // ?q= filters it (a link to one host lands here with its name)
       rows: [], key: (h) => h.id, name: (h) => h.hostname, noun: ["proxy host", "proxy hosts"], urlState: true,
       placeholder: "Filter by hostname or service", age,
-      search: (h) => [h.hostname, h.service_slug, h.service_name, h.upstream].join(" "),
+      search: (h) => [h.hostname, h.service_slug, h.service_name, h.upstream, h.service_model ? h.service_model.display : ""].join(" "),
       sort: { key: "hostname", dir: 1 },
       columns: [
         { key: "hostname", label: "Hostname", sort: (h) => h.hostname.split(".").reverse().join("."),
@@ -86,7 +86,7 @@
         { key: "service", label: "Service", sort: (h) => h.service_slug || "~",
           render: (h) => h.service_slug ? el("a", { href: "/services/" + enc(h.service_slug) }, h.service_slug)
             : [el("span", { class: "faint" }, "not linked"), " · ", el("button", { type: "button", class: "ghost small", style: { color: "var(--link)", padding: "0" }, onclick: () => linkHost(h) }, "Link…")] },
-        { key: "upstream", label: "Points to", sort: true, render: (h) => h.upstream ? el("span", { class: "mono" }, h.upstream) : el("span", { class: "faint" }, "nothing yet") },
+        { key: "upstream", label: "Points to", sort: true, render: (h) => window.Objects.pointsTo(h) },
         { key: "options", label: "Options", render: options },
         { key: "traefik", label: "Traefik", phone: false, sort: (h) => ["fail", "warn", "pending", "off", "ok"].indexOf(traefikState(h).cls),
           render: (h) => { const s = traefikState(h); return [el("span", { class: "pill " + s.cls, title: s.sub || null }, s.label), s.sub ? el("span", { class: "sub" }, s.sub) : null]; } },
@@ -103,6 +103,7 @@
       ],
       menu: (h) => [
         { label: "Edit…", onClick: () => edit(h) },
+        h.service_model && h.service_model.routers.length ? { label: "Backends…", onClick: () => window.Objects.backendsDrawer(h) } : null,
         h.sync_pending ? { label: "Push now", onClick: () => push(h, "Pushed") } : null,
         h.sync_state === "detached" ? { label: "Put back as configured here", onClick: () => push(h, "Put back") } : null,
         h.config_file_movable ? { label: "Move to " + h.config_file_resolved, onClick: async () => {

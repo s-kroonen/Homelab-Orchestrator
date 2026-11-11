@@ -201,6 +201,8 @@ def fallback_missing(
     for route in routes:
         if route.middlewares is None or not route.enabled or route.name.endswith("-redirect"):
             continue
+        if not proxy.owns_route_ref(route.ref):
+            continue  # a hand-written route is never edited, so it is never "missing" it
         eps = route.entry_points
         if eps and all(is_plain_http_entrypoint(e) for e in eps):
             continue  # a plain-HTTP (redirect) router never needs the page
@@ -353,27 +355,10 @@ def evaluate(
 ) -> HostSync:
     """Classify one host against what Traefik Manager listed (``None`` = it
     could not be read). Pure: no writes."""
-    fb_sig = fallback_signature(ph, service_slug)
     service_slug_for_fb = None if not proxy.maintenance_fallback_available() else service_slug
     if not is_live_managed(ph):
-        # No route of ours - but a hand-written one may serve the hostname and
-        # still deserves the maintenance page when the service is down.
-        if (
-            routes is not None
-            and service_slug_for_fb
-            and ph.router_provider is RouterProvider.TRAEFIK
-        ):
-            serving = _routes_for_host(routes, ph.hostname)
-            if serving and host_enabled(ph):
-                if fallback_missing(proxy, serving, service_slug_for_fb):
-                    return HostSync(LOCAL, [FALLBACK_MISSING], ["fallback"], host_routes=serving)
-                if ph.pushed_sig != fb_sig and not _fallback_known(proxy, serving):
-                    return HostSync(
-                        LOCAL,
-                        ["maintenance page fallback not applied yet"],
-                        ["fallback"],
-                        host_routes=serving,
-                    )
+        # No route of ours. A hand-written route serving the hostname is left exactly as it
+        # is - the maintenance page is only put on routes the orchestrator created.
         return HostSync(LOCAL)
     ref = ref_of(ph)
     want = desired_signature(ph, service_slug)
@@ -388,9 +373,10 @@ def evaluate(
             return HostSync(EXTERNAL)
         if ref and sig == want:
             return HostSync(IN_SYNC)
+        why = getattr(proxy, "read_error", None)
         return HostSync(
             PENDING_UPDATE,
-            ["not pushed yet (Traefik Manager could not be read to compare)"],
+            ["not compared: Traefik Manager could not be read" + (f" ({why})" if why else "")],
             ["update"],
         )
 
@@ -411,13 +397,7 @@ def evaluate(
         change = _enabled_change(ph, tm)
         changes = [change] if change else []
         actions = (["enable"] if host_enabled(ph) else ["disable"]) if change else []
-        if service_slug_for_fb and host_enabled(ph):
-            if fallback_missing(proxy, host_routes, service_slug_for_fb):
-                changes.append(FALLBACK_MISSING)
-                actions.append("fallback")
-            elif ph.pushed_sig != fb_sig and not _fallback_known(proxy, host_routes):
-                changes.append("maintenance page fallback not applied yet")
-                actions.append("fallback")
+        # Its content (the maintenance page included) is never edited: see LOCAL above.
         return HostSync(EXTERNAL, changes, actions, route=route, host_routes=host_routes, tm=tm)
 
     # --- ours, but not in Traefik Manager yet ---------------------------------
