@@ -179,6 +179,28 @@ def fallback_signature(ph: ProxyHost, service_slug: str | None) -> str:
 
 
 FALLBACK_MISSING = "maintenance page rule missing or broken on the live route"
+#: Our own route for a host is gone and a route we did not create serves the hostname now
+#: (a hand-written failover replaced it, say). Nothing is created next to it; adopting it
+#: (:func:`stale_ref_route`) makes the host ``external`` like any other adopted route.
+REPLACED_BY_HAND = "served by the route {name}, which this orchestrator did not create (its own route for this host is gone): adopt it to manage it here"
+
+
+def stale_ref_route(
+    proxy: ProxyAdapter, ph: ProxyHost, routes: Sequence[RouteInfo] | None
+) -> RouteInfo | None:
+    """The route that now serves ``ph`` when ``ph``'s own route (pushed before) is no longer
+    listed and a route we did not create serves its hostname; else ``None``."""
+    if routes is None or not is_live_managed(ph) or not ph.pushed_sig:
+        return None  # never created: a route in the way is a conflict the push reports
+    ref = ref_of(ph)
+    if not ref or not proxy.owns_route_ref(ref) or find_route(routes, ref, ph.hostname):
+        return None
+    theirs = [
+        r
+        for r in _routes_for_host(routes, ph.hostname)
+        if not proxy.owns_route_ref(r.ref) and not r.name.endswith("-redirect")
+    ]
+    return theirs[0] if theirs else None
 
 
 def _bare(name: str) -> str:
@@ -402,6 +424,15 @@ def evaluate(
 
     # --- ours, but not in Traefik Manager yet ---------------------------------
     if route is None:
+        replaced = stale_ref_route(proxy, ph, routes)
+        if replaced is not None:
+            return HostSync(
+                EXTERNAL,
+                [REPLACED_BY_HAND.format(name=replaced.name)],
+                [],
+                route=replaced,
+                host_routes=host_routes,
+            )
         gone = bool(sig)
         return HostSync(
             PENDING_CREATE,

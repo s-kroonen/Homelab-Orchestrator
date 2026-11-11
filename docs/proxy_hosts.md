@@ -1371,3 +1371,13 @@ Not through Traefik Manager's API, so not here: `passHostHeader`, the servers tr
 `serverName`), a router's rule or priority. Its per-route raw save rewrites the file with that
 route's service moved and comments shifted, which this orchestrator does not do to a hand-written
 file.
+
+## When a hand-written route replaced the orchestrator's own
+
+A host whose own route (`orchestrator-*`, pushed before) is gone from Traefik Manager while a
+route the orchestrator did not create serves its hostname - a hand-written failover that took
+its place, say - is not "re-created" next to it. It reads `external`, *served by the route <name>,
+which this orchestrator did not create*, with nothing to push. **Adopt the route that serves it**
+(the row's ⋯, `POST /api/proxy-hosts/{id}/adopt-route`) points the host at that route; *Resync
+from Traefik* does the same for every such host. Audited as `proxy_host.route_adopted`. A host
+that was never pushed and finds its hostname taken still gets the push's refusal instead.
