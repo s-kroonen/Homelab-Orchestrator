@@ -77,11 +77,13 @@ from orchestrator.registry.proxy_validation import (
     validate_cert_resolver,
     validate_proxy_host,
 )
+from orchestrator.registry.service_model import host_model, index_services
 from orchestrator.registry.traefik_probes import ProbeSyncEvent, sync_traefik_probe
 from orchestrator.registry.traefik_status import (
     drift_status,
     fetch_router_details,
     fetch_router_hostnames,
+    fetch_servers_transports,
 )
 from orchestrator.web.auth import CurrentAdmin, require_admin
 from orchestrator.web.deps import AdaptersDep, SessionDep, SettingsDep
@@ -106,6 +108,10 @@ class LiveState:
     runtime: list[RouteInfo] | None
     #: Traefik Manager's config files, when readable (for the "lives in" note).
     config_files: ConfigFiles | None = None
+    #: Traefik's runtime services by name (failover trees...), when readable.
+    services: dict[str, dict[str, Any]] | None = None
+    #: Traefik's servers transports by name (only with ``TRAEFIK_API_URL``).
+    transports: dict[str, dict[str, Any]] | None = None
 
 
 async def _live_state(settings: Any, adapters: AdapterBundle) -> LiveState:
@@ -122,7 +128,21 @@ async def _live_state(settings: Any, adapters: AdapterBundle) -> LiveState:
         hostnames = await fetch_router_hostnames(settings)
     runtime = await adapters.proxy.list_runtime_routers()
     config_files = await adapters.proxy.list_config_files() if routes is not None else None
-    return LiveState(hostnames=hostnames, routes=routes, runtime=runtime, config_files=config_files)
+    services = None
+    transports = None
+    if routes is not None:
+        raw = await adapters.proxy.list_runtime_services()
+        services = index_services(raw) if raw is not None else None
+        if services is not None:
+            transports = await fetch_servers_transports(settings)
+    return LiveState(
+        hostnames=hostnames,
+        routes=routes,
+        runtime=runtime,
+        config_files=config_files,
+        services=services,
+        transports=transports,
+    )
 
 
 async def _live_hostnames(settings: Any, adapters: AdapterBundle) -> set[str] | None:
@@ -335,6 +355,13 @@ def _serialize(
         "id": ph.id,
         "hostname": ph.hostname,
         "upstream": ph.upstream,
+        # What the live route really points at, a failover or weighted tree included
+        # (registry/service_model.py); None when the proxy could not be read.
+        "service_model": (
+            host_model(ph.hostname, live.routes, live.services, live.transports)
+            if live is not None
+            else None
+        ),
         "router_provider": ph.router_provider.value,
         "service_id": ph.service_id,
         "service_slug": svc.slug if svc else None,

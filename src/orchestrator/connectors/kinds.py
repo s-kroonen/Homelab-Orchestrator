@@ -1088,12 +1088,24 @@ class ProxyConnector(Connector):
         return kind == "proxy_host" and host in {h.hostname for h in _owned_proxy_hosts(ctx)}
 
     async def summary(self, ctx: SourceCtx) -> Summary:
-        async def has() -> str:
-            routes = await ctx.adapter.list_routes() or []
-            middlewares = await ctx.adapter.list_middlewares() or []
-            return f"{_count(len(routes), 'route')} · {_count(len(middlewares), 'middleware')}"
+        routes: list[Any] | None = None
 
-        return await _summarised(self, ctx, has)
+        async def has() -> str:
+            nonlocal routes
+            routes = await ctx.adapter.list_routes()
+            middlewares = await ctx.adapter.list_middlewares() or []
+            return (
+                f"{_count(len(routes or []), 'route')} · {_count(len(middlewares), 'middleware')}"
+            )
+
+        summary = await _summarised(self, ctx, has)
+        # It answered but could not list its routes (a file it cannot open or parse): that is
+        # a failure, not "0 routes" - every host's state is unknown until it is fixed.
+        why = getattr(ctx.adapter, "read_error", None) if ctx.adapter is not None else None
+        if summary.state != "fail" and routes is None and why:
+            summary.state, summary.label, summary.has = "fail", "cannot list routes", ""
+            summary.detail = why[:300]
+        return summary
 
 
 class TraefikApiConnector(Connector):

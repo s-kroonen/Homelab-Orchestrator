@@ -170,8 +170,8 @@ in `services.yaml`) and survives Reset/boot reconcile by hostname.
 | `pending_create` | live-managed, Traefik Manager has no route (never pushed, or removed there) | creates it |
 | `pending_update` | edited here since the last push (fingerprint differs); for a host never pushed from here: readable fields differ from Traefik Manager | updates it |
 | `detached` | **our fingerprint is unchanged but Traefik Manager's live state differs** - someone changed it there | puts our state back |
-| `external` | the hostname's route is not ours (adopted by Resync, hand-written, or no route reference) | only its on/off state (and the maintenance fallback); **content is never overwritten or deleted** |
-| `local` | not live-managed | nothing (unless a hand-written route serves the hostname and the maintenance fallback is not applied yet) |
+| `external` | the hostname's route is not ours (adopted by Resync, hand-written, or no route reference) | only its on/off state; **content is never overwritten or deleted**, the maintenance page included |
+| `local` | not live-managed | nothing |
 
 **Exactly what "detached" compares** (only what can be read back from
 `GET /api/routes`): the enabled/disabled state (the `-redirect` companion
@@ -1142,10 +1142,14 @@ Traefik Manager side no longer runs on an edit: it runs **at push time**
 (`registry/proxy_push.py`), per host, whenever a push created/updated/enabled
 its route (a route rewrite drops the middleware, so it is re-applied). A
 service re-link is part of the host's fingerprint, so it is a pending update.
-For a host with no route of its own that a hand-written route serves, the
-fallback is the only thing pushed (`local` state with a "maintenance page
-fallback not applied yet" note). A deleted host's middleware name is removed
-when its pending deletion is pushed. The meaning of each case:
+The middleware only goes on routes the orchestrator created (`orchestrator-*`).
+A hand-written or adopted route is never edited, not even for this: Traefik
+Manager's per-route save (`POST /api/routes/{id}/raw`) pops the router and its
+service and adds them back, so it rewrites the file with that service moved to
+the end and a comment above it left on the next block. Such a host has no
+maintenance page until its route is the orchestrator's. A deleted host's
+middleware name is removed when its pending deletion is pushed. The meaning of
+each case:
 
 * **Create** a linked `ProxyHost` → ensure the shared backend service +
   this service's middleware exist, inject the middleware name into every
@@ -1184,8 +1188,8 @@ The sync state does not just trust "the push ran". Traefik Manager lists each
 route's middlewares (`GET /api/routes`), and a host whose live, enabled, HTTPS
 route lacks `maintenance-<service>` is marked **desynced** with the change
 *"maintenance page rule missing or broken on the live route"* - for routes this
-orchestrator created (`detached`), for adopted ones (`external`) and for
-hand-written routes serving a host. A plain-HTTP redirect router, a disabled
+orchestrator created (`detached`); hand-written and adopted ones are left
+alone, see above. A plain-HTTP redirect router, a disabled
 route, a host that is disabled here, or a Traefik Manager that does not report
 middlewares never counts.
 
@@ -1294,3 +1298,34 @@ every linked host's middleware exists on the new instance.
   working exactly as before however a visitor arrives at it (a hand-wired
   Traefik `errors` middleware, a reverse proxy elsewhere, or a direct hit).
   This feature only automates wiring Traefik up to send visitors there.
+
+## What a route really points at (failover, weighted, mirroring)
+
+A host's `upstream` is one URL, but a hand-written route can send to a **failover**
+(primary, then fallback), a **weighted** split or a **mirroring** service, nested as deep as
+it likes. Each host row (`GET /api/proxy-hosts`, the MCP `list_proxy_hosts`) carries
+`service_model`: every router serving the hostname, highest priority first (a write router
+by path and a read router, say), and for each one the strategy and every backend server with
+its role (`primary`, `fallback`, `member`, `mirror`; nested ones joined, `primary > fallback`),
+health check (`path`, `interval`, `timeout`, `hostname`), whether the Host header is passed,
+the servers transport, and Traefik's own `UP` / `DOWN` for it. `display` is one line for
+the whole host (`failover: <primary> -> <fallback>`), `short` the catch-all router's line for
+lists. A Traefik internal service (`prometheus@internal`) is `internal`.
+
+It is read from Traefik's running configuration, which Traefik Manager passes through
+(`GET /api/traefik/services`), and resolved recursively with loops reported
+(`registry/service_model.py`). A transport's `serverName` and `insecureSkipVerify` need
+Traefik's own API (`TRAEFIK_API_URL`): Traefik Manager does not pass transports through, so
+without it a transport shows by name. On the proxy's page a composite host reads
+`failover: ...` in *Points to*, and *Backends…* lists every server.
+
+## When Traefik Manager cannot list its routes
+
+`GET /api/routes` fails for **every** host when Traefik Manager cannot open one dynamic
+config file (a file its user may not read answers 500), and leaves a file's routes out when
+the file does not parse (named in `configErrors`). Either way nothing is concluded: no host
+is "removed" or "pending create"; each one reads *not compared: Traefik Manager could not be
+read*, with the reason. When the list fails, each config file is opened on its own through
+the API (`GET /api/routes/<file>::<probe>/raw`: 404 when it can be read, an error when it
+cannot), so the reason names the file. The proxy's source status turns red (*cannot list
+routes*), and the infra status has a `proxy` row with `unreadable_files`.

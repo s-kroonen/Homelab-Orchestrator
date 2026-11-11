@@ -41,9 +41,10 @@ def _adapter() -> TraefikManagerProxyAdapter:
     return TraefikManagerProxyAdapter(_settings())
 
 
-def _apps(
-    *, middlewares: list[str] | None, eps: list[str] | None = None, name: str = "cloud"
-) -> Any:
+OURS = "orchestrator-cloud-example-com"  # a route the adapter created
+
+
+def _apps(*, middlewares: list[str] | None, eps: list[str] | None = None, name: str = OURS) -> Any:
     app: dict[str, Any] = {
         "id": f"{name}.yml::{name}",
         "name": name,
@@ -77,6 +78,8 @@ def test_missing_rule_is_detected_only_when_it_can_be_known() -> None:
     # A plain-HTTP (redirect) router never needs the page.
     assert fallback_missing(proxy, _apps(middlewares=[], eps=["web"]), SLUG) is False
     assert fallback_missing(proxy, _apps(middlewares=[]), None) is False
+    # A hand-written route is never edited, so it never "misses" the rule.
+    assert fallback_missing(proxy, _apps(middlewares=[], name="cloud"), SLUG) is False
 
 
 def _host(ref: str | None = None, **kw: Any) -> ProxyHost:
@@ -91,22 +94,20 @@ def _host(ref: str | None = None, **kw: Any) -> ProxyHost:
     )
 
 
-def test_a_hand_written_route_without_the_rule_is_flagged() -> None:
+def test_a_hand_written_route_is_left_alone() -> None:
+    """Traefik Manager's per-route save would reorder its file and move its comments,
+    so a route the orchestrator did not create never gets the rule put on it."""
     ph = _host()  # adopted: no route reference of ours
-    # The recorded fingerprint says the fallback was applied - the live route says no.
     from orchestrator.registry.proxy_push import fallback_signature
 
     ph.pushed_sig = fallback_signature(ph, SLUG)
-    state = evaluate(_adapter(), ph, _apps(middlewares=["cloud-hsts"]), SLUG)
+    state = evaluate(_adapter(), ph, _apps(middlewares=["cloud-hsts"], name="cloud"), SLUG)
     assert state.state == EXTERNAL
-    assert FALLBACK_MISSING in state.changes and "fallback" in state.actions
-
-    ok = evaluate(_adapter(), ph, _apps(middlewares=["cloud-hsts", MW]), SLUG)
-    assert FALLBACK_MISSING not in ok.changes and "fallback" not in ok.actions
+    assert FALLBACK_MISSING not in state.changes and "fallback" not in state.actions
 
 
 def test_an_owned_route_that_looks_in_sync_but_lacks_the_rule_is_detached() -> None:
-    ref = "orchestrator-cloud-example-com"  # a route this adapter created
+    ref = OURS
     ph = _host(ref)
     ph.pushed_sig = desired_signature(ph, SLUG)
 
@@ -256,8 +257,8 @@ def test_attached_but_dangling_rule_counts_as_missing() -> None:
     (route,) = _routes_to_route_info(
         [
             {
-                "id": "cloud.yml::cloud",
-                "name": "cloud",
+                "id": f"cloud.yml::{OURS}",
+                "name": OURS,
                 "protocol": "http",
                 "rule": "Host(`cloud.example.com`)",
                 "servers": ["http://10.0.0.11:80"],

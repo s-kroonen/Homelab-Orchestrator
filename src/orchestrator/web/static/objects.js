@@ -426,5 +426,41 @@
       x.stack ? el("a", { href: x.stack.href, class: "sub-stack" }, "Manage stack →") : el("span"))));
   }
 
-  window.Objects = { subList, subKind, bulk, slugify, serviceDrawer, serviceActions, deleteService, nodeDrawer, nodePower, deleteNode, proxyHostDrawer, deleteProxyHosts, catalogFor, describeEvent, eventRow };
+  // --- what a proxy host's live route points at (service_model of /api/proxy-hosts) ------------
+  // One backend reads as its URL; a failover, weighted or mirroring tree as one line with a tag,
+  // and "Backends…" opens every server with its role, check, Host header, transport and state.
+  const STRATEGY = { failover: "failover", weighted: "weighted", mirroring: "mirroring", internal: "Traefik internal", mixed: "several routers" };
+  function composite(h) { const m = h && h.service_model; return m && m.strategy !== "single" && m.strategy !== "unknown" ? m : null; }
+  function pointsTo(h, onOpen) {
+    const m = composite(h);
+    if (!m) return h.upstream ? el("span", { class: "mono" }, h.upstream) : el("span", { class: "faint" }, "nothing yet");
+    return [el("span", { class: "tag", title: "What the live route points at" }, STRATEGY[m.strategy] || m.strategy), " ",
+      el("button", { type: "button", class: "ghost small mono", style: { padding: 0, height: "auto", color: "var(--link)", textAlign: "left", whiteSpace: "normal" }, onclick: () => (onOpen || backendsDrawer)(h), title: m.display }, m.short || m.display),
+      m.other_routers ? el("span", { class: "sub" }, "+ " + m.other_routers + " more router" + (m.other_routers === 1 ? "" : "s") + " (by path)") : null];
+  }
+  function backendsDrawer(h) {
+    const m = h.service_model;
+    const hc = (c) => !c ? el("span", { class: "faint" }, "none") : [c.path || "/", c.interval ? " every " + c.interval : "", c.timeout ? " (timeout " + c.timeout + ")" : "", c.hostname ? el("div", { class: "faint" }, "as " + c.hostname) : null];
+    const tr = (t) => !t ? el("span", { class: "faint" }, "default") : [el("span", { class: "mono" }, t.name.split("@")[0]), t.server_name ? el("div", { class: "faint" }, "serverName " + t.server_name) : null, t.insecure_skip_verify ? el("div", { class: "faint" }, "certificate not checked") : null];
+    const body = el("div", {},
+      (m.problems || []).length ? el("div", { class: "banner warn", style: { marginBottom: "12px" } }, m.problems.join(" · ")) : null,
+      m.routers.map((r) => el("section", { class: "card", style: { marginBottom: "12px" } },
+        el("div", { class: "card-head" }, el("h2", { class: "mono", style: { fontSize: "14px" } }, r.router),
+          el("span", { class: "tag" }, STRATEGY[r.strategy] || r.strategy), r.priority != null ? el("span", { class: "faint" }, "priority " + r.priority) : null, r.redirect ? el("span", { class: "faint" }, "redirect to HTTPS") : null),
+        el("div", { class: "faint mono", style: { fontSize: "12px", margin: "0 0 8px", overflowWrap: "anywhere" } }, r.rule),
+        r.upstreams.length ? el("div", { class: "table-scroll" }, el("table", {},
+          el("thead", {}, el("tr", {}, ["Role", "Server", "State", "Health check", "Host header", "Transport"].map((x) => el("th", {}, x)))),
+          el("tbody", {}, r.upstreams.map((u) => el("tr", {},
+            el("td", {}, u.role, u.weight != null ? el("div", { class: "faint" }, "weight " + u.weight) : null, u.percent != null ? el("div", { class: "faint" }, u.percent + "% mirrored") : null),
+            el("td", { class: "mono", style: { overflowWrap: "anywhere" } }, u.url, el("div", { class: "faint" }, u.via.map((x) => x.split("@")[0]).join(" > "))),
+            el("td", {}, u.status ? el("span", { class: "pill " + (u.status === "UP" ? "ok" : "fail") }, u.status.toLowerCase()) : el("span", { class: "faint" }, "—")),
+            el("td", {}, hc(u.health_check)),
+            el("td", {}, u.pass_host_header === false ? "not passed" : u.pass_host_header ? "passed" : "—"),
+            el("td", {}, tr(u.servers_transport)))))))
+          : el("p", { class: "faint", style: { margin: 0 } }, r.display))),
+      el("p", { class: "faint", style: { fontSize: "12px" } }, "Read from Traefik's running configuration. A transport's serverName shows when Traefik's own API (TRAEFIK_API_URL) is set."));
+    drawer({ title: "Backends of " + h.hostname, sub: m.display, wide: true, intro: body, fields: [], saveLabel: "Close", note: "", onSave: () => {} });
+  }
+
+  window.Objects = { subList, subKind, bulk, slugify, serviceDrawer, serviceActions, deleteService, nodeDrawer, nodePower, deleteNode, proxyHostDrawer, deleteProxyHosts, catalogFor, describeEvent, eventRow, pointsTo, backendsDrawer };
 })();

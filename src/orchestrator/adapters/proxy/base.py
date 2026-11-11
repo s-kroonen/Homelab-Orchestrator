@@ -72,6 +72,12 @@ class RouteInfo:
     #: The config file the route lives in (Traefik Manager's ``configFile``;
     #: empty with a single config file). Needed to edit/delete precisely.
     config_file: str = ""
+    #: The service the router sends to, as the router names it (``None``: not reported).
+    service: str | None = None
+    #: The router's rule and priority, when reported (several routers can serve one
+    #: hostname, split by path; the higher priority is tried first).
+    rule: str = ""
+    priority: int | None = None
 
     @property
     def ref(self) -> str:
@@ -285,6 +291,21 @@ class ProxyAdapter(ABC):
     #: companion route this backend lists (Traefik Manager: ``<name>-redirect``),
     #: so its absence is a detectable difference.
     HAS_REDIRECT_COMPANION: bool = False
+    #: Why the last :meth:`list_routes` returned ``None`` (``None`` when it answered): what
+    #: failed, naming the config file when the backend can tell which one. A read failure is
+    #: "unknown", never "the route is gone", and this is what says so.
+    read_error: str | None = None
+
+    async def list_runtime_services(self) -> list[dict[str, Any]] | None:
+        """Traefik's runtime HTTP services (``/api/http/services``): each with its
+        ``loadBalancer`` / ``failover`` / ``weighted`` / ``mirroring`` block and
+        ``serverStatus``. ``None`` when this backend cannot say. Default: it cannot."""
+        return None
+
+    async def unreadable_files(self) -> list[dict[str, str]] | None:
+        """Config files the backend cannot read (``[{"file", "error"}]``); ``None`` when it
+        cannot tell. Default: it cannot."""
+        return None
 
     async def start(self) -> None:  # noqa: B027 - deliberate default no-op, see docstring
         """Open any persistent resource this backend needs. Idempotent.

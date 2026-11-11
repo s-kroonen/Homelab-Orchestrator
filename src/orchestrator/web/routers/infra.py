@@ -241,8 +241,43 @@ async def infra_status(
             *await node_checks(session, adapters),
             *await power_checks(session, adapters),
             *await portainer_checks(adapters),
+            *await proxy_checks(adapters),
         ],
     }
+
+
+async def proxy_checks(adapters: Any) -> list[dict[str, Any]]:
+    """One row per proxy: can it list its routes? When it cannot, why - naming the config
+    file it cannot open or parse (one such file makes Traefik Manager list nothing)."""
+    rows: list[dict[str, Any]] = []
+    ids = adapters.proxy_ids() if hasattr(adapters, "proxy_ids") else []
+    for ident in ids or [""]:
+        proxy = adapters.with_proxy(ident).proxy if ident else adapters.proxy
+        if not getattr(proxy, "IMPLEMENTED", True) or not _proxy_configured(proxy):
+            continue
+        target = f"proxy:{ident}" if ident else "proxy"
+        routes = await proxy.list_routes()
+        if routes is not None:
+            rows.append(
+                {"target": target, "reachable": True, "ok": True, "result": {"routes": len(routes)}}
+            )
+            continue
+        files = await proxy.unreadable_files()
+        rows.append(
+            {
+                "target": target,
+                "reachable": files is not None,
+                "error": getattr(proxy, "read_error", None) or "could not list its routes",
+                "kind": "unreadable" if files else "unreachable",
+                **({"unreadable_files": files} if files else {}),
+            }
+        )
+    return rows
+
+
+def _proxy_configured(proxy: Any) -> bool:
+    settings = getattr(proxy, "_settings", None)
+    return settings is None or bool(getattr(settings, "traefik_manager_url", "x").strip())
 
 
 class NodePowerIn(BaseModel):
