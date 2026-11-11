@@ -48,8 +48,9 @@ from orchestrator.adapters.proxy.verify import (
 )
 from orchestrator.audit import log as audit
 from orchestrator.db.models import ProxyHost, Service
-from orchestrator.domain.enums import RouterProvider
+from orchestrator.domain.enums import AuditResult, RouterProvider
 from orchestrator.logging_setup import get_logger
+from orchestrator.registry import backend_edit
 from orchestrator.registry.archive import archive_proxy_host
 from orchestrator.registry.config_files import normalize_config_file, unknown_file_problem
 from orchestrator.registry.host_cascade import host_served
@@ -1283,6 +1284,100 @@ async def set_enabled(
     return await set_proxy_host_enabled(
         session, admin, settings, adapters.with_proxy(ph.source_id), ph, body.enabled
     )
+
+
+# --- several backends: failover, weighted, mirroring (registry/backend_edit.py) ----------------
+
+
+async def _backend_state(adapters: AdapterBundle, ph: ProxyHost) -> tuple[Any, Any]:
+    proxy = adapters.with_proxy(ph.source_id).proxy
+    routes = await proxy.list_routes()
+    runtime = await proxy.list_runtime_services() if routes is not None else None
+    return routes, runtime
+
+
+@router.get("/{proxy_host_id}/backends")
+async def get_backends(
+    proxy_host_id: int, session: SessionDep, adapters: AdaptersDep
+) -> dict[str, Any]:
+    """What of this host's backends can be edited (a failover, weighted or mirroring host
+    only), each service with the ``version`` an edit must name."""
+    ph = _get_or_404(session, proxy_host_id)
+    routes, runtime = await _backend_state(adapters, ph)
+    return backend_edit.editable(ph.hostname, routes, runtime).as_dict()
+
+
+class BackendsIn(BaseModel):
+    #: ``[{"service", "version", "servers" | "health_check" | "primary"/"fallback" |
+    #: "weights" | "mirrors"}]`` - see ``registry/backend_edit.py``.
+    edits: list[dict[str, Any]]
+    #: Only say what would change (nothing is sent).
+    preview: bool = False
+
+
+@router.post("/{proxy_host_id}/backends")
+async def edit_backends(
+    proxy_host_id: int,
+    body: BackendsIn,
+    session: SessionDep,
+    admin: CurrentAdmin,
+    adapters: AdaptersDep,
+) -> dict[str, Any]:
+    """Change this host's backends through Traefik Manager's own service form, then read
+    Traefik back until the change shows. ``409`` with the reason when an edit cannot be
+    made (or a service changed since it was read); nothing is sent then."""
+    ph = _get_or_404(session, proxy_host_id)
+    return await apply_backend_edits(
+        session, admin.username, adapters, ph, body.edits, body.preview
+    )
+
+
+async def apply_backend_edits(
+    session: Session,
+    actor: str,
+    adapters: AdapterBundle,
+    ph: ProxyHost,
+    edits: list[dict[str, Any]],
+    preview: bool = False,
+) -> dict[str, Any]:
+    """``POST /api/proxy-hosts/{id}/backends``, callable (the MCP tool uses it)."""
+    proxy = adapters.with_proxy(ph.source_id).proxy
+    routes, runtime = await _backend_state(adapters, ph)
+    found = backend_edit.editable(ph.hostname, routes, runtime)
+    try:
+        the_plan = backend_edit.plan(found, edits, runtime)
+    except backend_edit.EditError as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
+    if preview:
+        return {"hostname": ph.hostname, "changes": the_plan.changes, "applied": False}
+    results = await backend_edit.apply(proxy, the_plan)
+    ok = all(r["ok"] for r in results) and len(results) == len(the_plan.calls)
+    verified = ok and await backend_edit.verify(
+        proxy.list_runtime_services, ph.hostname, routes or [], the_plan
+    )
+    audit.record(
+        session,
+        actor=actor,
+        action="proxy_host.backends_edited",
+        target=f"proxy_host:{ph.hostname}",
+        result=AuditResult.OK if ok else AuditResult.ERROR,
+        details={"changes": the_plan.changes, "results": results, "verified": verified},
+    )
+    session.commit()
+    if not ok:
+        failed = next(r for r in results if not r["ok"])
+        raise HTTPException(
+            status.HTTP_502_BAD_GATEWAY,
+            f"Traefik Manager refused the change to {failed['service']}: {failed['message']}"
+            + ("" if len(results) == 1 else " (the changes before it were saved)"),
+        )
+    return {
+        "hostname": ph.hostname,
+        "changes": the_plan.changes,
+        "results": results,
+        "applied": True,
+        "verified": verified,
+    }
 
 
 catalog_router = APIRouter(

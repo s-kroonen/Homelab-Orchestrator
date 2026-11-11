@@ -721,6 +721,29 @@ class TraefikManagerProxyAdapter(ProxyAdapter):
             return None
         return [s for s in http if isinstance(s, dict)]
 
+    async def save_service(self, payload: dict[str, Any]) -> None:
+        """``POST /api/services``: Traefik Manager's own service form. It edits the service
+        where it is - the keys it is sent replace theirs (``servers``, ``healthCheck`` when
+        sent, ``service``/``fallback``, ``services``, ``mirrors``), every other key and the
+        rest of the file are kept, comments included - and backs the file up first. Raises
+        :class:`TraefikManagerUnavailable` with Traefik Manager's own reason on a refusal."""
+        async with self._client() as client:
+            await self._post_json(
+                client, "/api/services", json=payload, headers={"X-Requested-With": "fetch"}
+            )
+
+    async def adopt_service(self, name: str) -> None:
+        """``POST /api/services/<name>/ownership`` with ``adopt``: Traefik Manager edits a
+        composite (failover, weighted, mirroring) service only once it is marked as managed.
+        This records that in its settings; the config file is not touched."""
+        async with self._client() as client:
+            await self._post_json(
+                client,
+                f"/api/services/{quote(name, safe='')}/ownership",
+                json={"adopt": True},
+                headers={"X-Requested-With": "fetch"},
+            )
+
     #: A router name no file has: asking for it inside one file makes Traefik Manager open
     #: just that file - 404 when it can, an error when it cannot.
     _PROBE_ROUTE = "__orchestrator_read_probe__"
