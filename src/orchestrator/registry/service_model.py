@@ -242,6 +242,13 @@ def _walk(
     return _bare(full)
 
 
+def effective_priority(route: Any) -> int:
+    """The priority Traefik gives a router: its own, else the length of its rule (so a
+    ``Host() && PathPrefix()`` router is tried before the plain ``Host()`` one)."""
+    own = getattr(route, "priority", None)
+    return own if isinstance(own, int) and own > 0 else len(getattr(route, "rule", "") or "")
+
+
 def host_model(
     hostname: str,
     routes: Sequence[Any] | None,
@@ -261,7 +268,8 @@ def host_model(
     ]
     if not mine:
         return None
-    mine.sort(key=lambda r: (-(getattr(r, "priority", None) or 0), r.name))
+    # redirect routers (plain HTTP, another entry point) last: they do not compete
+    mine.sort(key=lambda r: (r.name.endswith("-redirect"), -effective_priority(r), r.name))
     routers = []
     for r in mine:
         model = resolve(str(r.service), services, transports)

@@ -192,3 +192,21 @@ def test_a_list_gets_the_catch_all_router_and_a_count() -> None:
     host = host_model("app.example.lan", routes, _services())
     assert host is not None
     assert host["short"] == f"failover: {PRIMARY} -> {STANDBY}" and host["other_routers"] == 1
+
+
+def test_without_priorities_the_longest_rule_comes_first_and_the_catch_all_is_short() -> None:
+    """Traefik's own default: a router without a priority gets its rule's length."""
+    routes = [
+        _route("app", "app-standby", "Host(`app.example.lan`)", None),
+        _route("app-api", "app-primary", "Host(`app.example.lan`) && PathPrefix(`/api`)", None),
+        _route(
+            "app-socketio",
+            "app-primary",
+            "Host(`app.example.lan`) && PathPrefix(`/socket.io`)",
+            None,
+        ),
+    ]
+    host = host_model("app.example.lan", routes, _services())
+    assert host is not None
+    assert [r["router"] for r in host["routers"]] == ["app-socketio", "app-api", "app"]
+    assert host["short"] == STANDBY and host["other_routers"] == 2
