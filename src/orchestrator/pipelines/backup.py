@@ -54,6 +54,7 @@ from orchestrator.health.engine import HealthEngine
 from orchestrator.logging_setup import get_logger, new_correlation_id
 from orchestrator.notify.hooks import announce
 from orchestrator.pipelines.backup_wake import BackupWaker, WakeContext
+from orchestrator.pipelines.interrupted import fail_unexpected
 from orchestrator.pipelines.steps import (
     BackupError,
     BackupSkipped,
@@ -285,6 +286,11 @@ class BackupPipeline:
                 attempts=attempts,
                 will_retry=will_retry,
             )
+            raise
+        except BaseException as exc:
+            # Anything else (a bug, a database error, a cancelled task) must still
+            # close the run, or it reads as "backup running" for good.
+            fail_unexpected(session, run, exc, actor=actor, action="backup.failed")
             raise
         finally:
             # Whatever happened — including an exception this method does not

@@ -246,6 +246,15 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     from orchestrator.connectors.ownership import claim_now
 
     claim_now()  # nodes and proxy hosts from before sources had owners (OR-77)
+    # Runs the previous process left RUNNING would lock their service for good
+    # (a stuck wake fails every backup that needs it). Before the scheduler starts.
+    try:
+        from orchestrator.pipelines.interrupted import close_interrupted_runs
+
+        with session_scope() as session:
+            close_interrupted_runs(session)
+    except Exception as exc:
+        log.error("pipeline.interrupted_runs.failed", error=str(exc))
     _announce_setup_link(settings, log)
 
     # Startup failures past this point must never be silent. uvicorn runs with

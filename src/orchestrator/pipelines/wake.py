@@ -46,6 +46,7 @@ from orchestrator.domain.enums import (
 from orchestrator.health.engine import HealthEngine
 from orchestrator.logging_setup import get_logger, new_correlation_id
 from orchestrator.notify.hooks import announce
+from orchestrator.pipelines.interrupted import fail_unexpected
 from orchestrator.pipelines.steps import Recorder, StepRecorder
 from orchestrator.registry.tree import effective_guest, is_served
 
@@ -233,22 +234,62 @@ class WakePipeline:
                 .order_by(desc(PipelineRun.started_at))
                 .limit(1)
             ).one_or_none()
-            if latest is not None:
-                if latest.status is PipelineStatus.RUNNING:
+            if latest is not None and latest.status is PipelineStatus.RUNNING:
+                if not self._abandoned(session, latest):
                     return latest, False
-                if latest.finished_at is not None:
-                    # finished_at is written as UTC (see _finish), but SQLite
-                    # drops tzinfo on round-trip while an in-memory object
-                    # (not yet re-fetched from the DB) still carries it.
-                    # Normalize both sides to naive UTC before subtracting.
-                    now = datetime.now(UTC).replace(tzinfo=None)
-                    finished_at = latest.finished_at
-                    if finished_at.tzinfo is not None:
-                        finished_at = finished_at.astimezone(UTC).replace(tzinfo=None)
-                    age_s = (now - finished_at).total_seconds()
-                    if age_s < self._settings.wake_retry_cooldown_s:
-                        return latest, False
+                # Closed just now as abandoned: no cooldown, start a fresh one below.
+            elif latest is not None and latest.finished_at is not None:
+                # finished_at is written as UTC (see _finish), but SQLite
+                # drops tzinfo on round-trip while an in-memory object
+                # (not yet re-fetched from the DB) still carries it.
+                # Normalize both sides to naive UTC before subtracting.
+                now = datetime.now(UTC).replace(tzinfo=None)
+                finished_at = latest.finished_at
+                if finished_at.tzinfo is not None:
+                    finished_at = finished_at.astimezone(UTC).replace(tzinfo=None)
+                age_s = (now - finished_at).total_seconds()
+                if age_s < self._settings.wake_retry_cooldown_s:
+                    return latest, False
         return self.start(session, slug, actor=actor), True
+
+    def stale_after_s(self) -> int:
+        """No wake can still be working this long after it started: the whole wake is
+        bounded by ``wake_timeout_s``, and the one step that may run past it (the
+        Proxmox start task) by ``wake_guest_start_timeout_s``. Doubled for slack."""
+        s = self._settings
+        return 2 * (s.wake_timeout_s + s.wake_guest_start_timeout_s)
+
+    def _abandoned(self, session: Session, run: PipelineRun) -> bool:
+        """Close a wake still marked RUNNING long after any wake could finish, and say
+        so. Such a row is left by a process that died, or by a hang; joining it would
+        make every later wake and backup of that service fail without trying."""
+        started = run.started_at
+        if started.tzinfo is not None:
+            started = started.astimezone(UTC).replace(tzinfo=None)
+        age_s = (datetime.now(UTC).replace(tzinfo=None) - started).total_seconds()
+        limit = self.stale_after_s()
+        if age_s < limit:
+            return False
+        error = (
+            f"abandoned: still marked running {int(age_s)}s after it started, longer than "
+            f"any wake can take ({limit}s). Closed so a new wake can start."
+        )
+        StepRecorder(session, run).record(
+            "abandoned", "failed", detail={"age_s": int(age_s), "limit_s": limit}
+        )
+        self._finish(session, run, PipelineStatus.FAILED, error=error)
+        audit.record(
+            session,
+            actor="system",
+            action="wake.abandoned",
+            target=f"run:{run.id}",
+            result=AuditResult.ERROR,
+            correlation_id=run.correlation_id,
+            details={"run_id": run.id, "error": error},
+        )
+        session.commit()
+        log.warning("wake.abandoned", run_id=run.id, age_s=int(age_s), limit_s=limit)
+        return True
 
     def start(self, session: Session, slug: str, *, actor: str = "system") -> PipelineRun:
         """Resolve + validate the request and create the RUNNING run row.
@@ -532,6 +573,11 @@ class WakePipeline:
                 body=str(exc)[:1500],
                 scope={"slug": slug, "group": service.group},
             )
+            raise
+        except BaseException as exc:
+            # Anything else (a bug, a database error, a cancelled task) must still
+            # close the run: a RUNNING wake is joined by every later wake and backup.
+            fail_unexpected(session, run, exc, actor=actor, action="wake.failed")
             raise
         finally:
             if hold_handle is not None:
