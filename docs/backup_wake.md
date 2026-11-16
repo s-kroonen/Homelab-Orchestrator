@@ -94,6 +94,12 @@ For each plan entry, in order:
    It goes through `get_or_start`, so a backup needing a node that a visitor (or
    another backup) is already waking **joins that wake** instead of firing a second
    one, and a wake that just finished inside `WAKE_RETRY_COOLDOWN_S` is reused.
+   A wake is never joined when nobody can finish it: at start-up the orchestrator
+   closes every run the previous process left running ("interrupted"), a pipeline
+   that hits an error it did not expect closes its own run, and a wake still marked
+   running after `2 × (WAKE_TIMEOUT_S + WAKE_GUEST_START_TIMEOUT_S)` is closed as
+   "abandoned" and a fresh one is started. Before this, one stuck wake failed every
+   backup that needed its node, every night, without trying.
 3. **Record** one step: `wake_prerequisite:<slug>` or `wake_target:<slug>` with the
    reason, the node and whether it was woken or already up.
 
