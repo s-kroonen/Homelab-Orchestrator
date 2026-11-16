@@ -247,6 +247,17 @@ class ProxmoxAdapter(ABC):
         refused read comes back in :attr:`GuestFilesystems.error`."""
         return GuestFilesystems(error="this adapter cannot read guest disks")
 
+    async def guest_config(self, node: str, vmid: int, kind: GuestKind) -> dict[str, Any]:
+        """The guest's Proxmox config (NIC MACs, OS type, whether the agent option is on).
+        Needs ``VM.Audit``. Raises :class:`AdapterError` when it cannot be read."""
+        raise AdapterError("this adapter cannot read guest configs")
+
+    async def agent_read(self, node: str, vmid: int, command: str) -> Any:
+        """One *read-only* QEMU guest agent command (adapters/proxmox/agent.py ``AGENT_READS``);
+        anything else raises :class:`AgentCallRefused` without being sent. Returns the agent's
+        ``result``. Raises :class:`AdapterError` (403: :class:`AdapterAuthError`) on failure."""
+        raise AdapterError("this adapter cannot ask a guest agent")
+
     async def guest_boot(self, node: str, vmid: int, kind: GuestKind) -> GuestBoot:
         """The guest's boot settings, read from its config. Needs ``node`` online (Proxmox
         answers a guest's config from its node)."""

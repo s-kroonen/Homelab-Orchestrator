@@ -18,8 +18,10 @@ Proxmox cannot look inside a VM's disk, so a VM needs the agent:
 3. The API token needs `VM.GuestAgent.Audit` on the VM (`VM.Monitor` before Proxmox 9) - the
    same privilege IP discovery uses ([service_ips.md](service_ips.md)).
 
-A VM without the agent shows **not measured: no guest agent** and is never alerted. Hover the
-text for the reason Proxmox gave. Pseudo and image filesystems (tmpfs, overlay, squashfs snaps,
+A VM's filesystems come from the same agent reading the Guests tab shows
+([guest_agent.md](guest_agent.md)), so its agent is asked once per cycle. A VM without the agent
+shows *Set up agent…* (the option is off), **no permission** (Proxmox refused the read) or **not
+measured** with the reason, and is never alerted. Hover the text for the reason Proxmox gave. Pseudo and image filesystems (tmpfs, overlay, squashfs snaps,
 ISO images) are left out, and a disk mounted at several places (bind mounts, Docker volumes) is
 counted once.
 

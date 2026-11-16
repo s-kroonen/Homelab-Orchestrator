@@ -679,6 +679,10 @@ ENV_SECTIONS: tuple[EnvSection, ...] = (
                 "A guest filesystem this full (percent, default 95) is an error (disk_full).",
             ),
             EnvKey(
+                "AGENT_TIMEOUT_S",
+                "Seconds one QEMU guest agent read may take (default 5).",
+            ),
+            EnvKey(
                 "ARCHIVE_RETENTION_DAYS",
                 "A deleted service stays in the archive (restorable from /archive) this many days.",
             ),

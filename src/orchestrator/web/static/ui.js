@@ -81,6 +81,15 @@
     },
     // A duration: "45 s", "3 min".
     secs: (s) => (s >= 90 ? Math.round(s / 60) + " min" : Math.round(s) + " s"),
+    // how long something has lasted: "under a minute", "12 min", "2 h 14 min", "3 d 4 h"
+    duration(s) {
+      s = Math.max(0, Math.floor(Number(s) || 0));
+      if (s < 60) return "under a minute";
+      const d = Math.floor(s / 86400), h = Math.floor((s % 86400) / 3600), m = Math.floor((s % 3600) / 60);
+      if (d) return d + " d" + (h ? " " + h + " h" : "");
+      if (h) return h + " h" + (m ? " " + m + " min" : "");
+      return m + " min";
+    },
     nth: (n) => n + (n % 100 >= 11 && n % 100 <= 13 ? "th" : { 1: "st", 2: "nd", 3: "rd" }[n % 10] || "th"),
     bytes(n) {
       if (n == null || isNaN(n)) return "";
@@ -202,6 +211,7 @@
   //   onTest: async (values) => "message" (optional), testLabel,
   //   onDelete: async () => {...} (optional, shown left in the footer),
   //   wide: true (for a log or a long text: nearly the whole width),
+  //   noCancel: true (a read-only drawer: only its save button, labelled "Close"),
   // })
   let openDrawer = null;
   function drawer(opts) {
@@ -213,7 +223,7 @@
     const formError = el("div", { class: "banner fail form-error", role: "alert", hidden: true });
     const testResult = el("div", { class: "test-result", hidden: true, "aria-live": "polite" });
     const save = el("button", { type: "submit" }, opts.saveLabel || "Save");
-    const cancel = el("button", { type: "button", class: "secondary" }, "Cancel");
+    const cancel = el("button", { type: "button", class: "secondary", hidden: !!opts.noCancel }, "Cancel");
     const test = opts.onTest ? el("button", { type: "button", class: "secondary" }, opts.testLabel || "Test") : null;
     const del = opts.onDelete ? el("button", { type: "button", class: "danger" }, opts.deleteLabel || "Delete") : null;
     const closeBtn = el("button", { type: "button", class: "icon", "aria-label": "Close" }, "✕");

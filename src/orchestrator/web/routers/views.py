@@ -525,7 +525,33 @@ def service_view(session: Session, settings: Any, svc: Service) -> dict[str, Any
             for k, spec in PROBE_SPECS.items()
         ],
         "ping_transport": _ping_transport(settings.ip_discovery_transport),
+        "guest_link": guest_link(session, tree, svc),
         **{k: v for k, v in services_view(session).items() if k != "rows"},
+    }
+
+
+def guest_link(session: Session, tree: TreeIndex, svc: Service) -> dict[str, Any] | None:
+    """Where the guest this service runs on is shown (its Proxmox Guests tab, that guest's
+    drawer open), and the alerts about that guest that are open now. A sub-service runs on its
+    root's guest. None when it runs on no guest."""
+    from orchestrator.connectors.ownership import node_href
+    from orchestrator.guests.checks import open_alerts
+
+    root = tree.root(svc)
+    if root.guest_kind is GuestKind.NONE or root.guest_id is None or root.node_id is None:
+        return None
+    node = session.get(Node, root.node_id)
+    if node is None:
+        return None
+    key = f"{node.name}/{root.guest_id}"
+    alerts = open_alerts(session, key)
+    return {
+        "key": key,
+        "label": f"{root.guest_kind.value} {root.guest_id}",
+        "node": node.name,
+        "href": node_href(node, tab="guests", find=str(root.guest_id), guest=key),
+        "alerts": len(alerts),
+        "alert_states": sorted({a.state for a in alerts}),
     }
 
 

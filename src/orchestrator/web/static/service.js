@@ -60,11 +60,23 @@
   const busy = (btn, fn) => async () => { btn.disabled = true; try { await fn(); } finally { btn.disabled = false; } };
 
   // --- header ------------------------------------------------------------------------------------
+  // The guest it runs on, linked to that guest's drawer on its Proxmox Guests tab, with a
+  // warning sign while that guest has open alerts (agent, disk, guest down). Only a link: the
+  // guest's own data stays on the Guests tab.
+  function guestLink() {
+    const g = V.guest_link;
+    if (!g) return null;
+    const n = g.alerts || 0;
+    return [el("a", { href: g.href, title: "Show this guest" }, g.label.toUpperCase()),
+      n ? el("a", { href: g.href, class: "guest-alert", title: n + " open alert" + (n === 1 ? "" : "s") + " on this guest: " + (g.alert_states || []).join(", ").replace(/_/g, " "),
+        "aria-label": n + " open alert" + (n === 1 ? "" : "s") + " on this guest" }, " ⚠" + (n > 1 ? " " + n : "")) : null];
+  }
   function guestText(row) {
     if (!isRoot()) return ["part of ", el("a", { href: "/services/" + enc(S.parent) + "?tab=subs" }, S.parent),
-      row.stack ? [" · stack ", el("a", { class: "mono", href: row.stack.href }, row.stack.name)] : ""];
+      row.stack ? [" · stack ", el("a", { class: "mono", href: row.stack.href }, row.stack.name)] : "",
+      V.guest_link ? [" · on ", guestLink()] : ""];
     if (!hasGuest()) return S.node ? "on " + S.node.name : "no guest";
-    return S.guest_kind.toUpperCase() + " " + S.guest_id + (S.node ? " on " + S.node.name : "");
+    return [guestLink() || S.guest_kind.toUpperCase() + " " + S.guest_id, S.node ? " on " + S.node.name : ""];
   }
   async function check() {
     try { await O.bulk("services", "resync", [slug]); } catch (_e) { return; }
@@ -178,7 +190,7 @@
     const gate = V.health.guest;
     fill($("#facts"), facts([
       ["Runs on", isRoot()
-        ? [S.node ? el("a", { href: S.node.href || "/sources" }, S.node.name) : "no node", hasGuest() ? [" › ", S.guest_kind.toUpperCase() + " " + S.guest_id, gate ? [" ", el("span", { class: "pill " + (gate.guest_state === "running" ? "ok" : "off") }, gate.guest_state)] : ""] : ""]
+        ? [S.node ? el("a", { href: S.node.href || "/sources" }, S.node.name) : "no node", hasGuest() ? [" › ", guestLink() || S.guest_kind.toUpperCase() + " " + S.guest_id, gate ? [" ", el("span", { class: "pill " + (gate.guest_state === "running" ? "ok" : "off") }, gate.guest_state)] : ""] : ""]
         : [el("a", { href: "/services/" + enc(S.parent) }, S.parent), " (sub-service)"]],
       ["Address", ip.effective_ip ? [el("span", { class: "mono" }, ip.effective_ip), el("span", { class: "faint" }, " · " + (ip.effective_source_label || "") + (ip.ip_discovered_at && ip.effective_source !== "manual" ? " " + fmt.ago(ip.ip_discovered_at) : ""))] : el("span", { class: "faint" }, ip.has_guest ? "not found yet" : "none")],
       ["Proxy hosts", (S.proxy_hosts || []).length ? (S.proxy_hosts || []).map((h) => el("div", {}, el("a", { href: "/find/proxy-host?hostname=" + enc(h.hostname), class: "mono" }, h.hostname), " ", syncPill(h))) : el("span", { class: "faint" }, "none")],

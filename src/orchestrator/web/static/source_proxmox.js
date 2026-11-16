@@ -2,8 +2,11 @@
  * SourceProxmox and SourceGuests wireframes. Needs objects.js.
  *   proxmox.nodes   one card per node of this cluster: power, its own API, guests, services,
  *                   wake on hit, boot sequence; wake, restart, power off, edit, delete.
- *   proxmox.guests  every guest of this cluster: state, start at boot, disk, service; start,
- *                   stop, boot settings, make a service.
+ *   proxmox.guests  every guest of this cluster: state, start at boot, address, guest agent,
+ *                   who is signed in, disk, service; start, stop, boot settings, make a service.
+ *                   A guest's drawer (?guest=node/vmid) shows everything its agent reported,
+ *                   or only the setup steps still missing; *Read now* reads it again. The agent
+ *                   is only ever read (docs/guest_agent.md).
  * Node cards paint from the database (/api/views/nodes?source=), their live state from
  * /api/infra/nodes/status?source= and the guests from /api/infra/proxmox/guests?source=; guest
  * actions go to the cluster that owns the node. Import offers the nodes the cluster lists that
@@ -169,9 +172,10 @@
     const q = "?source=" + enc(ctx.source.id);
     let svcView = null; // /api/views/services, for "make a service"
     const box = el("div");
+    const refusedBanner = el("div", { class: "banner fail", hidden: true, role: "status" });
     const age = el("span", { class: "age" });
     const nodeSel = el("select", { "aria-label": "Node" }, el("option", { value: "" }, "Node: all"));
-    fill(panel, box);
+    fill(panel, refusedBanner, box);
     const serviceOf = (slug) => svcView && svcView.rows.find((r) => r.slug === slug);
 
     const linkGuest = (g) => window.Link.guest({ node: g.node, vmid: g.vmid, kind: g.kind, name: g.name, sourceName: ctx.source.name, onDone: () => { svcView = null; guestsRegion.refresh(); } });
@@ -255,7 +259,12 @@
       const d = g.disk;
       if (!d) return el("span", { class: "faint" }, "not checked yet");
       if (d.state === "off") return el("span", { class: "faint" }, "—");
-      if (d.state === "unmeasured") return el("span", { class: "faint", title: d.error || "" }, g.kind === "lxc" || g.kind === "ct" ? "not measured" : "not measured: no guest agent");
+      if (d.state === "unmeasured") {
+        const st = A(g).state;
+        if (st === "not_enabled") return setupLink(g);
+        if (st === "no_permission") return el("span", { class: "pill fail", title: d.error || "" }, "no permission");
+        return el("span", { class: "faint", title: d.error || "" }, g.kind === "lxc" || g.kind === "ct" ? "not measured" : st === "not_answering" ? "not measured: agent not answering" : "not measured: no guest agent");
+      }
       const w = d.worst || {};
       const others = (d.filesystems || []).filter((f) => f.mount !== w.mount);
       return [
@@ -263,6 +272,133 @@
         el("span", { class: "sub" }, fmt.bytes(w.used) + " of " + fmt.bytes(w.total) + (others.length ? " · " + others.length + " more" : "")),
       ];
     }
+    // --- what the guest agent reported (guests/view.py summary) ---------------------------------
+    const A = (g) => g.agent || {};
+    const setupLink = (g, text) => el("button", { type: "button", class: "ghost small", style: { color: "var(--link)", padding: "0" }, onclick: () => guestDrawer(g) }, text || "Set up agent…");
+    function agentCell(g) {
+      const a = A(g);
+      if (a.state === "answers") return a.locked_down === false
+        ? el("span", { class: "pill warn", title: "It accepts " + (a.dangerous || []).join(", ") + ". Lock it down: see its setup steps." }, "commands on")
+        : el("span", { class: "pill ok", title: a.os || "" }, "answers");
+      if (a.state === "not_answering") return el("span", { class: "pill warn", title: a.detail || "" }, "not answering");
+      if (a.state === "no_permission") return el("span", { class: "pill fail", title: a.detail || "" }, "no permission");
+      if (a.state === "not_enabled") return setupLink(g);
+      if (a.state === "not_needed") return el("span", { class: "faint", title: "Proxmox reads containers itself" }, "not needed");
+      if (a.state === "not_running") return el("span", { class: "faint" }, "—");
+      return el("span", { class: "faint", title: a.detail || "" }, a.label || "—");
+    }
+    function addressCell(g) {
+      const ad = A(g).address;
+      if (!ad || !ad.ip) return el("span", { class: "faint" }, "—");
+      return [el("span", { class: "mono" }, ad.ip), ad.source && ad.source !== "guest_agent" ? el("span", { class: "faint", style: { fontSize: "11px", marginLeft: "4px" } }, ad.source_label || ad.source) : null];
+    }
+    function signedInCell(g) {
+      const ss = A(g).sessions;
+      if (!ss || !ss.length) return el("span", { class: "faint" }, "—");
+      return ss.map((x) => el("div", { style: { whiteSpace: "nowrap" }, title: "since " + fmt.short(x.since) }, el("strong", {}, x.user), " ", el("span", { class: "faint" }, fmt.duration(x.seconds))));
+    }
+    const frozen = (g) => A(g).freeze === "frozen";
+    const signedIn = (g) => (A(g).sessions || []).length > 0;
+
+    // --- one guest's drawer: everything its agent reported, or the setup steps ----------------
+    const copy = (text) => (navigator.clipboard ? navigator.clipboard.writeText(text) : Promise.reject()).then(() => window.toast("Copied", "ok"), () => window.toast("Select it and copy it by hand", "error"));
+    const sec = (label) => el("h3", { class: "ai-h" }, label);
+    function guideView(guide) {
+      if (!guide) return null;
+      const mark = (ok) => ok === true ? el("span", { class: "gd-ok", "aria-label": "done" }, "✓") : ok === false ? el("span", { class: "gd-no", "aria-label": "missing" }, "✗") : el("span", { class: "faint", "aria-label": "not known yet" }, "–");
+      return [
+        guide.summary ? el("p", { style: { margin: "0 0 10px" } }, guide.summary) : null,
+        (guide.checks || []).length ? el("div", { class: "gd-checks" }, guide.checks.map((c) => el("div", { class: "gd-check" }, mark(c.ok), el("span", {}, c.label, c.hint ? el("span", { class: "mono faint", style: { marginLeft: "6px" } }, c.hint) : null), el("span", { class: "faint" }, c.value || "")))) : null,
+        (guide.steps || []).length ? el("ol", { class: "gd-steps" }, guide.steps.map((st) => el("li", {},
+          el("strong", {}, st.title), st.text ? el("div", { class: "sub" }, st.text) : null,
+          st.command ? el("div", { class: "gd-cmd" }, el("pre", { class: "mono" }, st.command), el("button", { type: "button", class: "secondary small", onclick: () => copy(st.command) }, "Copy")) : null,
+          st.note ? el("div", { class: "sub" }, st.note) : null))) : null,
+      ];
+    }
+    function factsView(d) {
+      const ss = d.sessions;
+      const ifs = d.interfaces;
+      const fss = d.filesystems || (d.disk && d.disk.filesystems) || null;
+      const boot = d.proxmox && d.proxmox.boot;
+      return [
+        ss ? [sec("Signed in"), ss.length ? el("table", { class: "gd-table" }, el("thead", {}, el("tr", {}, el("th", {}, "User"), el("th", {}, "Since"), el("th", {}, "Signed in for"))),
+          el("tbody", {}, ss.map((x) => el("tr", {}, el("td", { class: "mono" }, x.user + (x.domain ? "@" + x.domain : "")), el("td", {}, fmt.short(x.since)), el("td", {}, el("strong", {}, fmt.duration(x.seconds)))))))
+          : el("p", { class: "faint" }, "Nobody is signed in."),
+          ss.length ? el("p", { class: "faint", style: { fontSize: "12px" } }, "The agent reports one line per user: a second session of the same user shows as one, timed from the first.") : null] : null,
+        ifs ? [sec("Network"), el("table", { class: "gd-table" }, el("thead", {}, el("tr", {}, el("th", {}, "Interface"), el("th", {}, "Address"), el("th", {}, "State"), el("th", {}, "In / out since boot"))),
+          el("tbody", {}, ifs.map((i) => el("tr", {}, el("td", { class: "mono" }, i.name), el("td", { class: "mono" }, (i.addresses || []).join(", ") || "—"),
+            el("td", {}, el("span", { class: "pill " + (i.up ? "ok" : "off") }, i.up ? "up" : "no address")),
+            el("td", {}, i.rx_bytes != null ? fmt.bytes(i.rx_bytes) + " / " + fmt.bytes(i.tx_bytes) : "—")))))] : null,
+        fss && fss.length ? [sec("Disks"), el("div", { class: "gd-disks" }, fss.map((f) => {
+          const pct = f.percent != null ? f.percent : (f.total ? Math.round((f.used * 1000) / f.total) / 10 : 0);
+          const cls = pct >= 95 ? "fail" : pct >= 85 ? "warn" : "ok";
+          return el("div", {}, el("span", { class: "gd-bar" }, el("i", { class: cls, style: { width: Math.min(100, pct) + "%" } })), el("span", { class: "mono" }, f.mount), " ", el("span", { class: cls === "ok" ? "" : "pill " + cls }, pct + "%"), el("span", { class: "faint" }, " · " + fmt.bytes(f.used) + " of " + fmt.bytes(f.total)));
+        }))] : null,
+        d.state === "answers" ? [sec("Backups and agent"), el("dl", { class: "kv" },
+          el("dt", {}, "After the last backup"), el("dd", {}, d.freeze === "frozen" ? el("span", { class: "pill fail" }, "frozen") : d.freeze ? [d.freeze, " ", el("span", { class: "pill ok" }, "ok")] : "—"),
+          el("dt", {}, "Locked down"), el("dd", {}, d.locked_down === true ? ["commands and file access are off ", el("span", { class: "pill ok" }, "yes")] : d.locked_down === false ? el("span", { class: "pill warn" }, (d.dangerous || []).join(", ") + " on") : "not known"),
+          el("dt", {}, "Agent"), el("dd", {}, [d.agent_version ? "qemu-ga " + d.agent_version : "qemu-ga", d.ping_ms != null ? " · answers in " + d.ping_ms + " ms" : ""].join("")))] : null,
+        [sec("Proxmox"), el("dl", { class: "kv" },
+          el("dt", {}, "Starts with node"), el("dd", {}, !boot ? "not read yet" : boot.onboot ? "yes, " + fmt.nth(boot.position || 0) + (boot.starts_after_s != null ? " · about " + fmt.secs(boot.starts_after_s) + " after boot" : "") : "no: started when needed"),
+          d.proxmox && d.proxmox.freeze_on_backup != null ? [el("dt", {}, "Freeze on backup"), el("dd", {}, d.proxmox.freeze_on_backup ? "on" : "off")] : null)],
+      ];
+    }
+    const AGENT_PILL = { answers: ["ok", "agent answers"], not_answering: ["warn", "not answering"], no_permission: ["fail", "no permission"], not_enabled: ["off", "no agent"], not_needed: ["off", "no agent needed"], not_running: ["off", "guest stopped"] };
+    function guestBody(d, readBtn) {
+      const [cls, word] = AGENT_PILL[d.state] || ["off", d.label || "not read yet"];
+      const needsSetup = d.guide && !d.guide.complete && (d.guide.steps || []).length;
+      return el("div", {},
+        el("div", { class: "gd-head" }, el("span", { class: "pill " + cls }, word),
+          el("span", { class: "faint" }, d.read_at ? "read " + fmt.ago(d.read_at) : "not read yet"), readBtn),
+        needsSetup ? guideView(d.guide) : factsView(d),
+        needsSetup && d.state === "answers" ? factsView(d) : null);
+    }
+    async function guestDrawer(g) {
+      const url = "/api/infra/proxmox/guests/" + enc(g.node) + "/" + g.vmid + "/agent";
+      const holder = el("div", {}, el("p", { class: "faint" }, "Loading…"));
+      const readBtn = el("button", { type: "button", class: "secondary small" }, "↻ Read now");
+      const show = (d) => fill(holder, guestBody(d, readBtn));
+      readBtn.onclick = async () => {
+        readBtn.disabled = true; readBtn.textContent = "Reading…";
+        try { show(await api.post(url + "/read", undefined, { suppressToast: true })); window.toast("Read " + g.name + "'s agent", "ok"); guestsRegion.refresh(); }
+        catch (e) { window.toast(e.message, "error"); }
+        finally { readBtn.disabled = false; readBtn.textContent = "↻ Read now"; }
+      };
+      setGuestParam(g.node + "/" + g.vmid);
+      drawer({
+        title: kindOf(g).toLowerCase().replace("lxc", "ct") + "-" + g.vmid + " " + g.name,
+        sub: [g.node, g.status, g.service_slug ? "runs " + g.service_slug : "not linked to a service"].join(" · "),
+        saveLabel: "Close", noCancel: true,
+        note: "Read-only. Start, stop and boot settings stay in the row's ⋯ menu.",
+        async onSave() {},
+        onClose: () => setGuestParam(""),
+        fields: [{ type: "custom", key: "guest", render: () => holder }],
+      });
+      try { show(await api.get(url, { suppressToast: true })); }
+      catch (e) { fill(holder, el("div", { class: "banner fail" }, e.message)); }
+    }
+    function setGuestParam(v) {
+      const u = new URL(location.href);
+      if (v) u.searchParams.set("guest", v); else u.searchParams.delete("guest");
+      history.replaceState(history.state, "", u);
+    }
+    let openedFromUrl = false;
+    function openFromUrl() {
+      if (openedFromUrl) return;
+      openedFromUrl = true;
+      const want = new URL(location.href).searchParams.get("guest");
+      const g = want && all.find((x) => x.node + "/" + x.vmid === want);
+      if (g) guestDrawer(g);
+    }
+    function drawRefused() {
+      const refused = all.filter((g) => A(g).state === "no_permission");
+      refusedBanner.hidden = !refused.length;
+      if (!refused.length) return;
+      fill(refusedBanner, el("strong", {}, "Proxmox refused " + refused.length + " guest agent read" + (refused.length === 1 ? "" : "s") + ". "),
+        "The orchestrator's token needs ", el("span", { class: "mono" }, "VM.GuestAgent.Audit"), " on " + refused.slice(0, 3).map((g) => g.name).join(", ") + (refused.length > 3 ? " and " + (refused.length - 3) + " more" : "") + ". Until then their address, disks and sign-ins can't be read. ",
+        el("button", { type: "button", class: "ghost small", style: { color: "var(--link)", padding: "0" }, onclick: () => guestDrawer(refused[0]) }, "How to fix"));
+    }
+
     const kindOf = (g) => (g.kind === "ct" || g.kind === "lxc" ? "LXC" : g.kind === "vm" ? "VM" : g.kind);
     let all = [];
     const shown = () => (nodeSel.value ? all.filter((g) => g.node === nodeSel.value) : all);
@@ -270,28 +406,36 @@
       // ?q= filters it (an alert about a guest lands here with its VMID)
       rows: [], key: (g) => g.node + "/" + g.vmid, name: (g) => g.name, noun: ["guest", "guests"], urlState: true,
       placeholder: "Filter guests", age, toolbarExtra: nodeSel,
-      search: (g) => [g.vmid, g.name, g.node, g.kind, g.service_slug || ""].join(" "),
+      search: (g) => [g.vmid, g.name, g.node, g.kind, g.service_slug || "", (A(g).address || {}).ip || "", A(g).os || "", (A(g).sessions || []).map((x) => x.user).join(" ")].join(" "),
       sort: { key: "vmid", dir: 1 },
       columns: [
-        { key: "vmid", label: "Guest", sort: (g) => g.vmid, render: (g) => [el("strong", { class: "mono" }, kindOf(g).toLowerCase().replace("lxc", "ct") + "-" + g.vmid), " ", el("span", { class: "faint" }, g.name)] },
+        { key: "vmid", label: "Guest", sort: (g) => g.vmid, render: (g) => el("button", { type: "button", class: "linkish", title: "Everything known about " + g.name, onclick: () => guestDrawer(g) }, el("strong", { class: "mono" }, kindOf(g).toLowerCase().replace("lxc", "ct") + "-" + g.vmid), " ", el("span", { class: "faint" }, g.name)) },
         { key: "node", label: "Node", sort: true },
-        { key: "status", label: "State", sort: true, render: (g) => el("span", { class: "pill " + (g.status === "running" ? "ok" : "off") }, g.status) },
+        { key: "status", label: "State", sort: true, render: (g) => [el("span", { class: "pill " + (g.status === "running" ? "ok" : "off") }, g.status),
+          frozen(g) ? [" ", el("span", { class: "pill fail", title: "Its filesystems are frozen: writes are paused. Thaw them on the node: qm guest cmd " + g.vmid + " fsfreeze-thaw" }, "frozen")] : null] },
         { key: "boot", label: "Starts with node", sort: (g) => (g.boot && g.boot.onboot ? g.boot.position || 99 : 999), phone: "Starts with node",
           render: (g) => !g.boot ? el("span", { class: "faint" }, "not read yet")
             : !g.boot.onboot ? el("span", { class: "faint" }, "no: started when needed")
             : [el("span", {}, "yes, " + fmt.nth(g.boot.position || 0)), el("span", { class: "sub" }, [g.boot.order != null ? "order " + g.boot.order : "no order", g.boot.up_s ? "waits " + g.boot.up_s + " s" : "", g.boot.starts_after_s != null ? "starts ~" + fmt.secs(g.boot.starts_after_s) + " after boot" : ""].filter(Boolean).join(" · "))] },
+        { key: "address", label: "Address", sort: (g) => (A(g).address || {}).ip || "~", phone: "Address", render: addressCell },
+        { key: "agent", label: "Agent", sort: (g) => A(g).state || "~", phone: "Agent", render: agentCell },
+        { key: "signedin", label: "Signed in", sort: (g) => -((A(g).sessions || []).length), phone: "Signed in", render: signedInCell },
+        { key: "disk", label: "Disk", sort: diskSort, phone: "Disk", render: diskCell },
         { key: "service", label: "Service", sort: (g) => g.service_slug || "~",
           render: (g) => g.service_slug ? el("a", { href: "/services/" + enc(g.service_slug) }, g.service_slug)
             : [el("span", { class: "faint" }, "not linked"), " · ", el("button", { type: "button", class: "ghost small", style: { color: "var(--link)", padding: "0" }, onclick: () => linkGuest(g) }, "Link…")] },
-        { key: "disk", label: "Disk", sort: diskSort, phone: "Disk", render: diskCell },
       ],
       chips: [
         { key: "running", label: "Running", test: (g) => g.status === "running" },
         { key: "stopped", label: "Stopped", test: (g) => g.status !== "running" },
         { key: "unlinked", label: "Not linked", test: (g) => !g.service_slug },
         { key: "disk", label: "Disk filling up", test: (g) => !!g.disk && (g.disk.state === "low" || g.disk.state === "full") },
+        { key: "agent", label: "Agent needs a look", test: (g) => !!A(g).needs_look },
+        { key: "signedin", label: "Signed in", test: signedIn },
+        { key: "frozen", label: "Frozen", test: frozen },
       ],
       menu: (g) => [
+        { label: A(g).state === "not_enabled" ? "Set up the guest agent…" : "Details…", onClick: () => guestDrawer(g) },
         g.service_slug ? { label: "Open " + g.service_slug, href: "/services/" + enc(g.service_slug) } : null,
         { label: g.service_slug ? "Link to another service…" : "Link to a service…", onClick: () => linkGuest(g) },
         { label: "Boot settings…", onClick: () => bootDrawer(g) },
@@ -314,6 +458,8 @@
         fill(nodeSel, el("option", { value: "" }, "Node: all"), Array.from(new Set(d.map((g) => g.node))).sort().map((n) => el("option", { value: n }, "Node: " + n)));
         nodeSel.value = keep;
         t.setRows(shown());
+        drawRefused();
+        openFromUrl();
       },
       onError: (e) => window.toast(e.message, "error"),
       topics: ["run", "health", "registry"], wait: 3000, every: 30000, poll: true, age,
