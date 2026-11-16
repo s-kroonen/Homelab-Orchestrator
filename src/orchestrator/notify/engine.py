@@ -41,8 +41,9 @@ log = get_logger(__name__)
 
 #: network: the orchestrator's own LAN, internet and proxy checks (health/network.py);
 #: route: a proxy host's route, inside through the proxy and from outside;
-#: disk: how full a guest's filesystems are (health/disks.py).
-LEVELS = ("network", "node", "guest", "service", "sub", "route", "disk")
+#: disk: how full a guest's filesystems are (health/disks.py);
+#: agent: what a guest's QEMU guest agent reports (guests/checks.py).
+LEVELS = ("network", "node", "guest", "service", "sub", "route", "disk", "agent")
 EVENTS = (
     "failed",
     "down",
@@ -51,6 +52,8 @@ EVENTS = (
     "flapping",
     "disk_low",
     "disk_full",
+    "agent_unresponsive",
+    "lockdown_weakened",
     "recovery_attempt",
     "recovery_succeeded",
     "recovery_exhausted",
@@ -87,6 +90,8 @@ DEFAULT_EVENTS = (
     "flapping",
     "disk_low",
     "disk_full",
+    "agent_unresponsive",
+    "lockdown_weakened",
     "backup_failed",
     "backup_retry",
     "wake_failed",
@@ -157,7 +162,7 @@ def _severity_for(level: str, state: str) -> str:
         # down is often deliberate (a guest switched off) unless it is unreachable, which
         # the observation says itself.
         return "error" if level in ("node", "network", "route") else "warn"
-    if state in ("unknown", "disk_low"):
+    if state in ("unknown", "disk_low", "agent_unresponsive", "lockdown_weakened"):
         return "warn"
     if state == "disk_full":
         return "error"

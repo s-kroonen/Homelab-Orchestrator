@@ -159,7 +159,10 @@ Something that is off on purpose (a node asleep, its services) is **off**, never
 | Sources: every source, its status and what it has | [PNG](wireframes/Sources.png) · [HTML](wireframes/Sources.html) |
 | Sources: add a source | [PNG](wireframes/SourceAdd.png) · [HTML](wireframes/SourceAdd.html) |
 | Source page: Proxmox overview | [PNG](wireframes/SourceProxmox.png) · [HTML](wireframes/SourceProxmox.html) |
-| Source page: Proxmox guests (bulk bar, links to other sources) | [PNG](wireframes/SourceGuests.png) · [HTML](wireframes/SourceGuests.html) |
+| Source page: Proxmox guests, with what the guest agent reports (address, agent, sign-ins, disks) | [PNG](wireframes/SourceGuests.png) · [HTML](wireframes/SourceGuests.html) |
+| One guest in the drawer: sign-ins with how long, network, disks, backups, *Read now* (read-only) | [PNG](wireframes/SourceGuestDetails.png) · [HTML](wireframes/SourceGuestDetails.html) |
+| A guest without the agent: only the setup steps still missing ([guest_agent.md](../guest_agent.md)) | [PNG](wireframes/SourceGuestSetup.png) · [HTML](wireframes/SourceGuestSetup.html) |
+| A guest whose agent Proxmox will not let the orchestrator read (no permission) | [PNG](wireframes/SourceGuestPermission.png) · [HTML](wireframes/SourceGuestPermission.html) |
 | Source page: Portainer containers by environment | [PNG](wireframes/SourcePortainer.png) · [HTML](wireframes/SourcePortainer.html) |
 | A stack under its source (where a deploy alert lands). It keeps the Logs and History tabs of the Stack wireframes, and a failed deploy offers *Deploy again*, not a roll back (deploys do not roll back, [portainer_deploys.md](../portainer_deploys.md)) | [PNG](wireframes/SourceStack.png) · [HTML](wireframes/SourceStack.html) |
 | Source page: a proxy's proxy hosts (create, edit, link) | [PNG](wireframes/SourceProxy.png) · [HTML](wireframes/SourceProxy.html) |

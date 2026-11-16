@@ -493,6 +493,9 @@ class Settings(BaseSettings):
     #: as an error (disk_full). Checked every health cycle (health/disks.py).
     disk_warn_pct: int = 85
     disk_full_pct: int = 95
+    #: Seconds one QEMU guest agent call may take (guests/providers/proxmox.py). A guest that
+    #: keeps timing out is then read only every third health cycle until it answers.
+    agent_timeout_s: float = 5.0
     #: A deleted service stays in the archive (restorable) this many days, then is purged.
     archive_retention_days: int = 30
 

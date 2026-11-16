@@ -88,11 +88,14 @@ def source_page(kind: str, owner: str, query: dict[str, Any] | None = None) -> s
     return f"/sources/{quote(owner, safe='')}" + (f"?{urlencode(q)}" if q else "")
 
 
-def node_href(node: Node | None, *, tab: str = "nodes", find: str = "") -> str:
-    """The page that shows a node (``tab="guests"``: its guests, ``find`` filtering them): its
-    Proxmox source's page. An unowned node is the default source's."""
+def node_href(node: Node | None, *, tab: str = "nodes", find: str = "", guest: str = "") -> str:
+    """The page that shows a node (``tab="guests"``: its guests, ``find`` filtering them,
+    ``guest`` = ``node/vmid`` opening that guest's drawer): its Proxmox source's page. An
+    unowned node is the default source's."""
     return source_page(
-        "proxmox", node.source_id if node is not None else "", {"tab": tab, "q": find}
+        "proxmox",
+        node.source_id if node is not None else "",
+        {"tab": tab, "q": find, "guest": guest},
     )
 
 
@@ -104,7 +107,7 @@ def proxy_host_href(host: ProxyHost | None, **query: Any) -> str:
     )
 
 
-def node_href_by_name(name: str, *, tab: str = "nodes", find: str = "") -> str:
+def node_href_by_name(name: str, *, tab: str = "nodes", find: str = "", guest: str = "") -> str:
     """:func:`node_href` for a node known only by name (an alert's target)."""
     from orchestrator.db.session import get_engine
 
@@ -113,7 +116,7 @@ def node_href_by_name(name: str, *, tab: str = "nodes", find: str = "") -> str:
             node = session.exec(select(Node).where(Node.name == name)).first()
     except Exception:  # no database to ask (a link is never worth failing an alert for)
         node = None
-    return node_href(node, tab=tab, find=find)
+    return node_href(node, tab=tab, find=find, guest=guest)
 
 
 def proxmox_of(adapters: Any, source_id: str) -> Any:

@@ -43,7 +43,11 @@ service page shows which (and when):
      addresses. Loopback and link-local addresses are skipped, and the
      address on the NIC whose MAC matches the config wins (so `docker0` or a
      VPN tunnel inside the guest is not picked). Source: **guest agent**.
-     An agent that is not installed or not running is a normal miss.
+     The health cycle already reads every VM's agent ([guest_agent.md](guest_agent.md)):
+     when that reading is recent (30 minutes) its addresses are used and the agent is
+     not asked again, and when it has none the reason is named: the VM's agent option
+     is off, Proxmox refused the read (the token lacks the privilege below), or the
+     agent does not answer.
    * **Container:** the config's `netN` gives `hwaddr=`; a static `ip=10.0.0.5/24`
      is itself the answer. With `ip=dhcp`, `GET /nodes/{node}/lxc/{vmid}/interfaces`
      gives the live addresses. Source: **LXC**.
@@ -66,7 +70,7 @@ give them a manual IP.
 | Read | Privilege |
 |---|---|
 | guest config (MACs, LXC `ip=` / `/interfaces`) | `VM.Audit` — already in the routine token |
-| QEMU guest agent | `VM.Monitor` (PVE 8) / `VM.GuestAgent.Audit` (PVE 9+) — optional |
+| QEMU guest agent | `VM.Monitor` (PVE 8) / `VM.GuestAgent.Audit` (PVE 9+): optional, but without it no VM's address, disks or sign-ins can be read |
 
 A 403 is not fatal: the service page names the missing privilege and
 discovery carries on with what it has (no MACs → nothing to look up; MACs but

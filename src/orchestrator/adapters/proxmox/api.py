@@ -12,6 +12,7 @@ from orchestrator.adapters.errors import (
     AdapterUnreachable,
     TaskTimeout,
 )
+from orchestrator.adapters.proxmox.agent import agent_method
 from orchestrator.adapters.proxmox.base import (
     BackupStorage,
     ClusterNode,
@@ -332,12 +333,12 @@ class LiveProxmoxAdapter(ProxmoxAdapter):
         if not qemu_agent_enabled(config):
             return GuestNetwork(macs=macs)
         try:
-            payload = await self._client.request("GET", f"{base}/agent/network-get-interfaces")
+            payload = await self.agent_read(node, vmid, "network-get-interfaces")
         except AdapterAuthError as exc:
             return GuestNetwork(
                 macs=macs,
-                error=f"the guest agent read was refused ({exc.status_code}) — the API "
-                f"token needs VM.Monitor on /vms/{vmid}",
+                error=f"the guest agent read was refused ({exc.status_code}) - the API token "
+                f"needs VM.GuestAgent.Audit (VM.Monitor before Proxmox 9) on /vms/{vmid}",
             )
         except AdapterError as exc:
             # "QEMU guest agent is not running" (500) is the normal miss.
@@ -365,7 +366,7 @@ class LiveProxmoxAdapter(ProxmoxAdapter):
             found = lxc_root(status.get("disk"), status.get("maxdisk"))
             return GuestFilesystems(filesystems=found, source="lxc" if found else None)
         try:
-            payload = await self._client.request("GET", f"{base}/agent/get-fsinfo")
+            payload = await self.agent_read(node, vmid, "get-fsinfo")
         except AdapterAuthError as exc:
             return GuestFilesystems(
                 error=f"the guest agent read was refused ({exc.status_code}) - the API token "
@@ -379,6 +380,17 @@ class LiveProxmoxAdapter(ProxmoxAdapter):
         if not found:
             return GuestFilesystems(error="the guest agent reported no filesystem sizes")
         return GuestFilesystems(filesystems=found, source="guest_agent")
+
+    async def guest_config(self, node: str, vmid: int, kind: GuestKind) -> dict[str, Any]:
+        endpoint = self._endpoint_for(kind)
+        config = await self._client.request("GET", f"/nodes/{node}/{endpoint}/{vmid}/config")
+        return config if isinstance(config, dict) else {}
+
+    async def agent_read(self, node: str, vmid: int, command: str) -> Any:
+        # The allow-list is checked before anything is sent (adapters/proxmox/agent.py).
+        method = agent_method(command)
+        payload = await self._client.request(method, f"/nodes/{node}/qemu/{vmid}/agent/{command}")
+        return payload.get("result", payload) if isinstance(payload, dict) else payload
 
     async def guest_boot(self, node: str, vmid: int, kind: GuestKind) -> GuestBoot:
         endpoint = self._endpoint_for(kind)

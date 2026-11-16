@@ -31,7 +31,7 @@ task, and (from phase 3) start/stop guests once a node is awake.
 | `VM.Audit` | list guests via `/cluster/resources`, read config (incl. the NIC MACs and an LXC's `ip=` / `/interfaces` for [IP discovery](service_ips.md)) |
 | `VM.Backup` | run `vzdump` |
 | `VM.PowerMgmt` | start/stop guests after a node wake (phase 3) |
-| `VM.Monitor` (PVE 8) / `VM.GuestAgent.Audit` (PVE 9+) | *optional* — read a VM's IPs from the QEMU guest agent (`agent/network-get-interfaces`) for [IP discovery](service_ips.md) |
+| `VM.Monitor` (PVE 8) / `VM.GuestAgent.Audit` (PVE 9+) | *optional* — read the QEMU guest agent: a VM's addresses, disks, sign-ins and freeze state ([guest_agent.md](guest_agent.md)). Only read commands are ever sent. Without it the Guests tab shows **no permission** |
 | `Datastore.Audit` | see the PBS-backed storage entry |
 | `Datastore.AllocateSpace` | write the dump to that storage |
 | `Sys.Audit` | read node and task status |

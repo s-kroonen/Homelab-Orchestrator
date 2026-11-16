@@ -525,12 +525,15 @@ async def list_guests(
     proxmox = proxmox_of(adapters, source or "")
     guests = await proxmox.list_guests(node)
     await _refresh_boot(session, proxmox, guests)
+    from orchestrator.guests import store as guest_store
+    from orchestrator.guests import view as guest_view
     from orchestrator.health import disks as disks_mod
     from orchestrator.registry import boot as boot_mod
 
     nodes = {n.name: n for n in session.exec(select(Node)).all()}
     slots = {name: {s.vmid: s for s in boot_mod.sequence(session, n)} for name, n in nodes.items()}
     disk_rows = disks_mod.by_guest(disks_mod.load(session))
+    readings = guest_store.by_key(session)
     out = []
     for g in guests:
         svc = _service_for_guest(session, g.node, g.vmid)
@@ -549,9 +552,117 @@ async def list_guests(
                 ),
                 # The last health cycle's disk check (health/disks.py); None = not checked yet.
                 "disk": _disk_view(disk_rows.get(f"{g.node}/{g.vmid}")),
+                # What its guest agent last reported (guests/): state, address, sign-ins.
+                "agent": guest_view.summary(
+                    readings.get(f"{g.node}/{g.vmid}"), _fallback_address(session, svc)
+                ),
             }
         )
     return out
+
+
+def _fallback_address(session: Session, svc: Service | None) -> dict[str, str] | None:
+    """The address the guest's service has when its agent gave none (ARP, DHCP, manual)."""
+    if svc is None or svc.id is None:
+        return None
+    from orchestrator.guests.view import ADDRESS_SOURCES
+    from orchestrator.ipdiscovery.discovery import effective_ip
+
+    ip, source = effective_ip(svc, session.get(ServiceState, svc.id))
+    if not ip:
+        return None
+    return {"ip": ip, "source": source, "source_label": ADDRESS_SOURCES.get(source, source)}
+
+
+def _guest_detail(session: Session, node: str, vmid: int) -> dict[str, Any]:
+    from orchestrator.guests import store as guest_store
+    from orchestrator.guests import view as guest_view
+    from orchestrator.health import disks as disks_mod
+    from orchestrator.registry import boot as boot_mod
+
+    key = f"{node}/{vmid}"
+    facts = guest_store.load_by_key(session, key)
+    svc = _service_for_guest(session, node, vmid)
+    row = session.exec(select(Node).where(Node.name == node)).one_or_none()
+    slot = (
+        next((x for x in boot_mod.sequence(session, row) if x.vmid == vmid), None)
+        if row is not None
+        else None
+    )
+    out = guest_view.detail(facts, _fallback_address(session, svc))
+    out.update(
+        {
+            "node": node,
+            "vmid": vmid,
+            "key": key,
+            "name": facts.name if facts else "",
+            "kind": facts.kind if facts else "",
+            "running": facts.running if facts else None,
+            "service_slug": svc.slug if svc else None,
+            "disk": _disk_view(disks_mod.by_guest(disks_mod.load(session)).get(key)),
+            # The source's own section of the drawer.
+            "proxmox": {
+                "boot": _boot_view(boot_mod.setting_for(session, node, vmid), slot),
+                "freeze_on_backup": facts.freeze_on_backup if facts else None,
+            },
+        }
+    )
+    return out
+
+
+@router.get("/proxmox/guests/{node}/{vmid}/agent")
+async def guest_agent(node: str, vmid: int, session: SessionDep) -> dict[str, Any]:
+    """Everything known about one guest from inside it, and what is missing to know more
+    (its setup steps). From the last reading; nothing is asked here."""
+    return _guest_detail(session, node, vmid)
+
+
+#: Read now: at most once per this many seconds per guest.
+_READ_NOW_EVERY_S = 30.0
+_read_now_at: dict[str, float] = {}
+
+
+@router.post("/proxmox/guests/{node}/{vmid}/agent/read")
+async def guest_agent_read(
+    node: str,
+    vmid: int,
+    session: SessionDep,
+    adapters: AdaptersDep,
+    settings: SettingsDep,
+    admin: CurrentAdmin,
+) -> dict[str, Any]:
+    """Read one guest's agent now (*Read now*): read-only, like every agent call, and at most
+    once per 30 s per guest. Its service's address follows from the new reading."""
+    import time
+
+    from orchestrator.guests import runner
+    from orchestrator.ipdiscovery.discovery import IpDiscoverer
+
+    key = f"{node}/{vmid}"
+    now = time.monotonic()
+    last = _read_now_at.get(key)
+    if last is not None and now - last < _READ_NOW_EVERY_S:
+        wait = int(_READ_NOW_EVERY_S - (now - last)) + 1
+        raise HTTPException(
+            status.HTTP_429_TOO_MANY_REQUESTS, f"read a moment ago: read again in {wait} s"
+        )
+    _read_now_at[key] = now
+    proxmox = proxmox_for_node(session, adapters, node)
+    try:
+        guest = next((g for g in await proxmox.list_guests(node) if g.vmid == vmid), None)
+    except AdapterError as exc:
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, f"Proxmox: {exc}") from exc
+    if guest is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, f"no guest {vmid} on {node}")
+    await runner.read_now(proxmox, settings, guest)
+    svc = _service_for_guest(session, node, vmid)
+    if svc is not None and svc.parent_id is None:
+        session.expire_all()
+        await IpDiscoverer(settings=settings, proxmox=proxmox).discover(
+            session, svc, actor=admin.username
+        )
+    session.expire_all()
+    return _guest_detail(session, node, vmid)
 
 
 def _disk_view(row: dict[str, Any] | None) -> dict[str, Any] | None:

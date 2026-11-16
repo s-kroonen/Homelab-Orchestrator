@@ -110,12 +110,41 @@ def classify(percent: float, settings: Settings, previous: str | None = None) ->
     return "ok"
 
 
-async def _read(proxmox: Any, guest: Guest, sem: asyncio.Semaphore) -> GuestFilesystems:
+def from_facts(facts: Any) -> GuestFilesystems | None:
+    """A VM's filesystems from this cycle's guest reading (guests/), so its agent is asked
+    once; None when the reading says nothing either way (then the agent is asked here)."""
+    from orchestrator.guests.model import AgentState
+
+    if facts is None:
+        return None
+    if facts.agent is AgentState.ANSWERS:
+        if facts.filesystems:
+            return GuestFilesystems(
+                filesystems=[Filesystem(**f) for f in facts.filesystems], source="guest_agent"
+            )
+        return GuestFilesystems(
+            error=facts.filesystems_error or "the guest agent reported no filesystem sizes"
+        )
+    if facts.agent in (
+        AgentState.NOT_ENABLED,
+        AgentState.NO_PERMISSION,
+        AgentState.NOT_ANSWERING,
+    ):
+        return GuestFilesystems(error=facts.agent_detail or "no guest agent answered")
+    return None
+
+
+async def _read(
+    proxmox: Any, guest: Guest, sem: asyncio.Semaphore, facts: Any = None
+) -> GuestFilesystems:
     if guest.kind is GuestKind.CT and guest.maxdisk > 0:
         # Proxmox measures a container's root filesystem itself: it came with the list.
         from orchestrator.adapters.proxmox.disks import lxc_root
 
         return GuestFilesystems(filesystems=lxc_root(guest.disk, guest.maxdisk), source="lxc")
+    known = from_facts(facts) if guest.kind is GuestKind.VM else None
+    if known is not None:
+        return known
     async with sem:
         try:
             result: GuestFilesystems = await asyncio.wait_for(
@@ -135,15 +164,20 @@ async def check_disks(
     *,
     previous: dict[str, str] | None = None,
     guests: list[Guest] | None = None,
+    facts: dict[str, Any] | None = None,
 ) -> DiskStatus:
     """Read every guest. ``guests``: the list the health cycle already read (so it is not read
-    twice). Raises only when Proxmox cannot list the guests at all."""
+    twice); ``facts``: this cycle's guest readings by ``node/vmid`` (so a VM's agent is not
+    asked twice). Raises only when Proxmox cannot list the guests at all."""
     previous = previous or {}
     if guests is None:
         guests = list(await proxmox.list_guests())
     sem = asyncio.Semaphore(_CONCURRENCY)
     running = [g for g in guests if g.status == "running"]
-    reads = await asyncio.gather(*(_read(proxmox, g, sem) for g in running))
+    facts = facts or {}
+    reads = await asyncio.gather(
+        *(_read(proxmox, g, sem, facts.get(f"{g.node}/{g.vmid}")) for g in running)
+    )
     found = {(g.node, g.vmid): r for g, r in zip(running, reads, strict=True)}
     out: list[GuestDisks] = []
     for g in guests:

@@ -45,7 +45,9 @@ proxy host's route (inside through the proxy, and from outside), and announces C
 
 Guests' disks add **disk_low** (a filesystem at `DISK_WARN_PCT`, 85%: a warning) and **disk_full**
 (`DISK_FULL_PCT`, 95%: an error), sent by default, with *recovered* when there is room again -
-see [disks.md](disks.md).
+see [disks.md](disks.md). A guest's QEMU guest agent adds, at level **agent**,
+**agent_unresponsive** (a running guest's agent stopped answering) and **lockdown_weakened** (the
+agent accepts commands): both warnings, sent by default - see [guest_agent.md](guest_agent.md).
 
 Pipelines add **backup_failed** and **wake_failed** (default), **backup_retry** (default) and
 **backup_skipped** (a backup that was not taken because the service was unhealthy, had no
@@ -60,11 +62,11 @@ AI assistant adds **mcp_request** (with the approval link) - see [mcp.md](mcp.md
 
 ## Rules
 
-With **no rules**, `failed`, `down`, `unknown`, `recovered`, `flapping`, `disk_low`, `disk_full`, `backup_failed`, `wake_failed`,
+With **no rules**, `failed`, `down`, `unknown`, `recovered`, `flapping`, `disk_low`, `disk_full`, `agent_unresponsive`, `lockdown_weakened`, `backup_failed`, `wake_failed`,
 `recovery_succeeded`, `recovery_exhausted`, `restore_proposed`, `switch_failed`, `outside_change`,
 `deploy_blocked`, `deploy_failed`, `dump_failed` and `mcp_request` go to every channel
 (`recovery_attempt` stays in the feed unless a rule asks for it). A rule narrows or routes: levels
-(`network` / `node` / `guest` / `service` / `sub` / `route` / `disk`), scope (services, groups, nodes),
+(`network` / `node` / `guest` / `service` / `sub` / `route` / `disk` / `agent`), scope (services, groups, nodes),
 events, the least severity (`info` < `warn` < `error` < `critical`), channels, and whether it
 sends on the first check. An empty list
 means "any". Once any rule exists, an event is sent only if some enabled rule matches;

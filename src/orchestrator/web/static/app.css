@@ -1100,3 +1100,26 @@ pre.log .err { color: var(--fail); } pre.log .ts { color: var(--faint); }
 .fmt-item dl.kv { display: grid; grid-template-columns: max-content 1fr; gap: 4px 16px; font-size: 13px; margin: 6px 0; }
 .fmt-item dl.kv > div { display: contents; } .fmt-item dl.kv dt { color: var(--faint); } .fmt-item dl.kv dd { margin: 0; overflow-wrap: anywhere; }
 .fmt-item .checks label { display: inline-block; margin: 2px 8px 2px 0; }
+
+/* The guest a service runs on has open alerts (service page header and facts). */
+.guest-alert { color: var(--warn); font-weight: 700; text-decoration: none; }
+
+/* A guest's drawer on the Proxmox Guests tab (source_proxmox.js guestDrawer). */
+.gd-head { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+.gd-head > button { margin-left: auto; }
+.gd-checks { display: grid; gap: 6px; margin: 0 0 12px; font-size: 13.5px; }
+.gd-check { display: grid; grid-template-columns: 18px minmax(0, 1fr) auto; gap: 8px; align-items: start; }
+.gd-ok { color: var(--ok); font-weight: 700; }
+.gd-no { color: var(--fail); font-weight: 700; }
+.gd-steps { margin: 0; padding-left: 20px; display: grid; gap: 12px; font-size: 13.5px; }
+.gd-cmd { display: flex; gap: 8px; align-items: flex-start; margin: 6px 0 2px; }
+.gd-cmd pre { flex: 1; min-width: 0; margin: 0; padding: 8px 10px; background: var(--inset); border: 1px solid var(--line-strong);
+  border-radius: 8px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.gd-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.gd-table th { text-align: left; color: var(--faint); font-weight: 600; font-size: 12px; padding: 4px 8px 6px 0; border-bottom: 1px solid var(--line); }
+.gd-table td { padding: 6px 8px 6px 0; border-bottom: 1px solid var(--line); overflow-wrap: anywhere; }
+.gd-disks { display: grid; gap: 6px; font-size: 13px; }
+.gd-bar { display: inline-block; vertical-align: middle; width: 90px; height: 6px; margin-right: 8px; border-radius: 999px; background: var(--line); overflow: hidden; }
+.gd-bar i { display: block; height: 100%; background: var(--ok); }
+.gd-bar i.warn { background: var(--warn); }
+.gd-bar i.fail { background: var(--fail); }

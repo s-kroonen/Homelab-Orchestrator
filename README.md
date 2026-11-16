@@ -72,6 +72,10 @@ working (fail-open).
 * **Guest disks** — how full every running guest's filesystems are (LXC from
   Proxmox, VMs through the QEMU guest agent), on each Proxmox source's Guests tab, with a warning at
   85% and an error at 95% through the notifications. See [docs/disks.md](docs/disks.md)
+* **Guest agent** — each VM's own address, who is signed in and for how long, its
+  network and whether a backup left it frozen, read-only from the QEMU guest agent
+  and shown on the Guests tab, with setup steps for a VM without it. See
+  [docs/guest_agent.md](docs/guest_agent.md)
 * FastAPI app: `/healthz`, `/readyz`, `/wake`, `/maintenance`, the dashboard,
   registry, infra, and backup endpoints (the latter four behind login)
 

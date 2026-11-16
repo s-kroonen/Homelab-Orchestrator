@@ -906,6 +906,20 @@ class TargetState(SQLModel, table=True):
     updated_at: datetime = Field(default_factory=_utcnow)
 
 
+class GuestFactsRow(SQLModel, table=True):
+    """The latest reading of one guest from inside it (guests/model.py ``GuestFacts``), keyed
+    by its source and its key there (Proxmox: ``node/vmid``). Runtime only; the collector
+    rewrites it every health cycle and *Read now* rewrites one."""
+
+    __tablename__ = "guest_facts"
+
+    source_id: str = Field(sa_column=Column(String, primary_key=True))
+    guest_key: str = Field(sa_column=Column(String, primary_key=True))
+    facts: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))
+    read_at: datetime | None = None
+    updated_at: datetime = Field(default_factory=_utcnow)
+
+
 class RecoveryState(SQLModel, table=True):
     """Where a service's automatic recovery stands. Runtime only."""
 

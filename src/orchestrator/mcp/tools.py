@@ -996,7 +996,10 @@ TOOLS: dict[str, Tool] = {
         Tool(
             "list_guests",
             "List Proxmox guests",
-            "Proxmox VMs and containers with their status and the service each one runs.",
+            "Proxmox VMs and containers with their status and the service each one runs, and "
+            "what each one's QEMU guest agent last reported (agent: state answers / not_answering "
+            "/ not_enabled / no_permission, address, who is signed in and for how long, OS, "
+            "freeze state, whether it is locked down). Read-only.",
             "read",
             _guests,
             {"node": _s("Only this node")},

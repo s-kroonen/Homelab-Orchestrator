@@ -238,11 +238,36 @@ class HealthScanner:
             log.error("health_scanner.poll_crashed", error=str(exc), error_type=type(exc).__name__)
             return 0
 
-        await self._check_disks(guest_cache)
+        facts = await self._collect_guests(guest_cache)
+        await self._check_disks(guest_cache, facts)
         log.info("health_scanner.polled", services=len(cache), inserted=inserted)
         return inserted
 
-    async def _check_disks(self, guest_cache: Any = None) -> None:
+    async def _collect_guests(self, guest_cache: Any = None) -> dict[str, Any] | None:
+        """Read every guest from inside (its QEMU guest agent; guests/runner.py), keep it and
+        announce what changed. Returns the readings by ``node/vmid`` for the disk check, so a
+        guest's agent is asked once per cycle. Never raises."""
+        if self._adapters is None or guest_cache is None:
+            return None
+        from orchestrator.guests import runner
+
+        try:
+            guests, error = await guest_cache.guests()
+            if guests is None:
+                log.info("health_scanner.guests_skipped", reason=error or "no guest list")
+                return None
+            readings = await asyncio.wait_for(
+                runner.collect(self._adapters.proxmox, self._settings, guests, self._notifications),
+                120,
+            )
+            return {r.ref.key: r for r in readings}
+        except Exception as exc:  # never let the agent reads stop the cycle
+            log.warning(
+                "health_scanner.guests_failed", error=str(exc), error_type=type(exc).__name__
+            )
+            return None
+
+    async def _check_disks(self, guest_cache: Any = None, facts: Any = None) -> None:
         """How full each running guest's disks are; a filling disk is announced (health/
         disks.py). The guest list is the cycle's own (``guest_cache``), so Proxmox lists the
         guests once per cycle. Proxmox is read with no transaction open; the result is written
@@ -262,7 +287,11 @@ class HealthScanner:
                 previous = disks.previous_states(session)
             status = await asyncio.wait_for(
                 disks.check_disks(
-                    self._adapters.proxmox, self._settings, previous=previous, guests=guests
+                    self._adapters.proxmox,
+                    self._settings,
+                    previous=previous,
+                    guests=guests,
+                    facts=facts,
                 ),
                 90,
             )

@@ -103,12 +103,15 @@ def link_for(level: str, target: str, event: str = "") -> str | None:
         return f"/services/{quote(target, safe='')}#{spot}"
     if level == "node":
         return node_href_by_name(target) if target else None
-    if level in ("guest", "disk"):
-        # its Proxmox source's guest list, filtered to this one
-        node, _, vmid = target.partition("/")
+    if level in ("guest", "disk", "agent"):
+        # its Proxmox source's guest list, with that guest's drawer open
+        node, _, rest = target.partition("/")
+        vmid = rest.partition("/")[0]
         if not node:
             return None
-        return node_href_by_name(node, tab="guests", find=vmid or node)
+        return node_href_by_name(
+            node, tab="guests", find=vmid or node, guest=f"{node}/{vmid}" if vmid else ""
+        )
     if level == "route":
         # the proxy host, on the proxy that owns it
         return f"/find/proxy-host?hostname={quote(target, safe='')}" if target else None

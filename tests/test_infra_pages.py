@@ -144,6 +144,19 @@ def test_infra_guests_api_shows_real_adapter_data(client: TestClient) -> None:
             "boot": None,
             # No health cycle has checked its disks yet (health/disks.py).
             "disk": None,
+            # Nor read its guest agent (docs/guest_agent.md).
+            "agent": {
+                "state": "unknown",
+                "label": "not read yet",
+                "detail": "read on the next health cycle",
+                "needs_look": False,
+                "address": None,
+                "sessions": None,
+                "os": "",
+                "freeze": None,
+                "locked_down": None,
+                "read_at": None,
+            },
         }
     ]
 

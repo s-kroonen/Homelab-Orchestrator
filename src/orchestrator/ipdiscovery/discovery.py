@@ -378,11 +378,15 @@ class IpDiscoverer:
             )
 
         where = check.node or (node.name if node else "")
-        try:
-            net = await self._proxmox.guest_network(where, service.guest_id, service.guest_kind)
-        except Exception as exc:  # an adapter bug must not stop the cycle
-            log.warning("ipdiscovery.guest_network.failed", service=slug, error=str(exc))
-            net = GuestNetwork(error=f"{type(exc).__name__}: {exc}")
+        # The health cycle already asked the guest's agent (guests/): use that reading, so
+        # the agent is asked once, and its reason when there is no address.
+        net = network_from_facts(session, where, service.guest_id)
+        if net is None:
+            try:
+                net = await self._proxmox.guest_network(where, service.guest_id, service.guest_kind)
+            except Exception as exc:  # an adapter bug must not stop the cycle
+                log.warning("ipdiscovery.guest_network.failed", service=slug, error=str(exc))
+                net = GuestNetwork(error=f"{type(exc).__name__}: {exc}")
 
         if net.ips:
             return self._finish(
@@ -503,6 +507,41 @@ class IpDiscoverer:
             changed=result.changed,
         )
         return result
+
+
+#: A guest reading older than this is not used; the agent is asked directly instead.
+_FACTS_FRESH_S = 1800
+
+
+def network_from_facts(session: Session, node: str, vmid: int) -> GuestNetwork | None:
+    """A guest's addresses from its latest reading (guests/store.py), or None when there is
+    no recent reading that says anything either way."""
+    from orchestrator.guests import store
+    from orchestrator.guests.model import AgentState, parse_time
+
+    facts = store.load_by_key(session, f"{node}/{vmid}")
+    read = parse_time(facts.read_at) if facts else None
+    if facts is None or read is None:
+        return None
+    if (datetime.now(UTC) - read).total_seconds() > _FACTS_FRESH_S:
+        return None
+    if facts.agent in (AgentState.ANSWERS, AgentState.NOT_NEEDED):
+        if facts.addresses:
+            return GuestNetwork(
+                macs=list(facts.macs), ips=list(facts.addresses), source=facts.address_source
+            )
+        if facts.agent is AgentState.NOT_NEEDED:
+            return None  # a container: let Proxmox be asked as before
+        return GuestNetwork(
+            macs=list(facts.macs), error="the guest agent reported no usable address"
+        )
+    if facts.agent in (
+        AgentState.NOT_ENABLED,
+        AgentState.NO_PERMISSION,
+        AgentState.NOT_ANSWERING,
+    ):
+        return GuestNetwork(macs=list(facts.macs), error=facts.agent_detail or None)
+    return None
 
 
 def _label(source: str | None) -> str:

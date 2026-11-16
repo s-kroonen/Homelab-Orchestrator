@@ -6,6 +6,8 @@ import uuid
 from datetime import UTC, datetime
 from typing import Any
 
+from orchestrator.adapters.errors import AdapterError
+from orchestrator.adapters.proxmox.agent import agent_method
 from orchestrator.adapters.proxmox.base import (
     BackupStorage,
     ClusterNode,
@@ -55,6 +57,12 @@ class DryRunProxmoxAdapter(ProxmoxAdapter):
         #: changes nothing in Proxmox, but the page shows what was asked).
         self.simulated_boot: dict[int, GuestBoot] = {}
         self.simulated_onboot_delay: dict[str, int] = {}
+        #: vmid -> the guest's Proxmox config. Unset -> an empty config (agent option off).
+        self.simulated_configs: dict[int, dict[str, Any]] = {}
+        #: vmid -> {agent command: its result, or an exception to raise}. A command missing
+        #: from a guest's entry fails like an agent that is not running.
+        self.simulated_agent: dict[int, dict[str, Any]] = {}
+        self.agent_calls: list[tuple[str, int, str]] = []
 
     async def start(self) -> None:
         log.info("proxmox.dry_run.start")
@@ -164,6 +172,20 @@ class DryRunProxmoxAdapter(ProxmoxAdapter):
         log.info("proxmox.dry_run.guest_network", node=node, vmid=vmid, kind=kind.value)
         self.guest_network_calls.append((node, vmid, kind))
         return self.simulated_networks.get(vmid, GuestNetwork())
+
+    async def guest_config(self, node: str, vmid: int, kind: GuestKind) -> dict[str, Any]:
+        return dict(self.simulated_configs.get(vmid, {}))
+
+    async def agent_read(self, node: str, vmid: int, command: str) -> Any:
+        agent_method(command)  # the same allow-list as the live adapter
+        self.agent_calls.append((node, vmid, command))
+        answers = self.simulated_agent.get(vmid, {})
+        if command not in answers:
+            raise AdapterError("QEMU guest agent is not running")
+        answer = answers[command]
+        if isinstance(answer, BaseException):
+            raise answer
+        return answer
 
     async def guest_boot(self, node: str, vmid: int, kind: GuestKind) -> GuestBoot:
         return self.simulated_boot.get(vmid, GuestBoot())
