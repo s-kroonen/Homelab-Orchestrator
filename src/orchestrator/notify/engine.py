@@ -54,6 +54,11 @@ EVENTS = (
     "disk_full",
     "agent_unresponsive",
     "lockdown_weakened",
+    "network_down",
+    "guest_frozen",
+    "guest_signin",
+    "guest_signout",
+    "ip_changed",
     "recovery_attempt",
     "recovery_succeeded",
     "recovery_exhausted",
@@ -92,6 +97,10 @@ DEFAULT_EVENTS = (
     "disk_full",
     "agent_unresponsive",
     "lockdown_weakened",
+    "network_down",
+    "guest_frozen",
+    "guest_signin",
+    "ip_changed",
     "backup_failed",
     "backup_retry",
     "wake_failed",
@@ -164,7 +173,7 @@ def _severity_for(level: str, state: str) -> str:
         return "error" if level in ("node", "network", "route") else "warn"
     if state in ("unknown", "disk_low", "agent_unresponsive", "lockdown_weakened"):
         return "warn"
-    if state == "disk_full":
+    if state in ("disk_full", "network_down", "guest_frozen"):
         return "error"
     return "info"
 

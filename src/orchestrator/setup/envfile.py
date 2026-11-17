@@ -683,6 +683,10 @@ ENV_SECTIONS: tuple[EnvSection, ...] = (
                 "Seconds one QEMU guest agent read may take (default 5).",
             ),
             EnvKey(
+                "DISK_INCLUDE_NETWORK_FS",
+                "Count network filesystems (NFS, SMB) inside guests in the disk check.",
+            ),
+            EnvKey(
                 "ARCHIVE_RETENTION_DAYS",
                 "A deleted service stays in the archive (restorable from /archive) this many days.",
             ),

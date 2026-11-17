@@ -319,6 +319,7 @@
       const ss = d.sessions;
       const ifs = d.interfaces;
       const fss = d.filesystems || (d.disk && d.disk.filesystems) || null;
+      const nfs = d.network_mounts || [];
       const boot = d.proxmox && d.proxmox.boot;
       return [
         ss ? [sec("Signed in"), ss.length ? el("table", { class: "gd-table" }, el("thead", {}, el("tr", {}, el("th", {}, "User"), el("th", {}, "Since"), el("th", {}, "Signed in for"))),
@@ -329,11 +330,11 @@
           el("tbody", {}, ifs.map((i) => el("tr", {}, el("td", { class: "mono" }, i.name), el("td", { class: "mono" }, (i.addresses || []).join(", ") || "—"),
             el("td", {}, el("span", { class: "pill " + (i.up ? "ok" : "off") }, i.up ? "up" : "no address")),
             el("td", {}, i.rx_bytes != null ? fmt.bytes(i.rx_bytes) + " / " + fmt.bytes(i.tx_bytes) : "—")))))] : null,
-        fss && fss.length ? [sec("Disks"), el("div", { class: "gd-disks" }, fss.map((f) => {
+        (fss && fss.length) || nfs.length ? [sec("Disks"), el("div", { class: "gd-disks" }, (fss || []).map((f) => {
           const pct = f.percent != null ? f.percent : (f.total ? Math.round((f.used * 1000) / f.total) / 10 : 0);
           const cls = pct >= 95 ? "fail" : pct >= 85 ? "warn" : "ok";
           return el("div", {}, el("span", { class: "gd-bar" }, el("i", { class: cls, style: { width: Math.min(100, pct) + "%" } })), el("span", { class: "mono" }, f.mount), " ", el("span", { class: cls === "ok" ? "" : "pill " + cls }, pct + "%"), el("span", { class: "faint" }, " · " + fmt.bytes(f.used) + " of " + fmt.bytes(f.total)));
-        }))] : null,
+        }), nfs.map((m) => el("div", { class: "faint", title: "Another machine's disk: left out of the disk check" }, el("span", { class: "mono" }, m.mount), " " + m.fstype + ", not measured")))] : null,
         d.state === "answers" ? [sec("Backups and agent"), el("dl", { class: "kv" },
           el("dt", {}, "After the last backup"), el("dd", {}, d.freeze === "frozen" ? el("span", { class: "pill fail" }, "frozen") : d.freeze ? [d.freeze, " ", el("span", { class: "pill ok" }, "ok")] : "—"),
           el("dt", {}, "Locked down"), el("dd", {}, d.locked_down === true ? ["commands and file access are off ", el("span", { class: "pill ok" }, "yes")] : d.locked_down === false ? el("span", { class: "pill warn" }, (d.dangerous || []).join(", ") + " on") : "not known"),

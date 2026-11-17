@@ -108,6 +108,7 @@ def detail(facts: GuestFacts | None, fallback_address: dict[str, str] | None = N
             ),
             "filesystems": facts.filesystems,
             "filesystems_error": facts.filesystems_error,
+            "network_mounts": facts.network_mounts,
             "freeze_on_backup": facts.freeze_on_backup,
             "errors": facts.errors,
             "guide": setup_guide.build(facts).as_dict(),

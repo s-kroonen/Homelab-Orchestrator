@@ -94,7 +94,8 @@ def _install(facts: GuestFacts) -> Step:
     note = (
         ""
         if facts.os_name
-        else "Fedora/RHEL: dnf install qemu-guest-agent · Alpine: apk add qemu-guest-agent"
+        else "Fedora/RHEL: dnf install qemu-guest-agent · Alpine: apk add qemu-guest-agent · "
+        "FreeBSD/pfSense: pkg install qemu-guest-agent"
     )
     return Step("Install it in the guest", command=command, note=note)
 

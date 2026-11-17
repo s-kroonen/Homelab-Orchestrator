@@ -47,7 +47,9 @@ Guests' disks add **disk_low** (a filesystem at `DISK_WARN_PCT`, 85%: a warning)
 (`DISK_FULL_PCT`, 95%: an error), sent by default, with *recovered* when there is room again -
 see [disks.md](disks.md). A guest's QEMU guest agent adds, at level **agent**,
 **agent_unresponsive** (a running guest's agent stopped answering) and **lockdown_weakened** (the
-agent accepts commands): both warnings, sent by default - see [guest_agent.md](guest_agent.md).
+agent accepts commands), both warnings; **network_down** and **guest_frozen** (errors); and the
+moments **guest_signin**, **ip_changed** (sent by default) and **guest_signout** (in the feed,
+sent when a rule asks) - see [guest_agent.md](guest_agent.md).
 
 Pipelines add **backup_failed** and **wake_failed** (default), **backup_retry** (default) and
 **backup_skipped** (a backup that was not taken because the service was unhealthy, had no
@@ -62,7 +64,7 @@ AI assistant adds **mcp_request** (with the approval link) - see [mcp.md](mcp.md
 
 ## Rules
 
-With **no rules**, `failed`, `down`, `unknown`, `recovered`, `flapping`, `disk_low`, `disk_full`, `agent_unresponsive`, `lockdown_weakened`, `backup_failed`, `wake_failed`,
+With **no rules**, `failed`, `down`, `unknown`, `recovered`, `flapping`, `disk_low`, `disk_full`, `agent_unresponsive`, `lockdown_weakened`, `network_down`, `guest_frozen`, `guest_signin`, `ip_changed`, `backup_failed`, `wake_failed`,
 `recovery_succeeded`, `recovery_exhausted`, `restore_proposed`, `switch_failed`, `outside_change`,
 `deploy_blocked`, `deploy_failed`, `dump_failed` and `mcp_request` go to every channel
 (`recovery_attempt` stays in the feed unless a rule asks for it). A rule narrows or routes: levels

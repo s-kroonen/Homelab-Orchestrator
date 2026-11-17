@@ -129,6 +129,8 @@ class GuestFacts:
     #: Filesystems as ``{"mount", "fstype", "used", "total"}``.
     filesystems: list[dict[str, Any]] | None = None
     filesystems_error: str | None = None
+    #: Network filesystems left out of the disk check: ``{"mount", "fstype"}``.
+    network_mounts: list[dict[str, str]] | None = None
     #: "thawed" | "frozen" (the agent's fsfreeze-status).
     freeze: str | None = None
     #: The source's own "freeze filesystems during backup" option for this guest.

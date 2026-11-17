@@ -852,6 +852,28 @@ class BackupPipeline:
             raise RetryableBackupError(message)
         raise BackupSkipped(message, retryable=not failed, why="sub_unhealthy")
 
+    async def _freeze_check(self, steps: StepRecorder, service: Service, node: Node) -> None:
+        """Are the VM's filesystems thawed again (guests/runner.py ``after_backup``)? Recorded
+        only when its guest agent can say; never fails the backup."""
+        if service.guest_kind is not GuestKind.VM or service.guest_id is None:
+            return
+        from orchestrator.guests.runner import after_backup
+
+        started = datetime.now(UTC)
+        state = await after_backup(self._proxmox, self._settings, node.name, service.guest_id)
+        if state == "thawed":
+            steps.record("freeze_check", "ok", started_at=started, detail={"state": "thawed"})
+        elif state == "frozen":
+            steps.record(
+                "freeze_check",
+                "failed",
+                started_at=started,
+                detail={
+                    "state": "frozen",
+                    "fix": f"on {node.name}: qm guest cmd {service.guest_id} fsfreeze-thaw",
+                },
+            )
+
     async def _dump_and_locate(
         self,
         steps: StepRecorder,
@@ -889,6 +911,9 @@ class BackupPipeline:
         status = await self._proxmox.wait_for_task(
             node.name, handle.upid, timeout_s=self._settings.backup_task_timeout_s
         )
+        # Proxmox freezes a VM's filesystems for the snapshot and thaws them after; a dump
+        # that went wrong can leave them frozen, and the VM then stops writing.
+        await self._freeze_check(steps, service, node)
         if not status.succeeded:
             steps.record(
                 "vzdump_finished",
