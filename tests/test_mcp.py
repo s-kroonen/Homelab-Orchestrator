@@ -8,6 +8,7 @@ import hashlib
 import re
 import secrets
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 from urllib.parse import parse_qs, urlencode, urlsplit
 
@@ -748,6 +749,7 @@ def test_proxy_hosts_show_where_they_stand_against_the_router(client: TestClient
     assert out["isError"] is False
     text = out["content"][0]["text"]
     assert "wiki.example.com" in text and "sync_state" in text and "wiki" in text
+    assert '"route_ref"' in text and '"extra"' not in text
 
 
 def test_approval_tokens_can_always_be_typed_as_a_cli_argument(client: TestClient) -> None:
@@ -835,3 +837,152 @@ def test_linking_a_proxy_host_moves_it(client: TestClient) -> None:
         assert ph.service_id is not None
     assert call(client, got["access_token"], "link_proxy_host",
                 {"hostname": "nope.example.lan", "slug": "wiki"})["isError"]  # fmt: skip
+
+
+# -- checks: test_check (read) and edit_check (always a person's approval) ---------------------
+
+
+def _add_check(slug: str, name: str, *, required: bool = False) -> int:
+    from orchestrator.db.models import Probe, Service
+    from orchestrator.domain.enums import ProbeKind
+
+    with Session(get_engine()) as s:
+        svc = s.exec(select(Service).where(Service.slug == slug)).one()
+        probe = Probe(
+            service_id=svc.id,
+            name=name,
+            kind=ProbeKind.TCP,
+            required=required,
+            timeout_s=5,
+            order=0,
+            config={"host": "10.0.0.5", "port": 80},
+        )
+        s.add(probe)
+        s.commit()
+        assert probe.id is not None
+        return probe.id
+
+
+def _checks(slug: str) -> dict[str, Any]:
+    from orchestrator.db.models import Probe, Service
+
+    with Session(get_engine()) as s:
+        svc = s.exec(select(Service).where(Service.slug == slug)).one()
+        rows = s.exec(select(Probe).where(Probe.service_id == svc.id)).all()
+        return {p.name: p for p in rows}
+
+
+def test_edit_check_needs_configure_and_propose(client: TestClient) -> None:
+    args = {"slug": "wiki", "action": "add", "name": "web", "kind": "tcp",
+            "config": {"host": "10.0.0.5", "port": 80}}  # fmt: skip
+    no_propose = connect(client, ["read", "configure"])
+    out = call(client, no_propose["access_token"], "edit_check", args)
+    assert out["isError"] is True and "propose" in out["content"][0]["text"]
+    no_configure = connect(client, ["read", "propose"])
+    out = call(client, no_configure["access_token"], "edit_check", args)
+    assert out["isError"] is True and "configure" in out["content"][0]["text"]
+    assert "web" not in _checks("wiki")
+
+
+def test_adding_a_check_waits_for_a_person_then_adds_it(client: TestClient) -> None:
+    import json
+
+    got = connect(client, ["read", "configure", "propose"])
+    args = {"slug": "wiki", "action": "add", "name": "web", "kind": "tcp",
+            "config": {"host": "10.0.0.5", "port": 80}}  # fmt: skip
+    out = call(client, got["access_token"], "edit_check", args)
+    text = out["content"][0]["text"]
+    assert out["isError"] is False and "NOT DONE" in text
+    assert "ADD REQUIRED check 'web' to wiki" in text and '"port": 80' in text
+    assert "web" not in _checks("wiki")  # asked, not done
+
+    request = _only_request(client)
+    done = client.post(f"/api/assistants/requests/{request['request_id']}/approve").json()
+    assert done["result"]["ok"] is True, done["result"]
+    check = _checks("wiki")["web"]
+    assert check.required is True and check.config == {"host": "10.0.0.5", "port": 80}
+    with Session(get_engine()) as s:
+        entry = s.exec(select(AuditEntry).where(AuditEntry.action == "probe.created")).one()
+    assert entry.actor == "mcp:my claude" and entry.target == "service:wiki"
+    assert json.loads(done["result"]["output"])["name"] == "web"
+
+
+def test_changing_and_deleting_a_check_wait_for_a_person(client: TestClient) -> None:
+    got = connect(client, ["read", "configure", "propose"])
+    check_id = _add_check("wiki", "web")
+
+    out = call(client, got["access_token"], "edit_check",
+               {"slug": "wiki", "action": "change", "check_id": check_id, "required": True})  # fmt: skip
+    assert f"CHANGE check {check_id} of wiki: required=true" in out["content"][0]["text"]
+    assert _checks("wiki")["web"].required is False
+    request = _only_request(client)
+    client.post(f"/api/assistants/requests/{request['request_id']}/approve")
+    assert _checks("wiki")["web"].required is True
+
+    out = call(client, got["access_token"], "edit_check",
+               {"slug": "wiki", "action": "delete", "check_id": check_id})  # fmt: skip
+    assert f"DELETE check {check_id} of wiki" in out["content"][0]["text"]
+    assert "web" in _checks("wiki")
+    rows = client.get("/api/assistants/requests").json()
+    waiting = next(r for r in rows if r["status"] == "waiting")
+    client.post(f"/api/assistants/requests/{waiting['request_id']}/approve")
+    assert "web" not in _checks("wiki")
+
+
+@pytest.mark.parametrize(
+    ("args", "why"),
+    [
+        ({"action": "change", "required": True}, "needs check_id"),
+        ({"action": "delete", "check_id": 999999}, "no probe 999999"),
+        ({"action": "add", "kind": "tcp"}, "add needs name"),
+        ({"action": "add", "name": "x", "kind": "nope"}, "kind"),
+        ({"action": "add", "name": "x", "kind": "tcp", "config": {"host": "h"}}, "port"),
+    ],
+)
+def test_edit_check_refuses_what_could_never_apply_without_asking(
+    client: TestClient, args: dict[str, Any], why: str
+) -> None:
+    got = connect(client, ["read", "configure", "propose"])
+    out = call(client, got["access_token"], "edit_check", {"slug": "wiki", **args})
+    assert out["isError"] is True and why in out["content"][0]["text"], out
+    assert client.get("/api/assistants/requests").json() == []
+
+
+def test_a_change_that_sets_nothing_is_refused(client: TestClient) -> None:
+    got = connect(client, ["read", "configure", "propose"])
+    check_id = _add_check("wiki", "web")
+    out = call(client, got["access_token"], "edit_check",
+               {"slug": "wiki", "action": "change", "check_id": check_id})  # fmt: skip
+    assert out["isError"] is True and "at least one field" in out["content"][0]["text"]
+    assert client.get("/api/assistants/requests").json() == []
+
+
+def test_a_check_of_another_service_is_refused(client: TestClient) -> None:
+    got = connect(client, ["read", "configure", "propose"])
+    other = _add_check("portainer-vm", "web")
+    out = call(client, got["access_token"], "edit_check",
+               {"slug": "wiki", "action": "delete", "check_id": other})  # fmt: skip
+    assert out["isError"] is True and "belongs to portainer-vm" in out["content"][0]["text"]
+    assert client.get("/api/assistants/requests").json() == []
+    out = call(client, got["access_token"], "test_check", {"slug": "wiki", "check_id": other})
+    assert out["isError"] is True and "belongs to portainer-vm" in out["content"][0]["text"]
+    assert "web" in _checks("portainer-vm")
+
+
+def test_test_check_runs_a_check_and_saves_nothing(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from orchestrator.health.engine import HealthEngine
+
+    seen: list[str] = []
+
+    async def fake(self: Any, probe: Any) -> Any:
+        seen.append(probe.name)
+        return SimpleNamespace(model_dump=lambda: {"state": "passed", "detail": "open"})
+
+    monkeypatch.setattr(HealthEngine, "run_probe", fake)
+    check_id = _add_check("wiki", "web")
+    got = connect(client, ["read"])
+    out = call(client, got["access_token"], "test_check", {"slug": "wiki", "check_id": check_id})
+    assert out["isError"] is False and '"passed"' in out["content"][0]["text"]
+    assert seen == ["web"] and client.get("/api/assistants/requests").json() == []
