@@ -132,9 +132,13 @@ def _nodes(
         if state == "down" and by_hand is not None:
             # A person turned it off here: still announced, as a warning that says so.
             # Every other way down (external power-off, crash) stays an error.
-            what = (by_hand.details or {}).get("action", "power_off").replace("_", " ")
+            details = by_hand.details or {}
+            what = details.get("action", "power_off").replace("_", " ")
             when = by_hand.created_at.strftime("%H:%M UTC")
-            reason += f" - {what} by {by_hand.actor} from the orchestrator at {when}"
+            if by_hand.actor == "backup":
+                reason += f" - {what} after a backup ({details.get('why', 'planned')}) at {when}"
+            else:
+                reason += f" - {what} by {by_hand.actor} from the orchestrator at {when}"
             severity = "warn"
         out.append(
             Observation(

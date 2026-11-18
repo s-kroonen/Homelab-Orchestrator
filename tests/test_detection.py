@@ -293,6 +293,19 @@ def test_a_node_a_person_powered_off_here_is_announced_as_a_warning(session: Ses
     assert "power off by admin from the orchestrator" in node.reason
 
 
+def test_a_node_a_backup_put_back_off_is_announced_as_a_warning(session: Session) -> None:
+    from datetime import UTC, datetime, timedelta
+
+    from orchestrator.db.models import AuditEntry
+
+    session.add(AuditEntry(actor="backup", action="node.power_action", target="node:node-a",
+                           details={"action": "power_off", "why": "backup finished: back to the prior state"},
+                           created_at=datetime.now(UTC) - timedelta(minutes=15)))  # fmt: skip
+    session.commit()
+    node = _node_down(session)
+    assert node.severity == "warn" and "power off after a backup (backup finished" in node.reason
+
+
 @pytest.mark.parametrize(
     "history",
     [
