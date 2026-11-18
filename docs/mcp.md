@@ -63,9 +63,11 @@ may not use is not even listed to the assistant.
 * **read**: `orchestrator_status`, `list_services`, `get_service`, `service_health_history`,
   `linked_state`, `recent_activity`, `list_backups`, `backup_plan`, `list_runs`, `get_run`,
   `deploy_history`, `list_dumps`, `infra_status`, `list_nodes`, `list_guests`, `disk_usage`
-  (how full each guest's filesystems are, [disks.md](disks.md)), `list_proxy_hosts`,
+  (how full each guest's filesystems are, [disks.md](disks.md)), `list_proxy_hosts` (with the
+  Traefik Manager route each record points at, `route_ref`),
   `proxy_backends` (what of a failover, weighted or mirroring host can be changed, with versions),
-  `portainer_stacks`, `portainer_containers`, `container_logs` (secrets redacted), `get_request`.
+  `portainer_stacks`, `portainer_containers`, `container_logs` (secrets redacted), `get_request`,
+  `test_check` (runs one of a service's checks now and returns the raw result; saves nothing).
 * **act** (runs at once, logged, audited as `mcp:<connection>`): `run_backup`, `run_dump`, `propose_restore`,
   `deploy_service` (with its guards), `wake_service`, `node_power wake`, `switch_service`,
   `service_action`, `stack_action`, `container_action`, `guest_power start`.
@@ -81,7 +83,11 @@ may not use is not even listed to the assistant.
   `restart`, `delete_stack`, `deploy_service` with `skip_guards`, `switch_service off` with
   `include_guest`, `service_action stop` / `restart` on a `guest`, `set_dump` with a `command`
   (it runs a shell command in a container), `edit_proxy_backends` (a live route's backends,
-  [proxy_hosts.md](proxy_hosts.md#changing-a-host-with-several-backends)).
+  [proxy_hosts.md](proxy_hosts.md#changing-a-host-with-several-backends)), `edit_check` (add,
+  change or delete a service's check; it needs `configure` too). Required checks decide a
+  service's health, its alerts and whether it may be backed up, so every `edit_check` waits for a
+  person. The approval page names the service, the check and every field set; a check id that
+  belongs to another service is refused.
 
 The tools call the same code the dashboard buttons do, so every guard applies unchanged: nothing
 is stopped under a running backup, deploys run their pre-guards, the switch keeps its order.

@@ -177,6 +177,15 @@ async def call_tool(
     why = "dangerous" if risk == DANGEROUS else ""
     if not why and grant.confirm_writes and tool.writes:
         why = "this connection asks before every change"
+    if why and tool.precheck is not None:
+        try:
+            tool.precheck(
+                ToolContext(session, adapters, settings, actor=f"mcp:{grant.label}", grant=grant),
+                clean,
+            )
+        except ToolError as exc:
+            done("error", str(exc), risk, clean)
+            return _text(f"Not asked, it would fail: {exc}", error=True)
     if why:
         row, _ = await approvals.create_request(
             session, settings, grant, tool.name, clean, risk=risk, why=why

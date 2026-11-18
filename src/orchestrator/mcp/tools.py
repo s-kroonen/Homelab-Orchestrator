@@ -76,6 +76,9 @@ class Tool:
     risk: str | Callable[[dict[str, Any]], str] = READ
     #: One line for the approval page: what happens if a person says yes.
     consequence: Callable[[dict[str, Any]], str] | None = None
+    #: Raises ToolError for a call that could never succeed, before anyone is asked to
+    #: approve it (the run checks again: things can change while it waits).
+    precheck: Callable[[ToolContext, dict[str, Any]], None] | None = None
 
     def risk_of(self, args: dict[str, Any]) -> str:
         return self.risk(args) if callable(self.risk) else self.risk
@@ -119,6 +122,8 @@ _TYPES: dict[str, tuple[type, ...]] = {
     "string": (str,),
     "integer": (int,),
     "boolean": (bool,),
+    "object": (dict,),
+    "array": (list,),
 }
 
 
@@ -324,7 +329,16 @@ async def _proxy_hosts(ctx: ToolContext, a: dict[str, Any]) -> Any:
         "live_status",
         "served",
     )
-    return [{k: r[k] for k in keep if k in r} for r in rows]
+    from orchestrator.registry.proxy_push import TRAEFIK_MANAGER_ROUTE_REF_KEY
+
+    return [
+        {
+            **{k: r[k] for k in keep if k in r},
+            # Which Traefik Manager route this record points at (None: matched by hostname).
+            "route_ref": (r.get("extra") or {}).get(TRAEFIK_MANAGER_ROUTE_REF_KEY),
+        }
+        for r in rows
+    ]
 
 
 async def _portainer_stacks(ctx: ToolContext, a: dict[str, Any]) -> Any:
@@ -805,6 +819,119 @@ def _edits_text(a: dict[str, Any]) -> str:
         ]
         parts.append(f"{e.get('service')} ({', '.join(what) or 'nothing'})")
     return f"CHANGE the backends of {a.get('hostname')}: " + "; ".join(parts)
+
+
+#: What edit_check may set on a check; the rest of its arguments say which check.
+CHECK_FIELDS = (
+    "name",
+    "kind",
+    "required",
+    "enabled",
+    "timeout_s",
+    "config",
+    "backup_waits",
+    "needs_internet",
+)
+
+
+def _check_of(ctx: ToolContext, slug: str, check_id: int) -> Any:
+    """The check ``check_id``, refused unless it belongs to ``slug`` (the approval page names
+    the service, so a check of another service must never be the one changed)."""
+    from orchestrator.web.routers import dashboard
+
+    try:
+        probe, svc = dashboard._get_probe(ctx.session, check_id)
+    except HTTPException as exc:
+        raise ToolError(f"{exc.status_code}: {exc.detail}") from exc
+    if svc.slug != slug:
+        raise ToolError(f"check {check_id} belongs to {svc.slug}, not {slug}")
+    return probe
+
+
+async def _edit_check(ctx: ToolContext, a: dict[str, Any]) -> Any:
+    from pydantic import ValidationError
+
+    from orchestrator.web.routers import dashboard
+
+    action, slug = a["action"], a["slug"]
+    fields = {k: a[k] for k in CHECK_FIELDS if k in a}
+    try:
+        if action == "add":
+            for key in ("name", "kind"):
+                if key not in fields:
+                    raise ToolError(f"add needs {key}")
+            body = dashboard.ProbeCreate(**fields)
+            return await _call(dashboard.create_probe(slug, body, ctx.session, ctx.admin))
+        if "check_id" not in a:
+            raise ToolError(f"{action} needs check_id (get_service lists each check's id)")
+        probe = _check_of(ctx, slug, a["check_id"])
+        if action == "delete":
+            return await _call(dashboard.delete_probe(probe.id, ctx.session, ctx.admin))
+        if not fields:
+            raise ToolError("change needs at least one field to set")
+        update = dashboard.ProbeUpdate(**fields)
+        try:
+            return dashboard.apply_probe_update(ctx.session, ctx.actor, probe.id, update)
+        except HTTPException as exc:
+            raise ToolError(f"{exc.status_code}: {exc.detail}") from exc
+    except ValidationError as exc:
+        raise ToolError(f"invalid check: {exc.errors()[0].get('msg', exc)}") from exc
+
+
+def _edit_check_precheck(ctx: ToolContext, a: dict[str, Any]) -> None:
+    """Refuse what could never apply, so a person is only asked about a change that will."""
+    from orchestrator.web.routers import dashboard
+
+    action, slug = a["action"], a["slug"]
+    try:
+        svc = dashboard._get_service(ctx.session, slug)
+        if action == "add":
+            for key in ("name", "kind"):
+                if not a.get(key):
+                    raise ToolError(f"add needs {key}")
+            kind = dashboard._parse_probe_kind(a["kind"])
+            assert svc.id is not None
+            dashboard._check_probe_name_free(ctx.session, svc.id, a["name"])
+            dashboard._validate_probe_config(kind, a.get("config") or {})
+            return
+        if "check_id" not in a:
+            raise ToolError(f"{action} needs check_id (get_service lists each check's id)")
+        probe = _check_of(ctx, slug, a["check_id"])
+        if action == "delete":
+            return
+        if not any(k in a for k in CHECK_FIELDS):
+            raise ToolError("change needs at least one field to set")
+        if "name" in a:
+            dashboard._check_probe_name_free(
+                ctx.session, probe.service_id, a["name"], exclude_id=probe.id
+            )
+        if "kind" in a or "config" in a:
+            kind = dashboard._parse_probe_kind(a["kind"]) if "kind" in a else probe.kind
+            dashboard._validate_probe_config(kind, a.get("config", probe.config) or {})
+    except HTTPException as exc:
+        raise ToolError(f"{exc.status_code}: {exc.detail}") from exc
+
+
+def _edit_check_text(a: dict[str, Any]) -> str:
+    """The approval page's line: which service, which check, and exactly what is set."""
+    slug, action = a.get("slug"), a.get("action")
+    sets = ", ".join(
+        f"{k}={json.dumps(a[k], sort_keys=True)}" for k in CHECK_FIELDS if k in a and k != "name"
+    )
+    if action == "add":
+        req = "REQUIRED" if a.get("required", True) else "optional"
+        return f"ADD {req} check {a.get('name')!r} to {slug}: {sets}"
+    if action == "delete":
+        return f"DELETE check {a.get('check_id')} of {slug}"
+    rename = f" (rename to {a['name']!r})" if "name" in a else ""
+    return f"CHANGE check {a.get('check_id')} of {slug}{rename}: {sets}"
+
+
+async def _test_check(ctx: ToolContext, a: dict[str, Any]) -> Any:
+    from orchestrator.web.routers import dashboard
+
+    probe = _check_of(ctx, a["slug"], a["check_id"])
+    return await _call(dashboard.test_probe(probe.id, ctx.session, ctx.settings))
 
 
 async def _guest_power(ctx: ToolContext, a: dict[str, Any]) -> Any:
@@ -1383,7 +1510,51 @@ TOOLS: dict[str, Tool] = {
             ("hostname",),
             READ,
         ),
+        Tool(
+            "test_check",
+            "Test a check",
+            "Run one of a service's checks (probes) right now and return its raw result: the "
+            "request made, the status code, the error. Saves nothing and changes no verdict. "
+            "Use it before making a check required.",
+            "read",
+            _test_check,
+            {"slug": SLUG, "check_id": _i("The check's id, as get_service lists it", minimum=1)},
+            ("slug", "check_id"),
+            READ,
+        ),
         # -- dangerous
+        Tool(
+            "edit_check",
+            "Add, change or delete a check",
+            "Add a check (probe) to a service, change one, or delete one. Required checks "
+            "decide the service's health, its alerts and whether it may be backed up, so "
+            "every call needs a person's approval. get_service lists the checks with their "
+            "ids and config; test_check shows what a check gets now. Kinds and their config "
+            "are those of the dashboard's check form (http: url, expect_status, host_header, "
+            "verify_tls; tcp: host, port; portainer: endpoint and stack or container; ...).",
+            "configure",
+            _edit_check,
+            {
+                "slug": SLUG,
+                "action": _s("add | change | delete", enum=["add", "change", "delete"]),
+                "check_id": _i("change / delete: the check's id (get_service)", minimum=1),
+                "name": _s("add: its name; change: a new name"),
+                "kind": _s("http | tcp | portainer | systemd | mqtt | ... (add, or change)"),
+                "required": _b("Required: decides health, alerts and backups (add: default on)"),
+                "enabled": _b("Off: kept but not run"),
+                "timeout_s": _i("Seconds before it counts as failed", minimum=1, maximum=300),
+                "config": {
+                    "type": "object",
+                    "description": "The kind's settings, e.g. {url, expect_status} for http",
+                },
+                "backup_waits": _b("On a sub-service: its root's backup waits for this check"),
+                "needs_internet": _b("It goes over the internet: skipped while that is down"),
+            },
+            ("slug", "action"),
+            DANGEROUS,
+            _edit_check_text,
+            _edit_check_precheck,
+        ),
         Tool(
             "edit_proxy_backends",
             "Change a proxy host's backends",
