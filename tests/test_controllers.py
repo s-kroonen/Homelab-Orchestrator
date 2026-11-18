@@ -141,6 +141,8 @@ async def test_portainer_stacks(monkeypatch: pytest.MonkeyPatch) -> None:
     posts: list[str] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET" and request.url.path.endswith("/containers/json"):
+            return httpx.Response(200, json=[{"Id": "c1", "Names": ["/media-app-1"], "State": "running"}])  # fmt: skip
         if request.method == "GET":
             return httpx.Response(
                 200, json=[{"Id": 7, "Name": "media", "EndpointId": 2, "Status": 1}]
@@ -154,6 +156,88 @@ async def test_portainer_stacks(monkeypatch: pytest.MonkeyPatch) -> None:
     assert (await ctl.status()).running is True
     await ctl.restart()
     assert posts == ["/api/stacks/7/stop", "/api/stacks/7/start"]
+
+
+def _stack_portainer(
+    monkeypatch: pytest.MonkeyPatch, active: bool, boxes: list[tuple[str, str, str]]
+) -> list[str]:
+    """A stack ``media`` with ``boxes`` (id, name, state); returns the POSTs made."""
+    posts: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET" and request.url.path.endswith("/containers/json"):
+            label = json.loads(request.url.params["filters"])["label"]
+            assert label == ["com.docker.compose.project=media"]
+            return httpx.Response(
+                200, json=[{"Id": i, "Names": [f"/{n}"], "State": s} for i, n, s in boxes]
+            )
+        if request.method == "GET":
+            stack = {"Id": 7, "Name": "media", "EndpointId": 2, "Status": 1 if active else 2}
+            return httpx.Response(200, json=[stack])
+        posts.append(request.url.path)
+        return httpx.Response(204)
+
+    patch_http(monkeypatch, handler)
+    return posts
+
+
+async def test_an_active_stack_with_a_stopped_container_is_not_running(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _stack_portainer(monkeypatch, True, [("a", "media-web-1", "exited"), ("b", "media-db-1", "running")])  # fmt: skip
+    s = Settings(portainer_url="https://p.test", portainer_api_key="k", dry_run=False)
+    st = await PortainerController(s, {"endpoint": 2, "stack": "media"}).status()
+    assert st.running is False and st.state == "active" and "media-web-1" in st.detail
+
+
+async def test_waking_a_stack_starts_only_the_needed_stopped_container(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    posts = _stack_portainer(monkeypatch, True, [("a", "media-web-1", "exited"),
+                                                 ("b", "media-worker-1", "exited"),
+                                                 ("c", "media-db-1", "running")])  # fmt: skip
+    s = Settings(portainer_url="https://p.test", portainer_api_key="k", dry_run=False)
+    ctl = PortainerController(
+        s, {"endpoint": 2, "stack": "media"}, needs=["media-web-1", "media-db-1"]
+    )
+    assert (await ctl.status()).running is False
+    message = await ctl.start()
+    assert posts == ["/api/endpoints/2/docker/containers/a/start"]  # not the worker, not the stack
+    assert "media-web-1" in message and "nothing else" in message
+    # without needs: every stopped container of the stack, still not the stack itself
+    posts.clear()
+    await PortainerController(s, {"endpoint": 2, "stack": "media"}).start()
+    assert posts == ["/api/endpoints/2/docker/containers/a/start",
+                     "/api/endpoints/2/docker/containers/b/start"]  # fmt: skip
+
+
+async def test_a_needed_container_running_means_running(monkeypatch: pytest.MonkeyPatch) -> None:
+    posts = _stack_portainer(monkeypatch, True, [("a", "media-web-1", "running"), ("b", "media-worker-1", "exited")])  # fmt: skip
+    s = Settings(portainer_url="https://p.test", portainer_api_key="k", dry_run=False)
+    ctl = PortainerController(s, {"endpoint": 2, "stack": "media"}, needs=["media-web-1"])
+    assert (await ctl.status()).running is True
+    assert "already running" in await ctl.start() and posts == []
+
+
+async def test_a_stopped_stack_is_started_as_a_whole(monkeypatch: pytest.MonkeyPatch) -> None:
+    posts = _stack_portainer(monkeypatch, False, [])
+    s = Settings(portainer_url="https://p.test", portainer_api_key="k", dry_run=False)
+    ctl = PortainerController(s, {"endpoint": 2, "stack": "media"}, needs=["media-web-1"])
+    assert (await ctl.status()).running is False
+    await ctl.start()
+    assert posts == ["/api/stacks/7/start"]
+
+
+async def test_a_needed_container_that_is_gone_is_a_readable_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _stack_portainer(monkeypatch, True, [("c", "media-db-1", "running")])
+    s = Settings(portainer_url="https://p.test", portainer_api_key="k", dry_run=False)
+    ctl = PortainerController(s, {"endpoint": 2, "stack": "media"}, needs=["media-web-1"])
+    st = await ctl.status()
+    assert st.running is False and "not found: media-web-1" in st.detail
+    with pytest.raises(ControllerError, match="has no container media-web-1"):
+        await ctl.start()
 
 
 # --- home assistant -------------------------------------------------------------
@@ -381,3 +465,26 @@ async def test_waking_a_sub_service_starts_its_container_after_the_guest(
         names = [step["name"] for step in run.steps]
     assert "guest_start" in names and "service_start" in names
     assert names.index("guest_start") < names.index("service_start")
+
+
+def test_needed_containers_come_from_the_required_container_checks(client: TestClient) -> None:
+    from orchestrator.controllers import needed_containers
+    from orchestrator.db.models import Probe
+    from orchestrator.domain.enums import ProbeKind
+
+    with Session(get_engine()) as s:
+        svc = s.exec(select(Service).where(Service.slug == "redis")).one()
+
+        def add(
+            name: str, config: dict[str, Any], *, required: bool = True, on: bool = True
+        ) -> None:
+            s.add(Probe(service_id=svc.id, name=name, kind=ProbeKind.PORTAINER, required=required,
+                        enabled=on, timeout_s=5, order=0, config=config))  # fmt: skip
+
+        add("web", {"endpoint": 2, "container": "media-web-1"})
+        add("stack", {"endpoint": 2, "stack": "media"})  # a stack check names no container
+        add("optional", {"endpoint": 2, "container": "media-worker-1"}, required=False)
+        add("off", {"endpoint": 2, "container": "media-old-1"}, on=False)
+        add("elsewhere", {"endpoint": 3, "container": "other-1"})
+        s.commit()
+        assert needed_containers(s, svc, 2) == ["media-web-1"]

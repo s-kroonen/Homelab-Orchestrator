@@ -32,7 +32,11 @@ proxy host's route (inside through the proxy, and from outside), and announces C
   **recovered** - and only a recovery for something that was announced.
 * Severity: a node, the orchestrator's network or a route going down is an **error**, as is a
   service that is unreachable; a service down because its guest was switched off is a
-  warning, unknown is a warning.
+  warning, unknown is a warning. A node a person powered off (or restarted) **from the
+  orchestrator** in the last 2 hours - the Nodes page, a bulk action, or an assistant request a
+  person approved - is still announced, as a **warning** that says who and when. Every other way
+  a node goes down, an external power-off through the same power manager included, stays an
+  error.
 * Debounced: a change must be seen on `NOTIFY_CONFIRM_SCANS` (2) consecutive scans, unless a
   rule with **Send on the first check** matches it: then it goes out on the first scan.
 * Grouped under the root cause: a service that is down because its node or guest is
@@ -51,7 +55,9 @@ agent accepts commands), both warnings; **network_down** and **guest_frozen** (e
 moments **guest_signin**, **ip_changed** (sent by default) and **guest_signout** (in the feed,
 sent when a rule asks) - see [guest_agent.md](guest_agent.md).
 
-Pipelines add **backup_failed** and **wake_failed** (default), **backup_retry** (default) and
+Pipelines add **backup_failed** and **wake_failed** (default; a wake that fails with exactly the
+same error as the last one sent, with no wake of that service working since, is kept in the feed
+but not sent again for 24 hours - traffic keeps waking a broken service), **backup_retry** (default) and
 **backup_skipped** (a backup that was not taken because the service was unhealthy, had no
 required check or was off and may not be woken - see [backup_wake.md](backup_wake.md); in
 the feed, sent only when a rule asks for it); the recovery loop adds

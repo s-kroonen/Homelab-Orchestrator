@@ -38,7 +38,9 @@ async def announce(
     body: str,
     scope: dict[str, str] | None = None,
     approve_url: str | None = None,
+    suppressed: str = "",
 ) -> None:
+    """``suppressed``: why this one is only recorded in the feed, not sent."""
     engine = _engine
     if engine is None:
         return
@@ -54,7 +56,7 @@ async def announce(
                 title=title,
                 body=body,
                 scope=scope or {},
-                tags=[level],
+                tags=[level, *([f"suppressed:{suppressed}"] if suppressed else [])],
                 approve_url=approve_url,
             ),
         )

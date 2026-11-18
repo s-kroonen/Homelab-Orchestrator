@@ -14,11 +14,12 @@ Cause first, so the engine can fold effects under what explains them:
 from __future__ import annotations
 
 from collections.abc import Mapping
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from sqlmodel import Session, select
+from sqlmodel import Session, col, select
 
-from orchestrator.db.models import Node
+from orchestrator.db.models import AuditEntry, Node
 from orchestrator.domain.enums import GuestKind, HealthState
 from orchestrator.domain.schemas import ServiceVerdict
 from orchestrator.health.network import NetworkStatus
@@ -64,8 +65,44 @@ def _network(network: NetworkStatus | None) -> list[Observation]:
     return out
 
 
+#: How long after a person powered a node off from here its "down" still counts as theirs
+#: (a node shuts its guests down first: evepve took 20 minutes).
+MANUAL_POWER_OFF_WINDOW = timedelta(hours=2)
+#: Power actions that take a node down on purpose.
+_GOING_DOWN = {"power_off", "restart"}
+
+
+def manual_power_offs(session: Session, now: datetime | None = None) -> dict[str, AuditEntry]:
+    """Nodes a person powered off (or restarted) from the orchestrator within the window:
+    the dashboard, a bulk action, or an assistant request a person approved. The latest
+    power action per node counts; anything else that takes a node down (an external power-off
+    through the same power manager, a crash) is not in here."""
+    now = now or datetime.now(UTC)
+    rows = session.exec(
+        select(AuditEntry)
+        .where(
+            AuditEntry.action == "node.power_action",
+            col(AuditEntry.created_at) >= now - MANUAL_POWER_OFF_WINDOW,
+        )
+        .order_by(col(AuditEntry.created_at).desc())
+    ).all()
+    out: dict[str, AuditEntry] = {}
+    latest: set[str] = set()
+    for row in rows:
+        node = row.target.removeprefix("node:")
+        if node in latest:
+            continue
+        latest.add(node)
+        if row.actor != "system" and (row.details or {}).get("action") in _GOING_DOWN:
+            out[node] = row
+    return out
+
+
 def _nodes(
-    nodes: dict[Any, Node], cluster: Any | None, network: NetworkStatus | None
+    nodes: dict[Any, Node],
+    cluster: Any | None,
+    network: NetworkStatus | None,
+    manual: Mapping[str, AuditEntry] | None = None,
 ) -> list[Observation]:
     out: list[Observation] = []
     lan_cause = "network:lan" if network is not None and network.lan_ok is False else None
@@ -90,6 +127,15 @@ def _nodes(
             )
         else:
             state, reason = "down", f"node {node.name} is offline in the Proxmox cluster"
+        severity: str | None = None
+        by_hand = (manual or {}).get(node.name)
+        if state == "down" and by_hand is not None:
+            # A person turned it off here: still announced, as a warning that says so.
+            # Every other way down (external power-off, crash) stays an error.
+            what = (by_hand.details or {}).get("action", "power_off").replace("_", " ")
+            when = by_hand.created_at.strftime("%H:%M UTC")
+            reason += f" - {what} by {by_hand.actor} from the orchestrator at {when}"
+            severity = "warn"
         out.append(
             Observation(
                 level="node",
@@ -99,6 +145,7 @@ def _nodes(
                 reason=reason,
                 cause_key=lan_cause,
                 scope={"node": node.name},
+                severity=severity,
             )
         )
     return out
@@ -165,7 +212,8 @@ def collect(
     """Observations in cause-first order: network, nodes, guests, root services,
     sub-services, routes."""
     nodes = {n.id: n for n in session.exec(select(Node)).all()}
-    out: list[Observation] = [*_network(network), *_nodes(nodes, cluster, network)]
+    manual = manual_power_offs(session)
+    out: list[Observation] = [*_network(network), *_nodes(nodes, cluster, network, manual)]
 
     # -- guests: running or not, from the root service's guest gate ----------
     seen_guests: set[str] = set()
@@ -246,4 +294,4 @@ def _cause_key(cause: str | None, tree: TreeIndex) -> str | None:
     return cause
 
 
-__all__ = ["collect"]
+__all__ = ["MANUAL_POWER_OFF_WINDOW", "collect", "manual_power_offs"]

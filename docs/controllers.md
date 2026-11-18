@@ -17,6 +17,13 @@ Transports are the same blocks probes use (ssh, the host runner); commands are a
 lists, never shell strings. Under `DRY_RUN=true` the Portainer and Home Assistant
 controllers only log, and command controllers use the recording transport.
 
+**A Portainer stack starts as little as possible.** A stack is *running* when it is up in
+Portainer **and** the containers the service needs run: the ones its enabled, required container
+checks name (`container:<name>`), or every container of the stack when it names none. Start (and a
+wake) on an up stack starts only those that are stopped, one by one, nothing else of the stack;
+only a stack that is down in Portainer is started as a whole. A needed container that no longer
+exists is an error that names it. The guest it runs on is started only if it is stopped.
+
 A **root service with no controller** acts on its Proxmox guest (start / stop /
 restart the VM or container). A **sub-service with none** can't be acted on by itself.
 `target: guest` always means the root's guest.
