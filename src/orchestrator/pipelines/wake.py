@@ -24,7 +24,7 @@ import asyncio
 import contextlib
 import time
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from sqlmodel import Session, desc, select
 
@@ -33,7 +33,14 @@ from orchestrator.adapters.power.base import PowerAdapter
 from orchestrator.adapters.proxmox.base import ClusterStatus, ProxmoxAdapter
 from orchestrator.audit import log as audit
 from orchestrator.config import Settings
-from orchestrator.db.models import Node, NodeState, PipelineRun, Service
+from orchestrator.db.models import (
+    AuditEntry,
+    Node,
+    NodeState,
+    NotificationEvent,
+    PipelineRun,
+    Service,
+)
 from orchestrator.db.session import session_scope
 from orchestrator.domain.enums import (
     AuditResult,
@@ -136,6 +143,43 @@ def wake_is_unsupported(node: Node | None) -> bool:
 #: Actors whose wake was started by traffic rather than a person: they obey the node's wake on
 #: hit switch when the node is off (``traffic_blocker``), a person's wake does not.
 TRAFFIC_ACTORS = frozenset({"traefik_hit", "maintenance-page"})
+
+#: A wake that fails the same way again is sent once more after this long at most.
+WAKE_FAILED_REPEAT_QUIET = timedelta(hours=24)
+
+
+def repeated_wake_failure(session: Session, slug: str, body: str) -> str:
+    """Why this ``wake_failed`` is only recorded, not sent: the last one sent for ``slug``
+    said exactly the same, no wake of it succeeded since, and it is less than a day old.
+    Otherwise "" (send it). Traffic keeps waking a broken service; one alert says so."""
+    last = session.exec(
+        select(NotificationEvent)
+        .where(
+            NotificationEvent.level == "service",
+            NotificationEvent.target == slug,
+            NotificationEvent.event == "wake_failed",
+            NotificationEvent.suppressed == False,  # noqa: E712 - SQL comparison
+        )
+        .order_by(desc(NotificationEvent.at))
+    ).first()
+    if last is None or last.body != body:
+        return ""
+    sent = last.at if last.at.tzinfo else last.at.replace(tzinfo=UTC)
+    if datetime.now(UTC) - sent >= WAKE_FAILED_REPEAT_QUIET:
+        return ""
+    woke = session.exec(
+        select(AuditEntry).where(
+            AuditEntry.action == "wake.succeeded",
+            AuditEntry.target == f"service:{slug}",
+            AuditEntry.created_at > last.at,
+        )
+    ).first()
+    if woke is not None:
+        return ""
+    return (
+        f"the same wake failure was sent at {sent:%H:%M} UTC and no wake has worked "
+        "since: sent again when the error changes, a wake works, or after 24 hours"
+    )
 
 
 def traffic_blocker(
@@ -562,6 +606,7 @@ class WakePipeline:
                 details={"run_id": run.id, "error": str(exc), "indeterminate": indeterminate},
             )
             session.commit()
+            body = str(exc)[:1500]
             await announce(
                 session,
                 level="service",
@@ -570,8 +615,9 @@ class WakePipeline:
                 event="wake_failed",
                 severity="warn",
                 title=f"Waking {service.name} failed",
-                body=str(exc)[:1500],
+                body=body,
                 scope={"slug": slug, "group": service.group},
+                suppressed=repeated_wake_failure(session, slug, body),
             )
             raise
         except BaseException as exc:

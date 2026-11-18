@@ -43,7 +43,7 @@ log = get_logger(__name__)
 #: route: a proxy host's route, inside through the proxy and from outside;
 #: disk: how full a guest's filesystems are (health/disks.py);
 #: agent: what a guest's QEMU guest agent reports (guests/checks.py).
-LEVELS = ("network", "node", "guest", "service", "sub", "route", "disk", "agent")
+LEVELS = ("network", "node", "guest", "service", "sub", "route", "disk", "agent", "job")
 EVENTS = (
     "failed",
     "down",
@@ -82,6 +82,7 @@ EVENTS = (
     "deploy_failed",
     "deploy_blocked",
     "deploy_outside",
+    "job_failed",
     "test",
 )
 SEVERITIES = ("info", "warn", "error", "critical")
@@ -119,6 +120,7 @@ DEFAULT_EVENTS = (
     "restore_proposed",
     "restore_succeeded",
     "restore_failed",
+    "job_failed",
 )
 
 

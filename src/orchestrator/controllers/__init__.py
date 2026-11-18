@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from sqlmodel import Session
+from sqlmodel import Session, select
 
 from orchestrator.config import Settings
 from orchestrator.controllers.base import (
@@ -13,8 +13,8 @@ from orchestrator.controllers.base import (
     ControllerUnavailable,
     ServiceController,
 )
-from orchestrator.db.models import Node, Service
-from orchestrator.domain.enums import GuestKind
+from orchestrator.db.models import Node, Probe, Service
+from orchestrator.domain.enums import GuestKind, ProbeKind
 from orchestrator.registry.tree import effective_guest
 
 CONTROLLER_TYPES = ("portainer", "haos", "docker", "systemd", "command")
@@ -75,6 +75,26 @@ def validate_controller(raw: dict[str, Any] | None) -> dict[str, Any]:
     return cfg
 
 
+def needed_containers(session: Session, service: Service, endpoint: int) -> list[str]:
+    """The containers ``service`` needs on Portainer ``endpoint``: the ones its enabled,
+    required container checks name. A wake or Start brings up these and nothing else."""
+    rows = session.exec(
+        select(Probe).where(
+            Probe.service_id == service.id,
+            Probe.kind == ProbeKind.PORTAINER,
+            Probe.enabled == True,  # noqa: E712 - SQL comparison
+            Probe.required == True,  # noqa: E712
+        )
+    ).all()
+    out: list[str] = []
+    for probe in rows:
+        cfg = probe.config or {}
+        name = str(cfg.get("container") or "")
+        if name and int(cfg.get("endpoint") or endpoint) == endpoint and name not in out:
+            out.append(name)
+    return out
+
+
 def build_controller(
     settings: Settings,
     proxmox: Any,
@@ -109,7 +129,10 @@ def build_controller(
     if kind == "portainer":
         from orchestrator.controllers.portainer import PortainerController
 
-        return PortainerController(settings, cfg)
+        needs = (
+            needed_containers(session, service, int(cfg["endpoint"])) if cfg.get("stack") else []
+        )
+        return PortainerController(settings, cfg, needs=needs)
     if kind == "haos":
         from orchestrator.controllers.haos import HomeAssistantController
 

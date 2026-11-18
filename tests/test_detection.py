@@ -266,6 +266,52 @@ def test_a_node_that_does_not_answer_is_down_and_the_network_is_observed(session
     assert by[("network", "lan")].state == "healthy"
 
 
+def _power(
+    session: Session, actor: str, action: str, minutes_ago: int, node: str = "node-a"
+) -> None:
+    from datetime import UTC, datetime, timedelta
+
+    from orchestrator.db.models import AuditEntry
+
+    session.add(AuditEntry(actor=actor, action="node.power_action", target=f"node:{node}",
+                           details={"action": action, "force": False},
+                           created_at=datetime.now(UTC) - timedelta(minutes=minutes_ago)))  # fmt: skip
+    session.commit()
+
+
+def _node_down(session: Session) -> Any:
+    tree, _svc = _tree(session)
+    cluster = ClusterStatus(nodes=[ClusterNode("node-a", False, ip="10.0.0.11")])
+    out = collect(session, {}, cluster, tree, _status())
+    return next(o for o in out if (o.level, o.key) == ("node", "node-a"))
+
+
+def test_a_node_a_person_powered_off_here_is_announced_as_a_warning(session: Session) -> None:
+    _power(session, "admin", "power_off", minutes_ago=20)
+    node = _node_down(session)
+    assert node.state == "down" and node.severity == "warn"
+    assert "power off by admin from the orchestrator" in node.reason
+
+
+@pytest.mark.parametrize(
+    "history",
+    [
+        [],  # an external power-off through the power manager, or a crash: nothing here
+        [("admin", "power_off", 180)],  # longer ago than the window
+        [("admin", "power_off", 30), ("admin", "wake", 10)],  # woken again since
+        [("system", "power_off", 20)],  # not a person
+    ],
+)
+def test_any_other_node_down_stays_an_error(
+    session: Session, history: list[tuple[str, str, int]]
+) -> None:
+    for actor, action, ago in history:
+        _power(session, actor, action, minutes_ago=ago)
+    node = _node_down(session)
+    assert node.state == "down" and node.severity is None  # the node level's own: error
+    assert "from the orchestrator" not in node.reason
+
+
 def test_with_no_cluster_view_and_no_address_a_node_is_unknown(session: Session) -> None:
     session.add(Node(name="node-x"))
     session.commit()

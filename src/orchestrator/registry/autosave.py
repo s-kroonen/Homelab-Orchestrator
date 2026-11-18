@@ -180,6 +180,8 @@ class Autosaver:
         except Exception as exc:
             self.state.save_error = f"could not write {path}: {exc}"
             log.warning("autosave.save_failed", path=str(path), error=str(exc))
+        await _announce("autosave:yaml", "Saving services.yaml", self.state.save_error,
+                        "Changes are in the database but not in the file; Retry in the header.")  # fmt: skip
 
     async def _push(self, actor: str) -> None:
         try:
@@ -210,6 +212,12 @@ class Autosaver:
                 }
             ]
             log.warning("autosave.push_failed", error=str(exc))
+        failed = "; ".join(
+            f"{f.get('hostname')} ({f.get('action')}): {f.get('message')}"
+            for f in self.state.push_failed
+        )
+        await _announce("autosave:push", "Pushing proxy hosts to Traefik Manager", failed or None,
+                        "Traefik still serves what it had; Retry in the header.")  # fmt: skip
         await self.refresh_status()
 
     async def refresh_status(self) -> None:
@@ -226,3 +234,18 @@ class Autosaver:
         self.state.push_pending = sum(len(st.pending) + len(st.pending_deletes) for st in statuses)
         self.state.push_reachable = all(st.reachable for st in statuses)
         self.state.push_message = "; ".join(st.message for st in statuses if st.message)
+
+
+async def _announce(job: str, name: str, error: str | None, impact: str) -> None:
+    """A save or push as a background job (notify/jobs.py): a warning when it fails,
+    ``recovered`` when it works again. Never raises."""
+    from orchestrator.notify.jobs import job_failed, job_ok
+
+    try:
+        with session_scope() as session:
+            if error:
+                await job_failed(session, job=job, name=name, error=error, impact=impact)
+            else:
+                await job_ok(session, job=job, name=name)
+    except Exception as exc:  # pragma: no cover - an alert must never break a save
+        log.warning("autosave.announce_failed", job=job, error=str(exc))

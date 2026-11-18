@@ -14,6 +14,7 @@ silently unverified control-plane connection is worth being loud about.
 
 from __future__ import annotations
 
+import json
 import ssl
 from typing import Any, Literal
 
@@ -153,8 +154,10 @@ class ProxmoxFamilyClient:
             )
 
         if response.status_code >= 400:
+            reason = error_reason(response.text)
             raise AdapterRequestError(
-                f"{self._flavor} returned {response.status_code} on {method} {path}",
+                f"{self._flavor} returned {response.status_code} on {method} {path}"
+                + (f": {reason}" if reason else ""),
                 status_code=response.status_code,
                 body=response.text[:2000],
             )
@@ -186,6 +189,29 @@ def _is_tls_trust_failure(exc: Exception) -> bool:
         cur = cur.__cause__ or cur.__context__
         seen += 1
     return False
+
+
+def error_reason(text: str, limit: int = 300) -> str:
+    """What Proxmox / PBS said was wrong, from an error response: its ``message`` and the
+    per-parameter ``errors`` ({"keep-daily": "value must be ..."}), else the plain text.
+    Kept short: it goes into audit entries and alerts."""
+    text = (text or "").strip()
+    if not text:
+        return ""
+    try:
+        payload = json.loads(text)
+    except ValueError:
+        return text[:limit]
+    if not isinstance(payload, dict):
+        return text[:limit]
+    parts: list[str] = []
+    message = payload.get("message")
+    if isinstance(message, str) and message.strip():
+        parts.append(message.strip())
+    errors = payload.get("errors")
+    if isinstance(errors, dict):
+        parts.extend(f"{k}: {str(v).strip()}" for k, v in errors.items())
+    return ("; ".join(parts) or text)[:limit]
 
 
 def _clean(d: dict[str, Any] | None) -> dict[str, Any] | None:

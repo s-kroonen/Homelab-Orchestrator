@@ -9,6 +9,7 @@ the environment.
 from __future__ import annotations
 
 import json
+from collections.abc import Sequence
 from typing import Any
 
 import httpx
@@ -25,7 +26,9 @@ from orchestrator.controllers.base import (
 class PortainerController(ServiceController):
     type = "portainer"
 
-    def __init__(self, settings: Settings, cfg: dict[str, Any]) -> None:
+    def __init__(
+        self, settings: Settings, cfg: dict[str, Any], *, needs: Sequence[str] = ()
+    ) -> None:
         self._instance = str(cfg.get("instance") or "").strip()
         if self._instance:  # a particular Portainer connection, not the default one
             from orchestrator.connections import runtime
@@ -42,6 +45,9 @@ class PortainerController(ServiceController):
         self._endpoint = int(cfg["endpoint"])
         self._container = str(cfg.get("container") or "")
         self._stack_name = str(cfg.get("stack") or "")
+        #: For a stack: the containers the service needs (its required container checks).
+        #: Status and start look at only these; empty = every container of the stack.
+        self._needs = tuple(n for n in needs if n)
 
     def describe(self) -> str:
         what = f"container {self._container}" if self._container else f"stack {self._stack_name}"
@@ -120,6 +126,75 @@ class PortainerController(ServiceController):
                 return dict(stack)
         raise ControllerError(f"no stack named {self._stack_name!r} on endpoint {self._endpoint}")
 
+    async def _stack_boxes(self) -> list[tuple[str, str, str]]:
+        """(id, name, state) of every container of the stack (its compose project)."""
+        filters = json.dumps({"label": [f"com.docker.compose.project={self._stack_name}"]})
+        r = await self._call(
+            "GET",
+            f"/api/endpoints/{self._endpoint}/docker/containers/json",
+            params={"all": "1", "filters": filters},
+        )
+        if r.status_code >= 400:
+            raise ControllerError(f"Portainer answered {r.status_code}: {r.text[:200]}")
+        out = []
+        for row in r.json():
+            names = row.get("Names") or []
+            name = str(names[0]).lstrip("/") if names else str(row.get("Id", ""))[:12]
+            out.append((str(row.get("Id", "")), name, str(row.get("State", ""))))
+        return out
+
+    def _wanted(
+        self, boxes: list[tuple[str, str, str]]
+    ) -> tuple[list[tuple[str, str, str]], list[str]]:
+        """The containers that count (the needed ones, else all) and needed names not found."""
+        if not self._needs:
+            return boxes, []
+        have = {b[1] for b in boxes}
+        return [b for b in boxes if b[1] in self._needs], [n for n in self._needs if n not in have]
+
+    async def _stack_status(self) -> ControllerStatus:
+        stack = await self._stack()
+        if stack.get("Status") != 1:
+            return ControllerStatus(False, "inactive")
+        wanted, missing = self._wanted(await self._stack_boxes())
+        stopped = [name for _, name, state in wanted if state != "running"]
+        if missing or stopped or not wanted:
+            detail = "; ".join(
+                part
+                for part in (
+                    f"stopped: {', '.join(stopped)}" if stopped else "",
+                    f"not found: {', '.join(missing)}" if missing else "",
+                    "no containers" if not wanted and not missing else "",
+                )
+                if part
+            )
+            return ControllerStatus(False, "active", detail)
+        return ControllerStatus(True, "active", f"{len(wanted)} container(s) running")
+
+    async def _stack_start(self) -> str:
+        """A stopped stack is started as a whole (that is how Portainer brings it up). In a
+        running stack only the stopped containers that count are started, nothing else."""
+        stack = await self._stack()
+        if stack.get("Status") != 1:
+            return await self._stack_action("start")
+        self._writable()
+        wanted, missing = self._wanted(await self._stack_boxes())
+        if missing:
+            raise ControllerError(f"stack {self._stack_name} has no container {', '.join(missing)}")
+        stopped = [(cid, name) for cid, name, state in wanted if state != "running"]
+        if not stopped:
+            return f"stack {self._stack_name} already running"
+        for cid, name in stopped:
+            r = await self._call(
+                "POST", f"/api/endpoints/{self._endpoint}/docker/containers/{cid}/start"
+            )
+            if r.status_code not in (204, 304, 200):
+                raise ControllerError(
+                    f"Portainer start of {name} answered {r.status_code}: {r.text[:200]}"
+                )
+        names = ", ".join(name for _, name in stopped)
+        return f"started {names} in stack {self._stack_name} (nothing else)"
+
     async def _stack_action(self, verb: str) -> str:
         self._writable()
         stack = await self._stack()
@@ -136,14 +211,10 @@ class PortainerController(ServiceController):
         if self._container:
             _, state = await self._container_id()
             return ControllerStatus(state == "running", state or "unknown")
-        stack = await self._stack()
-        active = stack.get("Status") == 1
-        return ControllerStatus(active, "active" if active else "inactive")
+        return await self._stack_status()
 
     async def start(self) -> str:
-        return await (
-            self._container_action("start") if self._container else self._stack_action("start")
-        )
+        return await (self._container_action("start") if self._container else self._stack_start())
 
     async def stop(self) -> str:
         return await (

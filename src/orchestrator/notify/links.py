@@ -117,6 +117,12 @@ def link_for(level: str, target: str, event: str = "") -> str | None:
         return f"/find/proxy-host?hostname={quote(target, safe='')}" if target else None
     if level == "network":
         return "/system#h-net"
+    if level == "job":
+        # a background job (notify/jobs.py): "<kind>:<subject>"
+        kind, _, subject = target.partition(":")
+        if kind == "retention" and subject:
+            return f"/services/{quote(subject, safe='')}#backups"
+        return "/system"
     return None
 
 

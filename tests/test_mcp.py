@@ -1032,3 +1032,63 @@ def test_adopt_route_waits_for_a_person_then_links_the_record(
     again = call(client, got["access_token"], "adopt_route", {"hostname": "wiki.example.lan"})
     assert again["isError"] is True and "nothing to adopt" in again["content"][0]["text"]
     assert [r["status"] for r in client.get("/api/assistants/requests").json()] == ["approved"]
+
+
+# -- retention: preview (read) and apply (always approved) ------------------------------------
+
+
+def _give_policy(retention: dict[str, Any]) -> None:
+    from orchestrator.db.models import BackupPolicy, Service
+
+    with Session(get_engine()) as s:
+        policy = BackupPolicy(name="daily-frequent", retention=retention)
+        s.add(policy)
+        s.commit()
+        svc = s.exec(select(Service).where(Service.slug == "portainer-vm")).one()
+        svc.backup_policy_id = policy.id
+        s.add(svc)
+        s.commit()
+
+
+def test_retention_preview_shows_what_would_go_and_changes_nothing(client: TestClient) -> None:
+    import json
+
+    got = connect(client, ["read"])
+    out = call(client, got["access_token"], "retention_preview", {"slug": "portainer-vm"})
+    assert out["isError"] is True and "no backup policy" in out["content"][0]["text"]
+    _give_policy({"keep_daily": 7})
+    out = call(client, got["access_token"], "retention_preview", {"slug": "portainer-vm"})
+    assert out["isError"] is False, out
+    body = json.loads(out["content"][0]["text"])
+    assert body["dry_run"] is True and "would_remove" in body and body["group"] == "vm/101"
+    assert body["policy"] == "daily-frequent" and body["retention"] == {"keep_daily": 7}
+    with Session(get_engine()) as s:
+        assert not s.exec(select(AuditEntry).where(AuditEntry.action == "backup.retention")).all()
+
+
+def test_apply_retention_waits_for_a_person(client: TestClient) -> None:
+    _give_policy({"keep_daily": 7})
+    got = connect(client, ["read", "backup"])
+    out = call(client, got["access_token"], "apply_retention", {"slug": "portainer-vm"})
+    assert out["isError"] is True and "propose" in out["content"][0]["text"]
+    got = connect(client, ["read", "backup", "propose"])
+    out = call(client, got["access_token"], "apply_retention", {"slug": "portainer-vm"})
+    assert (
+        out["isError"] is False and "PRUNE old backups of portainer-vm" in out["content"][0]["text"]
+    )
+    with Session(get_engine()) as s:
+        assert not s.exec(select(AuditEntry).where(AuditEntry.action == "backup.retention")).all()
+    request = _only_request(client)
+    done = client.post(f"/api/assistants/requests/{request['request_id']}/approve").json()
+    assert done["result"]["ok"] is True, done["result"]
+    with Session(get_engine()) as s:
+        entry = s.exec(select(AuditEntry).where(AuditEntry.action == "backup.retention")).one()
+    assert entry.actor == "mcp:my claude"
+
+
+def test_apply_retention_refuses_a_policy_that_keeps_everything(client: TestClient) -> None:
+    _give_policy({"protect_latest_verified": True})
+    got = connect(client, ["read", "backup", "propose"])
+    out = call(client, got["access_token"], "apply_retention", {"slug": "portainer-vm"})
+    assert out["isError"] is True and "keeps everything" in out["content"][0]["text"]
+    assert client.get("/api/assistants/requests").json() == []

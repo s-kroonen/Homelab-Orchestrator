@@ -67,6 +67,8 @@ may not use is not even listed to the assistant.
   Traefik Manager route each record points at, `route_ref`),
   `proxy_backends` (what of a failover, weighted or mirroring host can be changed, with versions),
   `portainer_stacks`, `portainer_containers`, `container_logs` (secrets redacted), `get_request`,
+  `retention_preview` (what a service's backup policy would prune from PBS now, as PBS's dry run,
+  or PBS's reason for refusing),
   `test_check` (runs one of a service's checks now and returns the raw result; saves nothing).
 * **act** (runs at once, logged, audited as `mcp:<connection>`): `run_backup`, `run_dump`, `propose_restore`,
   `deploy_service` (with its guards), `wake_service`, `node_power wake`, `switch_service`,
@@ -85,7 +87,8 @@ may not use is not even listed to the assistant.
   (it runs a shell command in a container), `edit_proxy_backends` (a live route's backends,
   [proxy_hosts.md](proxy_hosts.md#changing-a-host-with-several-backends)), `adopt_route` (points a
   proxy host's record at the hand-written route serving it; the record only, no route is written,
-  [proxy_hosts.md](proxy_hosts.md#adopting-a-route-traefik-manager-already-has)), `edit_check` (add,
+  [proxy_hosts.md](proxy_hosts.md#adopting-a-route-traefik-manager-already-has)), `apply_retention` (prunes a service's old backups by its policy now;
+  needs `backup`), `edit_check` (add,
   change or delete a service's check; it needs `configure` too). Required checks decide a
   service's health, its alerts and whether it may be backed up, so every `edit_check` waits for a
   person. The approval page names the service, the check and every field set; a check id that
