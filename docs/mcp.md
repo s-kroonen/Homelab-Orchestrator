@@ -83,7 +83,9 @@ may not use is not even listed to the assistant.
   `restart`, `delete_stack`, `deploy_service` with `skip_guards`, `switch_service off` with
   `include_guest`, `service_action stop` / `restart` on a `guest`, `set_dump` with a `command`
   (it runs a shell command in a container), `edit_proxy_backends` (a live route's backends,
-  [proxy_hosts.md](proxy_hosts.md#changing-a-host-with-several-backends)), `edit_check` (add,
+  [proxy_hosts.md](proxy_hosts.md#changing-a-host-with-several-backends)), `adopt_route` (points a
+  proxy host's record at the hand-written route serving it; the record only, no route is written,
+  [proxy_hosts.md](proxy_hosts.md#adopting-a-route-traefik-manager-already-has)), `edit_check` (add,
   change or delete a service's check; it needs `configure` too). Required checks decide a
   service's health, its alerts and whether it may be backed up, so every `edit_check` waits for a
   person. The approval page names the service, the check and every field set; a check id that

@@ -6,6 +6,7 @@ No sessions and no server-to-client stream, so it works behind any proxy and sur
 
 from __future__ import annotations
 
+import inspect
 import time
 from typing import Any
 
@@ -179,10 +180,12 @@ async def call_tool(
         why = "this connection asks before every change"
     if why and tool.precheck is not None:
         try:
-            tool.precheck(
+            checked = tool.precheck(
                 ToolContext(session, adapters, settings, actor=f"mcp:{grant.label}", grant=grant),
                 clean,
             )
+            if inspect.isawaitable(checked):
+                await checked
         except ToolError as exc:
             done("error", str(exc), risk, clean)
             return _text(f"Not asked, it would fail: {exc}", error=True)

@@ -77,8 +77,8 @@ class Tool:
     #: One line for the approval page: what happens if a person says yes.
     consequence: Callable[[dict[str, Any]], str] | None = None
     #: Raises ToolError for a call that could never succeed, before anyone is asked to
-    #: approve it (the run checks again: things can change while it waits).
-    precheck: Callable[[ToolContext, dict[str, Any]], None] | None = None
+    #: approve it (the run checks again: things can change while it waits). May be async.
+    precheck: Callable[[ToolContext, dict[str, Any]], Awaitable[None] | None] | None = None
 
     def risk_of(self, args: dict[str, Any]) -> str:
         return self.risk(args) if callable(self.risk) else self.risk
@@ -793,6 +793,37 @@ async def _proxy_backends(ctx: ToolContext, a: dict[str, Any]) -> Any:
 
 
 # -- dangerous ---------------------------------------------------------------------------------
+
+
+async def _adoptable(ctx: ToolContext, ph: Any) -> Any:
+    """The route Adopt would point ``ph`` at, or a ToolError saying why there is none."""
+    from orchestrator.registry.proxy_push import adoptable_route
+
+    proxy = ctx.adapters.with_proxy(ph.source_id).proxy
+    routes = await proxy.list_routes()
+    if routes is None:
+        raise ToolError(
+            "Traefik Manager could not be read"
+            + (f": {proxy.read_error}" if getattr(proxy, "read_error", None) else "")
+        )
+    route = adoptable_route(proxy, ph, routes)
+    if route is None:
+        raise ToolError(
+            f"{ph.hostname} already points at its route, or no route this orchestrator did "
+            "not create serves it: nothing to adopt"
+        )
+    return route
+
+
+async def _adopt_route_precheck(ctx: ToolContext, a: dict[str, Any]) -> None:
+    await _adoptable(ctx, _proxy_host_row(ctx, a["hostname"]))
+
+
+async def _adopt_route(ctx: ToolContext, a: dict[str, Any]) -> Any:
+    from orchestrator.web.routers import proxy_hosts
+
+    ph = _proxy_host_row(ctx, a["hostname"])
+    return await _call(proxy_hosts.adopt_live_route(ctx.session, ctx.actor, ctx.adapters, ph))
 
 
 async def _edit_proxy_backends(ctx: ToolContext, a: dict[str, Any]) -> Any:
@@ -1580,6 +1611,24 @@ TOOLS: dict[str, Tool] = {
             ("hostname", "edits"),
             DANGEROUS,
             _edits_text,
+        ),
+        Tool(
+            "adopt_route",
+            "Adopt the route that serves a proxy host",
+            "Point a proxy host's record at the route in Traefik Manager that serves its "
+            "hostname, when that route was not created here and the record names no route or "
+            "a route that is gone (list_proxy_hosts: route_ref, sync_changes). Only the "
+            "orchestrator's record and services.yaml change; the route itself is never "
+            "written. Live production routes: always needs a person's approval.",
+            "configure",
+            _adopt_route,
+            {"hostname": _s("The proxy host's hostname")},
+            ("hostname",),
+            DANGEROUS,
+            lambda a: f"LINK proxy host {a.get('hostname')} to the Traefik Manager route that "
+            "serves it (the orchestrator's record and services.yaml only; no route file is "
+            "written)",
+            _adopt_route_precheck,
         ),
         Tool(
             "guest_power",

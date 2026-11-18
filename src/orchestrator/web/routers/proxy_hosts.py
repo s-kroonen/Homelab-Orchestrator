@@ -59,6 +59,7 @@ from orchestrator.registry.proxy_push import (
     TRAEFIK_MANAGER_ROUTE_REF_KEY,
     HostSync,
     add_pending_delete,
+    adoptable_route,
     config_file_view,
     conflict_message,
     desired_signature,
@@ -1320,10 +1321,19 @@ def _adopt_replacement(session: Session, actor: str, ph: ProxyHost, route: Route
 async def adopt_route(
     proxy_host_id: int, session: SessionDep, admin: CurrentAdmin, adapters: AdaptersDep
 ) -> dict[str, Any]:
-    """The host's own route is gone and a route this orchestrator did not create serves its
-    hostname (a hand-written failover, say): point the host at that route. It then reads as
-    ``external`` - its content is never overwritten - instead of a route to re-create."""
+    """A route this orchestrator did not create serves the host's hostname (a hand-written
+    failover, say) while the host's own route is gone, or while the host names no route at
+    all: point the host at that route. It then reads as ``external`` - its content is never
+    overwritten - instead of a route to re-create or one found by hostname only. Only this
+    record changes (and ``services.yaml`` with it); Traefik Manager is not written to."""
     ph = _get_or_404(session, proxy_host_id)
+    return await adopt_live_route(session, admin.username, adapters, ph)
+
+
+async def adopt_live_route(
+    session: Session, actor: str, adapters: AdapterBundle, ph: ProxyHost
+) -> dict[str, Any]:
+    """``POST /api/proxy-hosts/{id}/adopt-route``, callable (the assistant's adopt_route)."""
     proxy = adapters.with_proxy(ph.source_id).proxy
     routes = await proxy.list_routes()
     if routes is None:
@@ -1331,13 +1341,14 @@ async def adopt_route(
             status.HTTP_503_SERVICE_UNAVAILABLE,
             getattr(proxy, "read_error", None) or "Traefik Manager could not be read",
         )
-    route = stale_ref_route(proxy, ph, routes)
+    route = adoptable_route(proxy, ph, routes)
     if route is None:
         raise HTTPException(
             status.HTTP_409_CONFLICT,
-            f"{ph.hostname} does not point at a route that is gone, or no other route serves it",
+            f"{ph.hostname} already points at its route, or no route this orchestrator did "
+            "not create serves it",
         )
-    _adopt_replacement(session, admin.username, ph, route)
+    _adopt_replacement(session, actor, ph, route)
     session.commit()
     return {"hostname": ph.hostname, "route": route.ref, "file": route.config_file}
 

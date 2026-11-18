@@ -986,3 +986,49 @@ def test_test_check_runs_a_check_and_saves_nothing(
     out = call(client, got["access_token"], "test_check", {"slug": "wiki", "check_id": check_id})
     assert out["isError"] is False and '"passed"' in out["content"][0]["text"]
     assert seen == ["web"] and client.get("/api/assistants/requests").json() == []
+
+
+# -- adopt_route: re-link a proxy host record to the route serving it (always approved) ---------
+
+
+def test_adopt_route_waits_for_a_person_then_links_the_record(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from orchestrator.adapters.proxy.base import RouteInfo
+    from orchestrator.db.models import ProxyHost
+
+    theirs = RouteInfo(name="wiki", route_id="wiki.yml::wiki", hostnames={"wiki.example.lan"},
+                       upstream="http://10.0.0.5:80", service="wiki", config_file="wiki.yml")  # fmt: skip
+    proxy = client.app.state.adapters.proxy  # type: ignore[attr-defined]
+
+    async def routes() -> list[RouteInfo]:
+        return [theirs]
+
+    monkeypatch.setattr(proxy, "list_routes", routes)
+    with Session(get_engine()) as s:  # pushed once, its route reference lost
+        s.add(ProxyHost(hostname="wiki.example.lan", upstream="http://10.0.0.5:80",
+                        extra={}, pushed_sig="sig"))  # fmt: skip
+        s.commit()
+    got = connect(client, ["read", "configure"])
+    out = call(client, got["access_token"], "adopt_route", {"hostname": "wiki.example.lan"})
+    assert out["isError"] is True and "propose" in out["content"][0]["text"]
+
+    got = connect(client, ["read", "configure", "propose"])
+    out = call(client, got["access_token"], "adopt_route", {"hostname": "wiki.example.lan"})
+    text = out["content"][0]["text"]
+    assert out["isError"] is False and "NOT DONE" in text and "no route file is written" in text
+    with Session(get_engine()) as s:
+        assert s.exec(select(ProxyHost)).one().extra == {}  # asked, not done
+
+    request = _only_request(client)
+    done = client.post(f"/api/assistants/requests/{request['request_id']}/approve").json()
+    assert done["result"]["ok"] is True, done["result"]
+    with Session(get_engine()) as s:
+        assert s.exec(select(ProxyHost)).one().extra["traefik_manager_route_id"] == "wiki.yml::wiki"
+        actions = {a.action for a in s.exec(select(AuditEntry)).all()}
+    assert "proxy_host.route_adopted" in actions
+
+    # linked now: nothing left to adopt, refused without asking anyone
+    again = call(client, got["access_token"], "adopt_route", {"hostname": "wiki.example.lan"})
+    assert again["isError"] is True and "nothing to adopt" in again["content"][0]["text"]
+    assert [r["status"] for r in client.get("/api/assistants/requests").json()] == ["approved"]
