@@ -17,7 +17,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from orchestrator.adapters.errors import AdapterAuthError, AdapterError, AdapterUnreachable
-from orchestrator.adapters.proxmox.disks import parse_fsinfo
+from orchestrator.adapters.proxmox.disks import network_mounts, parse_fsinfo
 from orchestrator.adapters.proxmox.net import (
     normalize_mac,
     parse_agent_interfaces,
@@ -51,9 +51,16 @@ def permission_detail(status_code: int | None, vmid: int | None) -> str:
 class ProxmoxGuestProvider:
     """:class:`~orchestrator.guests.model.GuestFactsProvider` for one Proxmox cluster."""
 
-    def __init__(self, proxmox: Any, *, timeout_s: float = _DEFAULT_TIMEOUT_S) -> None:
+    def __init__(
+        self,
+        proxmox: Any,
+        *,
+        timeout_s: float = _DEFAULT_TIMEOUT_S,
+        include_network_fs: bool = False,
+    ) -> None:
         self._proxmox = proxmox
         self._timeout = timeout_s
+        self._include_network_fs = include_network_fs
 
     async def read(
         self, target: GuestTarget, previous: GuestFacts | None, *, os_due: bool
@@ -185,8 +192,10 @@ class ProxmoxGuestProvider:
         if fsinfo is not None:
             facts.filesystems = [
                 {"mount": f.mount, "fstype": f.fstype, "used": f.used, "total": f.total}
-                for f in parse_fsinfo(fsinfo)
+                for f in parse_fsinfo(fsinfo, include_network=self._include_network_fs)
             ]
+            if not self._include_network_fs:
+                facts.network_mounts = network_mounts(fsinfo)
         elif "get-fsinfo" in facts.errors:
             facts.filesystems_error = facts.errors["get-fsinfo"]
         if os_due or facts.os_name is None:

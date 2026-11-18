@@ -376,7 +376,7 @@ class LiveProxmoxAdapter(ProxmoxAdapter):
             # "QEMU guest agent is not running" / not enabled (500): the normal miss.
             log.debug("proxmox.guest_agent.fsinfo_unavailable", vmid=vmid, error=str(exc))
             return GuestFilesystems(error="no guest agent answered (install qemu-guest-agent)")
-        found = parse_fsinfo(payload)
+        found = parse_fsinfo(payload, include_network=self._settings.disk_include_network_fs)
         if not found:
             return GuestFilesystems(error="the guest agent reported no filesystem sizes")
         return GuestFilesystems(filesystems=found, source="guest_agent")

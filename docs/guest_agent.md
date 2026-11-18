@@ -26,7 +26,8 @@ guests' agents, a red banner above the table says so, with *How to fix*.
   once per 30 s per guest);
 * **Signed in**: user, since, and for how long;
 * **Network**: every interface with its addresses and traffic since the guest booted;
-* **Disks**: every filesystem with how full it is;
+* **Disks**: every filesystem with how full it is; network mounts (NFS, SMB) listed as not
+  measured;
 * **Backups and agent**: frozen or thawed after the last backup, locked down or not, agent
   version and answer time;
 * **Proxmox**: start with node, freeze on backup.
@@ -115,13 +116,34 @@ Per VM (the drawer shows these, fitted to the VM's OS, and only the ones still m
 
 Level **agent**, keyed by the guest (`node/vmid`), routed and muted by rules like any other:
 
+States, announced when they change (confirmed like every change) and `recovered` when they
+clear:
+
 | Event | When | Severity |
 |---|---|---|
-| `agent_unresponsive` | the guest runs, its agent answered before, and now it does not (confirmed like every change) | warning |
+| `agent_unresponsive` | the guest runs, its agent answered before, and now it does not | warning |
 | `lockdown_weakened` | the agent accepts exec, file or password commands | warning |
+| `network_down` | the agent answers, but the guest's own network card (the MAC Proxmox knows) is gone or has no address | error |
+| `guest_frozen` | its filesystems are frozen: writes are paused, usually by a backup that did not thaw them. The alert says how to thaw them | error |
 
-Both say `recovered` when they clear. A guest without the agent never alerts. Disk space keeps
-its own `disk_low` / `disk_full` ([disks.md](disks.md)), now read from the same reading.
+Moments, sent once, comparing a reading with the one before it:
+
+| Event | When | Severity | Sent by default |
+|---|---|---|---|
+| `guest_signin` | someone signed in (user, since when) | info | yes |
+| `guest_signout` | someone signed out, with how long they were signed in (to within one reading) | info | no: in the feed, sent when a rule asks |
+| `ip_changed` | the guest's own address changed | info | yes |
+
+The first reading after the agent was set up, or came back, announces no sign-ins. *Read now*
+sends the moments it finds too, so a sign-in it sees is not lost. A guest without the agent
+never alerts. Disk space keeps its own `disk_low` / `disk_full` ([disks.md](disks.md)), read
+from the same reading.
+
+**After a backup.** Right after the orchestrator backs up a VM (whether the dump succeeded or
+not), it asks the agent once whether the filesystems were thawed again, records it on the
+backup run as a `freeze_check` step (`ok`, or `failed` with the command that thaws them), and
+hands it to the frozen check at once. The health cycle checks every VM too, so a backup that
+Proxmox runs on its own schedule is covered as well.
 
 ## IP addresses
 

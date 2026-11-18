@@ -6,6 +6,7 @@ Proxmox is read with no database transaction open; the result is written after.
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 from sqlmodel import Session, select
@@ -44,7 +45,13 @@ def proxmox_targets(session: Session, guests: list[Guest]) -> list[GuestTarget]:
 
 
 def collector_for(proxmox: Any, settings: Settings) -> GuestCollector:
-    return GuestCollector(ProxmoxGuestProvider(proxmox, timeout_s=settings.agent_timeout_s))
+    return GuestCollector(
+        ProxmoxGuestProvider(
+            proxmox,
+            timeout_s=settings.agent_timeout_s,
+            include_network_fs=settings.disk_include_network_fs,
+        )
+    )
 
 
 async def collect(
@@ -64,6 +71,7 @@ async def collect(
         session.commit()
         if notifications is not None:
             await notifications.observe(session, checks.observations(session, readings))
+            await _send(notifications, session, checks.events(session, previous, readings))
     log.info(
         "guests.collected",
         guests=len(readings),
@@ -73,8 +81,11 @@ async def collect(
 
 
 async def read_now(proxmox: Any, settings: Settings, guest: Guest) -> GuestFacts:
-    """Read one guest at once (back-off or not) and keep it. Alerts follow on the next cycle,
-    like any other change, so one press cannot page anybody."""
+    """Read one guest at once (back-off or not) and keep it. State alerts follow on the next
+    cycle, like any other change, so one press cannot page anybody; what happened since the
+    last reading (a sign-in) is sent now, or the next cycle would not see it any more."""
+    from orchestrator.notify import hooks
+
     with session_scope() as session:
         target = proxmox_targets(session, [guest])[0]
         previous = store.load(session, target.ref)
@@ -82,7 +93,59 @@ async def read_now(proxmox: Any, settings: Settings, guest: Guest) -> GuestFacts
     with session_scope() as session:
         store.save(session, facts)
         session.commit()
+        engine = hooks.current()
+        if engine is not None and previous is not None:
+            await _send(engine, session, checks.events(session, {target.ref: previous}, [facts]))
     return facts
 
 
-__all__ = ["collect", "collector_for", "guest_key", "proxmox_targets", "read_now"]
+async def after_backup(proxmox: Any, settings: Settings, node: str, vmid: int) -> str | None:
+    """Right after the orchestrator backed up VM ``vmid``: are its filesystems thawed again?
+    Returns ``"thawed"`` / ``"frozen"``, or None when its agent cannot say (no agent, no
+    permission, not answering). Keeps the answer on the guest's reading and hands it to the
+    frozen check at once, so a frozen VM is announced without waiting for the health cycle
+    to notice it first. Never raises."""
+    from orchestrator.notify import hooks
+
+    try:
+        answer = await asyncio.wait_for(
+            proxmox.agent_read(node, vmid, "fsfreeze-status"), settings.agent_timeout_s
+        )
+    except Exception:  # no agent / no permission / not answering: nothing to say
+        return None
+    state = answer.strip().lower() if isinstance(answer, str) else ""
+    if state not in ("frozen", "thawed"):
+        return None
+    try:
+        with session_scope() as session:
+            facts = store.load_by_key(session, guest_key(node, vmid))
+            if facts is None:
+                return state
+            facts.freeze = state
+            store.save(session, facts)
+            session.commit()
+            engine = hooks.current()
+            if engine is not None:
+                found = checks.observations(session, [facts], checks=(checks.FrozenCheck(),))
+                await engine.observe(session, found)
+    except Exception as exc:  # the answer stands; only keeping it failed
+        log.warning("guests.after_backup.store_failed", node=node, vmid=vmid, error=str(exc))
+    return state
+
+
+async def _send(engine: Any, session: Any, events: list[Any]) -> None:
+    for event in events:
+        try:
+            await engine.emit(session, event)
+        except Exception as exc:  # one failed send must not stop the rest
+            log.warning("guests.event_failed", event=event.event, error=str(exc))
+
+
+__all__ = [
+    "after_backup",
+    "collect",
+    "collector_for",
+    "guest_key",
+    "proxmox_targets",
+    "read_now",
+]

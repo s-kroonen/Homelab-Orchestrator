@@ -22,8 +22,11 @@ A VM's filesystems come from the same agent reading the Guests tab shows
 ([guest_agent.md](guest_agent.md)), so its agent is asked once per cycle. A VM without the agent
 shows *Set up agent…* (the option is off), **no permission** (Proxmox refused the read) or **not
 measured** with the reason, and is never alerted. Hover the text for the reason Proxmox gave. Pseudo and image filesystems (tmpfs, overlay, squashfs snaps,
-ISO images) are left out, and a disk mounted at several places (bind mounts, Docker volumes) is
-counted once.
+ISO images, read-only system images such as Home Assistant OS's `erofs` root) are left out, and a
+disk mounted at several places (bind mounts, Docker volumes) is counted once. Network
+filesystems (NFS, SMB, sshfs) are left out too: they are another machine's disk, and a mount
+whose server is off can make the agent hang. The guest's drawer lists them as *not measured*;
+`DISK_INCLUDE_NETWORK_FS=true` counts them.
 
 ## When it alerts
 

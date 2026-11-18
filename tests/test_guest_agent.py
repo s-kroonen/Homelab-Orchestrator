@@ -513,3 +513,159 @@ def test_a_service_links_to_its_guest_with_its_open_alerts(session: Session) -> 
     assert link is not None and link["key"] == "node-a/105" and link["alerts"] == 1
     assert link["href"] == "/sources/pve?tab=guests&q=105&guest=node-a%2F105"
     assert guest_link(session, tree, sub)["key"] == "node-a/105"  # type: ignore[index]
+
+
+# -- PR 2: filesystems, network, frozen, sign-ins, address --------------------------------------
+
+
+def test_read_only_images_and_network_filesystems_are_not_disk_space() -> None:
+    from orchestrator.adapters.proxmox.disks import network_mounts, parse_fsinfo
+
+    payload = [
+        {"name": "dm-0", "mountpoint": "/", "type": "erofs", "total-bytes": 10, "used-bytes": 10},
+        {"name": "sda8", "mountpoint": "/mnt/data", "type": "ext4", "total-bytes": 100,
+         "used-bytes": 77},
+        {"name": "nas:/lib", "mountpoint": "/mnt/library", "type": "nfs4", "total-bytes": 900,
+         "used-bytes": 899},
+    ]  # fmt: skip
+    assert [f.mount for f in parse_fsinfo(payload)] == ["/mnt/data"]
+    assert [f.mount for f in parse_fsinfo(payload, include_network=True)] == [
+        "/mnt/data",
+        "/mnt/library",
+    ]
+    assert network_mounts(payload) == [{"mount": "/mnt/library", "fstype": "nfs4"}]
+
+
+async def test_the_reading_lists_network_mounts_apart() -> None:
+    px = DryRunProxmoxAdapter()
+    _answering(px, 105, **{"get-fsinfo": [
+        {"name": "sda1", "mountpoint": "/", "type": "ext4", "total-bytes": 100, "used-bytes": 40},
+        {"name": "nas", "mountpoint": "/mnt/library", "type": "nfs", "total-bytes": 9,
+         "used-bytes": 9},
+    ]})  # fmt: skip
+    f = await _read(px, 105)
+    assert [x["mount"] for x in f.filesystems or []] == ["/"]
+    assert f.network_mounts == [{"mount": "/mnt/library", "fstype": "nfs"}]
+    counted = await ProxmoxGuestProvider(px, include_network_fs=True).read(
+        _target(105), None, os_due=False
+    )
+    assert [x["mount"] for x in counted.filesystems or []] == ["/", "/mnt/library"]
+
+
+def _iface(name: str, mac: str, *addresses: str) -> Any:
+    from orchestrator.guests.model import Interface
+
+    return Interface(name=name, mac=mac, addresses=list(addresses))
+
+
+def test_the_network_check_watches_the_guests_own_card() -> None:
+    scope = checks.Scope(node="node-a")
+    check = checks.NetworkCheck()
+    up = _facts(agent=AgentState.ANSWERS, macs=[MAC],
+                interfaces=[_iface("eth0", MAC, "10.0.2.45/24"), _iface("docker0", "02:42:00:00:00:01")])  # fmt: skip
+    assert check.observe(up, scope).state == "healthy"  # type: ignore[union-attr]
+    lost = _facts(agent=AgentState.ANSWERS, macs=[MAC],
+                  interfaces=[_iface("eth0", MAC), _iface("docker0", "02:42:00:00:00:01", "172.17.0.1/16")])  # fmt: skip
+    obs = check.observe(lost, scope)
+    assert obs is not None and obs.state == "network_down" and obs.severity == "error"
+    assert obs.key == "node-a/105/network" and "eth0" in obs.reason
+    none = _facts(agent=AgentState.ANSWERS, macs=[], interfaces=[])
+    assert check.observe(none, scope).state == "network_down"  # type: ignore[union-attr]
+    assert check.observe(_facts(agent=AgentState.NOT_ANSWERING), scope) is None
+    assert check.observe(_facts(agent=AgentState.ANSWERS), scope) is None  # interfaces not read
+
+
+def test_the_frozen_check() -> None:
+    scope = checks.Scope(node="node-a")
+    check = checks.FrozenCheck()
+    obs = check.observe(_facts(agent=AgentState.ANSWERS, freeze="frozen"), scope)
+    assert obs is not None and obs.state == "guest_frozen" and obs.severity == "error"
+    assert "qm guest cmd 105 fsfreeze-thaw" in obs.reason and obs.key == "node-a/105/frozen"
+    thawed = check.observe(_facts(agent=AgentState.ANSWERS, freeze="thawed"), scope)
+    assert thawed is not None and thawed.state == "healthy"
+    assert check.observe(_facts(agent=AgentState.ANSWERS), scope) is None
+
+
+def _signed(*who: tuple[str, int]) -> list[Any]:
+    from orchestrator.guests.model import SignedIn
+
+    now = datetime.now(UTC)
+    return [SignedIn(user=u, since=(now - timedelta(seconds=s)).isoformat()) for u, s in who]
+
+
+def test_sign_ins_and_sign_outs_are_moments_between_two_readings() -> None:
+    scope = checks.Scope(node="node-a", slug="media")
+    check = checks.SignInEvents()
+    admin, backup = _signed(("admin", 720), ("backup", 3 * 86400 + 4 * 3600))
+    now = (datetime.now(UTC) + timedelta(seconds=1)).isoformat()
+    before = _facts(agent=AgentState.ANSWERS, sessions=[backup], read_at=now)
+    after = _facts(agent=AgentState.ANSWERS, sessions=[admin], read_at=now)
+    assert check.events(None, after, scope) == []  # first reading: nobody announced
+    ev = {e.event: e for e in check.events(before, after, scope)}
+    assert ev["guest_signin"].title == "admin signed in to media"
+    assert ev["guest_signout"].title == "backup signed out of media"
+    assert "after 3 d 4 h" in ev["guest_signout"].body
+    assert all(e.level == "agent" and e.severity == "info" for e in ev.values())
+    unknown = _facts(agent=AgentState.NOT_ANSWERING)
+    assert check.events(before, unknown, scope) == []  # not listed: say nothing
+    assert check.events(unknown, after, scope) == []  # back from not answering: nothing
+
+
+def test_an_address_change_is_a_moment() -> None:
+    scope = checks.Scope(node="node-a")
+    check = checks.AddressEvents()
+    a = _facts(agent=AgentState.ANSWERS, addresses=["10.0.2.45"])
+    b = _facts(agent=AgentState.ANSWERS, addresses=["10.0.2.46"])
+    (ev,) = check.events(a, b, scope)
+    assert ev.event == "ip_changed" and "10.0.2.45" in ev.body and "10.0.2.46" in ev.title
+    assert check.events(a, a, scope) == [] and check.events(None, b, scope) == []
+    assert check.events(a, _facts(agent=AgentState.NOT_ANSWERING), scope) == []
+
+
+def test_the_new_events_are_known_and_sign_ins_sent_by_default() -> None:
+    from orchestrator.notify.engine import DEFAULT_EVENTS, EVENTS
+
+    for e in ("network_down", "guest_frozen", "guest_signin", "guest_signout", "ip_changed"):
+        assert e in EVENTS
+    assert {"network_down", "guest_frozen", "guest_signin", "ip_changed"} <= set(DEFAULT_EVENTS)
+    assert "guest_signout" not in DEFAULT_EVENTS  # in the feed, sent only when a rule asks
+
+
+async def test_a_cycle_announces_who_signed_in(session: Session) -> None:
+    from orchestrator.guests import runner
+    from tests.test_notifications import Recorder, engine_with
+
+    px = DryRunProxmoxAdapter()
+    _answering(px, 105, **{"get-users": []})
+    guests = [Guest("node-a", 105, GuestKind.VM, "media", "running")]
+    rec = Recorder()
+    engine = engine_with(rec)
+    await runner.collect(px, get_settings(), guests, engine)
+    assert not [t for _, _, t in rec.sent if "signed in" in t]
+    px.simulated_agent[105]["get-users"] = [{"user": "admin", "login-time": time.time() - 60}]
+    await runner.collect(px, get_settings(), guests, engine)
+    assert [t for _, _, t in rec.sent if "signed in" in t] == ["admin signed in to media"]
+
+
+async def test_after_a_backup_a_frozen_vm_is_kept_and_checked(session: Session) -> None:
+    from orchestrator.guests import runner
+    from orchestrator.notify import hooks
+    from tests.test_notifications import Recorder, engine_with
+
+    px = DryRunProxmoxAdapter()
+    _answering(px, 105, **{"fsfreeze-status": "frozen"})
+    store.save(session, _facts(ref=GuestRef("", "node-a/105"), agent=AgentState.ANSWERS,
+                               freeze="thawed"))  # fmt: skip
+    session.commit()
+    engine = engine_with(Recorder())
+    hooks.install(engine)
+    try:
+        assert await runner.after_backup(px, get_settings(), "node-a", 105) == "frozen"
+    finally:
+        hooks.install(None)
+    session.expire_all()
+    assert store.load_by_key(session, "node-a/105").freeze == "frozen"  # type: ignore[union-attr]
+    row = session.get(TargetState, ("agent", "node-a/105/frozen"))
+    assert row is not None  # the frozen check saw it at once
+    # a VM whose agent cannot say: nothing recorded, the backup goes on
+    assert await runner.after_backup(px, get_settings(), "node-a", 999) is None

@@ -496,6 +496,9 @@ class Settings(BaseSettings):
     #: Seconds one QEMU guest agent call may take (guests/providers/proxmox.py). A guest that
     #: keeps timing out is then read only every third health cycle until it answers.
     agent_timeout_s: float = 5.0
+    #: Count network filesystems (NFS, SMB, sshfs...) inside guests in the disk check. Off:
+    #: they are another machine's disk, and a mount whose server is off can hang the agent.
+    disk_include_network_fs: bool = False
     #: A deleted service stays in the archive (restorable) this many days, then is purged.
     archive_retention_days: int = 30
 
