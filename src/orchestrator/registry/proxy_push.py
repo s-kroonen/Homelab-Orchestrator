@@ -195,12 +195,55 @@ def stale_ref_route(
     ref = ref_of(ph)
     if not ref or not proxy.owns_route_ref(ref) or find_route(routes, ref, ph.hostname):
         return None
+    return _hand_written_route(proxy, routes, ph.hostname)
+
+
+#: A record that points at no route (``route_ref`` empty) while a route we did not create
+#: serves its hostname: it is matched by hostname only. Adopting it stores that route's
+#: reference, so it survives a restart and every check finds the same route.
+LINK_MISSING = "served by the route {name}, which this orchestrator did not create, found by its hostname only (the record names no route): adopt it to keep the link"
+
+
+def _hand_written_route(
+    proxy: ProxyAdapter, routes: Sequence[RouteInfo], hostname: str
+) -> RouteInfo | None:
     theirs = [
         r
-        for r in _routes_for_host(routes, ph.hostname)
+        for r in _routes_for_host(routes, hostname)
         if not proxy.owns_route_ref(r.ref) and not r.name.endswith("-redirect")
     ]
     return theirs[0] if theirs else None
+
+
+def unlinked_route(
+    proxy: ProxyAdapter, ph: ProxyHost, routes: Sequence[RouteInfo] | None
+) -> RouteInfo | None:
+    """The route we did not create that serves ``ph`` when ``ph`` names no route at all;
+    else ``None``."""
+    if routes is None or not is_live_managed(ph) or ref_of(ph):
+        return None
+    return _hand_written_route(proxy, routes, ph.hostname)
+
+
+def adoptable_route(
+    proxy: ProxyAdapter, ph: ProxyHost, routes: Sequence[RouteInfo] | None
+) -> RouteInfo | None:
+    """The route Adopt would point ``ph`` at: the one that replaced its own route, or the one
+    serving it while it names none. Only the record changes; the route is never rewritten."""
+    return stale_ref_route(proxy, ph, routes) or unlinked_route(proxy, ph, routes)
+
+
+def live_route(routes: Sequence[RouteInfo] | None, ph: ProxyHost) -> RouteInfo | None:
+    """The route serving ``ph`` as every check sees it: the one it names, or, when it names
+    none, the one serving its hostname."""
+    if not routes:
+        return None
+    ref = ref_of(ph)
+    if ref:
+        return find_route(routes, ref, ph.hostname)
+    host_routes = _routes_for_host(routes, ph.hostname)
+    plain = [r for r in host_routes if not r.name.endswith("-redirect")]
+    return (plain or host_routes or [None])[0]
 
 
 def _bare(name: str) -> str:
@@ -403,8 +446,7 @@ def evaluate(
         )
 
     host_routes = _routes_for_host(routes, ph.hostname)
-    plain = [r for r in host_routes if not r.name.endswith("-redirect")]
-    route = find_route(routes, ref, ph.hostname) if ref else (plain or host_routes or [None])[0]
+    route = live_route(routes, ph)
 
     # --- not ours: only its enabled state is ever ours to push -----------------
     if (ref and not owned) or (not ref and route is not None):
@@ -419,6 +461,9 @@ def evaluate(
         change = _enabled_change(ph, tm)
         changes = [change] if change else []
         actions = (["enable"] if host_enabled(ph) else ["disable"]) if change else []
+        unlinked = None if ref else unlinked_route(proxy, ph, routes)
+        if unlinked is not None:
+            changes.append(LINK_MISSING.format(name=unlinked.name))
         # Its content (the maintenance page included) is never edited: see LOCAL above.
         return HostSync(EXTERNAL, changes, actions, route=route, host_routes=host_routes, tm=tm)
 

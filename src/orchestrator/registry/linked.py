@@ -17,12 +17,12 @@ from sqlmodel import Session, select
 from orchestrator.adapters.errors import AdapterError, AdapterNotConfigured, AdapterUnreachable
 from orchestrator.adapters.factory import AdapterBundle
 from orchestrator.adapters.portainer.links import container_url, stack_url
-from orchestrator.adapters.proxy.base import RouteInfo, find_route
+from orchestrator.adapters.proxy.base import RouteInfo
 from orchestrator.config import Settings
 from orchestrator.controllers import ControllerError, build_controller
 from orchestrator.db.models import ProxyHost, Service
 from orchestrator.health.guest_gate import GuestCheck, GuestStateCache, check_guest
-from orchestrator.registry.proxy_push import is_live_managed, ref_of
+from orchestrator.registry.proxy_push import is_live_managed, live_route
 from orchestrator.registry.tree import TreeIndex
 
 
@@ -214,7 +214,9 @@ def _proxy_part(ph: ProxyHost, ctx: LinkedContext, served: bool) -> Part:
         return Part(
             "proxy", ph.hostname, f"proxy {ph.hostname}", None, "Traefik Manager could not be read"
         )
-    route = find_route(ctx.routes, ref_of(ph), ph.hostname)
+    # The same route the proxy-host sync sees: the one the record names, else the one serving
+    # its hostname (a record that names none must not read as "gone" while it is served).
+    route = live_route(ctx.routes, ph)
     if route is None:
         if not (ph.pushed_sig or ""):
             # Never created there from here: it is waiting for "Push now", not changed outside.

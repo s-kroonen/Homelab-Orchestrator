@@ -546,6 +546,21 @@ applies the maintenance fallback). A route reference counts as ours when the
 adapter created it (`ProxyAdapter.owns_route_ref`; Traefik Manager: the
 `orchestrator-` prefix).
 
+**Adopt the route that serves it** (the host's ⋯ menu, `POST
+/api/proxy-hosts/{id}/adopt-route`, the assistant's `adopt_route`) points a record at the
+hand-written route serving its hostname in two cases:
+
+* its own route is gone and a route we did not create serves the hostname now (a failover that
+  replaced it), shown as *served by the route …, which this orchestrator did not create (its own
+  route for this host is gone)*;
+* the record names no route at all (`route_ref` empty) while one serves the hostname, shown as
+  *… found by its hostname only*. Such a record is still matched by its hostname everywhere (sync,
+  linked state), so it never reads as "gone" while it is served; adopting stores the link so a
+  restart keeps it (`services.yaml` is saved with it).
+
+Only the orchestrator's record changes: nothing is written to Traefik Manager. The assistant's
+`adopt_route` always waits for a person's approval.
+
 Switching `router_provider` away from `traefik` (or clearing the upstream) on a
 host with a route this orchestrator created records a pending deletion for it.
 
