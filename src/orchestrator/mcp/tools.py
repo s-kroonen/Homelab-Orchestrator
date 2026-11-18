@@ -263,6 +263,59 @@ async def _backup_plan(ctx: ToolContext, a: dict[str, Any]) -> Any:
     return await _call(backup.backup_plan(ctx.session, a["slug"], a.get("policy")))
 
 
+def _retention_policy(ctx: ToolContext, slug: str) -> Any:
+    """The backup policy whose retention applies to ``slug``, or a ToolError saying why none."""
+    from orchestrator.db.models import BackupPolicy
+
+    svc = ctx.session.exec(select(Service).where(Service.slug == slug)).one_or_none()
+    if svc is None:
+        raise ToolError(f"no service {slug!r}")
+    policy = (
+        ctx.session.get(BackupPolicy, svc.backup_policy_id)
+        if svc.backup_policy_id is not None
+        else None
+    )
+    if policy is None:
+        raise ToolError(f"{slug} has no backup policy, so no retention to apply")
+    return policy
+
+
+async def _retention(ctx: ToolContext, a: dict[str, Any], *, preview: bool) -> Any:
+    from orchestrator.adapters.errors import AdapterError
+    from orchestrator.scheduler.retention import RetentionError, enforce_retention
+
+    policy = _retention_policy(ctx, a["slug"])
+    try:
+        result = await enforce_retention(
+            ctx.session, ctx.adapters.pbs, policy, a["slug"], settings=ctx.settings,
+            actor=ctx.actor, preview=preview,
+        )  # fmt: skip
+    except (RetentionError, AdapterError, ValueError) as exc:
+        ctx.session.rollback()
+        raise ToolError(f"PBS would not prune {a['slug']}: {exc}") from exc
+    ctx.session.commit()
+    out = result.as_dict()
+    out["policy"], out["retention"] = policy.name, policy.retention
+    out["would_remove" if preview else "removed"] = out.pop("pruned")
+    return out
+
+
+async def _retention_preview(ctx: ToolContext, a: dict[str, Any]) -> Any:
+    return await _retention(ctx, a, preview=True)
+
+
+async def _apply_retention(ctx: ToolContext, a: dict[str, Any]) -> Any:
+    return await _retention(ctx, a, preview=False)
+
+
+def _apply_retention_precheck(ctx: ToolContext, a: dict[str, Any]) -> None:
+    from orchestrator.scheduler.retention import COUNT_KEYS
+
+    policy = _retention_policy(ctx, a["slug"])
+    if not any(k in (policy.retention or {}) for k in COUNT_KEYS):
+        raise ToolError(f"policy {policy.name!r} keeps everything: nothing would be pruned")
+
+
 async def _list_runs(ctx: ToolContext, a: dict[str, Any]) -> Any:
     from orchestrator.web.routers import backup
 
@@ -1105,6 +1158,16 @@ TOOLS: dict[str, Tool] = {
             ("slug",),
         ),
         Tool(
+            "retention_preview",
+            "Preview pruning old backups",
+            "What the service's backup policy would remove from PBS now (PBS's own prune as a "
+            "dry run), or PBS's reason when it would refuse. Changes nothing.",
+            "read",
+            _retention_preview,
+            {"slug": SLUG},
+            ("slug",),
+        ),
+        Tool(
             "list_runs",
             "List pipeline runs",
             "Recent pipeline runs (backup, wake, restore, switch, deploy), newest first. "
@@ -1629,6 +1692,22 @@ TOOLS: dict[str, Tool] = {
             "serves it (the orchestrator's record and services.yaml only; no route file is "
             "written)",
             _adopt_route_precheck,
+        ),
+        Tool(
+            "apply_retention",
+            "Prune old backups now",
+            "Apply the service's backup policy to its PBS backups now, as the nightly run does "
+            "after a backup: pin the newest verified one if the policy says so, then let PBS "
+            "remove what the policy does not keep. Deletes backups: always needs a person's "
+            "approval. Run retention_preview first.",
+            "backup",
+            _apply_retention,
+            {"slug": SLUG},
+            ("slug",),
+            DANGEROUS,
+            lambda a: f"PRUNE old backups of {a.get('slug')} in PBS by its backup policy "
+            "(snapshots the policy does not keep are deleted)",
+            _apply_retention_precheck,
         ),
         Tool(
             "guest_power",

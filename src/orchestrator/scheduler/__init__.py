@@ -46,6 +46,7 @@ from orchestrator.db.session import session_scope
 from orchestrator.display import get_timezone
 from orchestrator.domain.enums import AuditResult
 from orchestrator.logging_setup import get_logger
+from orchestrator.notify.jobs import job_failed, job_ok
 from orchestrator.pipelines.backup import BackupError, BackupPipeline, BackupSkipped, WakeContext
 from orchestrator.scheduler.retention import RetentionError, enforce_retention
 
@@ -420,6 +421,8 @@ class BackupScheduler:
             )
             session.commit()
             outcome["retention"] = result.as_dict()
+            await job_ok(session, job=f"retention:{slug}", name=f"Pruning old backups of {slug}",
+                         scope={"slug": slug})  # fmt: skip
         except (RetentionError, AdapterError, ValueError) as exc:
             session.rollback()
             log.error(
@@ -438,6 +441,15 @@ class BackupScheduler:
                 details={"policy": policy.name, "error": str(exc)},
             )
             session.commit()
+            await job_failed(
+                session,
+                job=f"retention:{slug}",
+                name=f"Pruning old backups of {slug}",
+                error=exc,
+                impact=f"The backup itself worked; snapshots older than policy {policy.name!r} "
+                "keeps stay in PBS until this works.",
+                scope={"slug": slug},
+            )
             outcome["retention"] = {"error": str(exc)}
         return outcome
 

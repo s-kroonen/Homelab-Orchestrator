@@ -136,11 +136,15 @@ async def enforce_retention(
     *,
     settings: Settings,
     actor: str = "scheduler",
+    preview: bool = False,
 ) -> RetentionResult:
     """Apply ``policy.retention`` to ``slug``'s PBS backup group.
 
     Caller commits. Raises :class:`RetentionError` for a policy/service that
     cannot be mapped (bad retention shape, no guest); adapter errors propagate.
+
+    ``preview``: change nothing - no pin, no audit entry, and PBS's prune runs as a dry
+    run, so ``pruned`` lists what *would* be removed (or PBS's error says why it would not).
     """
     retention = validate_retention(policy.retention)
     service = session.exec(select(Service).where(Service.slug == slug)).one_or_none()
@@ -152,10 +156,14 @@ async def enforce_retention(
 
     backup_id = str(service.guest_id)
     datastore = settings.pbs_datastore
-    result = RetentionResult(slug=slug, group=f"{pbs_type}/{backup_id}", dry_run=settings.dry_run)
+    dry_run = settings.dry_run or preview
+    result = RetentionResult(slug=slug, group=f"{pbs_type}/{backup_id}", dry_run=dry_run)
 
     # -- 1. pin the latest verified snapshot ---------------------------------
-    if retention.get("protect_latest_verified") and not settings.pbs_protect_enabled:
+    if preview:
+        if retention.get("protect_latest_verified"):
+            result.protect_skipped_reason = "preview: nothing is pinned"
+    elif retention.get("protect_latest_verified") and not settings.pbs_protect_enabled:
         # The live adapter would turn set_protected into a logged no-op; don't
         # also record a pin in the DB that PBS never received.
         result.protect_skipped_reason = "PBS_PROTECT_ENABLED=false"
@@ -204,11 +212,13 @@ async def enforce_retention(
             datastore=datastore,
             backup_type=pbs_type,
             backup_id=backup_id,
-            dry_run=settings.dry_run,
+            dry_run=dry_run,
             **counts,
         )
         result.pruned = [s.snapshot_id for s in removed]
 
+    if preview:
+        return result
     audit.record(
         session,
         actor=actor,

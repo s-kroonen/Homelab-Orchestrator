@@ -188,6 +188,23 @@ that step with the same error — and the wake is **not** retried per service.
 > the schedule headroom, and make sure `WAKE_TIMEOUT_S` (default 600 per entry) is
 > long enough for the slowest node.
 
+### Pruning old backups (retention)
+
+After each service's **successful scheduled** backup, its policy's `retention` (`keep_last`,
+`keep_daily`, `keep_monthly`, `protect_latest_verified`) is applied to its PBS backup group: the
+newest verified snapshot is pinned first when the policy says so, then PBS's own prune removes
+what the counts do not keep (`scheduler/retention.py`). A failed or skipped backup prunes nothing,
+and backups of guests the orchestrator does not manage (or made by hand in Proxmox) are never
+touched. Pruning only frees the space after PBS's **garbage collection** runs on the datastore:
+keep a GC schedule there.
+
+When PBS refuses a prune, the reason PBS gives is in the audit entry and in a **job_failed**
+warning (*Pruning old backups of <slug> failed*, [notifications.md](notifications.md)); it is
+sent once, again only when the error changes or after a day, and *recovered* follows when a prune
+works again. To check or catch up without waiting for the night, the assistant has
+`retention_preview` (PBS's dry run: what would be removed, or why PBS refuses; changes nothing)
+and `apply_retention` (the same run as the night's; always a person's approval).
+
 ## Manual backups
 
 The dashboard's **Run backup now**, `POST /api/backup/{slug}` and

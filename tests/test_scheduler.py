@@ -249,6 +249,24 @@ async def test_prune_dry_run_follows_settings(
     assert pbs.prune_calls[0]["dry_run"] is False
 
 
+async def test_preview_changes_nothing_and_asks_pbs_for_a_dry_run(
+    session: Session, service: Service, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("DRY_RUN", "false")  # a live install: the preview must still not prune
+    config_module.reset_settings_cache()
+    pbs = RecordingPbs([_snap(T0, verified=True)], prune_removes=[_snap(T0 - DAY)])
+    policy = _policy(session, retention={"keep_daily": 7, "protect_latest_verified": True})
+    result = await enforce_retention(
+        session, pbs, policy, "thing", settings=get_settings(), preview=True
+    )
+    assert pbs.prune_calls[0]["dry_run"] is True and pbs.protect_calls == []
+    assert result.pruned == [_snap(T0 - DAY).snapshot_id] and result.dry_run is True
+    assert result.protect_skipped_reason == "preview: nothing is pinned"
+    assert (
+        session.exec(select(AuditEntry).where(AuditEntry.action == "backup.retention")).all() == []
+    )
+
+
 async def test_retention_rejects_service_without_guest(session: Session, service: Service) -> None:
     session.add(Service(slug="hostonly", name="Host only", node_id=service.node_id))
     session.commit()

@@ -55,6 +55,14 @@ agent accepts commands), both warnings; **network_down** and **guest_frozen** (e
 moments **guest_signin**, **ip_changed** (sent by default) and **guest_signout** (in the feed,
 sent when a rule asks) - see [guest_agent.md](guest_agent.md).
 
+Background jobs add, at level **job**, **job_failed** (a warning with the error as the system
+gave it, PBS's own reason included; sent by default) and **recovered** when that job works again:
+pruning a service's old backups after the nightly run (`retention:<slug>`), the orchestrator's own
+backup (`self_backup`), saving `services.yaml` (`autosave:yaml`) and pushing proxy hosts to Traefik
+Manager (`autosave:push`). The same failure again (same job, same error, nothing worked since) is
+kept in the feed and sent again only after 24 hours. Whether a connection is reachable at all is
+not a job: a node switched off on purpose makes its PBS unreachable every scan.
+
 Pipelines add **backup_failed** and **wake_failed** (default; a wake that fails with exactly the
 same error as the last one sent, with no wake of that service working since, is kept in the feed
 but not sent again for 24 hours - traffic keeps waking a broken service), **backup_retry** (default) and
