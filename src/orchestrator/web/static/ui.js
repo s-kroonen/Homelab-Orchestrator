@@ -710,5 +710,20 @@
     };
   }
 
+  // --- wide tables scroll inside their card: while there is more to the right, the right edge
+  //     fades out (.scroll-more in app.css). Every table gets it, whoever drew it and when. -----
+  const SCROLLERS = "table:not(.dt), .table-scroll, .dt-scroll";
+  function markMore(node) {
+    const more = node.scrollWidth - node.clientWidth - node.scrollLeft > 2;
+    if (node.classList.contains("scroll-more") !== more) node.classList.toggle("scroll-more", more);
+  }
+  let marksQueued = false;
+  function markAll() { marksQueued = false; document.querySelectorAll(SCROLLERS).forEach(markMore); }
+  function queueMarks() { if (!marksQueued) { marksQueued = true; requestAnimationFrame(markAll); } }
+  document.addEventListener("scroll", (ev) => { if (ev.target instanceof Element && ev.target.matches(SCROLLERS)) markMore(ev.target); }, { capture: true, passive: true });
+  window.addEventListener("resize", queueMarks);
+  new MutationObserver(queueMarks).observe(document.documentElement, { childList: true, subtree: true });
+  queueMarks();
+
   window.UI = { $, $$, el, append, clear, fill, pill, api, fmt, menu, menuButton, confirm, drawer, tabs, region, table, closeMenu };
 })();

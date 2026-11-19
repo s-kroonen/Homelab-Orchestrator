@@ -10,6 +10,7 @@
   function setNav(open) {
     if (!sidebar) return;
     sidebar.classList.toggle("open", open);
+    document.body.classList.toggle("nav-open", open);
     if (toggle) toggle.setAttribute("aria-expanded", String(open));
     if (open) window.scrollTo({ top: 0 }); // the open menu replaces the page: start at its top
   }
