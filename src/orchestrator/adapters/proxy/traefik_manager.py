@@ -721,6 +721,70 @@ class TraefikManagerProxyAdapter(ProxyAdapter):
             return None
         return [s for s in http if isinstance(s, dict)]
 
+    async def read_inventory(self) -> dict[str, Any] | None:
+        """One read of everything, for the inventory: ``GET /api/routes`` (file routes and
+        middlewares with their config file), ``GET /api/traefik/routers`` / ``middlewares`` /
+        ``services`` (Traefik's running view, every provider; the services answer also names
+        the composite services Traefik Manager manages) and ``GET /api/traefik/entrypoints``
+        (middlewares an entry point applies to every request). Each part is read on its own, so one
+        failing leaves the others; a part that failed is ``None`` and named in ``errors``."""
+        if not self._settings.traefik_manager_url.strip():
+            return None
+        out: dict[str, Any] = {"errors": {}}
+
+        async def part(client: httpx.AsyncClient, key: str, path: str) -> Any:
+            try:
+                return await self._get_json(client, path)
+            except TraefikManagerError as exc:
+                log.warning("traefik_manager.inventory_part_failed", part=key, error=str(exc))
+                out["errors"][key] = str(exc)
+                return None
+
+        async with self._client() as client:
+            routes = await part(client, "routes", "/api/routes")
+            routers = await part(client, "routers", "/api/traefik/routers")
+            middlewares = await part(client, "middlewares", "/api/traefik/middlewares")
+            services = await part(client, "services", "/api/traefik/services")
+            entrypoints = await part(client, "entrypoints", "/api/traefik/entrypoints")
+
+        def http_list(payload: Any) -> list[dict[str, Any]] | None:
+            if not isinstance(payload, dict) or payload.get("reachable") is False:
+                return None
+            rows = payload.get("http")
+            return [r for r in rows if isinstance(r, dict)] if isinstance(rows, list) else None
+
+        if isinstance(routes, dict):
+            out["routes"] = [a for a in routes.get("apps") or [] if isinstance(a, dict)]
+            out["file_middlewares"] = [
+                m
+                for m in routes.get("middlewares") or []
+                if isinstance(m, dict) and m.get("type", "http") == "http"
+            ]
+            errors = routes.get("configErrors")
+            out["config_errors"] = errors if isinstance(errors, (list, dict)) else []
+        else:
+            out["routes"] = out["file_middlewares"] = None
+            out["config_errors"] = []
+        out["runtime_routers"] = http_list(routers)
+        out["runtime_middlewares"] = http_list(middlewares)
+        out["runtime_services"] = http_list(services)
+        managed: set[str] = set()
+        if isinstance(services, dict):
+            for key in ("ownedServices", "ownedChildren"):
+                names = services.get(key)
+                if isinstance(names, (list, dict)):
+                    managed.update(str(n) for n in names)
+        out["managed_services"] = sorted(managed)
+        # Middlewares an entry point applies to every request (a CrowdSec bouncer, say): no
+        # router lists them, so they are not "unused".
+        on_entrypoints: set[str] = set()
+        for ep in entrypoints if isinstance(entrypoints, list) else []:
+            http = ep.get("http") if isinstance(ep, dict) else None
+            mws = http.get("middlewares") if isinstance(http, dict) else None
+            on_entrypoints.update(str(m) for m in mws or [] if isinstance(m, str))
+        out["entrypoint_middlewares"] = sorted(on_entrypoints)
+        return out
+
     async def save_service(self, payload: dict[str, Any]) -> None:
         """``POST /api/services``: Traefik Manager's own service form. It edits the service
         where it is - the keys it is sent replace theirs (``servers``, ``healthCheck`` when

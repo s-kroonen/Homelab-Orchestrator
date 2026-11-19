@@ -1314,6 +1314,59 @@ every linked host's middleware exists on the new instance.
   Traefik `errors` middleware, a reverse proxy elsewhere, or a direct hit).
   This feature only automates wiring Traefik up to send visitors there.
 
+## Inventory and findings (Routers, Middlewares, Backends, Findings)
+
+A proxy's source page also lists **everything the proxy runs**, not only the hosts kept here,
+read only (`registry/proxy_inventory.py`):
+
+| Tab | One row per | Shows |
+|---|---|---|
+| **Routers** | router, from every provider (files, Docker labels, Traefik's own) | rule, the proxy host it serves, where it goes (`failover: a -> b`), middlewares, file (or *Docker labels*, *Traefik*), who made it (*orchestrator*, *hand-written*, *docker*, *internal*) and its finding |
+| **Middlewares** | middleware | type (`errors · 502-504`, `plugin · bouncer`...), the file it is defined in, the routers that use it (or *every request on its entry point*), who made it |
+| **Backends** | Traefik service | load balancer, failover, weighted or mirroring; servers with UP/DOWN or members with their role; health check; servers transport; who uses it (routers, a parent failover, an `errors` middleware); whether Traefik Manager manages it |
+| **Findings** | finding | the orchestrator's report, below |
+
+It comes from one read of Traefik Manager (`ProxyAdapter.read_inventory`): `GET /api/routes`
+(file routes and middlewares with their config file), `GET /api/traefik/routers`, `middlewares`,
+`services` (Traefik's running view; the services answer also names the composite services
+Traefik Manager manages) and `GET /api/traefik/entrypoints` (middlewares an entry point applies to
+every request). Each part is read on its own; one that fails is named and the rest is still
+shown. A route switched off in Traefik Manager is listed (state *off*) although Traefik no longer
+runs it. Servers transports are known by name only, unless the **Traefik API** connection is
+set: then their `serverName` and `insecureSkipVerify` are read from Traefik
+(`/api/http/serversTransports`) and an unused one can be found. The read is kept 20 s per proxy
+(*Read again* reads at once).
+
+### The findings
+
+| Group | What | Suggested |
+|---|---|---|
+| Can be converted to the standard | a hand-written router (with its siblings) serving a proxy host kept here | Convert |
+| Unused | a file middleware no router, chain or entry point uses (a `maintenance-<slug>` for a service that is gone says so); a file service nothing points at; a transport no service uses | Delete |
+| Leftovers | a file router with no proxy host here (switched off: Delete; serving: decide); routers with the same rule, of which only one answers | Delete / decide |
+| Old syntax | a redirect middleware on HTTPS routers (an NPM *Force SSL* leftover): the HTTP redirect router does that | Simplify |
+| Worth a look | a failover whose primary has no health check (it never fails over), or whose fallback has none (requests go there unchecked); routes still in `_shared.yml`; a router Traefik reports an error for | Keep / Move / decide |
+
+Docker labels and Traefik's own are never reported as unused: they come and go with their
+containers. The orchestrator's maintenance backend counts as used by the `errors` middlewares.
+
+**Decisions.** Each finding has a decision (*Decide later*, *Keep*, *Convert*, *Delete*,
+*Simplify*, *Move*), stored per proxy (`Setting` `proxy.findings.decisions.<source>`) and audited
+as `proxy.finding_decided`. Recording one **changes nothing in the proxy**: decisions are applied
+with the convert and clean-up tools, one change at a time, each with Traefik Manager's backup.
+The report exports as Markdown or JSON (inventory and report), to put next to a report made on
+the machine itself.
+
+API: `GET /api/pull/traefik/findings?source=&fmt=report|md|json&fresh=true`,
+`PUT /api/pull/traefik/findings/{id}?source=` `{"decision": "..."}`; the tabs' rows are the
+source's resources (`GET /api/sources/{id}/resources/routers|middlewares|backends`). MCP:
+`proxy_inventory`, `proxy_findings` (read).
+
+**On the Proxy hosts tab**, a host with several backends shows one dot per server of its main
+router (green UP, red DOWN) in *Points to*, its Traefik state reads *no backend* (every server
+DOWN) or *fallback down* / *a backend down*, and its row opens (▸) to show every router and every
+backend with its health check. Chips: *Several backends*, *A backend down*, *Hand-written*.
+
 ## What a route really points at (failover, weighted, mirroring)
 
 A host's `upstream` is one URL, but a hand-written route can send to a **failover**

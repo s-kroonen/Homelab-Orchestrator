@@ -402,7 +402,10 @@ def test_two_proxies_each_list_and_push_their_own_hosts(client: TestClient) -> N
     assert [t["key"] for t in d["tabs"]] == [
         "overview",
         "hosts",
+        "routers",
         "middlewares",
+        "backends",
+        "findings",
         "import",
         "format",
         "settings",
@@ -521,3 +524,84 @@ def test_an_environment_links_to_the_service_and_guest_it_runs_on(client: TestCl
     assert labels == ["runs on Docker VM", "node-a · vm 111"]
     assert env["links"][0]["href"] == "/services/docker-vm"
     assert "tab=guests" in env["links"][1]["href"] and "q=111" in env["links"][1]["href"]
+
+
+def test_a_proxy_lists_routers_middlewares_backends_and_its_findings(client: TestClient) -> None:
+    """Phase 1 of the proxy work: the Routers, Middlewares and Backends tabs and the Findings
+    report read the proxy (every provider) and change nothing in it; a decision is recorded."""
+    import sys
+    from pathlib import Path
+
+    from sqlmodel import Session
+
+    from orchestrator.db.models import ProxyHost, Service
+    from orchestrator.db.session import get_engine
+    from orchestrator.registry import proxy_inventory as pi
+
+    sys.path.insert(0, str(Path(__file__).parent))
+    from test_proxy_inventory import _raw
+
+    _proxy(client, "gateway")
+    with Session(get_engine()) as s:
+        svc = Service(slug="minecraft", name="Minecraft")
+        s.add(svc)
+        s.commit()
+        s.add(
+            ProxyHost(
+                hostname="panel.example.lan", upstream="http://10.0.1.14:80", service_id=svc.id
+            )
+        )
+        s.commit()
+    gateway = client.app.state.adapters.for_source("gateway")  # type: ignore[attr-defined]
+    calls: list[int] = []
+
+    async def read_inventory() -> dict:
+        calls.append(1)
+        return _raw()
+
+    gateway.read_inventory = read_inventory
+    pi._CACHE.clear()
+
+    routers = client.get("/api/sources/gateway/resources/routers").json()["rows"]
+    panel = next(r for r in routers if r["id"] == "panel-example-lan@file")
+    assert panel["made_by"] == "hand-written"
+    assert panel["host"] == "panel.example.lan"
+    assert panel["host_href"] == "/find/proxy-host?hostname=panel.example.lan"
+    assert panel["goes"].startswith("failover: http://10.0.1.14:80")
+    assert panel["finding"] == "can convert" and "findings" in panel["chips"]
+    mws = {
+        m["id"]: m for m in client.get("/api/sources/gateway/resources/middlewares").json()["rows"]
+    }
+    assert "unused" in mws["maintenance-oldsvc@file"]["chips"]
+    assert mws["crowdsec@file"]["used"] == "every request on its entry point"
+    backends = {
+        b["id"]: b for b in client.get("/api/sources/gateway/resources/backends").json()["rows"]
+    }
+    assert "down" in backends["panel-stack1@file"]["chips"]
+    assert len(calls) == 1  # one read for all three tabs (cached)
+
+    rep = client.get("/api/pull/traefik/findings?source=gateway").json()
+    ids = {f["id"] for g in rep["groups"] for f in g["findings"]}
+    assert "convert:panel.example.lan" in ids
+    assert "unused:middleware:maintenance-oldsvc" in ids
+    bad = client.put(
+        "/api/pull/traefik/findings/convert:panel.example.lan?source=gateway",
+        json={"decision": "explode"},
+    )
+    assert bad.status_code == 422
+    ok = client.put(
+        "/api/pull/traefik/findings/convert:panel.example.lan?source=gateway",
+        json={"decision": "convert"},
+    )
+    assert ok.status_code == 200, ok.text
+    rep = client.get("/api/pull/traefik/findings?source=gateway").json()
+    assert rep["counts"]["decided"] == 1
+    md = client.get("/api/pull/traefik/findings?source=gateway&fmt=md")
+    assert md.headers["content-type"].startswith("text/markdown")
+    assert "| `panel.example.lan` |" in md.text and "| Convert | Convert |" in md.text
+    js = client.get("/api/pull/traefik/findings?source=gateway&fmt=json")
+    assert js.json()["report"]["counts"]["decided"] == 1
+    assert len(calls) == 1
+    client.get("/api/pull/traefik/findings?source=gateway&fresh=true")
+    assert len(calls) == 2
+    pi._CACHE.clear()

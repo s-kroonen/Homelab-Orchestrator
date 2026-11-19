@@ -1123,3 +1123,31 @@ pre.log .err { color: var(--fail); } pre.log .ts { color: var(--faint); }
 .gd-bar i { display: block; height: 100%; background: var(--ok); }
 .gd-bar i.warn { background: var(--warn); }
 .gd-bar i.fail { background: var(--fail); }
+
+/* Proxy source: Findings tab (the orchestrator's report) */
+.findings-head { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-bottom: 12px; }
+.findings-what { flex: 1 1 320px; min-width: 0; }
+.findings-tools { display: flex; flex-wrap: wrap; gap: 8px; }
+.findings-grp { padding: 10px 18px; font-weight: 600; background: var(--sidebar); border-bottom: 1px solid var(--line); }
+.findings-row { display: grid; grid-template-columns: minmax(140px, 220px) minmax(0, 1fr) 190px 150px; gap: 14px; align-items: center; padding: 10px 18px; border-bottom: 1px solid var(--line); }
+.findings-row > * { min-width: 0; overflow-wrap: anywhere; }
+.findings-row select { width: 100%; }
+.findings-foot { padding: 12px 18px; font-size: 12.5px; }
+@media (max-width: 40rem) {
+  .findings-row { grid-template-columns: minmax(0, 1fr); gap: 6px; }
+}
+
+/* Proxy hosts: a dot per backend, and an open row with the host's routers and backends */
+.be-dots { display: inline-flex; gap: 4px; margin-right: 6px; vertical-align: middle; }
+.be-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--off); }
+.be-dot.ok { background: var(--ok); } .be-dot.fail { background: var(--fail); }
+.be-toggle { padding: 0 6px 0 0; height: auto; color: var(--faint); flex: none; }
+.host-cell { display: inline-flex; align-items: baseline; white-space: nowrap; }
+.be-detail { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.3fr); gap: 14px; padding: 4px 0 6px; }
+.be-card { border: 1px solid var(--line-strong); border-radius: 10px; padding: 12px 14px; background: var(--inset); display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.be-line { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
+.be-line > div { min-width: 0; overflow-wrap: anywhere; }
+.be-rule { font-size: 12px; margin-top: 2px; }
+.be-note { font-size: 12.5px; }
+.sec-label { font-size: 11.5px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; color: var(--faint); }
+@media (max-width: 40rem) { .be-detail { grid-template-columns: minmax(0, 1fr); } }

@@ -1092,3 +1092,38 @@ def test_apply_retention_refuses_a_policy_that_keeps_everything(client: TestClie
     out = call(client, got["access_token"], "apply_retention", {"slug": "portainer-vm"})
     assert out["isError"] is True and "keeps everything" in out["content"][0]["text"]
     assert client.get("/api/assistants/requests").json() == []
+
+
+def test_proxy_inventory_and_findings_are_read_only_tools(client: TestClient) -> None:
+    import json
+    import sys
+    from pathlib import Path
+
+    from orchestrator.registry import proxy_inventory as pi
+
+    sys.path.insert(0, str(Path(__file__).parent))
+    from test_proxy_inventory import _raw
+
+    proxy = client.app.state.adapters.proxy  # type: ignore[attr-defined]
+
+    async def read_inventory() -> dict[str, Any]:
+        return _raw()
+
+    proxy.read_inventory = read_inventory
+    pi._CACHE.clear()
+    got = connect(client, ["read"])
+    out = call(
+        client, got["access_token"], "proxy_inventory", {"part": "middlewares", "q": "maintenance"}
+    )
+    assert out["isError"] is False, out
+    body = json.loads(out["content"][0]["text"])
+    assert {r["name"] for r in body["rows"]} == {
+        "maintenance-nextcloud@file",
+        "maintenance-oldsvc@file",
+    }
+    out = call(client, got["access_token"], "proxy_inventory", {"part": "nope"})
+    assert out["isError"] is True
+    out = call(client, got["access_token"], "proxy_findings", {"markdown": True})
+    assert out["isError"] is False, out
+    assert "## Unused" in out["content"][0]["text"]
+    pi._CACHE.clear()

@@ -441,6 +441,89 @@ async def traefik_import(
     return out
 
 
+def _proxy_source(adapters: Any, source: str | None) -> str:
+    return source or getattr(adapters, "default_proxy", "") or "default"
+
+
+@router.get("/traefik/findings", response_model=None)
+async def traefik_findings(
+    session: SessionDep,
+    adapters: AdaptersDep,
+    settings: SettingsDep,
+    source: str | None = None,
+    fmt: str = "report",
+    fresh: bool = False,
+) -> Any:
+    """The proxy's findings report (``registry/proxy_inventory``): what could be converted,
+    removed, simplified or moved, with the decision recorded per finding. ``fmt``: ``report``
+    (the page's data), ``md`` (Markdown) or ``json`` (inventory and report). Read only."""
+    from fastapi.responses import PlainTextResponse, Response
+
+    from orchestrator.registry import proxy_inventory as pi
+
+    scoped = adapters.with_proxy(source or "")
+    src = _proxy_source(adapters, source)
+    inv = await pi.read(
+        scoped.proxy,
+        source=src,
+        hosts=owned_hosts(session, scoped),
+        settings=settings,
+        fresh=fresh,
+    )
+    if inv is None:
+        raise HTTPException(status.HTTP_409_CONFLICT, "This proxy cannot list its routers.")
+    slugs = list(session.exec(select(Service.slug)).all())
+    found = pi.findings(inv, service_slugs=slugs)
+    rep = pi.report(inv, found, pi.load_decisions(session, src))
+    if fmt == "md":
+        return PlainTextResponse(
+            pi.to_markdown(rep, source=src),
+            media_type="text/markdown",
+            headers={"Content-Disposition": f'attachment; filename="proxy-report-{src}.md"'},
+        )
+    if fmt == "json":
+        return Response(
+            pi.to_json(inv, rep),
+            media_type="application/json",
+            headers={"Content-Disposition": f'attachment; filename="proxy-report-{src}.json"'},
+        )
+    return rep
+
+
+class DecisionIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    decision: str
+
+
+@router.put("/traefik/findings/{finding_id:path}")
+async def traefik_finding_decide(
+    finding_id: str,
+    body: DecisionIn,
+    session: SessionDep,
+    adapters: AdaptersDep,
+    admin: CurrentAdmin,
+    source: str | None = None,
+) -> dict[str, Any]:
+    """Record what to do with one finding. Nothing is changed in the proxy."""
+    from orchestrator.registry import proxy_inventory as pi
+
+    src = _proxy_source(adapters, source)
+    try:
+        entry = pi.save_decision(session, src, finding_id, body.decision, admin.username)
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
+    audit.record(
+        session,
+        actor=admin.username,
+        action="proxy.finding_decided",
+        target=f"proxy:{src}",
+        details={"finding": finding_id, "decision": body.decision},
+    )
+    session.commit()
+    return {"id": finding_id, **entry}
+
+
 class PlanIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
 

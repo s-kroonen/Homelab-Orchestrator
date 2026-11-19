@@ -1001,27 +1001,178 @@ async def _proxy_hosts(ctx: SourceCtx) -> list[dict[str, Any]]:
     ]
 
 
-async def _proxy_middlewares(ctx: SourceCtx) -> list[dict[str, Any]]:
-    names = await ctx.adapter.list_middlewares() or []
-    routes = await ctx.adapter.list_routes() or []
+_FINDING_LABEL = {
+    "convert": ("can convert", "pending"),
+    "unused": ("unused", "warn"),
+    "leftover": ("leftover", "fail"),
+    "old_syntax": ("old syntax", "pending"),
+    "look": ("worth a look", "warn"),
+}
+_MADE_TONE = {"orchestrator": "ok", "hand-written": "warn"}
+
+
+async def _proxy_inventory(ctx: SourceCtx) -> tuple[Any, dict[str, Any]]:
+    """The inventory of this proxy and, per router / middleware / service name, its first
+    finding (``registry/proxy_inventory``). ``(None, {})`` when the proxy cannot say."""
+    from orchestrator.registry import proxy_inventory as pi
+
+    inv = await pi.read(
+        ctx.adapter, source=ctx.conn.id, hosts=_owned_proxy_hosts(ctx), settings=ctx.settings
+    )
+    if inv is None:
+        return None, {}
+    marks: dict[str, Any] = {}
+    for f in pi.findings(inv, service_slugs=_service_slugs()):
+        for kind in ("routers", "middlewares", "services", "transports"):
+            for name in f.refs.get(kind, []):
+                marks.setdefault(f"{kind}:{name.split('@', 1)[0]}", f)
+    return inv, marks
+
+
+def _service_slugs() -> list[str]:
+    from sqlmodel import Session, select
+
+    from orchestrator.db.models import Service
+    from orchestrator.db.session import get_engine
+
+    with Session(get_engine()) as session:
+        return list(session.exec(select(Service.slug)).all())
+
+
+def _mark(row: dict[str, Any], f: Any) -> None:
+    if f is not None:
+        label, tone = _FINDING_LABEL.get(f.group, (f.group, "off"))
+        row["finding"], row["finding_tone"] = label, tone
+        row["chips"].append("findings")
+
+
+def _bare_name(name: str) -> str:
+    return name.split("@", 1)[0]
+
+
+async def _proxy_routers(ctx: SourceCtx) -> list[dict[str, Any]]:
+    from orchestrator.registry import proxy_inventory as pi
+
+    inv, marks = await _proxy_inventory(ctx)
+    if inv is None:
+        return []
     rows = []
-    for name in sorted(names):
-        users = sorted(
-            h
-            for r in routes
-            if name in (getattr(r, "middlewares", None) or ())
-            for h in r.hostnames
+    for r in inv.routers:
+        where = (
+            r.config_file or "file"
+            if r.provider == "file"
+            else (
+                "Docker labels"
+                if r.provider == "docker"
+                else ("Traefik" if r.provider == "internal" else r.provider)
+            )
         )
-        rows.append(
-            {
-                "id": name,
-                "name": name,
-                "used": len(users),
-                "hosts": ", ".join(users[:4])
-                + (f" and {len(users) - 4} more" if len(users) > 4 else ""),
-                "chips": [] if users else ["unused"],
-            }
+        row = {
+            "id": r.name,
+            "name": _bare_name(r.name) if r.provider == "file" else r.name,
+            "name_sub": r.rule,
+            "rule": r.rule,
+            "host": r.proxy_host or ("redirect" if r.redirect else ""),
+            "goes": "-> HTTPS" if r.redirect else pi.goes_to(inv, r),
+            "middlewares": ", ".join(_bare_name(m) for m in r.middlewares),
+            "where": where,
+            "made_by": r.made_by,
+            "made_by_tone": _MADE_TONE.get(r.made_by, "off"),
+            "state": "off" if r.status == "off" else (r.status or "enabled"),
+            "chips": [],
+        }
+        if r.proxy_host:
+            row["host_href"] = "/find/proxy-host?hostname=" + r.proxy_host
+        row["chips"].append(
+            {"orchestrator": "orchestrator", "hand-written": "handwritten"}.get(
+                r.made_by,
+                (
+                    "docker"
+                    if r.provider == "docker"
+                    else "internal" if r.provider == "internal" else "other"
+                ),
+            )
         )
+        if not r.proxy_host and not r.redirect:
+            row["chips"].append("nohost")
+        _mark(row, marks.get(f"routers:{_bare_name(r.name)}"))
+        rows.append(row)
+    return rows
+
+
+async def _proxy_middlewares(ctx: SourceCtx) -> list[dict[str, Any]]:
+    inv, marks = await _proxy_inventory(ctx)
+    if inv is None:
+        return []
+    rows = []
+    for m in inv.middlewares:
+        users = [_bare_name(u) for u in m.used_by]
+        used = (
+            f"{len(users)} router{'s' if len(users) != 1 else ''}: "
+            + ", ".join(users[:3])
+            + (f" and {len(users) - 3} more" if len(users) > 3 else "")
+            if users
+            else ("every request on its entry point" if m.on_entrypoint else "")
+        )
+        row = {
+            "id": m.name,
+            "name": _bare_name(m.name) if m.provider == "file" else m.name,
+            "type": m.summary or m.type,
+            "file": m.config_file or (m.provider if m.provider != "file" else ""),
+            "used": used,
+            "made_by": m.made_by,
+            "made_by_tone": _MADE_TONE.get(m.made_by, "off"),
+            "chips": ["inuse" if (users or m.on_entrypoint) else "unused"],
+        }
+        if _bare_name(m.name).startswith("maintenance-"):
+            row["chips"].append("maintenance")
+        _mark(row, marks.get(f"middlewares:{_bare_name(m.name)}"))
+        rows.append(row)
+    return rows
+
+
+async def _proxy_backends(ctx: SourceCtx) -> list[dict[str, Any]]:
+    inv, marks = await _proxy_inventory(ctx)
+    if inv is None:
+        return []
+    rows = []
+    for b in inv.backends:
+        if b.kind == "loadBalancer":
+            servers = ", ".join(
+                f"{s['url']}" + (f" ({s['status']})" if s.get("status") else "") for s in b.servers
+            )
+        else:
+            servers = ", ".join(f"{k['role']} {k['name']}" for k in b.children)
+        down = any(s.get("status") == "DOWN" for s in b.servers)
+        hc = b.health_check or {}
+        users = [_bare_name(u) for u in b.used_by]
+        row = {
+            "id": b.name,
+            "name": _bare_name(b.name) if b.provider == "file" else b.name,
+            "kind": b.kind,
+            "servers": servers,
+            "health": " · ".join(
+                str(x) for x in (hc.get("path"), hc.get("interval"), hc.get("hostname")) if x
+            ),
+            "transport": b.transport,
+            "used": ", ".join(users[:3])
+            + (f" and {len(users) - 3} more" if len(users) > 3 else ""),
+            "state": (
+                "DOWN"
+                if down
+                else ("UP" if b.servers and any(s.get("status") == "UP" for s in b.servers) else "")
+            ),
+            "managed": "Traefik Manager" if b.managed_by_tm else "",
+            "chips": [],
+        }
+        if b.kind != "loadBalancer":
+            row["chips"].append("composite")
+        if down:
+            row["chips"].append("down")
+        if not users:
+            row["chips"].append("unused")
+        _mark(row, marks.get(f"services:{_bare_name(b.name)}"))
+        rows.append(row)
     return rows
 
 
@@ -1046,15 +1197,66 @@ class ProxyConnector(Connector):
             view="proxy.hosts",
         ),
         Resource(
+            "routers",
+            "Routers",
+            (
+                Column("name", "Router · rule", "mono"),
+                Column("host", "Proxy host", "link"),
+                Column("goes", "Goes to", "mono"),
+                Column("middlewares", "Middlewares"),
+                Column("where", "Where", "mono"),
+                Column("made_by", "Made by", "pill"),
+                Column("finding", "Finding", "pill"),
+            ),
+            _proxy_routers,
+            chips=(
+                Chip("orchestrator", "Orchestrator"),
+                Chip("handwritten", "Hand-written"),
+                Chip("docker", "Docker"),
+                Chip("internal", "Traefik internal"),
+                Chip("nohost", "No proxy host"),
+                Chip("findings", "With findings"),
+            ),
+        ),
+        Resource(
             "middlewares",
             "Middlewares",
             (
                 Column("name", "Middleware", "mono"),
-                Column("used", "Proxy hosts", "num"),
-                Column("hosts", "Used by"),
+                Column("type", "Type"),
+                Column("file", "Defined in", "mono"),
+                Column("used", "Used by"),
+                Column("made_by", "Made by", "pill"),
+                Column("finding", "Finding", "pill"),
             ),
             _proxy_middlewares,
-            chips=(Chip("unused", "Unused"),),
+            chips=(
+                Chip("inuse", "In use"),
+                Chip("unused", "Unused"),
+                Chip("maintenance", "Maintenance pages"),
+                Chip("findings", "With findings"),
+            ),
+        ),
+        Resource(
+            "backends",
+            "Backends",
+            (
+                Column("name", "Service", "mono"),
+                Column("kind", "Kind"),
+                Column("servers", "Servers / members", "mono"),
+                Column("health", "Health check", "mono"),
+                Column("transport", "Transport", "mono"),
+                Column("used", "Used by"),
+                Column("state", "Traefik", "pill"),
+                Column("finding", "Finding", "pill"),
+            ),
+            _proxy_backends,
+            chips=(
+                Chip("composite", "Several backends"),
+                Chip("down", "A server down"),
+                Chip("unused", "Unused"),
+                Chip("findings", "With findings"),
+            ),
         ),
     )
     raw = (
@@ -1071,11 +1273,13 @@ class ProxyConnector(Connector):
     )
 
     def tabs(self) -> list[Tab]:
-        """The SourceProxy wireframe: its lists, then Import and Format routes."""
+        """The SourceProxy wireframes: its lists (proxy hosts, routers, middlewares, backends),
+        then Findings, Import and Format routes."""
         tabs = super().tabs()
         at = next(i for i, t in enumerate(tabs) if t.key == "settings")
         return [
             *tabs[:at],
+            Tab("findings", "Findings", "proxy.findings"),
             Tab("import", "Import", "proxy.import"),
             Tab("format", "Format routes", "proxy.format"),
             *tabs[at:],
