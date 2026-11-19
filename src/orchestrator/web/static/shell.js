@@ -11,10 +11,11 @@
     if (!sidebar) return;
     sidebar.classList.toggle("open", open);
     if (toggle) toggle.setAttribute("aria-expanded", String(open));
+    if (open) window.scrollTo({ top: 0 }); // the open menu replaces the page: start at its top
   }
   if (toggle) toggle.addEventListener("click", () => setNav(!sidebar.classList.contains("open")));
   const more = $("#phone-more");
-  if (more) more.addEventListener("click", (ev) => { ev.preventDefault(); setNav(true); window.scrollTo({ top: 0 }); });
+  if (more) more.addEventListener("click", (ev) => { ev.preventDefault(); setNav(true); });
 
   // --- Sources folds remember being open (the one holding this page always opens) ----------
   const FOLDS = "orch.navFolds";

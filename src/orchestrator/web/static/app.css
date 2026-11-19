@@ -523,7 +523,7 @@ table.dt tbody tr.group-row:hover td { background: var(--inset); }
 .region-error { padding: 12px 0; color: var(--fail); font-size: 13.5px; }
 
 @media (max-width: 40rem) {
-  #toast-stack { left: 12px; right: 12px; bottom: 76px; max-width: none; }
+  #toast-stack { left: 12px; right: 12px; bottom: calc(76px + env(safe-area-inset-bottom)); max-width: none; }
 
   /* Tables scroll sideways instead of squashing every cell to one word per line; the page
      itself never scrolls horizontally. Data tables become cards instead (below). */
@@ -533,6 +533,8 @@ table.dt tbody tr.group-row:hover td { background: var(--inset); }
   .hide-phone { display: none !important; }
   table.services-table { display: table; }
   table.services-table td { white-space: normal; }
+  table.gd-table { display: table; }
+  table.gd-table td { white-space: normal; }
 
   table.dt thead { display: none; }
   table.dt, table.dt tbody { display: block; }
@@ -560,9 +562,13 @@ table.dt tbody tr.group-row:hover td { background: var(--inset); }
     background: transparent; color: var(--text); border: 1px solid var(--line-strong); font-size: 18px;
   }
   .sidebar nav { display: none; }
+  /* Open, the menu is the page: it scrolls with the document (a sticky bar taller than the
+     screen only moved once the page under it ran out) and ends above the bottom bar. */
+  .sidebar.open { position: relative; padding-bottom: calc(76px + env(safe-area-inset-bottom)); }
+  .sidebar.open ~ .main { display: none; }
   .sidebar.open nav { display: flex; padding-top: 14px; gap: 14px; font-size: 15px; }
   .sidebar nav a { padding: 10px; }
-  .main { margin-left: 0; min-height: 0; padding-bottom: 72px; }
+  .main { margin-left: 0; min-height: 0; padding-bottom: calc(72px + env(safe-area-inset-bottom)); }
   body.has-sidebar .wrap { padding: 16px 16px 32px; }
   .topbar { position: static; padding: 8px 16px; min-height: 0; gap: 8px; }
   .topbar .search { order: 5; flex: 1 1 100%; }
@@ -581,7 +587,7 @@ table.dt tbody tr.group-row:hover td { background: var(--inset); }
   .menu button, .menu a { height: 44px; }
   .drawer { width: 100vw; border-left: 0; }
   .card { padding: 14px; }
-  .bulkbar { bottom: 80px; }
+  .bulkbar { bottom: calc(80px + env(safe-area-inset-bottom)); }
   .phonebar {
     display: grid; grid-template-columns: repeat(4, 1fr); position: fixed; left: 0; right: 0; bottom: 0; z-index: 25;
     background: var(--sidebar); border-top: 1px solid var(--line); padding: 4px 4px calc(4px + env(safe-area-inset-bottom));
@@ -901,6 +907,7 @@ body.page-map .wrap { padding-right: calc(var(--map-side-w) + 32px); }
 dl.kv { display: grid; grid-template-columns: minmax(110px, max-content) minmax(0, 1fr); gap: 8px 16px; margin: 0 0 12px; font-size: 13.5px; }
 dl.kv dt { color: var(--faint); }
 dl.kv dd { margin: 0; overflow-wrap: anywhere; }
+dl.kv dd .pill { white-space: normal; max-width: 100%; }
 dl.kv.kv-2 { grid-template-columns: minmax(110px, max-content) minmax(0, 1fr) minmax(110px, max-content) minmax(0, 1fr); }
 @media (max-width: 860px) { dl.kv.kv-2 { grid-template-columns: minmax(100px, max-content) minmax(0, 1fr); } }
 .sys-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 0 0 8px; }
@@ -1108,7 +1115,8 @@ pre.log .err { color: var(--fail); } pre.log .ts { color: var(--faint); }
 .gd-head { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
 .gd-head > button { margin-left: auto; }
 .gd-checks { display: grid; gap: 6px; margin: 0 0 12px; font-size: 13.5px; }
-.gd-check { display: grid; grid-template-columns: 18px minmax(0, 1fr) auto; gap: 8px; align-items: start; }
+.gd-check { display: grid; grid-template-columns: 18px minmax(0, 1fr) fit-content(50%); gap: 8px; align-items: start; }
+.gd-check > * { min-width: 0; overflow-wrap: anywhere; }
 .gd-ok { color: var(--ok); font-weight: 700; }
 .gd-no { color: var(--fail); font-weight: 700; }
 .gd-steps { margin: 0; padding-left: 20px; display: grid; gap: 12px; font-size: 13.5px; }

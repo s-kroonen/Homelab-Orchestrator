@@ -337,7 +337,7 @@
         }), nfs.map((m) => el("div", { class: "faint", title: "Another machine's disk: left out of the disk check" }, el("span", { class: "mono" }, m.mount), " " + m.fstype + ", not measured")))] : null,
         d.state === "answers" ? [sec("Backups and agent"), el("dl", { class: "kv" },
           el("dt", {}, "After the last backup"), el("dd", {}, d.freeze === "frozen" ? el("span", { class: "pill fail" }, "frozen") : d.freeze ? [d.freeze, " ", el("span", { class: "pill ok" }, "ok")] : "—"),
-          el("dt", {}, "Locked down"), el("dd", {}, d.locked_down === true ? ["commands and file access are off ", el("span", { class: "pill ok" }, "yes")] : d.locked_down === false ? el("span", { class: "pill warn" }, (d.dangerous || []).join(", ") + " on") : "not known"),
+          el("dt", {}, "Locked down"), el("dd", {}, d.locked_down === true ? ["commands and file access are off ", el("span", { class: "pill ok" }, "yes")] : d.locked_down === false ? [(d.dangerous || []).join(", ") + " on ", el("span", { class: "pill warn" }, "no")] : "not known"),
           el("dt", {}, "Agent"), el("dd", {}, [d.agent_version ? "qemu-ga " + d.agent_version : "qemu-ga", d.ping_ms != null ? " · answers in " + d.ping_ms + " ms" : ""].join("")))] : null,
         [sec("Proxmox"), el("dl", { class: "kv" },
           el("dt", {}, "Starts with node"), el("dd", {}, !boot ? "not read yet" : boot.onboot ? "yes, " + fmt.nth(boot.position || 0) + (boot.starts_after_s != null ? " · about " + fmt.secs(boot.starts_after_s) + " after boot" : "") : "no: started when needed"),
