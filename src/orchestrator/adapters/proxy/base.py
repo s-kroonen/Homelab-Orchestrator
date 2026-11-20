@@ -302,6 +302,15 @@ class ProxyAdapter(ABC):
         ``serverStatus``. ``None`` when this backend cannot say. Default: it cannot."""
         return None
 
+    async def read_inventory(self) -> dict[str, Any] | None:
+        """Everything the proxy has, raw, for the inventory (``registry/proxy_inventory``):
+        ``routes`` (its file routes with their config file), ``file_middlewares`` (name, file,
+        definition), ``runtime_routers`` / ``runtime_middlewares`` / ``runtime_services``
+        (Traefik's running view, every provider), ``managed_services`` (the composite services
+        the backend's own UI manages) and ``config_errors``. A part that could not be read is
+        ``None``. ``None`` as a whole when this backend cannot say. Default: it cannot."""
+        return None
+
     async def save_service(self, payload: dict[str, Any]) -> None:
         """Create or edit one service in the backend's own service form (Traefik Manager:
         ``POST /api/services``). Raises :class:`NotImplementedError` where there is none."""

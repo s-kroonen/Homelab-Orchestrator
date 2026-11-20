@@ -868,3 +868,68 @@ async def test_a_hand_written_route_never_gets_the_maintenance_rule(
     assert not [p for p in saved if p.endswith("/raw")]
     assert adapter.owns_route_ref("media.yml::orchestrator-media-example-com")
     assert not adapter.owns_route_ref("media.yml::media")
+
+
+# ---------------------------------------------------------------------------
+# read_inventory — one read of routes, routers, middlewares, services, entry points
+# ---------------------------------------------------------------------------
+
+
+async def test_read_inventory_reads_every_part_and_names_a_failed_one(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seen: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request.method)
+        path = request.url.path
+        if path == "/api/routes":
+            return httpx.Response(
+                200,
+                json={
+                    "apps": [
+                        {"name": "app", "rule": "Host(`app.example.lan`)", "configFile": "app.yml"}
+                    ],
+                    "middlewares": [
+                        {"name": "hsts-headers", "configFile": "_shared.yml", "type": "http"},
+                        {"name": "tcp-only", "configFile": "_shared.yml", "type": "tcp"},
+                    ],
+                    "configErrors": [],
+                },
+            )
+        if path == "/api/traefik/routers":
+            return httpx.Response(200, json={"http": [{"name": "app@file"}], "reachable": True})
+        if path == "/api/traefik/middlewares":
+            return httpx.Response(502, json={"error": "Traefik API unreachable"})
+        if path == "/api/traefik/services":
+            return httpx.Response(
+                200,
+                json={
+                    "http": [{"name": "app@file"}],
+                    "reachable": True,
+                    "ownedServices": ["app-failover"],
+                    "ownedChildren": ["app-failover-backend-1"],
+                },
+            )
+        if path == "/api/traefik/entrypoints":
+            return httpx.Response(
+                200, json=[{"name": "websecure", "http": {"middlewares": ["crowdsec@file"]}}]
+            )
+        return httpx.Response(404)
+
+    _patch_transport(monkeypatch, handler)
+    raw = await TraefikManagerProxyAdapter(_settings()).read_inventory()
+    assert raw is not None
+    assert [a["name"] for a in raw["routes"]] == ["app"]
+    assert [m["name"] for m in raw["file_middlewares"]] == ["hsts-headers"]  # HTTP only
+    assert raw["runtime_routers"] == [{"name": "app@file"}]
+    assert raw["runtime_middlewares"] is None
+    assert "502" in raw["errors"]["middlewares"]
+    assert raw["managed_services"] == ["app-failover", "app-failover-backend-1"]
+    assert raw["entrypoint_middlewares"] == ["crowdsec@file"]
+    assert set(seen) == {"GET"}  # reads only
+
+
+async def test_read_inventory_is_none_when_not_configured() -> None:
+    adapter = TraefikManagerProxyAdapter(_settings(traefik_manager_url=""))
+    assert await adapter.read_inventory() is None

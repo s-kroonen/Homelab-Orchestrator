@@ -66,6 +66,10 @@ may not use is not even listed to the assistant.
   (how full each guest's filesystems are, [disks.md](disks.md)), `list_proxy_hosts` (with the
   Traefik Manager route each record points at, `route_ref`),
   `proxy_backends` (what of a failover, weighted or mirroring host can be changed, with versions),
+  `proxy_inventory` (every router, middleware, service or servers transport the proxy runs, from
+  every provider, with who made it, its file and who uses it), `proxy_findings` (the proxy report:
+  what could be converted, removed, simplified or moved, with the decisions recorded; also as
+  Markdown),
   `portainer_stacks`, `portainer_containers`, `container_logs` (secrets redacted), `get_request`,
   `retention_preview` (what a service's backup policy would prune from PBS now, as PBS's dry run,
   or PBS's reason for refusing),

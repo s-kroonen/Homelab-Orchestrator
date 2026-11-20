@@ -845,6 +845,65 @@ async def _proxy_backends(ctx: ToolContext, a: dict[str, Any]) -> Any:
     return await _call(proxy_hosts.get_backends(ph.id, ctx.session, ctx.adapters))
 
 
+async def _proxy_inv(ctx: ToolContext, a: dict[str, Any]) -> tuple[Any, Any, str]:
+    from orchestrator.registry import proxy_inventory as pi
+    from orchestrator.registry.proxy_push import owned_hosts
+
+    source = str(a.get("source") or "")
+    scoped = ctx.adapters.with_proxy(source)
+    src = source or getattr(ctx.adapters, "default_proxy", "") or "default"
+    inv = await pi.read(
+        scoped.proxy,
+        source=src,
+        hosts=owned_hosts(ctx.session, scoped),
+        settings=ctx.settings,
+        fresh=bool(a.get("fresh")),
+    )
+    if inv is None:
+        raise ToolError("This proxy cannot list its routers (no Traefik Manager, or dry run).")
+    return pi, inv, src
+
+
+async def _proxy_inventory(ctx: ToolContext, a: dict[str, Any]) -> Any:
+    from dataclasses import asdict
+
+    pi, inv, _src = await _proxy_inv(ctx, a)
+    part = str(a.get("part") or "routers")
+    q = str(a.get("q") or "").lower()
+    rows: list[dict[str, Any]] = []
+    if part == "routers":
+        rows = [{**asdict(r), "goes_to": pi.goes_to(inv, r)} for r in inv.routers]
+    elif part == "middlewares":
+        rows = [asdict(m) for m in inv.middlewares]
+    elif part == "backends":
+        rows = [asdict(b) for b in inv.backends]
+    elif part == "transports":
+        rows = [asdict(t) for t in inv.transports]
+    if q:
+        rows = [r for r in rows if q in json.dumps(r, default=str).lower()]
+    return {
+        "read_at": inv.read_at,
+        "part": part,
+        "count": len(rows),
+        "errors": inv.errors,
+        "transports_known": inv.transports_known,
+        "rows": rows,
+    }
+
+
+async def _proxy_findings(ctx: ToolContext, a: dict[str, Any]) -> Any:
+    from sqlmodel import select
+
+    from orchestrator.db.models import Service
+
+    pi, inv, src = await _proxy_inv(ctx, a)
+    slugs = list(ctx.session.exec(select(Service.slug)).all())
+    rep = pi.report(inv, pi.findings(inv, service_slugs=slugs), pi.load_decisions(ctx.session, src))
+    if a.get("markdown"):
+        return pi.to_markdown(rep, source=src)
+    return rep
+
+
 # -- dangerous ---------------------------------------------------------------------------------
 
 
@@ -1602,6 +1661,43 @@ TOOLS: dict[str, Tool] = {
             _proxy_backends,
             {"hostname": _s("The proxy host's hostname")},
             ("hostname",),
+            READ,
+        ),
+        Tool(
+            "proxy_inventory",
+            "Everything the proxy has",
+            "Every router (from every provider: file, Docker, Traefik's own), middleware, "
+            "service (backend) and servers transport the proxy runs, one part at a time: who "
+            "made each (orchestrator, hand-written, docker, internal), the file it is in, the "
+            "proxy host it serves and who uses it. Read only.",
+            "read",
+            _proxy_inventory,
+            {
+                "part": _s(
+                    "routers | middlewares | backends | transports (default routers)",
+                    enum=["routers", "middlewares", "backends", "transports"],
+                ),
+                "q": _s("Only rows containing this text"),
+                "source": _s("The proxy connection id (default: the default proxy)"),
+                "fresh": _b("Read the proxy again instead of the last 20 s"),
+            },
+            (),
+            READ,
+        ),
+        Tool(
+            "proxy_findings",
+            "The proxy report",
+            "The orchestrator's report on the proxy: what could be converted to the standard, "
+            "what is unused, leftovers, old syntax and what is worth a look, each with a "
+            "suggestion and the decision a person recorded. Nothing is changed.",
+            "read",
+            _proxy_findings,
+            {
+                "source": _s("The proxy connection id (default: the default proxy)"),
+                "markdown": _b("The report as Markdown, as the page exports it"),
+                "fresh": _b("Read the proxy again instead of the last 20 s"),
+            },
+            (),
             READ,
         ),
         Tool(

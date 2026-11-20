@@ -5,6 +5,9 @@
  *   proxy.import  every route this Traefik Manager has next to its record; record a route that
  *                 has none; import (upstream, on/off) into the records.
  *   proxy.format  rewrite hand-written routes into the standard shape (format_routes.js).
+ *   proxy.findings the orchestrator's report on this proxy (/api/pull/traefik/findings): what
+ *                 could be converted, removed, simplified or moved, a decision per finding (saved
+ *                 at once, nothing is changed in the proxy), Markdown / JSON export.
  * Hosts come from /api/proxy-hosts?source=, routes from /api/pull/traefik?source=; a push goes
  * to the proxy that owns each host. Nothing from Traefik is put in as HTML. */
 (function () {
@@ -37,6 +40,8 @@
       if (h.sync_state === "detached") return { cls: "warn", label: "changed in Traefik", sub: (h.sync_changes || []).join(", ") };
       const t = h.traefik;
       if (!t) return { cls: "off", label: h.router_provider, sub: "kept here only" };
+      if (t.state === "ok" && composite(h) && servers(h).length && downCount(h) === servers(h).length) return { cls: "fail", label: "no backend", sub: "every backend is DOWN" };
+      if (t.state === "ok" && composite(h) && downCount(h)) return { cls: "warn", label: (servers(h).find((u) => u.status === "DOWN") || {}).role === "fallback" ? "fallback down" : "a backend down", sub: downCount(h) + " of " + servers(h).length + " DOWN" };
       if (t.state === "ok") return { cls: "ok", label: "serving", sub: h.config_file_misplaced ? "in " + (h.tm_config_file || "?") + ", not " + h.config_file_resolved : "" };
       if (t.state === "error") return { cls: "fail", label: "error", sub: t.message || "" };
       if (t.state === "not_loaded") return { cls: "warn", label: "not loaded", sub: t.message || "" };
@@ -53,6 +58,41 @@
       if (o.pass_host_header === false) tags.push("own Host");
       return tags.length ? el("span", { class: "tags" }, tags.map((x) => el("span", { class: "tag" }, x))) : "";
     }
+    // A host with several backends: a dot per server of its catch-all router (Traefik's UP/DOWN),
+    // and an open row with every router and every backend (the ProxyHostsList wireframe).
+    const expanded = new Set();
+    const catchAll = (h) => { const m = h.service_model; return m && m.routers ? (m.routers.find((x) => !x.redirect && x.upstreams && x.upstreams.length) || null) : null; };
+    const servers = (h) => { const r = catchAll(h); return r ? r.upstreams : []; };
+    const composite = (h) => !!(h.service_model && ["failover", "weighted", "mirroring", "mixed"].includes(h.service_model.strategy)) || ((h.service_model && h.service_model.routers || []).filter((x) => !x.redirect).length > 1);
+    const downCount = (h) => servers(h).filter((u) => u.status === "DOWN").length;
+    function dots(h) {
+      if (!composite(h)) return null;
+      return el("span", { class: "be-dots", "aria-label": servers(h).map((u) => u.role + " " + (u.status || "unknown")).join(", ") },
+        servers(h).map((u) => el("i", { class: "be-dot " + (u.status === "UP" ? "ok" : u.status === "DOWN" ? "fail" : "off"), title: u.role + ": " + u.url + " " + (u.status || "") })));
+    }
+    function hostDetail(h) {
+      const m = h.service_model;
+      if (!m || !expanded.has(h.id)) return null;
+      const hc = (c) => c ? [c.path || "/", c.interval ? " · every " + c.interval : "", c.timeout ? " · " + c.timeout : "", c.hostname ? " · as " + c.hostname : ""].join("") : "no health check";
+      const routers = el("section", { class: "be-card" }, el("div", { class: "sec-label" }, "Routers ", el("span", { class: "faint" }, String(m.routers.length))),
+        m.routers.map((r) => el("div", { class: "be-line" },
+          el("div", {}, el("span", { class: "mono" }, r.router.split("@")[0]), r.priority != null ? el("span", { class: "faint" }, " · priority " + r.priority) : null,
+            el("div", { class: "faint mono be-rule" }, r.redirect ? "HTTP -> HTTPS" : r.rule)),
+          el("span", { class: "tag" }, r.redirect ? "redirect" : r.strategy))),
+        el("div", { class: "faint be-note" }, (h.tm_config_file ? "File " + h.tm_config_file + " · " : "") + (h.sync_state === "external" ? "hand-written: edit it in Traefik Manager, or convert it" : "made here · editable in Traefik Manager too")));
+      const main = catchAll(h);
+      const backends = el("section", { class: "be-card" }, el("div", { class: "sec-label" }, "Backends · " + (main ? main.strategy : m.strategy)),
+        servers(h).map((u) => el("div", { class: "be-line" },
+          el("div", {}, el("span", { class: "faint" }, u.role + " "), el("span", { class: "mono" }, u.url),
+            el("div", { class: "faint be-rule" }, hc(u.health_check) + (u.pass_host_header === false ? " · its own Host header" : ""))),
+          u.status ? el("span", { class: "pill " + (u.status === "UP" ? "ok" : "fail") }, u.status) : el("span", { class: "faint" }, "—"))),
+        el("div", { class: "be-note" },
+          downCount(h) && downCount(h) === servers(h).length ? el("span", { class: "faint" }, "No backend answers: visitors see the maintenance page if the route has one. ") : null,
+          el("button", { type: "button", class: "ghost small", style: { color: "var(--link)", padding: 0 }, onclick: () => window.Objects.backendsDrawer(h) }, "Backends…"),
+          ["failover", "weighted", "mirroring", "mixed"].includes(m.strategy) ? [" · ", el("button", { type: "button", class: "ghost small", style: { color: "var(--link)", padding: 0 }, onclick: () => window.Objects.editBackends(h, () => r.refresh()) }, "Change backends…")] : null));
+      return el("div", { class: "be-detail" }, routers, backends);
+    }
+    function toggle(h) { if (expanded.has(h.id)) expanded.delete(h.id); else expanded.add(h.id); t.render(); }
     async function setEnabled(h, on) {
       try { await api.post("/api/proxy-hosts/" + h.id + "/enabled", { enabled: on }, { suppressToast: true }); toast((on ? "Switched on " : "Switched off ") + h.hostname, "ok"); }
       catch (e) { toast(e.message, "error"); }
@@ -80,13 +120,16 @@
       placeholder: "Filter by hostname or service", age,
       search: (h) => [h.hostname, h.service_slug, h.service_name, h.upstream, h.service_model ? h.service_model.display : ""].join(" "),
       sort: { key: "hostname", dir: 1 },
+      detail: hostDetail,
       columns: [
         { key: "hostname", label: "Hostname", sort: (h) => h.hostname.split(".").reverse().join("."),
-          render: (h) => el("button", { type: "button", class: "ghost", style: { padding: 0, height: "auto", color: "var(--text)", font: "600 13.5px var(--mono)" }, onclick: () => edit(h) }, h.hostname) },
+          render: (h) => el("span", { class: "host-cell" }, h.service_model && h.service_model.routers && h.service_model.routers.length
+            ? el("button", { type: "button", class: "ghost be-toggle", "aria-expanded": String(expanded.has(h.id)), "aria-label": (expanded.has(h.id) ? "Close " : "Open ") + "routers and backends of " + h.hostname, onclick: () => toggle(h) }, expanded.has(h.id) ? "▾" : "▸") : null,
+            el("button", { type: "button", class: "ghost", style: { padding: 0, height: "auto", color: "var(--text)", font: "600 13.5px var(--mono)" }, onclick: () => edit(h) }, h.hostname)) },
         { key: "service", label: "Service", sort: (h) => h.service_slug || "~",
           render: (h) => h.service_slug ? el("a", { href: "/services/" + enc(h.service_slug) }, h.service_slug)
             : [el("span", { class: "faint" }, "not linked"), " · ", el("button", { type: "button", class: "ghost small", style: { color: "var(--link)", padding: "0" }, onclick: () => linkHost(h) }, "Link…")] },
-        { key: "upstream", label: "Points to", sort: true, render: (h) => window.Objects.pointsTo(h) },
+        { key: "upstream", label: "Points to", sort: true, render: (h) => [dots(h), window.Objects.pointsTo(h)] },
         { key: "options", label: "Options", render: options },
         { key: "traefik", label: "Traefik", phone: false, sort: (h) => ["fail", "warn", "pending", "off", "ok"].indexOf(traefikState(h).cls),
           render: (h) => { const s = traefikState(h); return [el("span", { class: "pill " + s.cls, title: s.sub || null }, s.label), s.sub ? el("span", { class: "sub" }, s.sub) : null]; } },
@@ -99,6 +142,9 @@
         { key: "detached", label: "Changed in Traefik", test: (h) => h.sync_state === "detached" },
         { key: "error", label: "Errors", test: (h) => traefikState(h).cls === "fail" || traefikState(h).label === "not loaded" },
         { key: "off", label: "Off", test: (h) => !h.enabled || !h.served },
+        { key: "several", label: "Several backends", test: (h) => composite(h) },
+        { key: "bedown", label: "A backend down", test: (h) => downCount(h) > 0 },
+        { key: "handwritten", label: "Hand-written", test: (h) => h.sync_state === "external" },
         { key: "file", label: "In another file", test: (h) => h.config_file_misplaced },
       ],
       menu: (h) => [
@@ -240,6 +286,73 @@
       finally { importBtn.disabled = false; }
       view.refresh();
     });
+  };
+
+  // --- Findings ------------------------------------------------------------------------------------------
+  const DECISIONS = [["later", "Decide later"], ["keep", "Keep"], ["convert", "Convert"], ["delete", "Delete"], ["simplify", "Simplify"], ["move", "Move"]];
+  const DECISION_LABEL = Object.fromEntries(DECISIONS);
+  window.SourceViews["proxy.findings"] = function (panel, ctx) {
+    const SRC = ctx.source.id;
+    const q = "?source=" + enc(SRC);
+    const url = "/api/pull/traefik/findings" + q;
+    const head = el("div", { class: "findings-head" });
+    const box = el("div");
+    fill(panel, head, box);
+    let fresh = false;
+    const view = region(box, {
+      load: () => { const u = url + (fresh ? "&fresh=true" : ""); fresh = false; return api.get(u, { suppressToast: true }); },
+      render: (rep) => draw(rep),
+      onError: (e) => fill(box, el("div", { class: "card" }, el("div", { class: "dt-empty" }, el("strong", {}, "Cannot read this proxy"), el("div", {}, e.message)))),
+      every: 600000,
+    });
+    function headLine(rep) {
+      const c = rep.counts;
+      fill(head,
+        el("div", { class: "findings-what" }, el("strong", {}, "Orchestrator report"),
+          el("span", { class: "faint" }, " · read " + window.UI.fmt.time(rep.read_at) + " · " + c.routers + " routers, " + c.middlewares + " middlewares, " + c.services + " services, " + c.transports + " transports, " + c.files + " files")),
+        el("div", { class: "findings-tools" },
+          el("button", { type: "button", class: "small", onclick: () => { fresh = true; view.refresh(); } }, "Read again"),
+          el("a", { class: "btn secondary small", href: url + "&fmt=md", download: "" }, "Export Markdown"),
+          el("a", { class: "btn secondary small", href: url + "&fmt=json", download: "" }, "Export JSON")));
+    }
+    async function decide(f, value, sel) {
+      sel.disabled = true;
+      try { await api.put("/api/pull/traefik/findings/" + enc(f.id) + q, { decision: value }, { suppressToast: true }); f.decision = value; toast(f.target + ": " + DECISION_LABEL[value], "ok"); }
+      catch (e) { toast(e.message, "error"); sel.value = f.decision || "later"; }
+      finally { sel.disabled = false; }
+      ctx.setCount && ctx.setCount(total);
+    }
+    let total = 0;
+    function draw(rep) {
+      headLine(rep);
+      total = rep.counts.findings;
+      ctx.setCount && ctx.setCount(total);
+      const parts = [];
+      const missing = Object.keys(rep.errors || {});
+      if (missing.length) parts.push(el("div", { class: "banner fail" }, "Not everything could be read (" + missing.join(", ") + "), so this report is incomplete: " + Object.values(rep.errors).join("; ")));
+      parts.push(el("div", { class: "banner info" }, "Nothing changes in the proxy from here. Each decision is recorded for this report and its export; converting a route has its own preview in Format routes."));
+      if (!rep.transports_known) parts.push(el("div", { class: "faint", style: { fontSize: "12.5px" } }, "Transports are known by name only: add the Traefik API connection to read their server names and find unused ones."));
+      if (!rep.groups.length) parts.push(el("div", { class: "card" }, el("div", { class: "dt-empty" }, el("strong", {}, "Nothing to report"), el("div", {}, "Every router, middleware and service is in use and in the standard shape."))));
+      const card = el("section", { class: "card findings" });
+      for (const g of rep.groups) {
+        card.append(el("div", { class: "findings-grp" }, g.label, el("span", { class: "faint" }, " " + g.findings.length)));
+        for (const f of g.findings) {
+          const sel = el("select", { "aria-label": "Decision for " + f.target, onchange: () => decide(f, sel.value, sel) },
+            DECISIONS.map(([v, l]) => el("option", { value: v, selected: (f.decision || "later") === v }, l)));
+          card.append(el("div", { class: "findings-row" },
+            el("span", { class: "mono" }, f.target),
+            el("span", {}, f.detail),
+            el("span", { class: "faint" }, "Suggested: ", el("strong", {}, DECISION_LABEL[f.suggestion] || f.suggestion)),
+            sel));
+        }
+      }
+      if (rep.groups.length) {
+        const decided = rep.counts.decided;
+        card.append(el("div", { class: "findings-foot faint" }, decided + " of " + rep.counts.findings + " decided. Applying them is done with the convert and clean-up tools, one change at a time, each with Traefik Manager's backup."));
+      }
+      if (rep.groups.length) parts.push(card);
+      fill(box, ...parts);
+    }
   };
 
   // --- Format routes ------------------------------------------------------------------------------------

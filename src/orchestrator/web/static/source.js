@@ -217,6 +217,8 @@
         const cols = meta.columns.map((c, i) => ({
           key: c.key, label: c.label, sort: (r) => r[c.key], cls: c.kind === "num" || c.kind === "pct" || c.kind === "bytes" ? "num" : null,
           render: i === 0 ? (r) => [r.href ? el("a", { href: r.href }, el("strong", {}, String(r[c.key] ?? r.id))) : el("strong", {}, String(r[c.key] ?? r.id)),
+            // a second line under the name (a router's rule, say): <key>_sub
+            r[c.key + "_sub"] ? el("div", { class: "faint mono", style: { fontSize: "11.5px", overflowWrap: "anywhere" } }, String(r[c.key + "_sub"])) : null,
             (r.links || []).length ? el("div", { class: "faint", style: { fontSize: "12.5px" } }, r.links.map((l, j) => [j ? " · " : "", el("a", { href: l.href }, l.label)])) : null]
             : (r) => cell(c, r),
         }));
