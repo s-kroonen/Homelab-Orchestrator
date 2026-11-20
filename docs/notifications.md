@@ -34,7 +34,8 @@ proxy host's route (inside through the proxy, and from outside), and announces C
   service that is unreachable; a service down because its guest was switched off is a
   warning, unknown is a warning. A node a person powered off (or restarted) **from the
   orchestrator** in the last 2 hours - the Nodes page, a bulk action, or an assistant request a
-  person approved - is still announced, as a **warning** that says who and when. Every other way
+  person approved - or that a backup put back off after it was done, is still announced, as a
+  **warning** that says who (or which backup) and when. Every other way
   a node goes down, an external power-off through the same power manager included, stays an
   error.
 * Debounced: a change must be seen on `NOTIFY_CONFIRM_SCANS` (2) consecutive scans, unless a

@@ -273,6 +273,12 @@ async def test_a_node_the_backup_powered_on_is_powered_off_again(
     assert world.index("vzdump:101") < world.index("power_off:compute")
     session.refresh(run)
     assert "restore_state:compute" in _steps(run)
+    # on record as a planned power-off, so its "node down" is a warning (notify/monitor.py)
+    from orchestrator.db.models import AuditEntry
+
+    entry = session.exec(select(AuditEntry).where(AuditEntry.action == "node.power_action")).one()
+    assert entry.actor == "backup" and entry.target == "node:compute"
+    assert entry.details["action"] == "power_off" and "backup finished" in entry.details["why"]
 
 
 async def test_a_node_that_was_already_on_is_left_on(

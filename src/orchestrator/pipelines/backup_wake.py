@@ -40,6 +40,7 @@ from typing import Any
 from sqlmodel import Session, select
 
 from orchestrator.adapters.errors import AdapterError, AdapterUnreachable
+from orchestrator.audit import log as audit
 from orchestrator.config import Settings
 from orchestrator.db.models import Node, NodeState, Service
 from orchestrator.domain.enums import GuestKind
@@ -356,7 +357,18 @@ class BackupWaker:
                 sink.record(step, "skipped", detail={"reason": busy})
                 return
         started = datetime.now(UTC)
-        await self._wake.power_off_node(node, reason="backup finished: back to the prior state")
+        why = "backup finished: back to the prior state"
+        await self._wake.power_off_node(node, reason=why)
+        # On record like a power-off from the Nodes page, so its "node down" reads as planned
+        # (notify/monitor.py) and not as an outage.
+        audit.record(
+            session,
+            actor="backup",
+            action="node.power_action",
+            target=f"node:{node.name}",
+            details={"action": "power_off", "force": False, "why": why},
+        )
+        session.commit()
         sink.record(
             step,
             "ok",
