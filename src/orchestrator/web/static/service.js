@@ -753,7 +753,9 @@
     const has = S.deploy && Object.keys(S.deploy).length > 0;
     const box = clear($("#stack"));
     box.append(el("div", { style: { display: "flex", flexWrap: "wrap", gap: "8px", alignItems: "center", marginBottom: "8px" } },
-      el("strong", { class: "mono" }, ctl().stack), part ? el("span", { class: "pill " + PART_STATE(part)[0] }, part.detail || PART_STATE(part)[1]) : null),
+      el("strong", { class: "mono" }, ctl().stack), part ? el("span", { class: "pill " + PART_STATE(part)[0] }, PART_STATE(part)[1]) : null),
+      // the pill stays one word; what the stack reports goes under it, as in the on/off chain
+      part && part.detail ? el("div", { class: "faint", style: { fontSize: "12px", overflowWrap: "anywhere", margin: "-4px 0 8px" } }, part.detail) : null,
       el("p", { class: "faint", style: { margin: "0 0 10px", fontSize: "13px" } }, guardsText(S.deploy)),
       el("div", { style: { display: "flex", gap: "8px", flexWrap: "wrap" } },
         has ? el("button", { type: "button", class: "secondary small", onclick: () => deployNow() }, "Deploy now") : null,
