@@ -1094,7 +1094,7 @@ def test_apply_retention_refuses_a_policy_that_keeps_everything(client: TestClie
     assert client.get("/api/assistants/requests").json() == []
 
 
-def test_proxy_inventory_and_findings_are_read_only_tools(client: TestClient) -> None:
+def test_proxy_inventory_and_review_are_read_only_tools(client: TestClient) -> None:
     import json
     import sys
     from pathlib import Path
@@ -1123,7 +1123,8 @@ def test_proxy_inventory_and_findings_are_read_only_tools(client: TestClient) ->
     }
     out = call(client, got["access_token"], "proxy_inventory", {"part": "nope"})
     assert out["isError"] is True
-    out = call(client, got["access_token"], "proxy_findings", {"markdown": True})
+    out = call(client, got["access_token"], "proxy_review", {"markdown": True})
     assert out["isError"] is False, out
-    assert "## Unused" in out["content"][0]["text"]
+    text = out["content"][0]["text"]
+    assert "## Clean-up" in text and "## What the orchestrator supports" in text
     pi._CACHE.clear()

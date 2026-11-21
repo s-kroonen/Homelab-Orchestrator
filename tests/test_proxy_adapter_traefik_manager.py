@@ -898,7 +898,14 @@ async def test_read_inventory_reads_every_part_and_names_a_failed_one(
                 },
             )
         if path == "/api/traefik/routers":
-            return httpx.Response(200, json={"http": [{"name": "app@file"}], "reachable": True})
+            return httpx.Response(
+                200,
+                json={
+                    "http": [{"name": "app@file"}],
+                    "tcp": [{"name": "mqtt@file", "rule": "HostSNI(`*`)", "provider": "file"}],
+                    "reachable": True,
+                },
+            )
         if path == "/api/traefik/middlewares":
             return httpx.Response(502, json={"error": "Traefik API unreachable"})
         if path == "/api/traefik/services":
@@ -913,8 +920,17 @@ async def test_read_inventory_reads_every_part_and_names_a_failed_one(
             )
         if path == "/api/traefik/entrypoints":
             return httpx.Response(
-                200, json=[{"name": "websecure", "http": {"middlewares": ["crowdsec@file"]}}]
+                200,
+                json=[
+                    {"name": "websecure", "http": {"middlewares": ["crowdsec@file"]}},
+                    {
+                        "name": "web",
+                        "http": {"redirections": {"entryPoint": {"to": "websecure"}}},
+                    },
+                ],
             )
+        if path == "/api/tls-options":
+            return httpx.Response(200, json=[{"name": "modern", "configFile": "_shared.yml"}])
         return httpx.Response(404)
 
     _patch_transport(monkeypatch, handler)
@@ -927,6 +943,10 @@ async def test_read_inventory_reads_every_part_and_names_a_failed_one(
     assert "502" in raw["errors"]["middlewares"]
     assert raw["managed_services"] == ["app-failover", "app-failover-backend-1"]
     assert raw["entrypoint_middlewares"] == ["crowdsec@file"]
+    assert raw["entrypoint_redirects"] == {"web": "websecure"}
+    assert raw["tls_options"] == [{"name": "modern", "configFile": "_shared.yml"}]
+    assert raw["runtime_tcp_routers"][0]["name"] == "mqtt@file"
+    assert raw["runtime_udp_routers"] == []
     assert set(seen) == {"GET"}  # reads only
 
 

@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Proxy — convert a hand-written route</title>
+<title>Proxy — review</title>
 </head>
 <body>
 <x-dc>
@@ -72,20 +72,14 @@ tr.selrow td{background:#16233a}
 .res.on{background:#16233a;color:#dbe6ff;font-weight:600}
 pre.json{margin:0;padding:14px 16px;font:12.5px/1.55 'JetBrains Mono',ui-monospace,monospace;color:#c9d1dc;background:#0f131a;border-top:1px solid #232a36;white-space:pre;overflow:hidden}
 
-.tag{white-space:nowrap}
-.yaml{margin:0;padding:12px 14px;font:12px/1.55 'JetBrains Mono',ui-monospace,monospace;color:#c9d1dc;background:#0f131a;border:1px solid #232a36;border-radius:8px;white-space:pre;overflow:hidden}
-.yaml .del{color:#ff8a82}.yaml .add{color:#5fe08b}.yaml .c{color:#8a94a5}
-.be{border:1px solid #2c3340;border-radius:10px;padding:12px 14px;display:flex;flex-direction:column;gap:8px;background:#0f131a}
-.be-h{display:flex;flex-wrap:wrap;align-items:center;gap:8px}
-.grid2{display:grid;grid-template-columns:120px 1fr;gap:6px 12px;font-size:13px}
-.grid2 .k{color:#8a94a5}
-.sec{font-size:11.5px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:#8a94a5}
 .grp{padding:10px 18px;font-weight:600;background:#11151c;border-bottom:1px solid #232a36;display:flex;gap:8px;align-items:center}
-.step{display:grid;grid-template-columns:22px 1fr;gap:8px;font-size:13px}
-.num{width:20px;height:20px;border-radius:50%;background:#1d2430;color:#b3bccb;font-size:11.5px;font-weight:700;display:flex;align-items:center;justify-content:center}
+.row{display:grid;grid-template-columns:230px minmax(0,1fr) 150px minmax(0,0.9fr);gap:14px;align-items:start;padding:10px 18px;border-bottom:1px solid #1d232e;font-size:13.5px}
+.row .fix{color:#b3bccb;font-size:12.5px}
+.sup{display:grid;grid-template-columns:minmax(0,1fr) 120px;gap:6px 12px;padding:12px 18px;font-size:13px}
+.sec{font-size:11.5px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:#8a94a5}
 </style>
 </helmet>
-<div style="position: relative; display: flex; flex-wrap: wrap; min-height: 1000px; background: #0d1015; color: #e6e9ef; font-family: Inter, system-ui, sans-serif; font-size: 14px; line-height: 1.45; overflow: hidden">
+<div style="position: relative; display: flex; flex-wrap: wrap; min-height: 1180px; background: #0d1015; color: #e6e9ef; font-family: Inter, system-ui, sans-serif; font-size: 14px; line-height: 1.45; overflow: hidden">
 <nav aria-label="Main" style="flex:0 0 232px;background:#11151c;border-right:1px solid #222833;padding:20px 14px;display:flex;flex-direction:column;gap:16px"><div style="font-weight:700;font-size:15px;padding:0 10px">homelab-orchestrator</div><div style="display:flex;flex-direction:column;gap:2px"><div class="lane">Overview</div><a href="#" class="nav-a">Dashboard</a><a href="#" class="nav-a">Map</a><a href="#" class="nav-a">Inventory</a></div><div style="display:flex;flex-direction:column;gap:2px"><div class="lane">Services</div><a href="#" class="nav-a">Services</a><a href="#" class="nav-a">Backups</a></div><div style="display:flex;flex-direction:column;gap:1px"><div class="lane">Sources<span style="margin-left:auto;font-size:15px;color:#8fb3ff;letter-spacing:0">+</span></div><a href="#" class="nav-a">All sources</a><div class="nav-kind" style="padding-top:8px"><span style="width:10px;color:#8a94a5">▾</span>Proxmox<span class="faint" style="font-weight:500">2</span></div><a href="#" class="nav-src"><span class="dot "></span>cluster-a</a><a href="#" class="nav-src"><span class="dot "></span>cluster-b</a><div class="nav-kind" style="padding-top:8px"><span style="width:10px;color:#8a94a5">▸</span>Portainer<span class="faint" style="font-weight:500">2</span><span class="dot bad" style="margin-left:auto"></span></div><a href="#" class="nav-src on" style="padding-left:10px"><span class="dot "></span>Proxy <span class="faint" style="font-weight:400">· gateway</span></a><a href="#" class="nav-src" style="padding-left:10px"><span class="dot warn"></span>Backups <span class="faint" style="font-weight:400">· pbs-main</span></a><a href="#" class="nav-src" style="padding-left:10px"><span class="dot "></span>Power <span class="faint" style="font-weight:400">· mqtt</span></a><div class="nav-kind" style="padding-top:8px"><span style="width:10px;color:#8a94a5">▸</span>Machines<span class="faint" style="font-weight:500">2</span></div></div><div style="display:flex;flex-direction:column;gap:2px"><div class="lane">Activity</div><a href="#" class="nav-a">Activity</a><a href="#" class="nav-a">Traffic</a></div><div style="display:flex;flex-direction:column;gap:2px"><div class="lane">Settings</div><a href="#" class="nav-a">General</a><a href="#" class="nav-a">Notifications</a><a href="#" class="nav-a">AI assistants</a><a href="#" class="nav-a">Admins & devices</a><a href="#" class="nav-a">System</a><a href="#" class="nav-a">Archive</a></div></nav>
   <div style="flex: 999 1 560px; min-width: 0; display: flex; flex-direction: column">
     <header style="display: flex; flex-wrap: wrap; align-items: center; gap: 12px; padding: 12px 32px; border-bottom: 1px solid #222833">
@@ -103,71 +97,24 @@ pre.json{margin:0;padding:14px 16px;font:12.5px/1.55 'JetBrains Mono',ui-monospa
         <button class="btn" type="button">Test</button>
         <button class="btn" type="button">⋯</button>
       </div>
-      <div class="tabs"><span class="">Overview</span><span class="on">Proxy hosts <span class=faint style=font-weight:500>27</span></span><span class="">Routers <span class=faint style=font-weight:500>41</span></span><span class="">Middlewares <span class=faint style=font-weight:500>14</span></span><span class="">Backends <span class=faint style=font-weight:500>33</span></span><span class="">Findings <span class=faint style=font-weight:500>18</span></span><span class="">Import <span class=faint style=font-weight:500>3</span></span><span class="">Format routes <span class=faint style=font-weight:500>15</span></span><span class="">Settings</span><span class="">Raw</span></div>
-<div style="display: flex; flex-wrap: wrap; gap: 8px; align-items: center">
-        <div class="input" style="width: 280px">Filter by hostname or service</div>
-        <span class="chip on">All <span class="n">27</span></span><span class="chip">Not linked <span class="n">2</span></span><span class="chip">Not pushed <span class="n">1</span></span><span class="chip">Changed in Traefik <span class="n">1</span></span><span class="chip">Off <span class="n">5</span></span>
-        <button class="btn primary" type="button" style="margin-left: auto">+ Add proxy host</button>
+      <div class="tabs"><span class="">Overview</span><span class="">Proxy hosts <span class=faint style=font-weight:500>27</span></span><span class="">Routers <span class=faint style=font-weight:500>94</span></span><span class="">Middlewares <span class=faint style=font-weight:500>32</span></span><span class="">Backends <span class=faint style=font-weight:500>56</span></span><span class="on">Review <span class=faint style=font-weight:500>17</span></span><span class="">Import <span class=faint style=font-weight:500>3</span></span><span class="">Format routes</span><span class="">Settings</span><span class="">Raw</span></div>
+      <div style="display:flex;flex-wrap:wrap;gap:10px;align-items:center">
+        <div><strong>Review</strong> <span class="faint">· read 21 Nov 10:42 · 94 routers, 32 middlewares, 56 services, 2 transports, 33 files</span></div>
+        <button class="btn small" type="button" style="margin-left:auto">Read again</button>
+        <button class="btn small" type="button">Export Markdown</button>
+        <button class="btn small" type="button">Export JSON</button>
       </div>
-      <section class="card">
-        <table><thead><tr><th><input type="checkbox"></th><th>Hostname</th><th>Service</th><th>Points to</th><th>Options</th><th>Traefik</th><th>On</th><th></th></tr></thead><tbody><tr><td><input type="checkbox"></td><td><span class="mono">adblock.example.lan</span></td><td><a href="#">adblock</a></td><td><span class="mono">http://10.0.0.14:80</span></td><td><span class="tag">HTTPS</span> <span class="tag">redirect</span></td><td><span class="pill ok">serving</span></td><td><span class="toggle"></span></td><td class="faint" style="text-align:right">⋯</td></tr><tr><td><input type="checkbox"></td><td><span class="mono">cloud.example.lan</span></td><td><a href="#">nextcloud</a></td><td><span class="mono">http://10.0.1.11:80</span></td><td><span class="tag">HTTPS</span> <span class="tag">HSTS</span></td><td><span class="pill ok">serving</span></td><td><span class="toggle"></span></td><td class="faint" style="text-align:right">⋯</td></tr><tr><td><input type="checkbox"></td><td><span class="mono">media.example.lan</span></td><td><a href="#">media</a></td><td><span class="mono">http://10.0.1.16:8096</span></td><td><span class="tag">HTTPS</span> <span class="tag">wake on hit</span></td><td><span class="pill pending">not pushed</span></td><td><span class="toggle"></span></td><td class="faint" style="text-align:right">⋯</td></tr><tr><td><input type="checkbox"></td><td><span class="mono">bingo-dev.example.lan</span></td><td><a href="#">bingo-dev</a></td><td><span class="mono">http://10.0.1.12:8085</span></td><td><span class="tag">HTTPS</span></td><td><span class="pill ok">serving</span></td><td><span class="toggle"></span></td><td class="faint" style="text-align:right">⋯</td></tr><tr><td><input type="checkbox"></td><td><span class="mono">wiki.example.lan</span></td><td><span class="faint">not linked</span></td><td><span class="mono">http://10.0.1.20:3000</span></td><td><span class="tag">HTTPS</span></td><td><span class="pill warn">only in Traefik</span></td><td><span class="toggle"></span></td><td style="text-align:right;position:relative"><span class="faint">⋯</span>
-              </td></tr><tr><td><input type="checkbox"></td><td><span class="mono">old.example.lan</span></td><td><span class="faint">not linked</span></td><td><span class="mono">http://10.0.1.30:80</span></td><td><span class="tag">HTTPS</span></td><td><span class="pill off">off</span></td><td><span class="toggle offt"></span></td><td class="faint" style="text-align:right">⋯</td></tr></tbody></table>
-        <div style="padding: 10px 18px; font-size: 12.5px; color: #8a94a5; display: flex"><span>6 of 27 · the proxy hosts of this gateway only. Add, Edit and Delete push to it when you save.</span><span style="margin-left: auto">Traefik read 6 s ago</span></div>
-      </section>
+      <div class="banner" style="background:#141922;border:1px solid #232a36">Read only: nothing here changes the proxy. Fix things in Traefik Manager, or hand the export to the proxy agent; it carries the data and what the orchestrator supports.</div>
+      <div style="display:grid;grid-template-columns:minmax(0,1fr) 320px;gap:16px;align-items:start">
+      <section class="card" style="overflow:hidden"><div class="grp"><span class="pill fail">Errors</span> <span class="faint" style="font-weight:500">2</span></div><div class="row"><span class="mono">vpn.yml</span><span>Traefik Manager cannot parse this file: <span class=mono>line 12: mapping values are not allowed here</span>. Its routes are not loaded.</span><span class="mono faint" style="font-size:12px">vpn.yml</span><span class="fix">Fix the YAML in Traefik Manager's Raw editor.</span></div><div class="row"><span class="mono">old-api</span><span>Traefik reports: <span class=mono>the service "old-api-service@file" does not exist</span>.</span><span class="mono faint" style="font-size:12px">_shared.yml</span><span class="fix">Point the router at a service that exists, or delete it.</span></div><div class="grp"><span class="pill warn">Not read yet</span> <span class="faint" style="font-weight:500">4</span></div><div class="row"><span class="mono">mqtt-tls</span><span>TCP router: TCP and UDP routers are not read yet.</span><span class="mono faint" style="font-size:12px">mqtt.yml</span><span class="fix">Shown here only; manage it in Traefik Manager.</span></div><div class="row"><span class="mono">api-hrw</span><span>highestRandomWeight service: not understood yet, so its servers are not shown.</span><span class="mono faint" style="font-size:12px">api.yml</span><span class="fix">Shown here only; manage it in Traefik Manager.</span></div><div class="row"><span class="mono">docs</span><span>Rule <span class=mono>HostRegexp(`^docs\..+$`)</span>: the hostname cannot be read from it, so no proxy host matches.</span><span class="mono faint" style="font-size:12px">docs.yml</span><span class="fix">Use <span class=mono>Host()</span> rules, or manage it in Traefik Manager.</span></div><div class="row"><span class="mono">tls options: modern</span><span>TLS options and stores are not read yet.</span><span class="mono faint" style="font-size:12px">_shared.yml</span><span class="fix">Shown here only.</span></div><div class="grp"><span class="pill pending">Hand-written (not Traefik Manager's form)</span> <span class="faint" style="font-weight:500">3</span></div><div class="row"><span class="mono">panel.example.lan</span><span>Failover whose two backends need different Host headers and server names. Traefik Manager's failover gives both the same.</span><span class="mono faint" style="font-size:12px">panel.yml</span><span class="fix">Stays hand-written: read only here, edit it in Traefik Manager's Raw editor.</span></div><div class="row"><span class="mono">app.example.lan</span><span>2 routers: <span class=mono>app-write</span> (path rule, priority 100) and <span class=mono>app</span>, each a failover.</span><span class="mono faint" style="font-size:12px">app.yml</span><span class="fix">Traefik Manager's form: two routes on the host, each with a custom rule, priority and failover backends.</span></div><div class="row"><span class="mono">wiki.example.lan</span><span>Router <span class=mono>wiki</span> with service <span class=mono>wiki-backend</span> (not <span class=mono>wiki-service</span>).</span><span class="mono faint" style="font-size:12px">_shared.yml</span><span class="fix">Recreate it with Traefik Manager's form, then Import it here.</span></div><div class="grp"><span class="pill off">Clean-up</span> <span class="faint" style="font-weight:500">8</span></div><div class="row"><span class="mono">Redirect routers</span><span>41 <span class=mono>*-redirect</span> routers and <span class=mono>redirect-to-https</span>, while the <span class=mono>web</span> entry point has no redirect.</span><span class="mono faint" style="font-size:12px">many files</span><span class="fix">Traefik Manager's way: one redirect on the <span class=mono>web</span> entry point; then the redirect routers can go.</span></div><div class="row"><span class="mono">bingo.example.lan</span><span>Two maintenance pages on its routers (<span class=mono>maintenance-portainer</span>, <span class=mono>maintenance-bingo</span>); the first one listed wins.</span><span class="mono faint" style="font-size:12px">bingo.yml</span><span class="fix">Keep only the page of the service it is linked to.</span></div><div class="row"><span class="mono">10 *-hsts middlewares</span><span>Ten headers middlewares with the same settings, one per host.</span><span class="mono faint" style="font-size:12px">10 files</span><span class="fix">One shared middleware, or Traefik Manager's per-route headers.</span></div><div class="row"><span class="mono">ai, mango, sakila</span><span>Switched off, no proxy host; ai and mango still have their HTTP redirect router on.</span><span class="mono faint" style="font-size:12px">3 files</span><span class="fix">Delete them in Traefik Manager.</span></div><div class="row"><span class="mono">traefik-manager.example.lan</span><span>Two routers with the same rule and priority (<span class=mono>traefik-manager</span>, <span class=mono>orchestrator-traefik-manager-example-lan</span>); which one answers is not defined.</span><span class="mono faint" style="font-size:12px">2 files</span><span class="fix">Delete one.</span></div></section>
+      <aside class="card" style="overflow:hidden"><div class="card-h"><h2>What the orchestrator supports</h2></div><div class="sup"><span>Routers with Host() rules</span><span><span class="pill ok">edits</span></span><span>Path and method rules, priority</span><span><span class="pill ok">edits</span></span><span>Failover, weighted, mirroring</span><span><span class="pill ok">edits</span></span><span>Health checks, Host header</span><span><span class="pill ok">edits</span></span><span>Middlewares (any type)</span><span><span class="pill off">reads</span></span><span>Maintenance page, HSTS</span><span><span class="pill ok">edits</span></span><span>Servers transports</span><span><span class="pill off">reads ¹</span></span><span>Docker and other providers</span><span><span class="pill off">reads</span></span><span>highestRandomWeight</span><span><span class="pill warn">not yet</span></span><span>TCP and UDP routers</span><span><span class="pill warn">not yet</span></span><span>HostRegexp and other rules</span><span><span class="pill warn">not yet</span></span><span>TLS options and stores</span><span><span class="pill warn">not yet</span></span></div><div class="sub" style="padding:0 18px 14px">Edits go through Traefik Manager's own forms, so its UI keeps working. ¹ server names with the Traefik API connection.</div></aside>
+      </div>
     </main>
   </div>
 
-<div class="scrim"></div>
-<aside class="drawer" style="width:760px" aria-label="Convert route">
-  <div class="drawer-h"><div style="display:flex;align-items:center;gap:10px"><h2 style="margin:0;font-size:18px">Convert panel.example.lan to the standard</h2><span class="faint" style="margin-left:auto">✕</span></div>
-  <div class="sub" style="margin-top:4px">Same backends, health checks, Host headers, transport and middlewares; nothing is lost. The route moves to the service's file, like every other host.</div></div>
-  <div class="drawer-b" style="gap:12px">
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px"><pre class="yaml"><span class="c"># panel.yml (hand-written)</span>
-http:
-  routers:
-<span class="del">    panel-example-lan:</span>
-      rule: Host(`panel.example.lan`)
-      service: panel-failover
-      middlewares: [maintenance-minecraft]
-  services:
-    panel-failover:
-      failover:
-        service: panel-stack1
-        fallback: panel-stack2
-<span class="del">    panel-stack1:</span>
-      loadBalancer: …
-<span class="del">    panel-stack2:</span>
-      loadBalancer: …
-  serversTransports:
-<span class="del">    panel-remote: {serverName: …}</span></pre><pre class="yaml"><span class="c"># minecraft.yml (standard)</span>
-http:
-  routers:
-<span class="add">    orchestrator-panel-example-lan:</span>
-      rule: Host(`panel.example.lan`)
-      service: panel-example-lan-failover
-      middlewares: [maintenance-minecraft]
-<span class="add">    orchestrator-panel-example-lan-redirect: …</span>
-  services:
-    panel-example-lan-failover:
-      failover:
-<span class="add">        service: panel-example-lan-primary</span>
-<span class="add">        fallback: panel-example-lan-fallback</span>
-<span class="add">    panel-example-lan-primary:</span> …
-<span class="add">    panel-example-lan-fallback:</span> …
-  serversTransports:
-<span class="add">    panel-example-lan-fallback-transport: …</span></pre></div>
-    <div class="sec">What happens</div>
-    <div class="step"><span class="num">1</span><span>Backs up <span class=mono>panel.yml</span> (Traefik Manager's backup, and a copy kept here for 30 days).</span></div>
-    <div class="step"><span class="num">2</span><span>Writes the new routers and services into <span class=mono>minecraft.yml</span>, then removes <span class=mono>panel.yml</span>'s.</span></div>
-    <div class="step"><span class="num">3</span><span>Reads Traefik until both routers are active and a backend is UP, then runs the route check. If that has not passed within 2 minutes, it puts the backup back by itself and alerts you.</span></div>
-    <div class="sub">Afterwards, the host's ⋯ has <strong style="color:#c9d1dc">Restore the hand-written version</strong> for 30 days.</div>
-    <div class="field" style="margin-top:4px"><label>panel.yml is marked production. Type its name to convert</label><div class="input mono" style="color:#e6e9ef">panel.y</div></div>
-  </div>
-  <div class="drawer-f"><button class="btn ghost" type="button">Cancel</button><button class="btn primary" type="button" disabled style="opacity:.55">Back up and convert</button></div>
-</aside>
 </div>
 </x-dc>
-<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":1000}}'>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":1180}}'>
 class Component extends DCLogic {
   renderVals() { return {}; }
 }

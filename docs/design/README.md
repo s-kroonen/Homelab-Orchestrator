@@ -169,9 +169,8 @@ Something that is off on purpose (a node asleep, its services) is **off**, never
 | Proxy hosts: a dot per backend, an open row with the host's routers and backends | [PNG](wireframes/ProxyHostsList.png) · [HTML](wireframes/ProxyHostsList.html) |
 | Proxy: Routers (every router from every provider, where it lives, who made it) | [PNG](wireframes/ProxyRouters.png) · [HTML](wireframes/ProxyRouters.html) |
 | Proxy: Middlewares (type, file, used by, unused). The *Backends* tab is the same table for services and transports | [PNG](wireframes/ProxyMiddlewares.png) · [HTML](wireframes/ProxyMiddlewares.html) |
-| Proxy: Findings, the orchestrator's report (a decision per finding, export). *Review and apply* comes with the clean-up tools; until then decisions are recorded and exported only | [PNG](wireframes/ProxyFindings.png) · [HTML](wireframes/ProxyFindings.html) |
-| Proxy host drawer: routers, maintenance page, failover backends with why one is DOWN (to build: OR-93 for the reason) | [PNG](wireframes/ProxyHostBackends.png) · [HTML](wireframes/ProxyHostBackends.html) |
-| Convert a hand-written route: preview, backup, verify, restore by itself (to build) | [PNG](wireframes/ProxyConvert.png) · [HTML](wireframes/ProxyConvert.html) |
+| Proxy: Review, read only: errors, what the orchestrator cannot read yet, routes not in Traefik Manager's form, clean-up, each with how to fix it, and what the orchestrator supports | [PNG](wireframes/ProxyReview.png) · [HTML](wireframes/ProxyReview.html) |
+| Proxy host drawer: routers, maintenance page, failover backends with why one is DOWN (to build; edits go through Traefik Manager's own forms; OR-93 for the reason) | [PNG](wireframes/ProxyHostBackends.png) · [HTML](wireframes/ProxyHostBackends.html) |
 | Source page: a bare-metal machine over SSH | [PNG](wireframes/SourceMachine.png) · [HTML](wireframes/SourceMachine.html) |
 | Source page: Settings tab | [PNG](wireframes/SourceSettings.png) · [HTML](wireframes/SourceSettings.html) |
 | Source page: Raw data | [PNG](wireframes/SourceRaw.png) · [HTML](wireframes/SourceRaw.html) |

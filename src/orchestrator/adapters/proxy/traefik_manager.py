@@ -735,6 +735,9 @@ class TraefikManagerProxyAdapter(ProxyAdapter):
         async def part(client: httpx.AsyncClient, key: str, path: str) -> Any:
             try:
                 return await self._get_json(client, path)
+            except TraefikManagerNotFound:
+                # An older Traefik Manager without this endpoint: nothing to read, not an error.
+                return None
             except TraefikManagerError as exc:
                 log.warning("traefik_manager.inventory_part_failed", part=key, error=str(exc))
                 out["errors"][key] = str(exc)
@@ -746,6 +749,7 @@ class TraefikManagerProxyAdapter(ProxyAdapter):
             middlewares = await part(client, "middlewares", "/api/traefik/middlewares")
             services = await part(client, "services", "/api/traefik/services")
             entrypoints = await part(client, "entrypoints", "/api/traefik/entrypoints")
+            tls_options = await part(client, "tls_options", "/api/tls-options")
 
         def http_list(payload: Any) -> list[dict[str, Any]] | None:
             if not isinstance(payload, dict) or payload.get("reachable") is False:
@@ -766,6 +770,19 @@ class TraefikManagerProxyAdapter(ProxyAdapter):
             out["routes"] = out["file_middlewares"] = None
             out["config_errors"] = []
         out["runtime_routers"] = http_list(routers)
+        # TCP and UDP routers are not read into the inventory yet; their names and rules are
+        # kept so the review can say so.
+        for proto in ("tcp", "udp"):
+            rows = routers.get(proto) if isinstance(routers, dict) else None
+            out[f"runtime_{proto}_routers"] = (
+                [
+                    {k: r.get(k) for k in ("name", "rule", "provider", "service", "status")}
+                    for r in rows
+                    if isinstance(r, dict)
+                ]
+                if isinstance(rows, list)
+                else []
+            )
         out["runtime_middlewares"] = http_list(middlewares)
         out["runtime_services"] = http_list(services)
         managed: set[str] = set()
@@ -783,6 +800,33 @@ class TraefikManagerProxyAdapter(ProxyAdapter):
             mws = http.get("middlewares") if isinstance(http, dict) else None
             on_entrypoints.update(str(m) for m in mws or [] if isinstance(m, str))
         out["entrypoint_middlewares"] = sorted(on_entrypoints)
+        # Entry points that redirect every request elsewhere (Traefik Manager's way of sending
+        # HTTP to HTTPS): {"web": "websecure"}.
+        redirects: dict[str, str] = {}
+        for ep in entrypoints if isinstance(entrypoints, list) else []:
+            http = ep.get("http") if isinstance(ep, dict) else None
+            red = (
+                (http.get("redirections") or {}).get("entryPoint")
+                if isinstance(http, dict)
+                else None
+            )
+            if isinstance(red, dict) and red.get("to"):
+                redirects[str(ep.get("name"))] = str(red["to"])
+        out["entrypoint_redirects"] = redirects
+        out["entrypoints"] = (
+            [str(ep.get("name")) for ep in entrypoints if isinstance(ep, dict) and ep.get("name")]
+            if isinstance(entrypoints, list)
+            else []
+        )
+        out["tls_options"] = (
+            [
+                {"name": str(o.get("name")), "configFile": str(o.get("configFile") or "")}
+                for o in tls_options
+                if isinstance(o, dict) and o.get("name")
+            ]
+            if isinstance(tls_options, list)
+            else []
+        )
         return out
 
     async def save_service(self, payload: dict[str, Any]) -> None:
