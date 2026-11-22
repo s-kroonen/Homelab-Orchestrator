@@ -1002,13 +1002,12 @@ async def _proxy_hosts(ctx: SourceCtx) -> list[dict[str, Any]]:
 
 
 _FINDING_LABEL = {
-    "convert": ("can convert", "pending"),
-    "unused": ("unused", "warn"),
-    "leftover": ("leftover", "fail"),
-    "old_syntax": ("old syntax", "pending"),
-    "look": ("worth a look", "warn"),
+    "error": ("error", "fail"),
+    "unread": ("not read yet", "warn"),
+    "handwritten": ("hand-written", "pending"),
+    "cleanup": ("clean-up", "off"),
 }
-_MADE_TONE = {"orchestrator": "ok", "hand-written": "warn"}
+_MADE_TONE = {"orchestrator": "ok", "Traefik Manager": "ok", "hand-written": "warn"}
 
 
 async def _proxy_inventory(ctx: SourceCtx) -> tuple[Any, dict[str, Any]]:
@@ -1016,27 +1015,32 @@ async def _proxy_inventory(ctx: SourceCtx) -> tuple[Any, dict[str, Any]]:
     finding (``registry/proxy_inventory``). ``(None, {})`` when the proxy cannot say."""
     from orchestrator.registry import proxy_inventory as pi
 
-    inv = await pi.read(
-        ctx.adapter, source=ctx.conn.id, hosts=_owned_proxy_hosts(ctx), settings=ctx.settings
-    )
+    hosts = _owned_proxy_hosts(ctx)
+    inv = await pi.read(ctx.adapter, source=ctx.conn.id, hosts=hosts, settings=ctx.settings)
     if inv is None:
         return None, {}
     marks: dict[str, Any] = {}
-    for f in pi.findings(inv, service_slugs=_service_slugs()):
+    slugs, linked = _service_slugs(hosts)
+    for f in pi.findings(inv, service_slugs=slugs, service_of=linked):
         for kind in ("routers", "middlewares", "services", "transports"):
             for name in f.refs.get(kind, []):
                 marks.setdefault(f"{kind}:{name.split('@', 1)[0]}", f)
     return inv, marks
 
 
-def _service_slugs() -> list[str]:
+def _service_slugs(hosts: list[Any]) -> tuple[list[str], dict[str, str]]:
+    """Every service slug, and each proxy host's linked service (the review's input)."""
     from sqlmodel import Session, select
 
     from orchestrator.db.models import Service
     from orchestrator.db.session import get_engine
+    from orchestrator.registry import proxy_inventory as pi
 
     with Session(get_engine()) as session:
-        return list(session.exec(select(Service.slug)).all())
+        return (
+            list(session.exec(select(Service.slug)).all()),
+            pi.linked_services(session, hosts),
+        )
 
 
 def _mark(row: dict[str, Any], f: Any) -> None:
@@ -1084,7 +1088,7 @@ async def _proxy_routers(ctx: SourceCtx) -> list[dict[str, Any]]:
         if r.proxy_host:
             row["host_href"] = "/find/proxy-host?hostname=" + r.proxy_host
         row["chips"].append(
-            {"orchestrator": "orchestrator", "hand-written": "handwritten"}.get(
+            {"orchestrator": "form", "Traefik Manager": "form", "hand-written": "handwritten"}.get(
                 r.made_by,
                 (
                     "docker"
@@ -1210,12 +1214,12 @@ class ProxyConnector(Connector):
             ),
             _proxy_routers,
             chips=(
-                Chip("orchestrator", "Orchestrator"),
+                Chip("form", "Traefik Manager's form"),
                 Chip("handwritten", "Hand-written"),
                 Chip("docker", "Docker"),
                 Chip("internal", "Traefik internal"),
                 Chip("nohost", "No proxy host"),
-                Chip("findings", "With findings"),
+                Chip("findings", "In the review"),
             ),
         ),
         Resource(
@@ -1234,7 +1238,7 @@ class ProxyConnector(Connector):
                 Chip("inuse", "In use"),
                 Chip("unused", "Unused"),
                 Chip("maintenance", "Maintenance pages"),
-                Chip("findings", "With findings"),
+                Chip("findings", "In the review"),
             ),
         ),
         Resource(
@@ -1255,7 +1259,7 @@ class ProxyConnector(Connector):
                 Chip("composite", "Several backends"),
                 Chip("down", "A server down"),
                 Chip("unused", "Unused"),
-                Chip("findings", "With findings"),
+                Chip("findings", "In the review"),
             ),
         ),
     )
@@ -1274,12 +1278,12 @@ class ProxyConnector(Connector):
 
     def tabs(self) -> list[Tab]:
         """The SourceProxy wireframes: its lists (proxy hosts, routers, middlewares, backends),
-        then Findings, Import and Format routes."""
+        then Review, Import and Format routes."""
         tabs = super().tabs()
         at = next(i for i, t in enumerate(tabs) if t.key == "settings")
         return [
             *tabs[:at],
-            Tab("findings", "Findings", "proxy.findings"),
+            Tab("review", "Review", "proxy.review"),
             Tab("import", "Import", "proxy.import"),
             Tab("format", "Format routes", "proxy.format"),
             *tabs[at:],

@@ -1314,53 +1314,63 @@ every linked host's middleware exists on the new instance.
   Traefik `errors` middleware, a reverse proxy elsewhere, or a direct hit).
   This feature only automates wiring Traefik up to send visitors there.
 
-## Inventory and findings (Routers, Middlewares, Backends, Findings)
+## Inventory and review (Routers, Middlewares, Backends, Review)
 
 A proxy's source page also lists **everything the proxy runs**, not only the hosts kept here,
 read only (`registry/proxy_inventory.py`):
 
 | Tab | One row per | Shows |
 |---|---|---|
-| **Routers** | router, from every provider (files, Docker labels, Traefik's own) | rule, the proxy host it serves, where it goes (`failover: a -> b`), middlewares, file (or *Docker labels*, *Traefik*), who made it (*orchestrator*, *hand-written*, *docker*, *internal*) and its finding |
+| **Routers** | router, from every provider (files, Docker labels, Traefik's own) | rule (under the name), the proxy host it serves, where it goes (`failover: a -> b`), middlewares, file (or *Docker labels*, *Traefik*), who made it, whether the review mentions it |
 | **Middlewares** | middleware | type (`errors · 502-504`, `plugin · bouncer`...), the file it is defined in, the routers that use it (or *every request on its entry point*), who made it |
 | **Backends** | Traefik service | load balancer, failover, weighted or mirroring; servers with UP/DOWN or members with their role; health check; servers transport; who uses it (routers, a parent failover, an `errors` middleware); whether Traefik Manager manages it |
-| **Findings** | finding | the orchestrator's report, below |
+| **Review** | item | the orchestrator's review, below |
 
 It comes from one read of Traefik Manager (`ProxyAdapter.read_inventory`): `GET /api/routes`
-(file routes and middlewares with their config file), `GET /api/traefik/routers`, `middlewares`,
-`services` (Traefik's running view; the services answer also names the composite services
-Traefik Manager manages) and `GET /api/traefik/entrypoints` (middlewares an entry point applies to
-every request). Each part is read on its own; one that fails is named and the rest is still
-shown. A route switched off in Traefik Manager is listed (state *off*) although Traefik no longer
-runs it. Servers transports are known by name only, unless the **Traefik API** connection is
-set: then their `serverName` and `insecureSkipVerify` are read from Traefik
-(`/api/http/serversTransports`) and an unused one can be found. The read is kept 20 s per proxy
-(*Read again* reads at once).
+(file routes and middlewares with their config file, and the files it cannot parse),
+`GET /api/traefik/routers`, `middlewares`, `services` (Traefik's running view; the services
+answer also names the composite services Traefik Manager manages), `GET /api/traefik/entrypoints`
+(middlewares an entry point applies to every request, and its redirect) and `GET /api/tls-options`.
+Each part is read on its own; one that fails is named and the rest is still shown (a Traefik
+Manager without one of these endpoints is simply not asked). TCP and UDP routers are kept as names
+and rules only. Servers transports are known by name only, unless the **Traefik API** connection
+is set: then their `serverName` and `insecureSkipVerify` are read from Traefik
+(`/api/http/serversTransports`). The read is kept 20 s per proxy (*Read again* reads at once).
 
-### The findings
+### Who made a route: its shape, not its name
 
-| Group | What | Suggested |
-|---|---|---|
-| Can be converted to the standard | a hand-written router (with its siblings) serving a proxy host kept here | Convert |
-| Unused | a file middleware no router, chain or entry point uses (a `maintenance-<slug>` for a service that is gone says so); a file service nothing points at; a transport no service uses | Delete |
-| Leftovers | a file router with no proxy host here (switched off: Delete; serving: decide); routers with the same rule, of which only one answers | Delete / decide |
-| Old syntax | a redirect middleware on HTTPS routers (an NPM *Force SSL* leftover): the HTTP redirect router does that | Simplify |
-| Worth a look | a failover whose primary has no health check (it never fails over), or whose fallback has none (requests go there unchecked); routes still in `_shared.yml`; a router Traefik reports an error for | Keep / Move / decide |
+Traefik Manager's route form writes router `<name>` with service `<name>-service` (or points it
+at a failover / weighted service Traefik Manager manages), a transport `<name>-transport` and
+per-route headers `<name>-headers`; HTTP to HTTPS is one redirect on the entry point, not a
+router. A file router of that shape is **Traefik Manager** (or **orchestrator**, for the
+`orchestrator-` routes this orchestrator made); anything else is **hand-written**, with the reason:
+a service not named `<name>-service`, Traefik's own `api@internal`, a failover whose backends need
+different Host headers or server names (Traefik Manager's form gives every backend the same), a
+separate HTTP redirect router.
+
+### The review
+
+Read only: nothing is decided, stored or applied. It says what it found and how to fix it, in
+Traefik Manager or with an agent, and what the orchestrator supports:
+
+| Group | What |
+|---|---|
+| **Errors** | a file Traefik Manager cannot parse (its routes are not loaded); a router, middleware or service Traefik reports an error for; a part of the proxy that could not be read |
+| **Not read yet** | TCP and UDP routers; `highestRandomWeight` services; a rule no hostname can be read from (`HostRegexp`...); TLS options |
+| **Hand-written** | per proxy host kept here: its routers and why they are not in Traefik Manager's form, and the form's version (*N routes on the host, each with its own rule and priority, with failover backends*) or *stays hand-written, read only here* when the form cannot express it |
+| **Clean-up** | redirect routers (and whether the entry point already redirects); maintenance pages on redirect routers; two maintenance pages on one router (only the first ever shows; keep the linked service's); middlewares with the same settings; unused file middlewares, services and transports; routers with no proxy host here (serving, or switched off, with their redirect still on); routers with the same rule; a redirect middleware on HTTPS routers; a failover whose primary or fallback has no health check; routes still in `_shared.yml` |
 
 Docker labels and Traefik's own are never reported as unused: they come and go with their
 containers. The orchestrator's maintenance backend counts as used by the `errors` middlewares.
 
-**Decisions.** Each finding has a decision (*Decide later*, *Keep*, *Convert*, *Delete*,
-*Simplify*, *Move*), stored per proxy (`Setting` `proxy.findings.decisions.<source>`) and audited
-as `proxy.finding_decided`. Recording one **changes nothing in the proxy**: decisions are applied
-with the convert and clean-up tools, one change at a time, each with Traefik Manager's backup.
-The report exports as Markdown or JSON (inventory and report), to put next to a report made on
-the machine itself.
+**What the orchestrator supports** is part of the review (`SUPPORT`): each kind of Traefik
+configuration as *edits* (read and changed through Traefik Manager's own forms), *reads* (shown
+only) or *not yet*. The export (Markdown or JSON, with the whole inventory) carries it, so a person
+or an agent can bring a route into a shape the orchestrator can work with.
 
-API: `GET /api/pull/traefik/findings?source=&fmt=report|md|json&fresh=true`,
-`PUT /api/pull/traefik/findings/{id}?source=` `{"decision": "..."}`; the tabs' rows are the
+API: `GET /api/pull/traefik/review?source=&fmt=report|md|json&fresh=true`; the tabs' rows are the
 source's resources (`GET /api/sources/{id}/resources/routers|middlewares|backends`). MCP:
-`proxy_inventory`, `proxy_findings` (read).
+`proxy_inventory`, `proxy_review` (read).
 
 **On the Proxy hosts tab**, a host with several backends shows one dot per server of its main
 router (green UP, red DOWN) in *Points to*, its Traefik state reads *no backend* (every server

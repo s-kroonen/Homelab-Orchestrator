@@ -405,7 +405,7 @@ def test_two_proxies_each_list_and_push_their_own_hosts(client: TestClient) -> N
         "routers",
         "middlewares",
         "backends",
-        "findings",
+        "review",
         "import",
         "format",
         "settings",
@@ -526,9 +526,9 @@ def test_an_environment_links_to_the_service_and_guest_it_runs_on(client: TestCl
     assert "tab=guests" in env["links"][1]["href"] and "q=111" in env["links"][1]["href"]
 
 
-def test_a_proxy_lists_routers_middlewares_backends_and_its_findings(client: TestClient) -> None:
-    """Phase 1 of the proxy work: the Routers, Middlewares and Backends tabs and the Findings
-    report read the proxy (every provider) and change nothing in it; a decision is recorded."""
+def test_a_proxy_lists_routers_middlewares_backends_and_its_review(client: TestClient) -> None:
+    """The Routers, Middlewares and Backends tabs and the Review read the proxy (every
+    provider) and change nothing in it. The Review is read only: no decisions."""
     import sys
     from pathlib import Path
 
@@ -539,7 +539,7 @@ def test_a_proxy_lists_routers_middlewares_backends_and_its_findings(client: Tes
     from orchestrator.registry import proxy_inventory as pi
 
     sys.path.insert(0, str(Path(__file__).parent))
-    from test_proxy_inventory import _raw
+    from test_proxy_inventory import _review_raw
 
     _proxy(client, "gateway")
     with Session(get_engine()) as s:
@@ -557,7 +557,7 @@ def test_a_proxy_lists_routers_middlewares_backends_and_its_findings(client: Tes
 
     async def read_inventory() -> dict:
         calls.append(1)
-        return _raw()
+        return _review_raw()
 
     gateway.read_inventory = read_inventory
     pi._CACHE.clear()
@@ -568,7 +568,9 @@ def test_a_proxy_lists_routers_middlewares_backends_and_its_findings(client: Tes
     assert panel["host"] == "panel.example.lan"
     assert panel["host_href"] == "/find/proxy-host?hostname=panel.example.lan"
     assert panel["goes"].startswith("failover: http://10.0.1.14:80")
-    assert panel["finding"] == "can convert" and "findings" in panel["chips"]
+    assert panel["finding"] == "hand-written" and "findings" in panel["chips"]
+    bingo = next(r for r in routers if r["id"] == "bingo@file")
+    assert bingo["made_by"] == "Traefik Manager" and "form" in bingo["chips"]
     mws = {
         m["id"]: m for m in client.get("/api/sources/gateway/resources/middlewares").json()["rows"]
     }
@@ -580,28 +582,25 @@ def test_a_proxy_lists_routers_middlewares_backends_and_its_findings(client: Tes
     assert "down" in backends["panel-stack1@file"]["chips"]
     assert len(calls) == 1  # one read for all three tabs (cached)
 
-    rep = client.get("/api/pull/traefik/findings?source=gateway").json()
+    rep = client.get("/api/pull/traefik/review?source=gateway").json()
+    keys = [g["key"] for g in rep["groups"]]
+    assert keys == ["error", "unread", "handwritten", "cleanup"]
     ids = {f["id"] for g in rep["groups"] for f in g["findings"]}
-    assert "convert:panel.example.lan" in ids
-    assert "unused:middleware:maintenance-oldsvc" in ids
-    bad = client.put(
-        "/api/pull/traefik/findings/convert:panel.example.lan?source=gateway",
-        json={"decision": "explode"},
-    )
-    assert bad.status_code == 422
-    ok = client.put(
-        "/api/pull/traefik/findings/convert:panel.example.lan?source=gateway",
+    assert "handwritten:panel.example.lan" in ids and "error:parse:vpn.yml" in ids
+    assert all("decision" not in f for g in rep["groups"] for f in g["findings"])
+    assert rep["support"][0] == {"what": "Routers with Host() rules", "status": "edits"}
+    # read only: there is nothing to record
+    put = client.put(
+        "/api/pull/traefik/findings/handwritten:panel.example.lan?source=gateway",
         json={"decision": "convert"},
     )
-    assert ok.status_code == 200, ok.text
-    rep = client.get("/api/pull/traefik/findings?source=gateway").json()
-    assert rep["counts"]["decided"] == 1
-    md = client.get("/api/pull/traefik/findings?source=gateway&fmt=md")
+    assert put.status_code in (404, 405)
+    md = client.get("/api/pull/traefik/review?source=gateway&fmt=md")
     assert md.headers["content-type"].startswith("text/markdown")
-    assert "| `panel.example.lan` |" in md.text and "| Convert | Convert |" in md.text
-    js = client.get("/api/pull/traefik/findings?source=gateway&fmt=json")
-    assert js.json()["report"]["counts"]["decided"] == 1
+    assert "## What the orchestrator supports" in md.text and "| `panel.example.lan` |" in md.text
+    js = client.get("/api/pull/traefik/review?source=gateway&fmt=json")
+    assert js.json()["review"]["counts"]["findings"] == rep["counts"]["findings"]
     assert len(calls) == 1
-    client.get("/api/pull/traefik/findings?source=gateway&fresh=true")
+    client.get("/api/pull/traefik/review?source=gateway&fresh=true")
     assert len(calls) == 2
     pi._CACHE.clear()

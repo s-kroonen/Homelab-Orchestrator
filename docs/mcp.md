@@ -67,9 +67,9 @@ may not use is not even listed to the assistant.
   Traefik Manager route each record points at, `route_ref`),
   `proxy_backends` (what of a failover, weighted or mirroring host can be changed, with versions),
   `proxy_inventory` (every router, middleware, service or servers transport the proxy runs, from
-  every provider, with who made it, its file and who uses it), `proxy_findings` (the proxy report:
-  what could be converted, removed, simplified or moved, with the decisions recorded; also as
-  Markdown),
+  every provider, with who made it, its file and who uses it), `proxy_review` (the proxy review, read only:
+  errors, what the orchestrator cannot read yet, routes not in Traefik Manager's form, clean-up,
+  each with how to fix it, and what the orchestrator supports; also as Markdown),
   `portainer_stacks`, `portainer_containers`, `container_logs` (secrets redacted), `get_request`,
   `retention_preview` (what a service's backup policy would prune from PBS now, as PBS's dry run,
   or PBS's reason for refusing),

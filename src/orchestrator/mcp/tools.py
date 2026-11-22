@@ -891,14 +891,19 @@ async def _proxy_inventory(ctx: ToolContext, a: dict[str, Any]) -> Any:
     }
 
 
-async def _proxy_findings(ctx: ToolContext, a: dict[str, Any]) -> Any:
+async def _proxy_review(ctx: ToolContext, a: dict[str, Any]) -> Any:
     from sqlmodel import select
 
     from orchestrator.db.models import Service
+    from orchestrator.registry.proxy_push import owned_hosts
 
     pi, inv, src = await _proxy_inv(ctx, a)
     slugs = list(ctx.session.exec(select(Service.slug)).all())
-    rep = pi.report(inv, pi.findings(inv, service_slugs=slugs), pi.load_decisions(ctx.session, src))
+    hosts = owned_hosts(ctx.session, ctx.adapters.with_proxy(str(a.get("source") or "")))
+    rep = pi.report(
+        inv,
+        pi.findings(inv, service_slugs=slugs, service_of=pi.linked_services(ctx.session, hosts)),
+    )
     if a.get("markdown"):
         return pi.to_markdown(rep, source=src)
     return rep
@@ -1685,16 +1690,17 @@ TOOLS: dict[str, Tool] = {
             READ,
         ),
         Tool(
-            "proxy_findings",
-            "The proxy report",
-            "The orchestrator's report on the proxy: what could be converted to the standard, "
-            "what is unused, leftovers, old syntax and what is worth a look, each with a "
-            "suggestion and the decision a person recorded. Nothing is changed.",
+            "proxy_review",
+            "The proxy review",
+            "The orchestrator's review of the proxy: errors (files Traefik Manager cannot parse, "
+            "routers Traefik reports), what the orchestrator cannot read yet, routes not in "
+            "Traefik Manager's own form (and the form's version), and clean-up, each with how to "
+            "fix it, plus what the orchestrator supports. Read only: nothing is changed.",
             "read",
-            _proxy_findings,
+            _proxy_review,
             {
                 "source": _s("The proxy connection id (default: the default proxy)"),
-                "markdown": _b("The report as Markdown, as the page exports it"),
+                "markdown": _b("The review as Markdown, as the page exports it"),
                 "fresh": _b("Read the proxy again instead of the last 20 s"),
             },
             (),

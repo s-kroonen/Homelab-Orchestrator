@@ -332,46 +332,183 @@ def test_transports_named_only_without_the_traefik_api():
     assert by["spare"].used_by == []
 
 
-def test_findings():
-    inv = _inv({"panel-remote@file": {"serverName": "x"}, "spare@file": {}})
-    found = {f.id: f for f in pi.findings(inv, service_slugs=["nextcloud", "media"])}
-    assert found["convert:panel.example.lan"].detail == "Hand-written failover route in panel.yml."
-    assert found["convert:app.example.lan"].refs["routers"] == ["app-read@file", "app-write@file"]
-    assert "convert:cloud.example.lan" not in found  # the orchestrator's own
-    assert found["unused:middleware:maintenance-oldsvc"].detail.startswith(
+def _review_raw() -> dict:
+    """The example proxy plus what only the review looks at."""
+    raw = _raw()
+    raw["config_errors"] = [{"file": "vpn.yml", "error": "mapping values are not allowed here"}]
+    raw["runtime_tcp_routers"] = [
+        {"name": "mqtt-tls@file", "rule": "HostSNI(`mqtt.example.lan`)", "provider": "file"}
+    ]
+    raw["tls_options"] = [{"name": "modern", "configFile": "_shared.yml"}]
+    raw["entrypoint_redirects"] = {}
+    raw["runtime_routers"] += [
+        {
+            "name": "docs@file",
+            "provider": "file",
+            "rule": "HostRegexp(`^docs\\..+$`)",
+            "service": "docs-service",
+            "status": "enabled",
+        },
+        {
+            "name": "bingo@file",
+            "provider": "file",
+            "rule": "Host(`bingo.example.lan`)",
+            "service": "bingo-service",
+            "tls": {},
+            "status": "enabled",
+            "middlewares": ["maintenance-portainer@file", "maintenance-bingo@file"],
+        },
+        {
+            "name": "web-old@file",
+            "provider": "file",
+            "rule": "Host(`web-old.example.lan`)",
+            "service": "web-old-service",
+            "tls": {},
+            "status": "warning",
+            "error": ['the service "web-old-service@file" does not exist'],
+        },
+    ]
+    raw["runtime_middlewares"] += [
+        {
+            "name": "maintenance-portainer@file",
+            "provider": "file",
+            "errors": {
+                "status": ["502-504"],
+                "service": "orchestrator-maintenance-backend-service",
+            },
+        },
+        {
+            "name": "maintenance-bingo@file",
+            "provider": "file",
+            "errors": {
+                "status": ["502-504"],
+                "service": "orchestrator-maintenance-backend-service",
+            },
+        },
+        {
+            "name": "cloud-hsts@file",
+            "provider": "file",
+            "headers": {"stsSeconds": 31536000},
+            "usedBy": ["orchestrator-cloud-example-lan@file"],
+        },
+        {
+            "name": "media-hsts@file",
+            "provider": "file",
+            "headers": {"stsSeconds": 31536000},
+            "usedBy": ["media@file"],
+        },
+    ]
+    raw["runtime_services"] += [
+        {"name": "api-hrw@file", "provider": "file", "highestRandomWeight": {"services": []}},
+        {
+            "name": "bingo-service@file",
+            "provider": "file",
+            "loadBalancer": {"servers": [{"url": "http://10.0.1.12:8085"}]},
+        },
+    ]
+    return raw
+
+
+def _review(**kw):
+    inv = pi.build(
+        _review_raw(),
+        hosts=[*HOSTS, SimpleNamespace(hostname="bingo.example.lan", id=5)],
+        owns=lambda n: n.startswith("orchestrator-"),
+        transports=kw.pop("transports", None),
+    )
+    return inv, {f.id: f for f in pi.findings(inv, service_slugs=["nextcloud", "media"], **kw)}
+
+
+def test_router_shape_decides_who_made_it():
+    inv, _ = _review()
+    by = {r.name: r for r in inv.routers}
+    assert by["orchestrator-cloud-example-lan@file"].made_by == "orchestrator"
+    assert by["bingo@file"].made_by == "Traefik Manager"  # router bingo, service bingo-service
+    panel = by["panel-example-lan@file"]
+    assert panel.made_by == "hand-written"
+    # its failover is one Traefik Manager manages, but the form cannot give its backends
+    # different Host headers
+    assert any("different Host headers" in w for w in panel.not_form)
+    assert by["media@file"].not_form == ["service media is not media-service"]
+
+
+def test_review_errors_and_what_is_not_read_yet():
+    _, found = _review()
+    assert found["error:parse:vpn.yml"].fix == "Fix the YAML in Traefik Manager's Raw editor."
+    assert "does not exist" in found["error:router:web-old"].detail
+    assert found["unread:tcp:mqtt-tls@file"].target == "mqtt-tls"
+    assert "highestRandomWeight" in found["unread:hrw:api-hrw"].detail
+    assert "no hostname can be read" in found["unread:rule:docs"].detail
+    assert found["unread:tls_options"].target == "TLS options: modern"
+
+
+def test_review_hand_written_says_the_form_version_or_stays():
+    _, found = _review()
+    panel = found["handwritten:panel.example.lan"]
+    assert panel.fix.startswith("Stays hand-written")
+    app = found["handwritten:app.example.lan"]
+    assert app.detail.startswith("2 routers (app-read, app-write priority 20)")
+    assert app.fix == (
+        "Traefik Manager's form: 2 routes on the host, each with its own rule and priority, "
+        "with failover or weighted backends; then Import or Adopt it here."
+    )
+    assert app.file == "app.yml"
+    assert "handwritten:cloud.example.lan" not in found  # the orchestrator's own
+    assert "handwritten:bingo.example.lan" not in found  # Traefik Manager's form
+
+
+def test_review_clean_up():
+    _, found = _review(
+        transports={"panel-remote@file": {"serverName": "x"}, "spare@file": {}},
+        service_of={"bingo.example.lan": "bingo"},
+    )
+    red = found["cleanup:redirect_routers"]
+    assert "while the web entry point has no redirect" in red.detail
+    double = found["cleanup:double_maintenance:bingo.example.lan"]
+    assert double.fix == "Keep only maintenance-bingo, the service it is linked to."
+    copies = found["cleanup:copies:headers:cloud-hsts"]
+    assert copies.detail == "2 headers middlewares with the same settings: cloud-hsts, media-hsts."
+    assert found["cleanup:unused:middleware:maintenance-oldsvc"].detail.startswith(
         "Maintenance page for a service"
     )
-    assert "unused:middleware:crowdsec" not in found  # an entry point applies it
-    assert "unused:middleware:maintenance-nextcloud" not in found
-    assert "unused:service:legacy-backend" in found
-    assert "unused:service:orchestrator-maintenance-backend-service" not in found
-    assert "unused:service:portainer" not in found  # Docker's own come and go
-    assert "unused:transport:spare" in found
-    assert found["leftover:router:wiki-old"].suggestion == "delete"
-    assert "leftover:duplicate:media+orchestrator-media-example-lan" in found
-    assert found["old_syntax:npm-force-ssl"].refs["routers"] == ["panel-example-lan@file"]
-    assert (
-        "old_syntax:redirect-to-https" not in found
-    )  # on the HTTP redirect router, where it belongs
-    assert found["look:fallback_unchecked:app-write"].suggestion == "keep"
-    assert "look:fallback_unchecked:panel-failover" not in found
-    assert found["look:shared_file:_shared.yml"].refs["routers"] == ["media@file"]
+    assert "cleanup:unused:middleware:crowdsec" not in found  # an entry point applies it
+    assert "cleanup:unused:service:legacy-backend" in found
+    assert "cleanup:unused:transport:spare" in found
+    assert "Switched off (wiki-old.example.lan)" in found["cleanup:off:_shared.yml"].detail
+    assert "cleanup:duplicate:media+orchestrator-media-example-lan" in found
+    assert found["cleanup:https_redirect:npm-force-ssl"].refs["routers"] == [
+        "panel-example-lan@file"
+    ]
+    assert "cleanup:fallback_unchecked:app-write" in found
+    assert found["cleanup:shared_file:_shared.yml"].refs["routers"] == ["media@file"]
 
 
-def test_report_and_markdown_carry_decisions():
-    inv = _inv()
-    found = pi.findings(inv)
-    rep = pi.report(
-        inv, found, {"convert:panel.example.lan": {"decision": "convert", "by": "admin"}}
-    )
-    assert rep["counts"]["decided"] == 1
+def test_redirect_routers_when_the_entry_point_already_redirects():
+    raw = _review_raw()
+    raw["entrypoint_redirects"] = {"web": "websecure"}
+    raw["runtime_routers"][1]["entryPoints"] = ["web"]
+    raw["runtime_routers"][1]["middlewares"].append("maintenance-nextcloud@file")
+    inv = pi.build(raw, hosts=HOSTS, owns=lambda n: n.startswith("orchestrator-"))
+    found = {f.id: f for f in pi.findings(inv)}
+    red = found["cleanup:redirect_routers"]
+    assert "already redirects" in red.detail and red.fix == "Delete them in Traefik Manager."
+    assert found["cleanup:redirect_maintenance"].refs["routers"] == [
+        "orchestrator-cloud-example-lan-redirect@file"
+    ]
+
+
+def test_report_and_markdown_say_what_is_supported():
+    inv, found = _review()
+    rep = pi.report(inv, list(found.values()))
+    assert rep["counts"]["error"] == 2 and rep["counts"]["findings"] == len(found)
+    assert {"what": "TCP and UDP routers", "status": "not yet"} in rep["support"]
     md = pi.to_markdown(rep, source="gateway")
-    assert "## Can be converted to the standard" in md
-    assert (
-        "| `panel.example.lan` | Hand-written failover route in panel.yml. | Convert | Convert |"
-        in md
-    )
-    assert '"inventory"' in pi.to_json(inv, rep)
+    assert "## What the orchestrator supports" in md
+    assert "| TCP and UDP routers | not yet |" in md
+    assert "## Errors (2)" in md
+    assert "| What | Finding | File | How to fix |" in md
+    assert "Entry point redirects: none" in md
+    assert '"review"' in pi.to_json(inv, rep) and "decision" not in md
 
 
 def test_a_part_that_could_not_be_read_is_named():
@@ -382,16 +519,3 @@ def test_a_part_that_could_not_be_read_is_named():
     assert inv.middlewares == []
     assert inv.errors["middlewares"] == "Traefik Manager timed out"
     assert inv.errors["runtime_middlewares"] == "could not be read"
-
-
-def test_decisions_are_stored_per_source(session):
-    pi.save_decision(session, "gw", "convert:panel.example.lan", "convert", "admin")
-    session.commit()
-    assert pi.load_decisions(session, "gw")["convert:panel.example.lan"]["decision"] == "convert"
-    assert pi.load_decisions(session, "other") == {}
-    try:
-        pi.save_decision(session, "gw", "x", "explode", "admin")
-    except ValueError as exc:
-        assert "decision must be one of" in str(exc)
-    else:  # pragma: no cover
-        raise AssertionError("an unknown decision was accepted")

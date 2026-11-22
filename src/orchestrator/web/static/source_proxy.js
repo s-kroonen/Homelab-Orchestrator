@@ -5,9 +5,9 @@
  *   proxy.import  every route this Traefik Manager has next to its record; record a route that
  *                 has none; import (upstream, on/off) into the records.
  *   proxy.format  rewrite hand-written routes into the standard shape (format_routes.js).
- *   proxy.findings the orchestrator's report on this proxy (/api/pull/traefik/findings): what
- *                 could be converted, removed, simplified or moved, a decision per finding (saved
- *                 at once, nothing is changed in the proxy), Markdown / JSON export.
+ *   proxy.review  the orchestrator's review of this proxy (/api/pull/traefik/review), read only:
+ *                 errors, what it cannot read yet, routes not in Traefik Manager's form, clean-up,
+ *                 each with how to fix it, and what the orchestrator supports; Markdown / JSON.
  * Hosts come from /api/proxy-hosts?source=, routes from /api/pull/traefik?source=; a push goes
  * to the proxy that owns each host. Nothing from Traefik is put in as HTML. */
 (function () {
@@ -288,13 +288,12 @@
     });
   };
 
-  // --- Findings ------------------------------------------------------------------------------------------
-  const DECISIONS = [["later", "Decide later"], ["keep", "Keep"], ["convert", "Convert"], ["delete", "Delete"], ["simplify", "Simplify"], ["move", "Move"]];
-  const DECISION_LABEL = Object.fromEntries(DECISIONS);
-  window.SourceViews["proxy.findings"] = function (panel, ctx) {
+  // --- Review (ProxyReview wireframe) ---------------------------------------------------------------
+  const GROUP_TONE = { error: "fail", unread: "warn", handwritten: "pending", cleanup: "off" };
+  const SUPPORT_TONE = { edits: "ok", reads: "off", "not yet": "warn" };
+  window.SourceViews["proxy.review"] = function (panel, ctx) {
     const SRC = ctx.source.id;
-    const q = "?source=" + enc(SRC);
-    const url = "/api/pull/traefik/findings" + q;
+    const url = "/api/pull/traefik/review?source=" + enc(SRC);
     const head = el("div", { class: "findings-head" });
     const box = el("div");
     fill(panel, head, box);
@@ -308,50 +307,38 @@
     function headLine(rep) {
       const c = rep.counts;
       fill(head,
-        el("div", { class: "findings-what" }, el("strong", {}, "Orchestrator report"),
+        el("div", { class: "findings-what" }, el("strong", {}, "Review"),
           el("span", { class: "faint" }, " · read " + window.UI.fmt.time(rep.read_at) + " · " + c.routers + " routers, " + c.middlewares + " middlewares, " + c.services + " services, " + c.transports + " transports, " + c.files + " files")),
         el("div", { class: "findings-tools" },
           el("button", { type: "button", class: "small", onclick: () => { fresh = true; view.refresh(); } }, "Read again"),
           el("a", { class: "btn secondary small", href: url + "&fmt=md", download: "" }, "Export Markdown"),
           el("a", { class: "btn secondary small", href: url + "&fmt=json", download: "" }, "Export JSON")));
     }
-    async function decide(f, value, sel) {
-      sel.disabled = true;
-      try { await api.put("/api/pull/traefik/findings/" + enc(f.id) + q, { decision: value }, { suppressToast: true }); f.decision = value; toast(f.target + ": " + DECISION_LABEL[value], "ok"); }
-      catch (e) { toast(e.message, "error"); sel.value = f.decision || "later"; }
-      finally { sel.disabled = false; }
-      ctx.setCount && ctx.setCount(total);
+    function supportCard(rep) {
+      return el("aside", { class: "card review-support" },
+        el("div", { class: "card-head" }, el("h2", {}, "What the orchestrator supports")),
+        el("div", { class: "review-sup" }, rep.support.map((x) => [el("span", {}, x.what), el("span", {}, el("span", { class: "pill " + (SUPPORT_TONE[x.status] || "off") }, x.status))])),
+        el("div", { class: "faint review-sup-note" }, "Edits go through Traefik Manager's own forms, so its UI keeps working." +
+          (rep.transports_known ? "" : " Servers transports are known by name only until the Traefik API connection is added.")));
     }
-    let total = 0;
     function draw(rep) {
       headLine(rep);
-      total = rep.counts.findings;
-      ctx.setCount && ctx.setCount(total);
-      const parts = [];
-      const missing = Object.keys(rep.errors || {});
-      if (missing.length) parts.push(el("div", { class: "banner fail" }, "Not everything could be read (" + missing.join(", ") + "), so this report is incomplete: " + Object.values(rep.errors).join("; ")));
-      parts.push(el("div", { class: "banner info" }, "Nothing changes in the proxy from here. Each decision is recorded for this report and its export; converting a route has its own preview in Format routes."));
-      if (!rep.transports_known) parts.push(el("div", { class: "faint", style: { fontSize: "12.5px" } }, "Transports are known by name only: add the Traefik API connection to read their server names and find unused ones."));
-      if (!rep.groups.length) parts.push(el("div", { class: "card" }, el("div", { class: "dt-empty" }, el("strong", {}, "Nothing to report"), el("div", {}, "Every router, middleware and service is in use and in the standard shape."))));
-      const card = el("section", { class: "card findings" });
+      ctx.setCount && ctx.setCount(rep.counts.findings);
+      const list = el("section", { class: "card findings" });
       for (const g of rep.groups) {
-        card.append(el("div", { class: "findings-grp" }, g.label, el("span", { class: "faint" }, " " + g.findings.length)));
+        list.append(el("div", { class: "findings-grp" }, el("span", { class: "pill " + (GROUP_TONE[g.key] || "off") }, g.label), el("span", { class: "faint" }, " " + g.findings.length)));
         for (const f of g.findings) {
-          const sel = el("select", { "aria-label": "Decision for " + f.target, onchange: () => decide(f, sel.value, sel) },
-            DECISIONS.map(([v, l]) => el("option", { value: v, selected: (f.decision || "later") === v }, l)));
-          card.append(el("div", { class: "findings-row" },
+          list.append(el("div", { class: "review-row" },
             el("span", { class: "mono" }, f.target),
             el("span", {}, f.detail),
-            el("span", { class: "faint" }, "Suggested: ", el("strong", {}, DECISION_LABEL[f.suggestion] || f.suggestion)),
-            sel));
+            el("span", { class: "mono faint review-file" }, f.file || ""),
+            el("span", { class: "faint review-fix" }, f.fix)));
         }
       }
-      if (rep.groups.length) {
-        const decided = rep.counts.decided;
-        card.append(el("div", { class: "findings-foot faint" }, decided + " of " + rep.counts.findings + " decided. Applying them is done with the convert and clean-up tools, one change at a time, each with Traefik Manager's backup."));
-      }
-      if (rep.groups.length) parts.push(card);
-      fill(box, ...parts);
+      if (!rep.groups.length) list.append(el("div", { class: "dt-empty" }, el("strong", {}, "Nothing to report"), el("div", {}, "No errors, everything is read, every route is in Traefik Manager's form and nothing needs cleaning up.")));
+      fill(box,
+        el("div", { class: "banner info" }, "Read only: nothing here changes the proxy. Fix things in Traefik Manager, or hand the export to an agent; it carries the data and what the orchestrator supports."),
+        el("div", { class: "review-grid" }, list, supportCard(rep)));
     }
   };
 
