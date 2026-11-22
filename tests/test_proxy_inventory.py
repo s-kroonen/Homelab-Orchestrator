@@ -269,7 +269,7 @@ def _inv(transports=None):
     return pi.build(
         _raw(),
         hosts=HOSTS,
-        owns=lambda n: n.startswith("orchestrator-"),
+        owns=lambda n, *_a, **_k: n.startswith("orchestrator-"),
         transports=transports,
     )
 
@@ -413,7 +413,7 @@ def _review(**kw):
     inv = pi.build(
         _review_raw(),
         hosts=[*HOSTS, SimpleNamespace(hostname="bingo.example.lan", id=5)],
-        owns=lambda n: n.startswith("orchestrator-"),
+        owns=lambda n, *_a, **_k: n.startswith("orchestrator-"),
         transports=kw.pop("transports", None),
     )
     return inv, {f.id: f for f in pi.findings(inv, service_slugs=["nextcloud", "media"], **kw)}
@@ -488,7 +488,7 @@ def test_redirect_routers_when_the_entry_point_already_redirects():
     raw["entrypoint_redirects"] = {"web": "websecure"}
     raw["runtime_routers"][1]["entryPoints"] = ["web"]
     raw["runtime_routers"][1]["middlewares"].append("maintenance-nextcloud@file")
-    inv = pi.build(raw, hosts=HOSTS, owns=lambda n: n.startswith("orchestrator-"))
+    inv = pi.build(raw, hosts=HOSTS, owns=lambda n, *_a, **_k: n.startswith("orchestrator-"))
     found = {f.id: f for f in pi.findings(inv)}
     red = found["cleanup:redirect_routers"]
     assert "already redirects" in red.detail and red.fix == "Delete them in Traefik Manager."

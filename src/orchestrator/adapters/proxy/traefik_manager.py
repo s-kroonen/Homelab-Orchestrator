@@ -154,24 +154,43 @@ def maintenance_middleware_name(slug: str) -> str:
     return f"maintenance-{slug}"
 
 
+#: The name prefix routes made by older versions of the orchestrator carry
+#: (``orchestrator-app-example-lan``). Such a route is still the orchestrator's;
+#: new routes have no prefix (see :func:`route_name_for_hostname`).
+LEGACY_ROUTE_PREFIX = "orchestrator-"
+
+
 def route_name_for_hostname(hostname: str) -> str:
     """The Traefik Manager route (``serviceName``/router) name this adapter
-    creates for a ``ProxyHost``'s live-managed route, e.g.
-    ``orchestrator-app-example-com`` for ``app.example.com``.
+    creates for a ``ProxyHost``'s live-managed route, e.g. ``app-example-lan``
+    for ``app.example.lan`` - a name like one typed into Traefik Manager's own
+    route form, which then names the service ``app-example-lan-service``.
 
-    Deterministic and derived from the hostname alone — never from the
-    ``ProxyHost.id`` — so it reads clearly in Traefik Manager's own UI and
-    so re-deriving it (e.g. for a backfill) needs no extra lookup. Prefixed
-    with ``orchestrator-`` so it can never collide with a hand-authored
-    router name. This IS the opaque reference :meth:`TraefikManagerProxyAdapter.
-    create_route` returns and that gets persisted to ``ProxyHost.extra``
-    (see ``docs/proxy_hosts.md``) — callers should treat it as opaque and
-    always use the stored value rather than recomputing this, since a
-    hostname rename does NOT rename the underlying route (see
-    :meth:`TraefikManagerProxyAdapter.update_route`).
+    Deterministic and derived from the hostname alone - never from the
+    ``ProxyHost.id`` - so re-deriving it needs no extra lookup. A route is the
+    orchestrator's when its name is this one for the host's hostname and its
+    router points at ``<name>-service`` (see
+    :meth:`TraefikManagerProxyAdapter.owns_route_ref`), or when it carries the
+    :data:`LEGACY_ROUTE_PREFIX` older versions used. This IS the opaque
+    reference :meth:`TraefikManagerProxyAdapter.create_route` returns and that
+    gets persisted to ``ProxyHost.extra`` (see ``docs/proxy_hosts.md``) -
+    callers use the stored value rather than recomputing this, since a hostname
+    rename does NOT rename the underlying route.
     """
     slug = re.sub(r"[^a-z0-9]+", "-", hostname.strip().lower()).strip("-")
-    return f"orchestrator-{slug}" if slug else "orchestrator-route"
+    return slug or "route"
+
+
+def is_redirect_router(
+    name: str, middlewares: Sequence[str] | None = None, redirect_mw: str = ""
+) -> bool:
+    """A router whose only job is sending plain HTTP to HTTPS: named ``<name>-redirect``
+    (the companion), or carrying the redirect middleware. It never needs the maintenance
+    page: its requests never reach a backend."""
+    if name.split("::", 1)[-1].endswith("-redirect"):
+        return True
+    wanted = redirect_mw.strip()
+    return bool(wanted) and wanted in {m.split("@", 1)[0] for m in middlewares or ()}
 
 
 #: ``certResolver`` sentinels Traefik Manager's ``/save`` understands: the first
@@ -426,6 +445,9 @@ class TraefikManagerProxyAdapter(ProxyAdapter):
 
     def __init__(self, settings: Settings) -> None:
         self._settings = settings
+        #: Whether Traefik was last seen redirecting every plain-HTTP entry point to
+        #: another one (``None`` = not read yet). Set by :meth:`list_entrypoints`.
+        self._ep_redirect: bool | None = None
 
     # -- low-level HTTP ---------------------------------------------------
 
@@ -1015,12 +1037,27 @@ class TraefikManagerProxyAdapter(ProxyAdapter):
             return False
         _name, router = block
         middlewares = router.get("middlewares")
+        # One maintenance page per router: Traefik only ever shows the first errors
+        # middleware that answers, so a page left from an earlier link (another service)
+        # is replaced in place rather than kept in front of this one.
+        stale = [
+            m
+            for m in list(middlewares or [])
+            if isinstance(m, str)
+            and m.split("@", 1)[0].startswith("maintenance-")
+            and m.split("@", 1)[0] != middleware_name
+        ]
         if middlewares is None:
             router["middlewares"] = [middleware_name]
-        elif middleware_name not in list(middlewares):
-            middlewares.append(middleware_name)
-        else:
+        elif middleware_name in [m.split("@", 1)[0] for m in middlewares] and not stale:
             return False  # already present — nothing to write
+        else:
+            names = [m.split("@", 1)[0] if isinstance(m, str) else m for m in middlewares]
+            at = names.index(stale[0].split("@", 1)[0]) if stale else len(names)
+            for m in stale:
+                middlewares.remove(m)
+            if middleware_name not in [m.split("@", 1)[0] for m in middlewares]:
+                middlewares.insert(min(at, len(middlewares)), middleware_name)
 
         buf = io.StringIO()
         _yaml.dump(doc, buf)
@@ -1031,7 +1068,10 @@ class TraefikManagerProxyAdapter(ProxyAdapter):
         after_block = self._router_block(
             _yaml.load(after.get("raw", "") if isinstance(after, dict) else "")
         )
-        after_mws = list(after_block[1].get("middlewares") or []) if after_block else []
+        after_mws = [
+            str(m).split("@", 1)[0]
+            for m in (after_block[1].get("middlewares") or [] if after_block else [])
+        ]
         if middleware_name not in after_mws:
             raise TraefikManagerUnavailable(
                 f"Traefik Manager accepted the write but {middleware_name} is not on "
@@ -1062,10 +1102,12 @@ class TraefikManagerProxyAdapter(ProxyAdapter):
         return True
 
     async def _routes_matching_hostname(self, hostname: str) -> list[str]:
-        """The routes of ours (``orchestrator-*``) that serve ``hostname``. A hand-written
-        route is never edited: Traefik Manager's per-route save rewrites its file with the
-        service moved and comments left on the wrong block, so the maintenance page is only
-        put on routes the orchestrator created."""
+        """The routes of ours (see :meth:`owns_route_ref`) that serve ``hostname``, minus
+        the plain-HTTP redirect ones (their requests never reach a backend, so a maintenance
+        page there never shows). A hand-written route is never edited: Traefik Manager's
+        per-route save rewrites its file with the service moved and comments left on the
+        wrong block, so the maintenance page is only put on routes the orchestrator
+        created."""
         routes = await self._get_routes()
         apps = routes.get("apps") if isinstance(routes, dict) else None
         matched: list[str] = []
@@ -1077,11 +1119,20 @@ class TraefikManagerProxyAdapter(ProxyAdapter):
                 continue
             rule = app.get("rule")
             route_id = app.get("id") or app.get("name")
+            mws = app.get("middlewares")
+            service = app.get("service_name")
             if (
                 isinstance(rule, str)
                 and isinstance(route_id, str)
                 and target in extract_hostnames(rule)
-                and self.owns_route_ref(route_id)
+                and not is_redirect_router(
+                    route_id,
+                    [m for m in mws if isinstance(m, str)] if isinstance(mws, list) else (),
+                    self._settings.traefik_redirect_middleware or "redirect-to-https",
+                )
+                and self.owns_route_ref(
+                    route_id, hostname, service=service if isinstance(service, str) else ""
+                )
             ):
                 matched.append(route_id)
         return matched
@@ -1345,6 +1396,8 @@ class TraefikManagerProxyAdapter(ProxyAdapter):
         siblings = [r for r in routes if rid in (r.route_id, r.name)]
         beside = [r for r in siblings if main is not None and r.config_file == main.config_file]
         existing = (beside or siblings or [None])[0]
+        if want and existing is None and not await self._redirect_router_needed():
+            return  # the entry point redirects every request already: no router to add
         if want:
             try:
                 await self._save_redirect_route(
@@ -1398,12 +1451,70 @@ class TraefikManagerProxyAdapter(ProxyAdapter):
     def route_ref_for(self, hostname: str) -> str:
         return route_name_for_hostname(hostname)
 
-    def owns_route_ref(self, route_ref: str) -> bool:
-        # Everything this adapter creates is prefixed (see
-        # route_name_for_hostname); anything else was adopted from a
-        # hand-written setup and is never overwritten or deleted. With several
-        # config files the id is "<file>::<name>": the name decides.
-        return route_ref.rsplit("::", 1)[-1].startswith("orchestrator-")
+    def owns_route_ref(
+        self, route_ref: str, hostname: str | None = None, *, service: str | None = None
+    ) -> bool:
+        """A route is ours when it carries the legacy ``orchestrator-`` prefix, or when it
+        is named exactly as :func:`route_name_for_hostname` names ``hostname`` AND - when
+        the live route is known - its router points at a ``<name>-service``: the shape
+        Traefik Manager's route form writes (its own, or the one of another route with the
+        same backend, which Traefik Manager shares). ``None`` or ``""`` = no service to
+        look at (a route about to be created, or one listed without it): the name decides.
+        A hand-written route that merely has the same name (a failover pointing at
+        ``<x>-failover``, say) is never overwritten or deleted. With several config files
+        the id is ``<file>::<name>``: the name decides."""
+        name = route_ref.rsplit("::", 1)[-1]
+        if name.startswith(LEGACY_ROUTE_PREFIX):
+            return True
+        if not hostname or not name or name != route_name_for_hostname(hostname):
+            return False
+        return not service or service.split("@", 1)[0].endswith("-service")
+
+    def entrypoint_redirects_http(self) -> bool:
+        return self._ep_redirect is True
+
+    async def _redirect_router_needed(self) -> bool:
+        """Does a host still need its own ``<name>-redirect`` router? Not when every
+        plain-HTTP entry point already redirects (Traefik Manager's way: one redirect on
+        ``web`` in the static config). Unknown (Traefik unreadable) = needed, as before."""
+        await self.list_entrypoints()
+        return self._ep_redirect is not True
+
+    async def _live_middlewares(self, route: RouteInfo) -> list[str]:
+        """The middlewares on ``route`` as Traefik Manager lists them, or - when the list
+        does not say - as its stored YAML does (``/save`` replaces the whole list, so an
+        edit must send what is there). Neither readable: none, as before this was read."""
+        if route.middlewares is not None:
+            return list(route.middlewares)
+        try:
+            raw = await self._get_route_raw(route.ref)
+            block = self._router_block(
+                _yaml.load(raw.get("raw", "") if isinstance(raw, dict) else "")
+            )
+        except Exception as exc:
+            log.warning("traefik_manager.middlewares_unread", route=route.ref, error=str(exc))
+            return []
+        if block is None:
+            log.warning("traefik_manager.middlewares_unread", route=route.ref, error="no router")
+            return []
+        return [str(m) for m in block[1].get("middlewares") or []]
+
+    def _keep_middlewares(self, live: Sequence[str], opts: RouteOptions) -> str:
+        """The ``middlewares`` form value for an edit of one of our routes: everything the
+        route carries now (added in Traefik Manager's UI, say) in its order, with the HSTS
+        middleware following the host's option. The maintenance page is left out: the push
+        puts the one for the host's linked service back right after (and none when it has
+        no service any more), so an unlinked service's page never lingers."""
+        hsts = (self._settings.traefik_hsts_middleware or "hsts-headers").strip()
+        kept = [
+            m
+            for m in live
+            if m
+            and not m.split("@", 1)[0].startswith("maintenance-")
+            and (opts.hsts or m.split("@", 1)[0] != hsts)
+        ]
+        bare = {m.split("@", 1)[0] for m in kept}
+        return ",".join([*kept, *self._hsts_for(opts, list(bare))])
 
     async def ensure_hsts_middleware(self) -> SyncEvent | None:
         """Create the HSTS headers middleware when Traefik does not have it yet, so a route
@@ -1469,7 +1580,7 @@ class TraefikManagerProxyAdapter(ProxyAdapter):
                 # Before the companion refers to the new route's service: a route that landed
                 # in another file would make that reference fail with a baffling message.
                 await self._confirm_created_in(name, hostname, cfile)
-            if opts.http_redirect:
+            if opts.http_redirect and await self._redirect_router_needed():
                 # The companion goes into the SAME file as its main route.
                 await self._save_redirect_route(
                     name, hostname=hostname, existing=None, config_file=cfile
@@ -1688,6 +1799,7 @@ class TraefikManagerProxyAdapter(ProxyAdapter):
                 http_rule=f"Host(`{hostname}`)",
                 entry_points=eps,
                 cert_resolver=resolver,
+                middlewares=self._keep_middlewares(await self._live_middlewares(main), opts),
                 is_edit=True,
                 original_id=f"{old_file}::{main.name}",
                 config_file=target,
@@ -1743,7 +1855,7 @@ class TraefikManagerProxyAdapter(ProxyAdapter):
                 http_rule=f"Host(`{hostname}`)",
                 entry_points=eps,
                 cert_resolver=resolver,
-                middlewares=",".join(self._hsts_for(opts)),
+                middlewares=self._keep_middlewares(await self._live_middlewares(main), opts),
                 is_edit=True,
                 original_id=main.ref,
                 config_file=main.config_file,
@@ -1995,11 +2107,22 @@ class TraefikManagerProxyAdapter(ProxyAdapter):
         for item in response:
             if isinstance(item, dict) and isinstance(item.get("name"), str) and item["name"]:
                 address = item.get("address")
+                http = item.get("http")
+                red = (http.get("redirections") or {}) if isinstance(http, dict) else {}
+                to = red.get("entryPoint") if isinstance(red, dict) else None
                 found.append(
                     EntryPointInfo(
-                        name=item["name"], address=address if isinstance(address, str) else ""
+                        name=item["name"],
+                        address=address if isinstance(address, str) else "",
+                        redirect_to=(
+                            str(to["to"]) if isinstance(to, dict) and to.get("to") else ""
+                        ),
                     )
                 )
+        plain = [
+            e for e in found if e.name != "traefik" and is_plain_http_entrypoint(e.name, e.address)
+        ]
+        self._ep_redirect = bool(plain) and all(e.redirect_to for e in plain)
         return found
 
     async def _resolvers_from_settings(self) -> list[str] | None:

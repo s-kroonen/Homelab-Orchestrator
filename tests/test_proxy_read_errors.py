@@ -72,7 +72,7 @@ async def test_a_file_that_does_not_parse_makes_the_list_unknown(
     ph = ProxyHost(
         hostname="game.example.lan",
         upstream="http://10.0.0.14:80",
-        extra={"traefik_manager_route_id": "orchestrator-game-example-lan"},
+        extra={"traefik_manager_route_id": "game-example-lan"},
         pushed_sig="x",
     )
     state = evaluate(adapter, ph, None, "game")

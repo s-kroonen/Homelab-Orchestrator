@@ -15,7 +15,7 @@ from orchestrator.registry.proxy_push import EXTERNAL, PENDING_CREATE, evaluate,
 from tests.test_proxy_adapter_traefik_manager import _settings
 
 HOST = "panel.example.lan"
-OURS = "orchestrator-panel-example-lan"
+OURS = "panel-example-lan"
 
 
 def _host() -> ProxyHost:

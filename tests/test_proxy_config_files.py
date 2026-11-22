@@ -40,7 +40,7 @@ from tests.sim_tm import DEFAULT_FILE, SimTM
 from tests.test_proxy_entrypoints_adapter import _patch, _settings
 from tests.test_proxy_entrypoints_api import _body, _client, dry_client  # noqa: F401
 
-REF = "orchestrator-app-example-com"
+REF = "app-example-com"
 
 
 def _create(client: TestClient, service: Service, **over: Any) -> dict[str, Any]:

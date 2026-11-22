@@ -44,6 +44,9 @@ class ProxyCatalog:
     #: (``None`` = could not tell).
     redirect_middleware: str = "redirect-to-https"
     redirect_available: bool | None = None
+    #: True when Traefik's plain-HTTP entry points already redirect every request to
+    #: HTTPS (Traefik Manager's way), so a host needs no redirect router of its own.
+    entrypoint_redirect: bool | None = None
     #: The same for the HSTS headers middleware.
     hsts_middleware: str = "hsts-headers"
     hsts_available: bool | None = None
@@ -54,6 +57,12 @@ class ProxyCatalog:
     #: Files routes were seen in (``GET /api/routes``): offered as suggestions
     #: even when the manager's own file list could not be read.
     config_files_seen: list[str] = field(default_factory=list)
+
+    @property
+    def redirect_router_default(self) -> bool | None:
+        """Should a host get its own HTTP -> HTTPS redirect router? Not when the entry point
+        redirects already; otherwise when Traefik has the redirect middleware."""
+        return False if self.entrypoint_redirect else self.redirect_available
 
     @property
     def source(self) -> str:
@@ -75,7 +84,11 @@ class ProxyCatalog:
     ) -> dict[str, Any]:
         files = self.config_files
         return {
-            "entrypoints": [{"name": e.name, "address": e.address} for e in self.entrypoints or []],
+            "entrypoints": [
+                {"name": e.name, "address": e.address, "redirect_to": e.redirect_to}
+                for e in self.entrypoints or []
+            ],
+            "entrypoint_redirect": self.entrypoint_redirect,
             "cert_resolvers": list(self.cert_resolvers or []),
             "cert_resolvers_known": self.cert_resolvers is not None,
             # name -> sources that report it; label per source key for tooltips.
@@ -145,6 +158,7 @@ async def get_catalog(settings: Any, proxy: ProxyAdapter, *, refresh: bool = Fal
         domains=list(domains or []),
         redirect_middleware=redirect_name,
         redirect_available=None if known_mws is None else redirect_name in known_mws,
+        entrypoint_redirect=(None if entrypoints is None else proxy.entrypoint_redirects_http()),
         hsts_middleware=hsts_name,
         hsts_available=None if known_mws is None else hsts_name in known_mws,
         config_files=config_files,

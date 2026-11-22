@@ -222,7 +222,7 @@ async def _plan_one(
         ]
         return item
 
-    owned = proxy.owns_route_ref(route.name)
+    owned = proxy.owns_route_ref(route.name, ph.hostname, service=route.service or "")
     companion = _companion(routes, route)
     target_file, problem = resolve_file_for(settings, ph, slug, known)
     if problem:
@@ -244,7 +244,7 @@ async def _plan_one(
         )
     options = standard_options(
         ph.route_options,
-        redirect_available=catalog.redirect_available,
+        redirect_available=catalog.redirect_router_default,
         hsts=want_hsts,
         skip_verify=info.skip_verify
         or RouteOptions.from_dict(ph.route_options).skip_upstream_tls_verify,
@@ -293,6 +293,17 @@ async def _plan_one(
     item.dropped_middlewares = legacy
 
     if not owned:
+        taken = [r for r in routes if r.name == new_name]
+        if taken:
+            # Traefik Manager would overwrite (or refuse) a router of the same name: rename the
+            # route there first, or let this host keep its hand-written route.
+            item.status = BLOCKED
+            item.reasons = [
+                f"a router named {new_name} exists already "
+                f"(in {taken[0].config_file or 'the default file'}) and is not in the shape "
+                "Traefik Manager's form writes: rename or remove it in Traefik Manager first"
+            ]
+            return item
         item.action = RECREATE
         item.changes.append(f"rewritten as {new_name} in Traefik Manager's own syntax")
     elif target_file and not same_file(route.config_file, target_file):
@@ -311,7 +322,16 @@ async def _plan_one(
         item.changes.append(f"moves from {route.config_file or '(default file)'} to {target_file}")
     if options.http_redirect and companion is None:
         item.changes.append("adds the HTTP -> HTTPS redirect router")
-    if not options.http_redirect and catalog.redirect_available is False:
+    if not options.http_redirect and companion is not None and catalog.entrypoint_redirect:
+        item.changes.append(
+            f"removes the redirect router {companion.name} (the entry point redirects every "
+            "request to HTTPS already)"
+        )
+    if (
+        not options.http_redirect
+        and catalog.redirect_available is False
+        and not catalog.entrypoint_redirect
+    ):
         item.warnings.append(
             f"the {catalog.redirect_middleware} middleware does not exist in Traefik, so no "
             "redirect router is added"

@@ -51,7 +51,9 @@ class DryRunProxyAdapter(ProxyAdapter):
     def route_ref_for(self, hostname: str) -> str:
         return f"dry-run:{hostname}"
 
-    def owns_route_ref(self, route_ref: str) -> bool:
+    def owns_route_ref(
+        self, route_ref: str, hostname: str | None = None, *, service: str | None = None
+    ) -> bool:
         return route_ref.startswith("dry-run:")
 
     async def list_routes(self) -> list[RouteInfo] | None:

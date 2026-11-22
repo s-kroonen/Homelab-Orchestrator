@@ -120,9 +120,7 @@ async def test_plan_classifies_every_host(
     by = {i.hostname: i for i in plan.items}
     nas = by[HOST]
     assert nas.status == rf.READY and nas.action == rf.RECREATE
-    assert (
-        nas.target["name"] == "orchestrator-nas-example-com" and nas.target["file"] == "thing.yml"
-    )
+    assert nas.target["name"] == "nas-example-com" and nas.target["file"] == "thing.yml"
     assert nas.dropped_middlewares == ["redirect-to-https"]
     assert nas.target["middlewares"] == ["hsts-headers", "auth-basic"]  # only the redirect one goes
     assert nas.target["options"]["http_redirect"] is True
@@ -165,7 +163,7 @@ async def test_apply_recreates_the_route_in_the_standard_shape(
     plan = await _plan(session, adapters, settings)
     (result,) = await rf.apply_plan(session, adapters, settings, plan, actor="storm")
     assert result.ok, result.message
-    new = "orchestrator-nas-example-com"
+    new = "nas-example-com"
     assert sim.file_of(new) == "thing.yml"
     assert sim.file_of("nas") is None  # the old route is gone from its file
     assert sim.file_of(f"{new}-redirect") == "thing.yml"  # the redirect router exists
@@ -181,13 +179,13 @@ async def test_a_route_the_runtime_refuses_is_removed_and_the_old_one_stays(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, session: Session, service: Service
 ) -> None:
     sim, adapters, settings = _setup(monkeypatch, tmp_path, session, service)
-    sim.runtime_errors.add("orchestrator-nas-example-com")
+    sim.runtime_errors.add("nas-example-com")
     _old(sim)
     ph = _host(session, service)
     plan = await _plan(session, adapters, settings)
     (result,) = await rf.apply_plan(session, adapters, settings, plan, actor="storm")
     assert not result.ok and result.outcome == "restored"
-    assert sim.file_of("orchestrator-nas-example-com") is None  # the new one was taken away
+    assert sim.file_of("nas-example-com") is None  # the new one was taken away
     assert sim.file_of("nas") == "legacy.yml"  # the old one never stopped existing
     session.refresh(ph)
     assert TRAEFIK_MANAGER_ROUTE_REF_KEY not in (ph.extra or {})
@@ -204,7 +202,7 @@ async def test_a_failed_delete_of_the_old_route_puts_things_back(
     (result,) = await rf.apply_plan(session, adapters, settings, plan, actor="storm")
     assert not result.ok and result.outcome == "restored"
     assert sim.file_of("nas") == "legacy.yml"
-    assert sim.file_of("orchestrator-nas-example-com") is None
+    assert sim.file_of("nas-example-com") is None
 
 
 async def test_a_route_that_changed_since_the_plan_is_not_touched(
@@ -217,16 +215,14 @@ async def test_a_route_that_changed_since_the_plan_is_not_touched(
     sim.files["legacy.yml"]["nas"]["mws"].append("someone-added-this")
     (result,) = await rf.apply_plan(session, adapters, settings, plan, actor="storm")
     assert not result.ok and "changed since the plan" in result.message
-    assert (
-        sim.file_of("nas") == "legacy.yml" and sim.file_of("orchestrator-nas-example-com") is None
-    )
+    assert sim.file_of("nas") == "legacy.yml" and sim.file_of("nas-example-com") is None
 
 
 async def test_the_run_stops_at_the_first_failure_unless_told_to_go_on(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, session: Session, service: Service
 ) -> None:
     sim, adapters, settings = _setup(monkeypatch, tmp_path, session, service)
-    sim.runtime_errors.add("orchestrator-a-example-com")
+    sim.runtime_errors.add("a-example-com")
     for n in ("a", "b"):
         _old(sim, n, f"{n}.example.com")
         _host(session, service, f"{n}.example.com")
@@ -256,18 +252,18 @@ async def test_an_owned_route_in_the_wrong_file_is_moved_and_gets_its_redirect(
     sim, adapters, settings = _setup(monkeypatch, tmp_path, session, service)
     sim.add(
         "dynamic.yml",
-        "orchestrator-nas-example-com",
+        "nas-example-com",
         HOST,
         upstream=UPSTREAM,
         resolver="letsencrypt",
     )
-    _host(session, service, extra={TRAEFIK_MANAGER_ROUTE_REF_KEY: "orchestrator-nas-example-com"})
+    _host(session, service, extra={TRAEFIK_MANAGER_ROUTE_REF_KEY: "nas-example-com"})
     plan = await _plan(session, adapters, settings)
     (item,) = plan.items
     assert item.status == rf.READY and item.action == rf.MOVE
     (result,) = await rf.apply_plan(session, adapters, settings, plan, actor="t")
     assert result.ok, result.message
-    assert sim.file_of("orchestrator-nas-example-com") == "thing.yml"
+    assert sim.file_of("nas-example-com") == "thing.yml"
 
 
 # -- HSTS -----------------------------------------------------------------------------------------
@@ -302,7 +298,7 @@ async def test_asking_for_hsts_adds_the_middleware_to_the_new_route(
     assert item.target["options"]["hsts"] is True and plan.hsts_available is True
     (result,) = await rf.apply_plan(session, adapters, settings, plan, actor="storm")
     assert result.ok, result.message
-    new = "orchestrator-nas-example-com"
+    new = "nas-example-com"
     assert sim.files["thing.yml"][new]["mws"] == ["auth-basic", "hsts-headers"]
     session.refresh(ph)
     assert ph.route_options["hsts"] is True
@@ -327,7 +323,7 @@ async def test_hsts_that_traefik_does_not_have_is_created_by_the_format(
     (result,) = await rf.apply_plan(session, adapters, settings, plan, actor="storm")
     assert result.ok, result.message
     assert "stsSeconds: 31536000" in sim.created_middlewares["hsts-headers"]
-    assert "hsts-headers" in sim.files["thing.yml"]["orchestrator-nas-example-com"]["mws"]
+    assert "hsts-headers" in sim.files["thing.yml"]["nas-example-com"]["mws"]
 
 
 async def test_a_route_that_already_has_hsts_keeps_it_when_left_as_is(

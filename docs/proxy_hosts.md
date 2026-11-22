@@ -123,12 +123,16 @@ What the endpoints do now (`web/routers/proxy_hosts.py`):
 * **Create** validates everything read-only (see below), stores the row and the
   *planned* route reference in `extra["traefik_manager_route_id"]`
   (`ProxyAdapter.route_ref_for`; for Traefik Manager the deterministic name
-  `orchestrator-app-example-com`, so the saved YAML already carries it and a
-  later push does not make the registry dirty). The host is `pending_create`.
+  `app-example-com` - the hostname with dashes, the name a route typed into Traefik
+  Manager's own form would get - so the saved YAML already carries it and a later push
+  does not make the registry dirty). The host is `pending_create`.
   Re-creating a hostname that was just deleted (its route not yet removed)
   takes that route over instead of conflicting with it.
-* **Update** validates, stores, keeps the stored reference (a hostname rename
-  does **not** rename the route) and leaves the host `pending_update`. A host
+* **Update** validates, stores, keeps the stored reference and leaves the host
+  `pending_update`. A hostname rename of a route named after its hostname is a new
+  route: the old one gets a pending deletion and the reference becomes the new name
+  (the push deletes the old route and creates the new one). An older
+  `orchestrator-…` route keeps its name; only its rule changes. A host
   that stops being live-managed (provider changed, upstream cleared) gets a
   pending deletion for the route this orchestrator created. There is no longer
   an "enable it first" refusal for a disabled host: the push orders the
@@ -425,7 +429,7 @@ defaults) and set in the form's **Certificate** and **Behaviour** sections:
 | `pass_host_header` | **true** | The backend receives the hostname the visitor typed. With `false` Traefik sends the *upstream's own address* as `Host`; any backend that builds redirects or absolute links from it (Proxmox, PBS, most web UIs) then sends the browser to a raw LAN IP such as `http://192.168.100.18:8007`. |
 | `skip_upstream_tls_verify` | false | For an `https://` upstream with a self-signed certificate (Proxmox, PBS). Only valid with an `https://` upstream. |
 | `tls_main` / `tls_sans` | none | Request **one certificate for several names** instead of one per host, e.g. `example.com` + `*.example.com`. The form offers a ready-made wildcard for each base domain Traefik Manager is configured with, or custom names. Needs a cert resolver (a wildcard needs one with a DNS challenge) and a TLS entry point. This is also how a *new* certificate gets generated: the resolver issues it on first use. |
-| `http_redirect` | off (new hosts: on when the middleware exists) | Adds a companion router `<route>-redirect` on the plain-HTTP entry point (`web`, never `traefik`), with the redirect middleware, sharing the main route's service — the same pair a hand-written `proxmox-redirect` / `proxmox` setup has. Needs an HTTPS entry point selected and the middleware to exist in Traefik. |
+| `http_redirect` | off (new hosts: on when the middleware exists and the entry point does not redirect already) | Adds a companion router `<route>-redirect` on the plain-HTTP entry point (`web`, never `traefik`), with the redirect middleware, sharing the main route's service — the same pair a hand-written `proxmox-redirect` / `proxmox` setup has. Needs an HTTPS entry point selected and the middleware to exist in Traefik. **Not made when every plain-HTTP entry point already redirects** (Traefik Manager's way: `entryPoints.web.http.redirections` in the static config, read from `GET /api/traefik/entrypoints`): then a missing companion is no difference, the form says the option is not needed and defaults it off, and Format routes removes an existing companion (shown in its plan). A companion that is there already is left alone until the option is turned off. |
 
 The redirect middleware is **not created by the orchestrator** (a duplicate of
 one defined in your shared config would clash). Define it once, e.g.
@@ -543,8 +547,34 @@ the existing router. An adopted (or hand-written, or reference-less) route is
 `external`: **its content is never overwritten and never deleted** - deleting
 the host here leaves the route alone and a push only switches it on/off (and
 applies the maintenance fallback). A route reference counts as ours when the
-adapter created it (`ProxyAdapter.owns_route_ref`; Traefik Manager: the
-`orchestrator-` prefix).
+adapter created it (`ProxyAdapter.owns_route_ref`), see below.
+
+### Route names, and which routes are ours
+
+A route the orchestrator makes (create, Format routes, Move to file) is named the way
+Traefik Manager's own form names one: the hostname with dashes, `app-example-com` for
+`app.example.com`, with service `app-example-com-service`. There is no `orchestrator-`
+prefix any more. A route is ours (`TraefikManagerProxyAdapter.owns_route_ref`) when:
+
+* it carries the `orchestrator-` prefix older versions used (those keep their name and stay
+  ours; nothing renames them), or
+* it is named exactly after the host's hostname **and**, when the live route is listed, its
+  router points at a `…-service` - its own `<name>-service`, or the one of another route with
+  the same backend, which Traefik Manager may share.
+
+Anything else is hand-written or adopted and never rewritten or deleted. A hand-written route
+that only *happens* to be named after its hostname (a failover pointing at `<x>-failover`, say)
+stays `external`, and a pending deletion for it is dropped at push time without touching it
+(*left … alone: it points at …*). A route that was renamed in Traefik Manager to the name of its
+hostname and adopted here is ours again. A hostname change of one of ours needs Traefik
+Manager's route list (it decides whether the old route is ours to replace): when it cannot be
+read the edit is refused with a 503, nothing is saved. A redirect companion `<name>-redirect` is judged by its main route's name and
+the service it shares with it.
+
+An edit of one of ours keeps the middlewares on the live route (added in Traefik Manager's UI,
+say): its `/save` replaces the whole list, so the orchestrator sends the live list back with only
+the HSTS middleware following the host's option. The maintenance page is left out of that edit
+and put back by the push right after (none when the host has no service any more).
 
 **Adopt the route that serves it** (the host's ⋯ menu, `POST
 /api/proxy-hosts/{id}/adopt-route`, the assistant's `adopt_route`) points a record at the
@@ -1157,7 +1187,12 @@ Traefik Manager side no longer runs on an edit: it runs **at push time**
 (`registry/proxy_push.py`), per host, whenever a push created/updated/enabled
 its route (a route rewrite drops the middleware, so it is re-applied). A
 service re-link is part of the host's fingerprint, so it is a pending update.
-The middleware only goes on routes the orchestrator created (`orchestrator-*`).
+The middleware only goes on routes the orchestrator created (see
+["Route names, and which routes are ours"](#route-names-and-which-routes-are-ours)), and
+never on a plain-HTTP redirect router (`<name>-redirect`, or one carrying the redirect
+middleware): its requests never reach a backend, so the page would never show. One page per
+router: attaching it replaces another `maintenance-*` middleware on the same router in place
+(Traefik only ever shows the first one), so a re-link leaves no stale page in front.
 A hand-written or adopted route is never edited, not even for this: Traefik
 Manager's per-route save (`POST /api/routes/{id}/raw`) pops the router and its
 service and adds them back, so it rewrites the file with that service moved to
@@ -1342,8 +1377,9 @@ is set: then their `serverName` and `insecureSkipVerify` are read from Traefik
 Traefik Manager's route form writes router `<name>` with service `<name>-service` (or points it
 at a failover / weighted service Traefik Manager manages), a transport `<name>-transport` and
 per-route headers `<name>-headers`; HTTP to HTTPS is one redirect on the entry point, not a
-router. A file router of that shape is **Traefik Manager** (or **orchestrator**, for the
-`orchestrator-` routes this orchestrator made); anything else is **hand-written**, with the reason:
+router. A file router of that shape is **Traefik Manager** (or **orchestrator**, for the routes
+this orchestrator made: `orchestrator-` ones, and ones named after their hostname that point at a
+`…-service`); anything else is **hand-written**, with the reason:
 a service not named `<name>-service`, Traefik's own `api@internal`, a failover whose backends need
 different Host headers or server names (Traefik Manager's form gives every backend the same), a
 separate HTTP redirect router.
@@ -1452,7 +1488,7 @@ file.
 
 ## When a hand-written route replaced the orchestrator's own
 
-A host whose own route (`orchestrator-*`, pushed before) is gone from Traefik Manager while a
+A host whose own route (one of ours, pushed before) is gone from Traefik Manager while a
 route the orchestrator did not create serves its hostname - a hand-written failover that took
 its place, say - is not "re-created" next to it. It reads `external`, *served by the route <name>,
 which this orchestrator did not create*, with nothing to push. **Adopt the route that serves it**

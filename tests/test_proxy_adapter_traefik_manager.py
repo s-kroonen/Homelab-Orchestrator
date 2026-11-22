@@ -164,7 +164,7 @@ async def test_list_routes_returns_none_on_401(monkeypatch: pytest.MonkeyPatch) 
 RAW_ROUTE_WITH_EXTRAS = """\
 http:
   routers:
-    orchestrator-media-example-com:
+    media-example-com:
       rule: Host(`media.example.com`)
       service: media-service
       entryPoints:
@@ -199,8 +199,8 @@ def _router_calls(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
                 json={
                     "apps": [
                         {
-                            "id": "orchestrator-media-example-com",
-                            "name": "orchestrator-media-example-com",
+                            "id": "media-example-com",
+                            "name": "media-example-com",
                             "protocol": "http",
                             "rule": "Host(`media.example.com`)",
                         }
@@ -209,7 +209,7 @@ def _router_calls(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
                     "services": {"http": [SHARED_BACKEND_SERVICE_REF], "tcp": [], "udp": []},
                 },
             )
-        if path == "/api/routes/orchestrator-media-example-com/raw":
+        if path == "/api/routes/media-example-com/raw":
             if request.method == "GET":
                 return httpx.Response(200, json={"raw": state["raw"], "configFile": "a.yml"})
             if request.method == "POST":
@@ -331,8 +331,8 @@ async def test_remove_maintenance_fallback_removes_injection_leaves_middleware_d
                 json={
                     "apps": [
                         {
-                            "id": "orchestrator-media-example-com",
-                            "name": "orchestrator-media-example-com",
+                            "id": "media-example-com",
+                            "name": "media-example-com",
                             "protocol": "http",
                             "rule": "Host(`media.example.com`)",
                         }
@@ -341,9 +341,9 @@ async def test_remove_maintenance_fallback_removes_injection_leaves_middleware_d
                     "services": {"http": [SHARED_BACKEND_SERVICE_REF], "tcp": [], "udp": []},
                 },
             )
-        if path == "/api/routes/orchestrator-media-example-com/raw" and request.method == "GET":
+        if path == "/api/routes/media-example-com/raw" and request.method == "GET":
             return httpx.Response(200, json={"raw": state["raw"]})
-        if path == "/api/routes/orchestrator-media-example-com/raw" and request.method == "POST":
+        if path == "/api/routes/media-example-com/raw" and request.method == "POST":
             state["raw"] = json.loads(request.read())["content"]
             return httpx.Response(200, json={"ok": True})
         return httpx.Response(404, json={"ok": False})
@@ -573,13 +573,13 @@ async def test_update_route_raises_on_invalid_upstream() -> None:
 
 async def test_delete_route_posts_to_delete_endpoint(monkeypatch: pytest.MonkeyPatch) -> None:
     sim = SimTM(multi=False)
-    sim.add("dynamic.yml", "orchestrator-app-example-com", "app.example.com")
+    sim.add("dynamic.yml", "app-example-com", "app.example.com")
     _patch_transport(monkeypatch, sim)
     adapter = TraefikManagerProxyAdapter(_settings())
 
-    await adapter.delete_route("orchestrator-app-example-com")
+    await adapter.delete_route("app-example-com")
 
-    assert [rid for k, rid, _ in sim.requests if k == "delete"] == ["orchestrator-app-example-com"]
+    assert [rid for k, rid, _ in sim.requests if k == "delete"] == ["app-example-com"]
     assert sim.enabled_ids() == set()
 
 
@@ -866,8 +866,10 @@ async def test_a_hand_written_route_never_gets_the_maintenance_rule(
     )
     assert not any(e.action == "middleware.injected" for e in events)
     assert not [p for p in saved if p.endswith("/raw")]
-    assert adapter.owns_route_ref("media.yml::orchestrator-media-example-com")
-    assert not adapter.owns_route_ref("media.yml::media")
+    assert adapter.owns_route_ref("media.yml::media-example-com", "media.example.com")
+    assert not adapter.owns_route_ref("media.yml::media-example-com")  # no hostname: by prefix
+    assert adapter.owns_route_ref("media.yml::orchestrator-media-example-com")  # legacy prefix
+    assert not adapter.owns_route_ref("media.yml::media", "media.example.com")
 
 
 # ---------------------------------------------------------------------------

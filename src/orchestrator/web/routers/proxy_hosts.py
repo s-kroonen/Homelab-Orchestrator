@@ -675,7 +675,7 @@ async def _prepare(
             not is_plain_http_entrypoint(n, addresses.get(n, "")) for n in entry_points
         )
         raw_options = standard_options(
-            None, redirect_available=catalog.redirect_available and serves_https
+            None, redirect_available=catalog.redirect_router_default and serves_https
         ).to_dict()
     else:
         raw_options = dict((existing.route_options if existing else None) or {})
@@ -1040,15 +1040,28 @@ async def update_proxy_host(
 
     new_extra = dict(body.extra)
     old_ref = ref_of(ph)
+    if (
+        prep.live_managed
+        and old_ref
+        and is_live_managed(ph)
+        and ph.hostname != prep.hostname
+        and adapters.proxy.owns_route_ref(old_ref, ph.hostname)
+        and not adapters.proxy.owns_route_ref(old_ref, prep.hostname)
+        and await _live_route_is_ours(adapters, ph, old_ref)
+    ):
+        # Our route is named after its hostname (Traefik Manager's way): a new hostname is a
+        # new route. The old one is removed on the next push, which creates the new one.
+        await _tombstone(session, adapters, ph)
+        old_ref = None
     if prep.live_managed:
-        # The stored reference stays (a rename does not rename the route); a
-        # host that has none yet gets the one the push will create.
+        # The stored reference stays (a rename of an older orchestrator- route does not
+        # rename the route); a host that has none yet gets the one the push will create.
         new_extra[TRAEFIK_MANAGER_ROUTE_REF_KEY] = old_ref or adapters.proxy.route_ref_for(
             prep.hostname
         )
     elif body.adopt and prep.adopt_ref:
         new_extra[TRAEFIK_MANAGER_ROUTE_REF_KEY] = prep.adopt_ref
-    elif old_ref and is_live_managed(ph) and adapters.proxy.owns_route_ref(old_ref):
+    elif old_ref and is_live_managed(ph) and adapters.proxy.owns_route_ref(old_ref, ph.hostname):
         # No longer live-managed (provider changed / upstream cleared): the
         # route this orchestrator made for it goes away on the next push.
         await _tombstone(session, adapters, ph)
@@ -1116,6 +1129,24 @@ async def delete_proxy_host(
     )
 
 
+async def _live_route_is_ours(adapters: AdapterBundle, ph: ProxyHost, ref: str) -> bool:
+    """Is the route ``ref`` really ours as Traefik Manager lists it (not one only named like
+    ours)? Not listed (never pushed) counts as ours. Unreadable refuses the edit: guessing
+    would either orphan our route or take over someone else's."""
+    routes = await adapters.proxy.list_routes()
+    if routes is None:
+        raise _fail(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            "Traefik Manager could not be read. A new hostname replaces this host's route (it "
+            "is named after its hostname), so it needs the live route list - try again.",
+            {"hostname": "Traefik Manager could not be read"},
+        )
+    live = find_route(routes, ref, ph.hostname)
+    return live is None or adapters.proxy.owns_route_ref(
+        ref, ph.hostname, service=live.service or ""
+    )
+
+
 async def _tombstone(session: Session, adapters: AdapterBundle, ph: ProxyHost) -> bool:
     """Remember that ``ph``'s Traefik Manager route has to be deleted on the
     next push. Only a route this orchestrator created is ever deleted (an
@@ -1123,11 +1154,16 @@ async def _tombstone(session: Session, adapters: AdapterBundle, ph: ProxyHost) -
     a host that was never pushed leaves nothing behind. The read is the only
     contact with Traefik Manager."""
     ref = ref_of(ph)
-    if not ref or not adapters.proxy.owns_route_ref(ref):
+    if not ref or not adapters.proxy.owns_route_ref(ref, ph.hostname):
         return False
     routes = await adapters.proxy.list_routes()
-    if routes is not None and find_route(routes, ref, ph.hostname) is None:
+    live = find_route(routes, ref, ph.hostname) if routes is not None else None
+    if routes is not None and live is None:
         return False
+    if live is not None and not adapters.proxy.owns_route_ref(
+        ref, ph.hostname, service=live.service or ""
+    ):
+        return False  # named like ours, but not the shape we write: someone else's
     svc = session.get(Service, ph.service_id) if ph.service_id else None
     add_pending_delete(
         session,

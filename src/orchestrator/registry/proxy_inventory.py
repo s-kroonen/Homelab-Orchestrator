@@ -220,7 +220,7 @@ def build(
     raw: dict[str, Any],
     *,
     hosts: Iterable[Any] = (),
-    owns: Callable[[str], bool] = lambda _n: False,
+    owns: Callable[..., bool] = lambda *_a, **_k: False,
     transports: dict[str, dict[str, Any]] | None = None,
     now: datetime | None = None,
 ) -> Inventory:
@@ -259,7 +259,11 @@ def build(
             "internal"
             if provider == "internal"
             else (
-                ("orchestrator" if owns(bare) else "hand-written")
+                (
+                    "orchestrator"
+                    if _mine(owns, bare, hostnames, r.get("service"))
+                    else "hand-written"
+                )
                 if provider == "file"
                 else provider
             )
@@ -306,7 +310,11 @@ def build(
                 status="off",
                 error="",
                 config_file=str(app.get("configFile") or ""),
-                made_by="orchestrator" if owns(bare) else "hand-written",
+                made_by=(
+                    "orchestrator"
+                    if _mine(owns, bare, hostnames, app.get("service_name"))
+                    else "hand-written"
+                ),
                 redirect=bare.endswith("-redirect"),
                 proxy_host=ph.hostname if ph else "",
                 proxy_host_id=getattr(ph, "id", None) if ph else None,
@@ -479,11 +487,20 @@ def _errors(value: Any) -> str:
 _INTERNAL = "@internal"
 
 
+def _mine(owns: Callable[..., bool], bare: str, hostnames: Iterable[str], service: Any) -> bool:
+    """Is the router ``bare`` the orchestrator's? Its name and service decide, for one of the
+    hostnames it serves (see ``ProxyAdapter.owns_route_ref``). A ``<name>-redirect``
+    companion is judged by its main route's name and the service it shares with it."""
+    main = bare.removesuffix("-redirect")
+    svc = _bare(str(service or ""))
+    return any(owns(main, h, service=svc) for h in [*hostnames] or [None])
+
+
 def _judge_shapes(
     routers: list[Router],
     backends: dict[str, Backend],
     managed: set[str],
-    owns: Callable[[str], bool],
+    owns: Callable[..., bool],
 ) -> None:
     """Set each file router's ``made_by`` by its shape: Traefik Manager's route form writes
     router ``<name>`` with service ``<name>-service``, or points it at a failover / weighted
@@ -492,7 +509,7 @@ def _judge_shapes(
         if r.provider != "file":
             continue
         bare = _bare(r.name)
-        mine = owns(bare)
+        mine = _mine(owns, bare, r.hostnames, r.service)
         if r.redirect:
             # Traefik Manager makes no redirect routers: it redirects on the entry point.
             r.made_by = "orchestrator" if mine else "hand-written"

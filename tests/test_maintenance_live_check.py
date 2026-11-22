@@ -41,7 +41,7 @@ def _adapter() -> TraefikManagerProxyAdapter:
     return TraefikManagerProxyAdapter(_settings())
 
 
-OURS = "orchestrator-cloud-example-com"  # a route the adapter created
+OURS = "cloud-example-com"  # a route the adapter created
 
 
 def _apps(*, middlewares: list[str] | None, eps: list[str] | None = None, name: str = OURS) -> Any:

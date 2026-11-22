@@ -193,7 +193,11 @@ def stale_ref_route(
     if routes is None or not is_live_managed(ph) or not ph.pushed_sig:
         return None  # never created: a route in the way is a conflict the push reports
     ref = ref_of(ph)
-    if not ref or not proxy.owns_route_ref(ref) or find_route(routes, ref, ph.hostname):
+    if (
+        not ref
+        or not proxy.owns_route_ref(ref, ph.hostname)
+        or find_route(routes, ref, ph.hostname)
+    ):
         return None
     return _hand_written_route(proxy, routes, ph.hostname)
 
@@ -210,9 +214,18 @@ def _hand_written_route(
     theirs = [
         r
         for r in _routes_for_host(routes, hostname)
-        if not proxy.owns_route_ref(r.ref) and not r.name.endswith("-redirect")
+        if not route_is_ours(proxy, r, hostname) and not r.name.endswith("-redirect")
     ]
     return theirs[0] if theirs else None
+
+
+def route_is_ours(proxy: ProxyAdapter, route: RouteInfo, hostname: str | None = None) -> bool:
+    """Did this orchestrator make ``route``? Judged by its name and service for ``hostname``
+    (or, without one, for any hostname the route serves). A ``<name>-redirect`` companion is
+    judged by its main route's name and the service it shares with it."""
+    main = route.ref.rsplit("::", 1)[-1].removesuffix("-redirect")
+    hosts = [hostname] if hostname else sorted(route.hostnames)
+    return any(proxy.owns_route_ref(main, h, service=route.service or "") for h in hosts or [None])
 
 
 def unlinked_route(
@@ -266,7 +279,7 @@ def fallback_missing(
     for route in routes:
         if route.middlewares is None or not route.enabled or route.name.endswith("-redirect"):
             continue
-        if not proxy.owns_route_ref(route.ref):
+        if not route_is_ours(proxy, route):
             continue  # a hand-written route is never edited, so it is never "missing" it
         eps = route.entry_points
         if eps and all(is_plain_http_entrypoint(e) for e in eps):
@@ -430,7 +443,10 @@ def evaluate(
     want_content, _ = _split_sig(want)
     sig = ph.pushed_sig or ""
     opts = RouteOptions.from_dict(ph.route_options)
-    owned = bool(ref) and proxy.owns_route_ref(ref or "")
+    named = find_route(routes, ref, ph.hostname) if ref and routes is not None else None
+    owned = bool(ref) and proxy.owns_route_ref(
+        ref or "", ph.hostname, service=(named.service or "") if named is not None else None
+    )
     disable_too = [] if host_enabled(ph) else ["disable"]
 
     if routes is None:
@@ -510,7 +526,12 @@ def evaluate(
             f"{', '.join(route.entry_points)}, we have {', '.join(ph.entry_points)}"
         )
         content_diff = True
-    if proxy.HAS_REDIRECT_COMPANION and opts.http_redirect and companion is None:
+    if (
+        proxy.HAS_REDIRECT_COMPANION
+        and opts.http_redirect
+        and companion is None
+        and not proxy.entrypoint_redirects_http()
+    ):
         diffs.append("the HTTP -> HTTPS redirect router is missing in Traefik Manager")
         content_diff = True
     enabled_diff = _enabled_change(ph, tm)
@@ -589,7 +610,7 @@ async def move_to_configured_file(
     ref = ref_of(ph)
     if not is_live_managed(ph) or not ref:
         return fail("only a route this orchestrator created can be moved")
-    if not adapters.proxy.owns_route_ref(ref):
+    if not adapters.proxy.owns_route_ref(ref, host):
         return fail(
             "this route was adopted from a hand-written one - it is never moved automatically; "
             "move it in Traefik Manager"
@@ -741,7 +762,9 @@ def config_file_view(
     resolved, problem = resolve_file_for(settings, ph, service_slug, known)
     current = route.config_file if route is not None else ""
     ref = ref_of(ph)
-    owned = bool(ref) and proxy.owns_route_ref(ref or "")
+    owned = bool(ref) and proxy.owns_route_ref(
+        ref or "", ph.hostname, service=(route.service or "") if route is not None else None
+    )
     misplaced = bool(
         route is not None and resolved and current and not same_file(current, resolved)
     )
@@ -1174,6 +1197,25 @@ class ProxyPusher:
             _store_deletes(session, items)
             session.commit()
 
+        live_routes = await adapters.proxy.list_routes()
+        live = find_route(live_routes, ref, hostname) if live_routes is not None else None
+        if live is not None and not adapters.proxy.owns_route_ref(
+            ref, hostname, service=live.service or ""
+        ):
+            # Named like ours but not in the shape we write (a hand-written failover, say):
+            # never deleted, whatever the pending deletion says.
+            out.append(
+                PushResult(
+                    TARGET,
+                    hostname,
+                    "delete",
+                    True,
+                    f"left {ref} alone: it points at {live.service}, so this orchestrator did "
+                    "not make it",
+                )
+            )
+            finish()
+            return
         try:
             await adapters.proxy.delete_route(
                 ref, with_redirect=bool(tombstone.get("with_redirect")), hostname=hostname

@@ -51,7 +51,7 @@ from tests.test_proxy_entrypoints_api import (  # noqa: F401 - dry_client is a f
 )
 from tests.test_proxy_host_enabled import ToggleTM
 
-REF = "orchestrator-app-example-com"
+REF = "app-example-com"
 
 
 def _create(client: TestClient, service: Service, **over: Any) -> dict[str, Any]:
@@ -339,7 +339,7 @@ def test_a_rejected_create_is_rolled_back_and_does_not_stop_the_other_hosts(
     assert actions(result) == [("good.example.com", "create")]
     (fail,) = failures(result)
     assert fail["hostname"] == "bad.example.com" and "Refusing to overwrite" in fail["message"]
-    assert "squatter" in fake.routes and "orchestrator-bad-example-com" not in fake.routes
+    assert "squatter" in fake.routes and "bad-example-com" not in fake.routes
     assert sync_state(client, good["id"]) == "in_sync"
     assert _row(bad["id"]).pushed_sig == ""  # only recorded on success
 
@@ -381,7 +381,7 @@ def test_hostnames_filter_and_dry_run_plan(
 
     result = push(client, hostnames=["B.example.com"])
     assert actions(result) == [("b.example.com", "create")]
-    assert [s["serviceName"] for s in fake.saves] == ["orchestrator-b-example-com"]
+    assert [s["serviceName"] for s in fake.saves] == ["b-example-com"]
 
 
 def test_push_endpoint_rejects_unknown_targets(dry_client: TestClient) -> None:  # noqa: F811
@@ -565,7 +565,7 @@ def test_other_services_can_register_a_pusher(dry_client: TestClient) -> None:  
 # Traefik Manager with several config files: `file::name` ids
 # ---------------------------------------------------------------------------
 
-MULTI_REF = "orchestrator-app-example-com"
+MULTI_REF = "app-example-com"
 
 
 def test_routes_keep_the_id_and_the_config_file() -> None:

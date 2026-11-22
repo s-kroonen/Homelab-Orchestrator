@@ -125,6 +125,9 @@ class EntryPointInfo:
 
     name: str
     address: str = ""
+    #: The entry point every request on this one is redirected to (Traefik's
+    #: ``http.redirections.entryPoint.to``, e.g. ``websecure``); ``""`` = none.
+    redirect_to: str = ""
 
 
 #: Human labels for the sources a certificate resolver can be seen in (the key
@@ -172,7 +175,7 @@ class RouteOptions:
     * ``skip_upstream_tls_verify``: only meaningful for an ``https://``
       upstream with a self-signed certificate (PBS, Proxmox).
     * ``tls_main`` / ``tls_sans``: request one certificate covering these names
-      (e.g. ``kroon-en.nl`` + ``*.kroon-en.nl``) instead of one per host.
+      (e.g. ``example.lan`` + ``*.example.lan``) instead of one per host.
       Needs a cert resolver able to do it (DNS challenge for a wildcard).
     * ``http_redirect``: also answer plain HTTP and redirect it to HTTPS.
     * ``hsts``: attach the configured HSTS headers middleware
@@ -353,11 +356,20 @@ class ProxyAdapter(ABC):
         later push does not dirty the registry. Default: the hostname."""
         return hostname
 
-    def owns_route_ref(self, route_ref: str) -> bool:
-        """Does ``route_ref`` look like a route THIS orchestrator created (as
-        opposed to one adopted from the backend, which is never overwritten or
-        deleted)? Default: yes."""
+    def owns_route_ref(
+        self, route_ref: str, hostname: str | None = None, *, service: str | None = None
+    ) -> bool:
+        """Is ``route_ref`` a route THIS orchestrator manages for ``hostname`` (as opposed
+        to one adopted from the backend, which is never overwritten or deleted)?
+        ``service`` is what the live route points at, when known (``None``/``""`` = not
+        known). Default: yes."""
         return True
+
+    def entrypoint_redirects_http(self) -> bool:
+        """True when the backend was last seen sending every plain-HTTP request to HTTPS
+        itself (Traefik: a redirect on the ``web`` entry point), so a host needs no redirect
+        route of its own. Read from what the adapter last saw; never does I/O."""
+        return False
 
     @abstractmethod
     async def list_routes(self) -> list[RouteInfo] | None:
@@ -625,7 +637,7 @@ class ProxyAdapter(ABC):
 
     async def list_domains(self) -> list[str] | None:
         """Base domains the operator serves (Traefik Manager's configured
-        domains, e.g. ``kroon-en.nl``) - the form offers ``domain`` +
+        domains, e.g. ``example.lan``) - the form offers ``domain`` +
         ``*.domain`` as a ready-made wildcard certificate. ``None`` = unknown."""
         return None
 

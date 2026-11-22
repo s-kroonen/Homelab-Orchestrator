@@ -32,7 +32,7 @@ from orchestrator.ipdiscovery.discovery import ip_view
 from orchestrator.logging_setup import get_logger, new_correlation_id
 from orchestrator.pipelines.steps import StepRecorder
 from orchestrator.registry import route_format as rf
-from orchestrator.registry.proxy_push import owned_hosts, ref_of
+from orchestrator.registry.proxy_push import owned_hosts, ref_of, route_is_ours
 from orchestrator.web.auth import CurrentAdmin, require_admin
 from orchestrator.web.deps import AdaptersDep, SessionDep, SettingsDep
 
@@ -394,7 +394,7 @@ async def traefik(
                 "enabled": r.enabled,
                 "entry_points": list(r.entry_points),
                 "cert_resolver": r.cert_resolver,
-                "owned": proxy.owns_route_ref(r.name),
+                "owned": route_is_ours(proxy, r, ph.hostname if ph else None),
                 "redirect_companion": r.name.endswith("-redirect"),
                 "host_id": ph.id if ph else None,
                 "service": (

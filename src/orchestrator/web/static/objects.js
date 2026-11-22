@@ -222,7 +222,8 @@
     if (serviceSlug) q.set("service", serviceSlug);
     try { return await api.get("/api/proxy/entrypoints?" + q, { suppressToast: true }); } catch (_e) { return FALLBACK_CATALOG; }
   }
-  const routeName = (h) => "orchestrator-" + String(h || "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+  // The name Traefik Manager's own form would give it (see route_name_for_hostname).
+  const routeName = (h) => String(h || "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "route";
 
   // services: [{id, slug, name, ip, ip_source}]; host: a row of /api/proxy-hosts (edit) or none
   async function proxyHostDrawer(o) {
@@ -241,7 +242,7 @@
       cert_resolver: editing ? h.cert_resolver : (cat.default_cert_resolver || ""),
       cert_mode: !ro.tls_main ? "host" : wild ? "wild:" + ro.tls_main : "custom",
       tls_main: ro.tls_main || "", tls_sans: (ro.tls_sans || []).join("\n"),
-      http_redirect: editing ? !!ro.http_redirect : cat.redirect_available !== false,
+      http_redirect: editing ? !!ro.http_redirect : cat.redirect_available !== false && !cat.entrypoint_redirect,
       pass_host_header: editing ? ro.pass_host_header !== false : true,
       hsts: editing ? !!ro.hsts : false,
       skip_upstream_tls_verify: editing ? !!ro.skip_upstream_tls_verify : false,
@@ -329,7 +330,7 @@
         { key: "cert_mode", label: "Certificate", type: "select", options: [{ value: "host", label: "One for this hostname" }].concat(cat.domains.map((x) => ({ value: "wild:" + x, label: "Wildcard: " + x + " + *." + x }))).concat([{ value: "custom", label: "Custom names…" }]) },
         { key: "tls_main", label: "Main name", mono: true, placeholder: "example.lan", show: (v) => v.cert_mode === "custom" },
         { key: "tls_sans", label: "Extra names", type: "textarea", rows: 2, placeholder: "*.example.lan", help: "One per line.", show: (v) => v.cert_mode === "custom" },
-        { key: "http_redirect", label: "Redirect http:// to https://", type: "checkbox", help: cat.redirect_available === false ? "The redirect middleware does not exist in Traefik yet." : null },
+        { key: "http_redirect", label: "Redirect http:// to https://", type: "checkbox", help: cat.entrypoint_redirect ? "Not needed: the plain-HTTP entry point already sends every http:// request to https://. Leave it off; no redirect router is made." : cat.redirect_available === false ? "The redirect middleware does not exist in Traefik yet." : null },
         { key: "pass_host_header", label: "Send the visitor's hostname (Host header)", type: "checkbox", help: "Leave on: with it off, many apps redirect the browser to their raw LAN address." },
         { key: "hsts", label: "HSTS (browsers only use https afterwards)", type: "checkbox", help: cat.hsts_available === false ? "The HSTS middleware does not exist in Traefik yet." : "Browsers remember it for a long time: turn it on once https works for sure." },
         { key: "skip_upstream_tls_verify", label: "Don't verify the app's own certificate", type: "checkbox", help: "For an https:// app with a self-signed certificate (Proxmox, PBS).", show: (v) => /^https:/i.test(v.upstream || "") },
