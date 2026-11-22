@@ -89,7 +89,7 @@ from orchestrator.registry.config_files import (
     same_file,
     unknown_file_problem,
 )
-from orchestrator.registry.traefik_status import extract_hostnames
+from orchestrator.registry.traefik_status import extract_host_patterns, extract_hostnames
 
 log = get_logger(__name__)
 
@@ -154,9 +154,10 @@ def maintenance_middleware_name(slug: str) -> str:
     return f"maintenance-{slug}"
 
 
-#: The name prefix routes made by older versions of the orchestrator carry
-#: (``orchestrator-app-example-lan``). Such a route is still the orchestrator's;
-#: new routes have no prefix (see :func:`route_name_for_hostname`).
+#: The name prefix older versions gave the routes they created
+#: (``orchestrator-app-example-lan``). New routes have none (see
+#: :func:`route_name_for_hostname`); only :meth:`TraefikManagerProxyAdapter.recreatable_ref`
+#: still knows it, for a route that vanished.
 LEGACY_ROUTE_PREFIX = "orchestrator-"
 
 
@@ -167,18 +168,90 @@ def route_name_for_hostname(hostname: str) -> str:
     route form, which then names the service ``app-example-lan-service``.
 
     Deterministic and derived from the hostname alone - never from the
-    ``ProxyHost.id`` - so re-deriving it needs no extra lookup. A route is the
-    orchestrator's when its name is this one for the host's hostname and its
-    router points at ``<name>-service`` (see
-    :meth:`TraefikManagerProxyAdapter.owns_route_ref`), or when it carries the
-    :data:`LEGACY_ROUTE_PREFIX` older versions used. This IS the opaque
-    reference :meth:`TraefikManagerProxyAdapter.create_route` returns and that
+    ``ProxyHost.id`` - so re-deriving it needs no extra lookup. The name says
+    nothing about who may change the route: that is decided by its contents
+    (:func:`route_edit_problem`). This IS the opaque reference :meth:`TraefikManagerProxyAdapter.create_route` returns and that
     gets persisted to ``ProxyHost.extra`` (see ``docs/proxy_hosts.md``) -
     callers use the stored value rather than recomputing this, since a hostname
     rename does NOT rename the underlying route.
     """
     slug = re.sub(r"[^a-z0-9]+", "-", hostname.strip().lower()).strip("-")
     return slug or "route"
+
+
+_PLAIN_HOST_RULE_RE = re.compile(r"^\s*Host\(\s*`([^`]+)`\s*\)\s*$")
+
+
+def _bare_name(name: str | None) -> str:
+    return str(name or "").split("@", 1)[0]
+
+
+def route_edit_problem(route: RouteInfo, routes: Sequence[RouteInfo] = ()) -> str | None:
+    """Why a host's record cannot rewrite ``route`` through Traefik Manager's route form
+    without losing something - ``None`` when it can. Only its contents count: who made it
+    and how it is named do not, apart from what the form itself does (it writes the router
+    and the service ``<router>-service``, nothing else):
+
+    * it is in Traefik Manager's files (another provider's router is read only);
+    * its rule is one plain ``Host(...)`` (a path or pattern rule would be lost);
+    * it points at a service the form wrote: its own ``<router>-service``, or the one
+      Traefik Manager shares from another route of the same file with the same backend;
+    * that service has one server (several are edited as backends, not from the record).
+
+    A ``<name>-redirect`` router is editable with the route it redirects for: it shares
+    that route's service."""
+    if route.provider != "file":
+        return (
+            f"it comes from Traefik's {route.provider} provider, not from Traefik Manager's files"
+        )
+    name = _bare_name(route.name)
+    if name.endswith("-redirect"):
+        main = next(
+            (
+                r
+                for r in routes
+                if r.provider == "file"
+                and _bare_name(r.name) == name.removesuffix("-redirect")
+                and r.config_file == route.config_file
+            ),
+            None,
+        )
+        if main is None:
+            return "it is a redirect router without the route it redirects for"
+        why = route_edit_problem(main, routes)
+        if why:
+            return f"the route it redirects for cannot be changed here: {why}"
+        if _bare_name(route.service) != _bare_name(main.service):
+            return "it does not share the service of the route it redirects for"
+        return None
+    if not _PLAIN_HOST_RULE_RE.match(route.rule or ""):
+        return (
+            f"its rule is not one plain host: {route.rule}"
+            if route.rule
+            else "Traefik Manager does not report its rule"
+        )
+    svc = _bare_name(route.service)
+    if not svc:
+        return "Traefik Manager does not say which service it points at"
+    if svc != f"{name}-service":
+        sharer = svc.removesuffix("-service")
+        shared = svc.endswith("-service") and any(
+            r.provider == "file"
+            and _bare_name(r.name) == sharer
+            and _bare_name(r.service) == svc
+            and r.config_file == route.config_file
+            for r in routes
+        )
+        if not shared:
+            return (
+                f"it points at the service {svc}, which Traefik Manager's route form did not "
+                f"write for it (the form would replace it with {name}-service)"
+            )
+    if route.upstream is None:
+        return "its backend could not be read"
+    if "," in route.upstream:
+        return "its service has several servers: change them under its backends"
+    return None
 
 
 def is_redirect_router(
@@ -372,9 +445,9 @@ def _routes_to_route_info(apps: Any, dangling: set[str] | None = None) -> list[R
         rule = app.get("rule")
         if not isinstance(name, str) or not isinstance(rule, str):
             continue
+        # A rule without Host() names (a HostRegexp, a path only) is still a route: it is
+        # listed and read, it is just matched to a hostname by pattern or not at all.
         hostnames = extract_hostnames(rule)
-        if not hostnames:
-            continue
         servers = app.get("servers")
         target = app.get("target")
         upstream = (
@@ -402,6 +475,7 @@ def _routes_to_route_info(apps: Any, dangling: set[str] | None = None) -> list[R
                 rule=rule,
                 priority=app["priority"] if isinstance(app.get("priority"), int) else None,
                 hostnames=hostnames,
+                host_patterns=tuple(sorted(extract_host_patterns(rule))),
                 upstream=upstream or None,
                 entry_points=(
                     tuple(e for e in eps if isinstance(e, str)) if isinstance(eps, list) else ()
@@ -709,7 +783,66 @@ class TraefikManagerProxyAdapter(ProxyAdapter):
             return None
         self.read_error = None
         apps = response.get("apps") if isinstance(response, dict) else None
-        return _routes_to_route_info(apps, _dangling_middlewares(response))
+        routes = _routes_to_route_info(apps, _dangling_middlewares(response))
+        return routes + await self._other_provider_routes()
+
+    async def _other_provider_routes(self) -> list[RouteInfo]:
+        """Routers Traefik runs from other providers (Docker labels, ...), read from its
+        runtime view: Traefik Manager does not list them, but a host can be served by one.
+        They are read and linked, never changed (not even switched off) from here. Nothing
+        when the runtime view cannot be read: the file routes are still complete."""
+        try:
+            async with self._client() as client:
+                response = await self._get_json(client, "/api/traefik/routers")
+        except TraefikManagerError as exc:
+            log.info("traefik_manager.runtime_routers_unread", error=str(exc))
+            return []
+        http = response.get("http") if isinstance(response, dict) else None
+        out: list[RouteInfo] = []
+        for router in http if isinstance(http, list) else []:
+            name = router.get("name") if isinstance(router, dict) else None
+            rule = router.get("rule") if isinstance(router, dict) else None
+            if not isinstance(name, str) or "@" not in name or not isinstance(rule, str):
+                continue
+            provider = str(router.get("provider") or name.rsplit("@", 1)[1])
+            if provider in ("file", "internal"):
+                continue  # file: Traefik Manager lists it; internal: Traefik's own
+            service = router.get("service")
+            eps = router.get("entryPoints")
+            mws = router.get("middlewares")
+            tls = router.get("tls")
+            resolver = tls.get("certResolver") if isinstance(tls, dict) else None
+            out.append(
+                RouteInfo(
+                    name=name,
+                    route_id=name,
+                    provider=provider,
+                    rule=rule,
+                    hostnames=extract_hostnames(rule),
+                    host_patterns=tuple(sorted(extract_host_patterns(rule))),
+                    upstream=None,
+                    service=(
+                        f"{service}@{provider}"
+                        if isinstance(service, str) and service and "@" not in service
+                        else (service if isinstance(service, str) and service else None)
+                    ),
+                    entry_points=(
+                        tuple(e for e in eps if isinstance(e, str)) if isinstance(eps, list) else ()
+                    ),
+                    middlewares=(
+                        tuple(m for m in mws if isinstance(m, str))
+                        if isinstance(mws, list)
+                        else None
+                    ),
+                    priority=(
+                        router.get("priority") if isinstance(router.get("priority"), int) else None
+                    ),
+                    status=str(router.get("status") or "") or None,
+                    cert_resolver=resolver if isinstance(resolver, str) else None,
+                    enabled=router.get("status") != "disabled",
+                )
+            )
+        return out
 
     async def _explain_read_failure(self, exc: Exception) -> str:
         """The read error, plus the files Traefik Manager cannot open when that is the cause
@@ -1102,40 +1235,22 @@ class TraefikManagerProxyAdapter(ProxyAdapter):
         return True
 
     async def _routes_matching_hostname(self, hostname: str) -> list[str]:
-        """The routes of ours (see :meth:`owns_route_ref`) that serve ``hostname``, minus
-        the plain-HTTP redirect ones (their requests never reach a backend, so a maintenance
-        page there never shows). A hand-written route is never edited: Traefik Manager's
-        per-route save rewrites its file with the service moved and comments left on the
-        wrong block, so the maintenance page is only put on routes the orchestrator
-        created."""
-        routes = await self._get_routes()
-        apps = routes.get("apps") if isinstance(routes, dict) else None
-        matched: list[str] = []
-        if not isinstance(apps, list):
-            return matched
-        target = hostname.strip().lower()
-        for app in apps:
-            if not isinstance(app, dict) or app.get("protocol", "http") != "http":
-                continue
-            rule = app.get("rule")
-            route_id = app.get("id") or app.get("name")
-            mws = app.get("middlewares")
-            service = app.get("service_name")
-            if (
-                isinstance(rule, str)
-                and isinstance(route_id, str)
-                and target in extract_hostnames(rule)
-                and not is_redirect_router(
-                    route_id,
-                    [m for m in mws if isinstance(m, str)] if isinstance(mws, list) else (),
-                    self._settings.traefik_redirect_middleware or "redirect-to-https",
-                )
-                and self.owns_route_ref(
-                    route_id, hostname, service=service if isinstance(service, str) else ""
-                )
-            ):
-                matched.append(route_id)
-        return matched
+        """The routes serving ``hostname`` that can take the maintenance page: editable ones
+        (:func:`route_edit_problem`), minus the plain-HTTP redirect ones (their requests
+        never reach a backend, so a page there never shows). Any other route is never
+        edited: Traefik Manager's per-route save rewrites its file with the service moved and
+        comments left on the wrong block."""
+        response = await self._get_routes()
+        apps = response.get("apps") if isinstance(response, dict) else None
+        routes = _routes_to_route_info(apps)
+        redirect_mw = self._settings.traefik_redirect_middleware or "redirect-to-https"
+        return [
+            r.ref
+            for r in routes
+            if r.serves(hostname)
+            and not is_redirect_router(r.ref, r.middlewares, redirect_mw)
+            and route_edit_problem(r, routes) is None
+        ]
 
     async def _inject_into_hostname_routes(
         self, hostname: str, middleware_name: str
@@ -1451,24 +1566,13 @@ class TraefikManagerProxyAdapter(ProxyAdapter):
     def route_ref_for(self, hostname: str) -> str:
         return route_name_for_hostname(hostname)
 
-    def owns_route_ref(
-        self, route_ref: str, hostname: str | None = None, *, service: str | None = None
-    ) -> bool:
-        """A route is ours when it carries the legacy ``orchestrator-`` prefix, or when it
-        is named exactly as :func:`route_name_for_hostname` names ``hostname`` AND - when
-        the live route is known - its router points at a ``<name>-service``: the shape
-        Traefik Manager's route form writes (its own, or the one of another route with the
-        same backend, which Traefik Manager shares). ``None`` or ``""`` = no service to
-        look at (a route about to be created, or one listed without it): the name decides.
-        A hand-written route that merely has the same name (a failover pointing at
-        ``<x>-failover``, say) is never overwritten or deleted. With several config files
-        the id is ``<file>::<name>``: the name decides."""
+    def route_editable(self, route: RouteInfo, routes: Sequence[RouteInfo] = ()) -> str | None:
+        return route_edit_problem(route, routes)
+
+    def recreatable_ref(self, route_ref: str, hostname: str) -> bool:
+        # The name create_route gives this hostname, or the prefixed one older versions gave.
         name = route_ref.rsplit("::", 1)[-1]
-        if name.startswith(LEGACY_ROUTE_PREFIX):
-            return True
-        if not hostname or not name or name != route_name_for_hostname(hostname):
-            return False
-        return not service or service.split("@", 1)[0].endswith("-service")
+        return name.startswith(LEGACY_ROUTE_PREFIX) or name == route_name_for_hostname(hostname)
 
     def entrypoint_redirects_http(self) -> bool:
         return self._ep_redirect is True
@@ -1499,18 +1603,22 @@ class TraefikManagerProxyAdapter(ProxyAdapter):
             return []
         return [str(m) for m in block[1].get("middlewares") or []]
 
-    def _keep_middlewares(self, live: Sequence[str], opts: RouteOptions) -> str:
+    def _keep_middlewares(
+        self, live: Sequence[str], opts: RouteOptions, drop: Sequence[str] = ()
+    ) -> str:
         """The ``middlewares`` form value for an edit of one of our routes: everything the
         route carries now (added in Traefik Manager's UI, say) in its order, with the HSTS
         middleware following the host's option. The maintenance page is left out: the push
         puts the one for the host's linked service back right after (and none when it has
         no service any more), so an unlinked service's page never lingers."""
         hsts = (self._settings.traefik_hsts_middleware or "hsts-headers").strip()
+        gone = {d.split("@", 1)[0] for d in drop}
         kept = [
             m
             for m in live
             if m
             and not m.split("@", 1)[0].startswith("maintenance-")
+            and m.split("@", 1)[0] not in gone
             and (opts.hsts or m.split("@", 1)[0] != hsts)
         ]
         bare = {m.split("@", 1)[0] for m in kept}
@@ -1739,6 +1847,7 @@ class TraefikManagerProxyAdapter(ProxyAdapter):
         cert_resolver: str = "",
         options: RouteOptions | None = None,
         config_file: str,
+        drop_middlewares: Sequence[str] = (),
     ) -> str:
         """Move a route (and its redirect companion) into ``config_file``.
 
@@ -1799,7 +1908,9 @@ class TraefikManagerProxyAdapter(ProxyAdapter):
                 http_rule=f"Host(`{hostname}`)",
                 entry_points=eps,
                 cert_resolver=resolver,
-                middlewares=self._keep_middlewares(await self._live_middlewares(main), opts),
+                middlewares=self._keep_middlewares(
+                    await self._live_middlewares(main), opts, drop_middlewares
+                ),
                 is_edit=True,
                 original_id=f"{old_file}::{main.name}",
                 config_file=target,
@@ -1833,6 +1944,7 @@ class TraefikManagerProxyAdapter(ProxyAdapter):
         cert_resolver: str = "",
         options: RouteOptions | None = None,
         previous_options: RouteOptions | None = None,
+        drop_middlewares: Sequence[str] = (),
     ) -> None:
         opts = options or RouteOptions()
         scheme, host, port = self._target_or_raise(upstream)
@@ -1855,7 +1967,9 @@ class TraefikManagerProxyAdapter(ProxyAdapter):
                 http_rule=f"Host(`{hostname}`)",
                 entry_points=eps,
                 cert_resolver=resolver,
-                middlewares=self._keep_middlewares(await self._live_middlewares(main), opts),
+                middlewares=self._keep_middlewares(
+                    await self._live_middlewares(main), opts, drop_middlewares
+                ),
                 is_edit=True,
                 original_id=main.ref,
                 config_file=main.config_file,

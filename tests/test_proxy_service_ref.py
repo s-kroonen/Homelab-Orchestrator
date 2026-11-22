@@ -52,8 +52,13 @@ async def test_the_redirect_follows_a_shared_service(monkeypatch: pytest.MonkeyP
     redirect = [f for f in sim.calls("save") if f["serviceName"].endswith("-redirect")][-1]
     assert redirect["serviceRef"] == "home-alt-service"
     assert sim.copies_of(f"{ref}-redirect") == ["home.yml"]
-    # Still ours: named after its hostname, pointing at a Traefik Manager form service.
-    assert adapter.owns_route_ref(ref, "home.example.lan", service="home-alt-service@file")
+    # Still editable: it points at a service Traefik Manager's form wrote (shared with the
+    # route of the same backend), so a record can rewrite it.
+    routes = await adapter.list_routes()
+    assert routes is not None
+    mine = next(r for r in routes if r.name == ref)
+    assert mine.service == "home-alt-service"
+    assert adapter.route_editable(mine, routes) is None
 
 
 async def test_an_own_service_is_still_referred_to_by_its_usual_name(

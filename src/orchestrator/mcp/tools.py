@@ -379,6 +379,7 @@ async def _proxy_hosts(ctx: ToolContext, a: dict[str, Any]) -> Any:
         "service_slug",
         "sync_state",
         "sync_changes",
+        "read_only",
         "live_status",
         "served",
     )

@@ -102,6 +102,8 @@ class FakeTM:
                     "rule": r["rule"],
                     "servers": [r["upstream"]],
                     "entryPoints": r["eps"],
+                    # The real app reports each router's service (the form's own by default).
+                    "service_name": r.get("service") or f"{n}-service",
                 }
                 for n, r in self.routes.items()
                 if r["provider"] == "file"  # TM only manages the file provider

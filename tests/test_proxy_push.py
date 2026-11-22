@@ -215,6 +215,7 @@ def test_adopted_routes_are_never_deleted_when_the_host_is_deleted(
 ) -> None:
     fake = FakeTM()
     fake.seed("hand-made", "app.example.com", ["websecure"])
+    fake.routes["hand-made"]["service"] = "hand-made"  # not the form's: read only by contents
     client = _client(monkeypatch, fake)
     r = client.post(
         "/api/proxy-hosts", json=_body(service, upstream="http://1.2.3.4:80", adopt=True)

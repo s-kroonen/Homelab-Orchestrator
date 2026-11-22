@@ -53,6 +53,10 @@ log = get_logger(__name__)
 #   Host(`a.example.com`) || Host(`b.example.com`)
 _HOST_CLAUSE_RE = re.compile(r"Host(?:SNI)?\(\s*((?:`[^`]*`\s*,?\s*)+)\)")
 _QUOTED_RE = re.compile(r"`([^`]*)`")
+# HostRegexp(`...`) / HostSNIRegexp(`...`): Traefik v3 takes a Go regexp
+# (``^.+\.example\.lan$``), v2 a template with ``{name:regexp}`` / ``{name}`` parts.
+_HOST_REGEXP_CLAUSE_RE = re.compile(r"Host(?:SNI)?Regexp\(\s*((?:`[^`]*`\s*,?\s*)+)\)")
+_V2_PART_RE = re.compile(r"\{[A-Za-z_]\w*(?::((?:[^{}]|\{[^{}]*\})+))?\}")
 
 
 class DriftStatus(StrEnum):
@@ -61,6 +65,49 @@ class DriftStatus(StrEnum):
     MATCHED = "matched"  # a live router's Host() rule covers this hostname
     MISSING = "missing"  # Traefik reachable, but no router covers it
     UNKNOWN = "unknown"  # not configured, or the poll failed — not the same as MISSING
+
+
+def _v2_template_to_regex(template: str) -> str:
+    """``{sub:[a-z]+}.example.lan`` -> ``(?:[a-z]+)\.example\.lan`` (Traefik v2 syntax)."""
+    out: list[str] = []
+    pos = 0
+    for m in _V2_PART_RE.finditer(template):
+        out.append(re.escape(template[pos : m.start()]))
+        out.append(f"(?:{m.group(1)})" if m.group(1) else "[^.]+")
+        pos = m.end()
+    out.append(re.escape(template[pos:]))
+    return "".join(out)
+
+
+def extract_host_patterns(rule: str) -> set[str]:
+    """The HostRegexp patterns of a router ``rule``, as Python regular expressions matched
+    against a whole lower-case hostname. A pattern that is not a valid expression is left
+    out (it cannot be matched here)."""
+    found: set[str] = set()
+    for clause in _HOST_REGEXP_CLAUSE_RE.findall(rule):
+        for raw in _QUOTED_RE.findall(clause):
+            text = raw.strip()
+            pattern = _v2_template_to_regex(text) if _V2_PART_RE.search(text) else text
+            try:
+                re.compile(pattern)
+            except re.error:
+                continue
+            found.add(pattern)
+    return found
+
+
+def rule_serves(hostnames: set[str] | frozenset[str], patterns: Any, hostname: str) -> bool:
+    """Does a router with these Host() names and HostRegexp patterns answer ``hostname``?"""
+    host = hostname.strip().lower().rstrip(".")
+    if host in {h.lower() for h in hostnames}:
+        return True
+    for pattern in patterns or ():
+        try:
+            if re.fullmatch(pattern, host, flags=re.IGNORECASE):
+                return True
+        except re.error:
+            continue
+    return False
 
 
 def extract_hostnames(rule: str) -> set[str]:

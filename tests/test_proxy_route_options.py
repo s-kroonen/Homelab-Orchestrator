@@ -64,6 +64,7 @@ class Recorder:
                     "protocol": "http",
                     "rule": f"Host(`{n}.example.com`)",
                     "servers": ["http://10.0.0.5:80"],
+                    "service_name": f"{n}-service",
                 }
                 for n in self.routes
             ]

@@ -588,7 +588,10 @@ def test_a_proxy_lists_routers_middlewares_backends_and_its_review(client: TestC
     ids = {f["id"] for g in rep["groups"] for f in g["findings"]}
     assert "handwritten:panel.example.lan" in ids and "error:parse:vpn.yml" in ids
     assert all("decision" not in f for g in rep["groups"] for f in g["findings"])
-    assert rep["support"][0] == {"what": "Routers with Host() rules", "status": "edits"}
+    assert rep["support"][0] == {
+        "what": "Routers with one Host() rule, in Traefik Manager's form",
+        "status": "edits",
+    }
     # read only: there is nothing to record
     put = client.put(
         "/api/pull/traefik/findings/handwritten:panel.example.lan?source=gateway",

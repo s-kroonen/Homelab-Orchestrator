@@ -70,6 +70,7 @@ from orchestrator.registry.proxy_push import (
     owned_hosts,
     pending_deletes,
     ref_of,
+    route_problem,
     slug_of,
     stale_ref_route,
     take_pending_delete,
@@ -270,8 +271,7 @@ def tm_routes_for(routes: Sequence[RouteInfo] | None, hostname: str) -> list[Rou
     """Every Traefik Manager route that serves ``hostname`` - the main router
     and, for example, a hand-written ``<name>-redirect`` on the plain-HTTP entry
     point."""
-    host = hostname.strip().lower()
-    return [r for r in routes or [] if host in {h.lower() for h in r.hostnames}]
+    return [r for r in routes or [] if r.serves(hostname)]
 
 
 def tm_state(routes: Sequence[RouteInfo] | None, hostname: str) -> str | None:
@@ -342,6 +342,13 @@ def _serialize(
     files: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     svc = services.get(ph.service_id)
+    if (
+        live_hostnames is not None
+        and ph.hostname.lower() not in live_hostnames
+        and live is not None
+        and any(r.serves(ph.hostname) for r in live.routes or [])
+    ):
+        live_hostnames = live_hostnames | {ph.hostname.lower()}  # answered by a HostRegexp
     traefik = _traefik_block(ph, live)
     if traefik is not None and sync is not None and "disable" in sync.actions:
         # Switched off here, but the push that parks the route has not run yet.
@@ -355,6 +362,9 @@ def _serialize(
         "sync_state": sync.state if sync is not None else None,
         "sync_changes": list(sync.changes) if sync is not None else [],
         "sync_pending": bool(sync is not None and sync.pending),
+        # Why its route is only read and switched here, not rewritten from this record
+        # (its contents decide: a failover, a path rule, another provider...); "" = editable.
+        "read_only": sync.read_only if sync is not None else "",
         # Its own route is gone and a hand-written one serves it: Adopt points it there.
         "adoptable": bool(
             sync is not None
@@ -441,6 +451,7 @@ def _files_view(
         slug_of(ph, services),
         sync.route,
         live.config_files,
+        sync.read_only,
     )
 
 
@@ -1040,30 +1051,17 @@ async def update_proxy_host(
 
     new_extra = dict(body.extra)
     old_ref = ref_of(ph)
-    if (
-        prep.live_managed
-        and old_ref
-        and is_live_managed(ph)
-        and ph.hostname != prep.hostname
-        and adapters.proxy.owns_route_ref(old_ref, ph.hostname)
-        and not adapters.proxy.owns_route_ref(old_ref, prep.hostname)
-        and await _live_route_is_ours(adapters, ph, old_ref)
-    ):
-        # Our route is named after its hostname (Traefik Manager's way): a new hostname is a
-        # new route. The old one is removed on the next push, which creates the new one.
-        await _tombstone(session, adapters, ph)
-        old_ref = None
     if prep.live_managed:
-        # The stored reference stays (a rename of an older orchestrator- route does not
-        # rename the route); a host that has none yet gets the one the push will create.
+        # The stored reference stays (a hostname change rewrites the route's rule, its name
+        # is only a label); a host that has none yet gets the one the push will create.
         new_extra[TRAEFIK_MANAGER_ROUTE_REF_KEY] = old_ref or adapters.proxy.route_ref_for(
             prep.hostname
         )
     elif body.adopt and prep.adopt_ref:
         new_extra[TRAEFIK_MANAGER_ROUTE_REF_KEY] = prep.adopt_ref
-    elif old_ref and is_live_managed(ph) and adapters.proxy.owns_route_ref(old_ref, ph.hostname):
-        # No longer live-managed (provider changed / upstream cleared): the
-        # route this orchestrator made for it goes away on the next push.
+    elif old_ref and is_live_managed(ph):
+        # No longer live-managed (provider changed / upstream cleared): its route goes away
+        # on the next push when a record can write it (and only then, see _tombstone).
         await _tombstone(session, adapters, ph)
 
     ph.hostname = prep.hostname
@@ -1129,41 +1127,25 @@ async def delete_proxy_host(
     )
 
 
-async def _live_route_is_ours(adapters: AdapterBundle, ph: ProxyHost, ref: str) -> bool:
-    """Is the route ``ref`` really ours as Traefik Manager lists it (not one only named like
-    ours)? Not listed (never pushed) counts as ours. Unreadable refuses the edit: guessing
-    would either orphan our route or take over someone else's."""
-    routes = await adapters.proxy.list_routes()
-    if routes is None:
-        raise _fail(
-            status.HTTP_503_SERVICE_UNAVAILABLE,
-            "Traefik Manager could not be read. A new hostname replaces this host's route (it "
-            "is named after its hostname), so it needs the live route list - try again.",
-            {"hostname": "Traefik Manager could not be read"},
-        )
-    live = find_route(routes, ref, ph.hostname)
-    return live is None or adapters.proxy.owns_route_ref(
-        ref, ph.hostname, service=live.service or ""
-    )
-
-
 async def _tombstone(session: Session, adapters: AdapterBundle, ph: ProxyHost) -> bool:
     """Remember that ``ph``'s Traefik Manager route has to be deleted on the
-    next push. Only a route this orchestrator created is ever deleted (an
-    adopted one is left alone), and only if Traefik Manager really has it -
-    a host that was never pushed leaves nothing behind. The read is the only
+    next push. Only a route whose contents a record can write is ever deleted
+    (:func:`route_problem`; a hand-written failover, a path rule, another
+    provider's router are left alone, whoever made them), and only if Traefik
+    Manager really has it - a host that was never pushed leaves nothing behind.
+    The push checks the route again before it deletes it. The read is the only
     contact with Traefik Manager."""
     ref = ref_of(ph)
-    if not ref or not adapters.proxy.owns_route_ref(ref, ph.hostname):
+    if not ref:
         return False
     routes = await adapters.proxy.list_routes()
     live = find_route(routes, ref, ph.hostname) if routes is not None else None
     if routes is not None and live is None:
         return False
-    if live is not None and not adapters.proxy.owns_route_ref(
-        ref, ph.hostname, service=live.service or ""
-    ):
-        return False  # named like ours, but not the shape we write: someone else's
+    if live is not None and route_problem(adapters.proxy, live, routes or []) is not None:
+        return False  # its contents are not what a record writes: it is left as it is
+    if live is None and not adapters.proxy.recreatable_ref(ref, ph.hostname):
+        return False  # nothing to look at, and not a route this record would make
     svc = session.get(Service, ph.service_id) if ph.service_id else None
     add_pending_delete(
         session,

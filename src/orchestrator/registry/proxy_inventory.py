@@ -15,13 +15,17 @@ from __future__ import annotations
 import json
 import re
 import time
-from collections.abc import Callable, Iterable
+from collections.abc import Iterable
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from typing import Any
 
 from orchestrator.registry.route_standard import LEGACY_REDIRECT
-from orchestrator.registry.traefik_status import extract_hostnames
+from orchestrator.registry.traefik_status import (
+    extract_host_patterns,
+    extract_hostnames,
+    rule_serves,
+)
 
 #: The shared service every maintenance middleware points at, and its never-matched router.
 MAINTENANCE_BACKEND = "orchestrator-maintenance-backend"
@@ -36,7 +40,8 @@ GROUPS = (
 #: What the orchestrator does with each kind of Traefik configuration: "edits" (reads it and
 #: changes it through Traefik Manager's own forms), "reads" (shows it), "not yet".
 SUPPORT = (
-    ("Routers with Host() rules", "edits"),
+    ("Routers with one Host() rule, in Traefik Manager's form", "edits"),
+    ("Any other router (hand-written, shared files)", "reads"),
     ("Path and method rules, priority", "reads"),
     ("Failover, weighted, mirroring", "edits"),
     ("Health checks", "edits"),
@@ -46,7 +51,8 @@ SUPPORT = (
     ("Docker and other providers", "reads"),
     ("highestRandomWeight", "not yet"),
     ("TCP and UDP routers", "not yet"),
-    ("HostRegexp and other rules", "not yet"),
+    ("HostRegexp rules", "reads"),
+    ("Rules without a host (path only)", "reads"),
     ("TLS options and stores", "not yet"),
 )
 
@@ -220,12 +226,12 @@ def build(
     raw: dict[str, Any],
     *,
     hosts: Iterable[Any] = (),
-    owns: Callable[..., bool] = lambda *_a, **_k: False,
     transports: dict[str, dict[str, Any]] | None = None,
     now: datetime | None = None,
 ) -> Inventory:
     """The inventory from one ``read_inventory`` answer. ``hosts``: the proxy hosts kept here
-    (``hostname``, ``id``); ``owns``: whether a router name is one the orchestrator made."""
+    (``hostname``, ``id``). Who made a router is judged by its shape alone (see
+    :func:`_judge_shapes`), never by its name."""
     by_host = {str(h.hostname).lower(): h for h in hosts}
     file_routes = raw.get("routes") or []
     tm_by_name: dict[str, dict[str, Any]] = {}
@@ -236,8 +242,15 @@ def build(
         if isinstance(name, str):
             tm_by_name.setdefault(name, app)
 
-    def host_of(hostnames: Iterable[str]) -> Any:
-        return next((by_host[h.lower()] for h in sorted(hostnames) if h.lower() in by_host), None)
+    def host_of(hostnames: Iterable[str], rule: str = "") -> Any:
+        found = next((by_host[h.lower()] for h in sorted(hostnames) if h.lower() in by_host), None)
+        patterns = extract_host_patterns(rule) if found is None and rule else set()
+        if patterns:  # a HostRegexp router: the first kept host it answers
+            found = next(
+                (h for name, h in sorted(by_host.items()) if rule_serves(set(), patterns, name)),
+                None,
+            )
+        return found
 
     routers: list[Router] = []
     seen_file: set[str] = set()
@@ -252,21 +265,13 @@ def build(
             seen_file.add(bare)
         rule = str(r.get("rule") or "")
         hostnames = sorted(extract_hostnames(rule))
-        ph = host_of(hostnames)
+        ph = host_of(hostnames, rule)
         mws = [str(m) for m in r.get("middlewares") or [] if isinstance(m, str)]
         errs = r.get("error")
         made_by = (
             "internal"
             if provider == "internal"
-            else (
-                (
-                    "orchestrator"
-                    if _mine(owns, bare, hostnames, r.get("service"))
-                    else "hand-written"
-                )
-                if provider == "file"
-                else provider
-            )
+            else ("hand-written" if provider == "file" else provider)
         )
         routers.append(
             Router(
@@ -295,7 +300,7 @@ def build(
             continue
         rule = str(app.get("rule") or "")
         hostnames = sorted(extract_hostnames(rule))
-        ph = host_of(hostnames)
+        ph = host_of(hostnames, rule)
         routers.append(
             Router(
                 name=f"{bare}@file",
@@ -310,11 +315,7 @@ def build(
                 status="off",
                 error="",
                 config_file=str(app.get("configFile") or ""),
-                made_by=(
-                    "orchestrator"
-                    if _mine(owns, bare, hostnames, app.get("service_name"))
-                    else "hand-written"
-                ),
+                made_by="hand-written",
                 redirect=bare.endswith("-redirect"),
                 proxy_host=ph.hostname if ph else "",
                 proxy_host_id=getattr(ph, "id", None) if ph else None,
@@ -385,7 +386,7 @@ def build(
             )
         )
     backends.sort(key=lambda b: b.name)
-    _judge_shapes(routers, {b.name: b for b in backends}, managed, owns)
+    _judge_shapes(routers, {b.name: b for b in backends}, managed)
 
     # Middlewares, with the routers (and chains) that use them.
     file_mws = {
@@ -487,20 +488,10 @@ def _errors(value: Any) -> str:
 _INTERNAL = "@internal"
 
 
-def _mine(owns: Callable[..., bool], bare: str, hostnames: Iterable[str], service: Any) -> bool:
-    """Is the router ``bare`` the orchestrator's? Its name and service decide, for one of the
-    hostnames it serves (see ``ProxyAdapter.owns_route_ref``). A ``<name>-redirect``
-    companion is judged by its main route's name and the service it shares with it."""
-    main = bare.removesuffix("-redirect")
-    svc = _bare(str(service or ""))
-    return any(owns(main, h, service=svc) for h in [*hostnames] or [None])
-
-
 def _judge_shapes(
     routers: list[Router],
     backends: dict[str, Backend],
     managed: set[str],
-    owns: Callable[..., bool],
 ) -> None:
     """Set each file router's ``made_by`` by its shape: Traefik Manager's route form writes
     router ``<name>`` with service ``<name>-service``, or points it at a failover / weighted
@@ -509,12 +500,10 @@ def _judge_shapes(
         if r.provider != "file":
             continue
         bare = _bare(r.name)
-        mine = _mine(owns, bare, r.hostnames, r.service)
         if r.redirect:
             # Traefik Manager makes no redirect routers: it redirects on the entry point.
-            r.made_by = "orchestrator" if mine else "hand-written"
-            if not mine:
-                r.not_form.append("a separate HTTP redirect router")
+            r.made_by = "hand-written"
+            r.not_form.append("a separate HTTP redirect router")
             continue
         svc = r.service
         reasons: list[str] = []
@@ -542,7 +531,7 @@ def _judge_shapes(
         elif b is not None and b.transport and _bare(b.transport) != f"{bare}-transport":
             reasons.append(f"transport {_bare(b.transport)} is not {bare}-transport")
         r.not_form = reasons
-        r.made_by = ("orchestrator" if mine else FORM) if not reasons else "hand-written"
+        r.made_by = FORM if not reasons else "hand-written"
 
 
 # -- findings ---------------------------------------------------------------------------------
@@ -677,13 +666,16 @@ def findings(
     for r in inv.routers:
         if r.hostnames or r.provider == "internal" or not r.rule:
             continue
+        if extract_host_patterns(r.rule):
+            continue  # a HostRegexp: matched to the hosts it answers
         add(
             "unread",
             f"rule:{_bare(r.name)}",
             _bare(r.name),
-            f"Rule {r.rule}: no hostname can be read from it, so no proxy host matches it.",
-            "Use Host() rules for what the orchestrator should know, or manage it in Traefik "
-            "Manager.",
+            f"Rule {r.rule}: it names no host, so it answers any host on its entry points and "
+            "is linked to no proxy host.",
+            "Read only here. Add a Host() (or HostRegexp) to it if a proxy host should be "
+            "linked to it.",
             file=r.config_file,
             routers=[r.name],
         )
@@ -1143,7 +1135,7 @@ async def read(
         from orchestrator.registry.traefik_status import fetch_servers_transports
 
         transports = await fetch_servers_transports(settings)
-    inv = build(raw, hosts=hosts, owns=adapter.owns_route_ref, transports=transports)
+    inv = build(raw, hosts=hosts, transports=transports)
     _CACHE[source] = (time.monotonic(), inv)
     return inv
 

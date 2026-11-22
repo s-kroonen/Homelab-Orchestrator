@@ -80,6 +80,7 @@ class ToggleTM(FakeTM):
                         "rule": r["rule"],
                         "target": r["upstream"],
                         "entryPoints": r["eps"],
+                        "service_name": r.get("service") or f"{name}-service",
                         "enabled": False,
                     }
                 )

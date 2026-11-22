@@ -179,63 +179,56 @@ def fallback_signature(ph: ProxyHost, service_slug: str | None) -> str:
 
 
 FALLBACK_MISSING = "maintenance page rule missing or broken on the live route"
-#: Our own route for a host is gone and a route we did not create serves the hostname now
-#: (a hand-written failover replaced it, say). Nothing is created next to it; adopting it
-#: (:func:`stale_ref_route`) makes the host ``external`` like any other adopted route.
-REPLACED_BY_HAND = "served by the route {name}, which this orchestrator did not create (its own route for this host is gone): adopt it to manage it here"
+#: The route a host is linked to is gone and another route serves the hostname now (a
+#: hand-written failover replaced it, say). Nothing is created next to it; adopting it
+#: (:func:`stale_ref_route`) links the host to it.
+REPLACED_BY_HAND = "served by the route {name} now (the route this host was linked to is gone): adopt it to link it here"
 
 
 def stale_ref_route(
     proxy: ProxyAdapter, ph: ProxyHost, routes: Sequence[RouteInfo] | None
 ) -> RouteInfo | None:
-    """The route that now serves ``ph`` when ``ph``'s own route (pushed before) is no longer
-    listed and a route we did not create serves its hostname; else ``None``."""
-    if routes is None or not is_live_managed(ph) or not ph.pushed_sig:
-        return None  # never created: a route in the way is a conflict the push reports
-    ref = ref_of(ph)
-    if (
-        not ref
-        or not proxy.owns_route_ref(ref, ph.hostname)
-        or find_route(routes, ref, ph.hostname)
-    ):
+    """The route that serves ``ph`` now when the route it is linked to is no longer listed
+    and another route serves its hostname; else ``None``. A route the record would create
+    itself that was never pushed is not "replaced": a route in its way is a conflict the
+    push reports."""
+    if routes is None or not is_live_managed(ph):
         return None
-    return _hand_written_route(proxy, routes, ph.hostname)
+    ref = ref_of(ph)
+    if not ref or find_route(routes, ref, ph.hostname):
+        return None
+    if not ph.pushed_sig and proxy.recreatable_ref(ref, ph.hostname):
+        return None
+    return serving_route(routes, ph.hostname)
 
 
-#: A record that points at no route (``route_ref`` empty) while a route we did not create
-#: serves its hostname: it is matched by hostname only. Adopting it stores that route's
-#: reference, so it survives a restart and every check finds the same route.
-LINK_MISSING = "served by the route {name}, which this orchestrator did not create, found by its hostname only (the record names no route): adopt it to keep the link"
+#: A record that points at no route (``route_ref`` empty) while a route serves its hostname:
+#: it is matched by hostname only. Adopting it stores that route's reference, so it survives
+#: a restart and every check finds the same route.
+LINK_MISSING = "served by the route {name}, found by its hostname only (the record names no route): adopt it to keep the link"
 
 
-def _hand_written_route(
-    proxy: ProxyAdapter, routes: Sequence[RouteInfo], hostname: str
-) -> RouteInfo | None:
-    theirs = [
-        r
-        for r in _routes_for_host(routes, hostname)
-        if not route_is_ours(proxy, r, hostname) and not r.name.endswith("-redirect")
-    ]
-    return theirs[0] if theirs else None
+def serving_route(routes: Sequence[RouteInfo], hostname: str) -> RouteInfo | None:
+    """The route that answers ``hostname`` (not a redirect router), whoever made it."""
+    plain = [r for r in _routes_for_host(routes, hostname) if not r.name.endswith("-redirect")]
+    return plain[0] if plain else None
 
 
-def route_is_ours(proxy: ProxyAdapter, route: RouteInfo, hostname: str | None = None) -> bool:
-    """Did this orchestrator make ``route``? Judged by its name and service for ``hostname``
-    (or, without one, for any hostname the route serves). A ``<name>-redirect`` companion is
-    judged by its main route's name and the service it shares with it."""
-    main = route.ref.rsplit("::", 1)[-1].removesuffix("-redirect")
-    hosts = [hostname] if hostname else sorted(route.hostnames)
-    return any(proxy.owns_route_ref(main, h, service=route.service or "") for h in hosts or [None])
+def route_problem(
+    proxy: ProxyAdapter, route: RouteInfo, routes: Sequence[RouteInfo] = ()
+) -> str | None:
+    """Why ``route`` cannot be rewritten from a record (``None``: it can). Its contents
+    decide (:meth:`ProxyAdapter.route_editable`), never its name."""
+    return proxy.route_editable(route, routes)
 
 
 def unlinked_route(
     proxy: ProxyAdapter, ph: ProxyHost, routes: Sequence[RouteInfo] | None
 ) -> RouteInfo | None:
-    """The route we did not create that serves ``ph`` when ``ph`` names no route at all;
-    else ``None``."""
+    """The route serving ``ph`` when ``ph`` names no route at all; else ``None``."""
     if routes is None or not is_live_managed(ph) or ref_of(ph):
         return None
-    return _hand_written_route(proxy, routes, ph.hostname)
+    return serving_route(routes, ph.hostname)
 
 
 def adoptable_route(
@@ -264,7 +257,10 @@ def _bare(name: str) -> str:
 
 
 def fallback_missing(
-    proxy: ProxyAdapter, routes: Sequence[RouteInfo], service_slug: str | None
+    proxy: ProxyAdapter,
+    routes: Sequence[RouteInfo],
+    service_slug: str | None,
+    all_routes: Sequence[RouteInfo] | None = None,
 ) -> bool:
     """True when Traefik Manager LISTS the routes serving this host and at least
     one that is switched on and answers HTTPS lacks the maintenance middleware.
@@ -279,8 +275,8 @@ def fallback_missing(
     for route in routes:
         if route.middlewares is None or not route.enabled or route.name.endswith("-redirect"):
             continue
-        if not route_is_ours(proxy, route):
-            continue  # a hand-written route is never edited, so it is never "missing" it
+        if route_problem(proxy, route, all_routes or routes) is not None:
+            continue  # a route that is not edited here is never "missing" it
         eps = route.entry_points
         if eps and all(is_plain_http_entrypoint(e) for e in eps):
             continue  # a plain-HTTP (redirect) router never needs the page
@@ -380,6 +376,9 @@ class HostSync:
     host_routes: list[RouteInfo] = field(default_factory=list)
     #: Traefik Manager's own on/off state for it, when known.
     tm: str | None = None
+    #: Why the linked route is only read and switched, not rewritten from the record
+    #: (``""``: it is rewritten, or there is none).
+    read_only: str = ""
 
     @property
     def pending(self) -> bool:
@@ -397,8 +396,9 @@ def _norm_upstream(url: str) -> str:
 
 
 def _routes_for_host(routes: Sequence[RouteInfo], hostname: str) -> list[RouteInfo]:
-    host = hostname.strip().lower()
-    return [r for r in routes if host in {h.lower() for h in r.hostnames}]
+    """Every router answering ``hostname``: by a Host() name or a HostRegexp, from any
+    provider."""
+    return [r for r in routes if r.serves(hostname)]
 
 
 def _companion(routes: Sequence[RouteInfo], ref: str, main: RouteInfo | None) -> RouteInfo | None:
@@ -443,14 +443,12 @@ def evaluate(
     want_content, _ = _split_sig(want)
     sig = ph.pushed_sig or ""
     opts = RouteOptions.from_dict(ph.route_options)
-    named = find_route(routes, ref, ph.hostname) if ref and routes is not None else None
-    owned = bool(ref) and proxy.owns_route_ref(
-        ref or "", ph.hostname, service=(named.service or "") if named is not None else None
-    )
     disable_too = [] if host_enabled(ph) else ["disable"]
 
     if routes is None:
-        if ref and not owned:
+        # Nothing to look at: a host linked to a route its record would not create stays
+        # what it was (read only) rather than reading as a pending rewrite.
+        if ref and not proxy.recreatable_ref(ref, ph.hostname):
             return HostSync(EXTERNAL)
         if ref and sig == want:
             return HostSync(IN_SYNC)
@@ -463,27 +461,53 @@ def evaluate(
 
     host_routes = _routes_for_host(routes, ph.hostname)
     route = live_route(routes, ph)
+    problem = route_problem(proxy, route, routes) if route is not None else None
+    if route is not None and not ref:
+        problem = "the record is not linked to it (found by its hostname only)"
 
-    # --- not ours: only its enabled state is ever ours to push -----------------
-    if (ref and not owned) or (not ref and route is not None):
-        if route is None:
-            return HostSync(
-                EXTERNAL,
-                ["the adopted route no longer exists in Traefik Manager"],
-                [],
-                host_routes=host_routes,
-            )
-        tm = _tm_state(host_routes)
+    # --- read only: its contents cannot be rewritten from the record ------------
+    # It is still read, shown and linked; only its enabled state is pushed (for the routes
+    # Traefik Manager can switch: those in its files).
+    if route is not None and problem:
+        switchable = [r for r in host_routes if r.provider == "file"]
+        tm = _tm_state(switchable)
         change = _enabled_change(ph, tm)
         changes = [change] if change else []
         actions = (["enable"] if host_enabled(ph) else ["disable"]) if change else []
         unlinked = None if ref else unlinked_route(proxy, ph, routes)
         if unlinked is not None:
             changes.append(LINK_MISSING.format(name=unlinked.name))
-        # Its content (the maintenance page included) is never edited: see LOCAL above.
-        return HostSync(EXTERNAL, changes, actions, route=route, host_routes=host_routes, tm=tm)
+        return HostSync(
+            EXTERNAL,
+            changes,
+            actions,
+            route=route,
+            host_routes=switchable,
+            tm=tm,
+            read_only=problem,
+        )
 
-    # --- ours, but not in Traefik Manager yet ---------------------------------
+    # --- not in Traefik Manager (any more) ------------------------------------
+    if route is None and ref and not proxy.recreatable_ref(ref, ph.hostname):
+        replaced = stale_ref_route(proxy, ph, routes)
+        if replaced is not None:
+            return HostSync(
+                EXTERNAL,
+                [REPLACED_BY_HAND.format(name=replaced.name)],
+                [],
+                route=replaced,
+                host_routes=host_routes,
+                read_only="the route this host was linked to is gone",
+            )
+        # The record was linked to a route it would not make itself: creating one in its
+        # place would not bring that back.
+        return HostSync(
+            EXTERNAL,
+            [f"the linked route {ref} no longer exists in Traefik Manager"],
+            [],
+            host_routes=host_routes,
+            read_only="the route this host was linked to is gone",
+        )
     if route is None:
         replaced = stale_ref_route(proxy, ph, routes)
         if replaced is not None:
@@ -553,7 +577,7 @@ def evaluate(
         host_enabled(ph)
         and bool(service_slug_for_fb)
         and fallback_missing(
-            proxy, [route] + ([companion] if companion else []), service_slug_for_fb
+            proxy, [route] + ([companion] if companion else []), service_slug_for_fb, routes
         )
     )
     if fb_missing:
@@ -598,8 +622,8 @@ async def move_to_configured_file(
     out of the file it is in now, and verify it afterwards. The route is
     rewritten from our record - like an update - so middlewares added by hand in
     Traefik Manager are not carried along (the maintenance-page fallback is put
-    back). Never run by a normal push, and never for a route that is not ours
-    (an adopted, hand-written one)."""
+    back). Never run by a normal push, and never for a route whose contents cannot be
+    rewritten from the record (:func:`route_problem`)."""
     host = ph.hostname
 
     def fail(message: str) -> PushResult:
@@ -609,12 +633,7 @@ async def move_to_configured_file(
     slug = slug_of(ph, services)
     ref = ref_of(ph)
     if not is_live_managed(ph) or not ref:
-        return fail("only a route this orchestrator created can be moved")
-    if not adapters.proxy.owns_route_ref(ref, host):
-        return fail(
-            "this route was adopted from a hand-written one - it is never moved automatically; "
-            "move it in Traefik Manager"
-        )
+        return fail("the host is not linked to a route - push it first")
     if not host_enabled(ph):
         return fail("the host is disabled - enable and push it first (a parked route has no file)")
     known = await adapters.proxy.list_config_files()
@@ -629,6 +648,9 @@ async def move_to_configured_file(
     current = find_route(routes, ref, host)
     if current is None:
         return fail("Traefik Manager has no route for this host yet - push it first")
+    problem = route_problem(adapters.proxy, current, routes)
+    if problem:
+        return fail(f"it is never moved automatically: {problem} - move it in Traefik Manager")
     if same_file(current.config_file, target):
         return PushResult(TARGET, host, "move", True, f"already in {target} - nothing to move")
     eps = list(ph.entry_points or [])
@@ -756,15 +778,15 @@ def config_file_view(
     service_slug: str | None,
     route: RouteInfo | None,
     known: ConfigFiles | None,
+    read_only: str = "",
 ) -> dict[str, Any]:
     """Where a host's route lives in Traefik Manager vs where it would be
-    created: purely informational (never an error), for the list and edit form."""
+    created: purely informational (never an error), for the list and edit form.
+    ``read_only`` is why the route is not rewritten from the record (``HostSync``)."""
     resolved, problem = resolve_file_for(settings, ph, service_slug, known)
     current = route.config_file if route is not None else ""
     ref = ref_of(ph)
-    owned = bool(ref) and proxy.owns_route_ref(
-        ref or "", ph.hostname, service=(route.service or "") if route is not None else None
-    )
+    owned = bool(ref) and not read_only
     misplaced = bool(
         route is not None and resolved and current and not same_file(current, resolved)
     )
@@ -773,7 +795,9 @@ def config_file_view(
     if misplaced:
         note = f"Lives in {current}; a new route for this host would go to {resolved}."
         if not owned:
-            note += " It was adopted from a hand-written route, so it is never moved automatically."
+            note += (
+                f" It is never moved automatically: {read_only or 'the host is not linked to it'}."
+            )
     return {
         "config_file": RouteOptions.from_dict(ph.route_options).config_file,
         "config_file_resolved": resolved,
@@ -966,7 +990,9 @@ class ProxyPusher:
             done: list[str] = []
             if hs.state == EXTERNAL and ("enable" in hs.actions or "disable" in hs.actions):
                 verb = "enable" if host_enabled(ph) else "disable"
-                for route in hs.host_routes or ([hs.route] if hs.route else []):
+                for route in hs.host_routes or (
+                    [hs.route] if hs.route and hs.route.provider == "file" else []
+                ):
                     try:
                         await proxy.set_route_enabled(
                             route.ref, host_enabled(ph), with_redirect=False, hostname=host
@@ -1199,21 +1225,13 @@ class ProxyPusher:
 
         live_routes = await adapters.proxy.list_routes()
         live = find_route(live_routes, ref, hostname) if live_routes is not None else None
-        if live is not None and not adapters.proxy.owns_route_ref(
-            ref, hostname, service=live.service or ""
-        ):
-            # Named like ours but not in the shape we write (a hand-written failover, say):
+        problem = (
+            route_problem(adapters.proxy, live, live_routes or []) if live is not None else None
+        )
+        if problem:
+            # Its contents are not what a record can write (a hand-written failover, say):
             # never deleted, whatever the pending deletion says.
-            out.append(
-                PushResult(
-                    TARGET,
-                    hostname,
-                    "delete",
-                    True,
-                    f"left {ref} alone: it points at {live.service}, so this orchestrator did "
-                    "not make it",
-                )
-            )
+            out.append(PushResult(TARGET, hostname, "delete", True, f"left {ref} alone: {problem}"))
             finish()
             return
         try:

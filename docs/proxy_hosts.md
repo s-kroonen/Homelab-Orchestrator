@@ -129,19 +129,17 @@ What the endpoints do now (`web/routers/proxy_hosts.py`):
   Re-creating a hostname that was just deleted (its route not yet removed)
   takes that route over instead of conflicting with it.
 * **Update** validates, stores, keeps the stored reference and leaves the host
-  `pending_update`. A hostname rename of a route named after its hostname is a new
-  route: the old one gets a pending deletion and the reference becomes the new name
-  (the push deletes the old route and creates the new one). An older
-  `orchestrator-…` route keeps its name; only its rule changes. A host
-  that stops being live-managed (provider changed, upstream cleared) gets a
-  pending deletion for the route this orchestrator created. There is no longer
+  `pending_update`. A hostname change rewrites the route's rule; its name stays (a name
+  is only a label). A host that stops being live-managed (provider changed, upstream
+  cleared) gets a pending deletion for its route when that route is editable (see
+  ["Which routes are edited here"](#which-routes-are-edited-here)). There is no longer
   an "enable it first" refusal for a disabled host: the push orders the
   operations safely.
-* **Delete** removes the row and, for a route this orchestrator created that
-  Traefik Manager really has, records a **pending deletion**
-  (`{hostname, route_ref, with_redirect}` in the `Setting` row
-  `proxy.pending_deletes`). Routes that were adopted or hand-written are never
-  deleted. **Reset to saved** clears the pending deletions (the YAML reconcile
+* **Delete** removes the row and, for an editable route that Traefik Manager
+  really has, records a **pending deletion** (`{hostname, route_ref, with_redirect}`
+  in the `Setting` row `proxy.pending_deletes`). A read-only route is never deleted,
+  whoever made it; the push checks the route again before it deletes it and drops the
+  pending deletion when it is not editable (*left … alone: …*). **Reset to saved** clears the pending deletions (the YAML reconcile
   recreates the hosts).
 * **Enable / disable** and the bulk actions only flip `ProxyHost.enabled`.
 
@@ -174,7 +172,7 @@ in `services.yaml`) and survives Reset/boot reconcile by hostname.
 | `pending_create` | live-managed, Traefik Manager has no route (never pushed, or removed there) | creates it |
 | `pending_update` | edited here since the last push (fingerprint differs); for a host never pushed from here: readable fields differ from Traefik Manager | updates it |
 | `detached` | **our fingerprint is unchanged but Traefik Manager's live state differs** - someone changed it there | puts our state back |
-| `external` | the hostname's route is not ours (adopted by Resync, hand-written, or no route reference) | only its on/off state; **content is never overwritten or deleted**, the maintenance page included |
+| `external` | read only: the linked route cannot be rewritten from the record (`read_only` says why: a failover, a path or pattern rule, another provider, a service the form did not write), or no route reference | only its on/off state (routes in Traefik Manager's files); **content is never overwritten or deleted**, the maintenance page included |
 | `local` | not live-managed | nothing |
 
 **Exactly what "detached" compares** (only what can be read back from
@@ -326,10 +324,10 @@ another router shares it, from the old file) - the redirect companion **first**
 (it references the main route's service, which would otherwise count as shared and
 stay behind), then the main route. The result is **read back**: exactly one copy of
 each router, in the new file, or the move fails and says where it found them.
-Notes: the route is rewritten from our record like any update, so middlewares
-added by hand in TM are not carried (the maintenance-page fallback is put back);
+Notes: the route is rewritten from our record like any update; the middlewares on it are
+kept (the maintenance-page fallback is put back);
 a route that is switched off (parked by TM outside any file), a disabled host and a
-route that is not ours are refused with a message.
+read-only route are refused with a message.
 
 ### Entry points and certificate resolver
 
@@ -540,49 +538,67 @@ rewrites the route on Traefik Manager with explicit values, then verifies it.
 
 ### Adopting a route Traefik Manager already has
 
-Create refuses to touch a router that is not ours. **Resync** lists such routes
-under "Discovered"; its **Add** button records one with `adopt: true` - no write
-to Traefik Manager at all; the route reference and entry points are taken from
-the existing router. An adopted (or hand-written, or reference-less) route is
-`external`: **its content is never overwritten and never deleted** - deleting
-the host here leaves the route alone and a push only switches it on/off (and
-applies the maintenance fallback). A route reference counts as ours when the
-adapter created it (`ProxyAdapter.owns_route_ref`), see below.
+Create refuses to write over a router that is already there. **Resync** lists such
+routes under "Discovered"; its **Add** button records one with `adopt: true` - no
+write to Traefik Manager at all; the route reference and entry points are taken from
+the existing router. From then on the route is treated by its contents like any other
+(below), whoever made it.
 
-### Route names, and which routes are ours
+### Which routes are read, and which are edited here
+
+The orchestrator owns no routes. **Every route is read, shown and linked**: every
+file Traefik Manager has (a shared file too), Traefik's other providers (Docker labels,
+...: read from its runtime routers, `RouteInfo.provider`), and rules that match by
+pattern (`HostRegexp`, Traefik v2 `{name:regexp}` templates and v3 regular expressions
+alike: a host is linked to the router that answers it). A rule that names no host at all
+(a path only) is listed and read, and linked to no host (the Review says so).
+
+### Which routes are edited here
+
+Whether a host's route is **rewritten from its record** is decided by the route's contents
+(`ProxyAdapter.route_editable`; Traefik Manager: `route_edit_problem`), never by who made
+it or how it is named. A route is editable when Traefik Manager's route form can write it
+without losing anything:
+
+* it is in Traefik Manager's files (another provider's router is read only, not even
+  switched off from here);
+* its rule is one plain `Host(...)` (a path, method or pattern rule would be lost);
+* it points at a service the form wrote: its own `<router>-service`, or the one Traefik
+  Manager shares from another route of the same file with the same backend (the form
+  writes and edits `<router>-service`; a route pointing at another service would have it
+  replaced);
+* that service has one server (several are edited as its backends, *Edit backends*).
+
+A `<name>-redirect` router is editable with the route it redirects for. Anything else is
+**read only** (`external`, with the reason in the host's `read_only`): read, shown,
+linked, switched on and off (when it is in Traefik Manager's files), never rewritten,
+moved or deleted. A hand-written failover that happens to be named after its hostname is
+read only by its contents. The Proxy hosts list and Sources -> Routes say *editable* or
+*read only (why)*.
+
+Names are used in one place only, where there is nothing to read: when the linked route
+has vanished, or Traefik Manager cannot be read, a route is created again from the record
+only when it would come back the same - its reference is the name a create gives this
+hostname (or the `orchestrator-` one older versions gave). Otherwise the host reads *the
+linked route … no longer exists*.
 
 A route the orchestrator makes (create, Format routes, Move to file) is named the way
 Traefik Manager's own form names one: the hostname with dashes, `app-example-com` for
-`app.example.com`, with service `app-example-com-service`. There is no `orchestrator-`
-prefix any more. A route is ours (`TraefikManagerProxyAdapter.owns_route_ref`) when:
+`app.example.com`, with service `app-example-com-service`.
 
-* it carries the `orchestrator-` prefix older versions used (those keep their name and stay
-  ours; nothing renames them), or
-* it is named exactly after the host's hostname **and**, when the live route is listed, its
-  router points at a `…-service` - its own `<name>-service`, or the one of another route with
-  the same backend, which Traefik Manager may share.
-
-Anything else is hand-written or adopted and never rewritten or deleted. A hand-written route
-that only *happens* to be named after its hostname (a failover pointing at `<x>-failover`, say)
-stays `external`, and a pending deletion for it is dropped at push time without touching it
-(*left … alone: it points at …*). A route that was renamed in Traefik Manager to the name of its
-hostname and adopted here is ours again. A hostname change of one of ours needs Traefik
-Manager's route list (it decides whether the old route is ours to replace): when it cannot be
-read the edit is refused with a 503, nothing is saved. A redirect companion `<name>-redirect` is judged by its main route's name and
-the service it shares with it.
-
-An edit of one of ours keeps the middlewares on the live route (added in Traefik Manager's UI,
-say): its `/save` replaces the whole list, so the orchestrator sends the live list back with only
-the HSTS middleware following the host's option. The maintenance page is left out of that edit
-and put back by the push right after (none when the host has no service any more).
+An edit of an editable route keeps the middlewares on the live route (added in Traefik
+Manager's UI, say): its `/save` replaces the whole list, so the orchestrator sends the
+live list back with only the HSTS middleware following the host's option. The maintenance
+page is left out of that edit and put back by the push right after (none when the host
+has no service any more).
 
 **Adopt the route that serves it** (the host's ⋯ menu, `POST
 /api/proxy-hosts/{id}/adopt-route`, the assistant's `adopt_route`) points a record at the
-hand-written route serving its hostname in two cases:
+route serving its hostname in two cases:
 
-* its own route is gone and a route we did not create serves the hostname now (a failover that
-  replaced it), shown as *served by the route …, which this orchestrator did not create (its own
-  route for this host is gone)*;
+* the route it is linked to is gone and another route serves the hostname now (a failover that
+  replaced it), shown as *served by the route … now (the route this host was linked to is
+  gone)*;
 * the record names no route at all (`route_ref` empty) while one serves the hostname, shown as
   *… found by its hostname only*. Such a record is still matched by its hostname everywhere (sync,
   linked state), so it never reads as "gone" while it is served; adopting stores the link so a
@@ -592,7 +608,7 @@ Only the orchestrator's record changes: nothing is written to Traefik Manager. T
 `adopt_route` always waits for a person's approval.
 
 Switching `router_provider` away from `traefik` (or clearing the upstream) on a
-host with a route this orchestrator created records a pending deletion for it.
+host with an editable route records a pending deletion for it.
 
 The maintenance-fallback middleware sync (further down) now also runs at push
 time, per host, instead of on every edit.
@@ -1187,17 +1203,17 @@ Traefik Manager side no longer runs on an edit: it runs **at push time**
 (`registry/proxy_push.py`), per host, whenever a push created/updated/enabled
 its route (a route rewrite drops the middleware, so it is re-applied). A
 service re-link is part of the host's fingerprint, so it is a pending update.
-The middleware only goes on routes the orchestrator created (see
-["Route names, and which routes are ours"](#route-names-and-which-routes-are-ours)), and
+The middleware only goes on editable routes (see
+["Which routes are edited here"](#which-routes-are-edited-here)), and
 never on a plain-HTTP redirect router (`<name>-redirect`, or one carrying the redirect
 middleware): its requests never reach a backend, so the page would never show. One page per
 router: attaching it replaces another `maintenance-*` middleware on the same router in place
 (Traefik only ever shows the first one), so a re-link leaves no stale page in front.
-A hand-written or adopted route is never edited, not even for this: Traefik
+A read-only route is never edited, not even for this: Traefik
 Manager's per-route save (`POST /api/routes/{id}/raw`) pops the router and its
 service and adds them back, so it rewrites the file with that service moved to
 the end and a comment above it left on the next block. Such a host has no
-maintenance page until its route is the orchestrator's. A deleted host's
+maintenance page until its route is editable. A deleted host's
 middleware name is removed when its pending deletion is pushed. The meaning of
 each case:
 
@@ -1377,9 +1393,8 @@ is set: then their `serverName` and `insecureSkipVerify` are read from Traefik
 Traefik Manager's route form writes router `<name>` with service `<name>-service` (or points it
 at a failover / weighted service Traefik Manager manages), a transport `<name>-transport` and
 per-route headers `<name>-headers`; HTTP to HTTPS is one redirect on the entry point, not a
-router. A file router of that shape is **Traefik Manager** (or **orchestrator**, for the routes
-this orchestrator made: `orchestrator-` ones, and ones named after their hostname that point at a
-`…-service`); anything else is **hand-written**, with the reason:
+router. A file router of that shape is **Traefik Manager**, whoever made it; anything else is
+**hand-written**, with the reason:
 a service not named `<name>-service`, Traefik's own `api@internal`, a failover whose backends need
 different Host headers or server names (Traefik Manager's form gives every backend the same), a
 separate HTTP redirect router.
@@ -1486,12 +1501,11 @@ Not through Traefik Manager's API, so not here: `passHostHeader`, the servers tr
 route's service moved and comments shifted, which this orchestrator does not do to a hand-written
 file.
 
-## When a hand-written route replaced the orchestrator's own
+## When another route replaced the linked one
 
-A host whose own route (one of ours, pushed before) is gone from Traefik Manager while a
-route the orchestrator did not create serves its hostname - a hand-written failover that took
-its place, say - is not "re-created" next to it. It reads `external`, *served by the route <name>,
-which this orchestrator did not create*, with nothing to push. **Adopt the route that serves it**
+A host whose linked route is gone from Traefik Manager while another route serves its
+hostname - a hand-written failover that took its place, say - is not "re-created" next to it.
+It reads `external`, *served by the route <name> now*, with nothing to push. **Adopt the route that serves it**
 (the row's ⋯, `POST /api/proxy-hosts/{id}/adopt-route`) points the host at that route; *Resync
 from Traefik* does the same for every such host. Audited as `proxy_host.route_adopted`. A host
 that was never pushed and finds its hostname taken still gets the push's refusal instead.

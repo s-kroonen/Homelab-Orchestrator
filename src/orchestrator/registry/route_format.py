@@ -192,12 +192,7 @@ async def _plan_one(
     route = find_route(routes, ref, ph.hostname) if ref else None
     if route is None:
         route = next(
-            (
-                r
-                for r in routes
-                if ph.hostname.lower() in {h.lower() for h in r.hostnames}
-                and not r.name.endswith("-redirect")
-            ),
+            (r for r in routes if r.serves(ph.hostname) and not r.name.endswith("-redirect")),
             None,
         )
     if route is None:
@@ -222,7 +217,8 @@ async def _plan_one(
         ]
         return item
 
-    owned = proxy.owns_route_ref(route.name, ph.hostname, service=route.service or "")
+    # Rewritten in place when its contents are what a record writes; else recreated beside it.
+    owned = proxy.route_editable(route, routes) is None
     companion = _companion(routes, route)
     target_file, problem = resolve_file_for(settings, ph, slug, known)
     if problem:
@@ -235,8 +231,9 @@ async def _plan_one(
     hsts_name = catalog.hsts_middleware
     had_hsts = hsts_name in info.middlewares
     stored_hsts = RouteOptions.from_dict(ph.route_options).hsts
-    # An owned route is rewritten in place (its middlewares are the adapter's to set), so the
-    # HSTS it has must travel as the option; a recreated one carries it in the kept list.
+    # An editable route is rewritten in place (its middlewares are kept, HSTS follows the
+    # option), so the HSTS it has must travel as the option; a recreated one carries it in
+    # the kept list.
     want_hsts = (stored_hsts or (owned and had_hsts)) if hsts is None else hsts
     if want_hsts and not had_hsts and catalog.hsts_available is False:
         item.changes.append(
@@ -312,6 +309,7 @@ async def _plan_one(
         (options.http_redirect and companion is None)
         or (not options.http_redirect and companion is not None)
         or (hsts is not None and options.hsts != had_hsts)
+        or legacy
     ):
         item.action = UPDATE
     else:
@@ -347,11 +345,7 @@ async def _plan_one(
             f"entry points {', '.join(info.entry_points) or '-'} -> {', '.join(eps)}"
         )
     others = [
-        r.name
-        for r in routes
-        if r is not route
-        and r is not companion
-        and ph.hostname.lower() in {h.lower() for h in r.hostnames}
+        r.name for r in routes if r is not route and r is not companion and r.serves(ph.hostname)
     ]
     if others:
         item.warnings.append(
@@ -481,6 +475,7 @@ async def apply_item(
                 cert_resolver=resolver,
                 options=options,
                 config_file=file,
+                drop_middlewares=item.dropped_middlewares,
             )
             note("move", "ok", to=file)
         else:
@@ -492,6 +487,7 @@ async def apply_item(
                 cert_resolver=resolver,
                 options=options,
                 previous_options=RouteOptions.from_dict(ph.route_options),
+                drop_middlewares=item.dropped_middlewares,
             )
             note("update", "ok")
         check = await verify_route(proxy, route_ref=new_ref, hostname=host, expect_entry_points=eps)

@@ -297,11 +297,10 @@ class SimTM:
                         "entryPoints": r["eps"],
                         "enabled": True,
                         "configFile": f if self.multi else "",
+                        # The real app reports the service each router points at.
+                        "service_name": self.service_key(name, r),
                         **(
-                            {
-                                "middlewares": self.middlewares_of(name, r),
-                                "service_name": self.service_key(name, r),
-                            }
+                            {"middlewares": self.middlewares_of(name, r)}
                             if self.report_middlewares
                             else {}
                         ),
@@ -316,6 +315,7 @@ class SimTM:
                     "rule": snap["route"]["rule"],
                     "target": snap["route"]["upstream"],
                     "entryPoints": snap["route"]["eps"],
+                    "service_name": self.service_key(key.split("::", 1)[-1], snap["route"]),
                     "enabled": False,
                     "configFile": snap["file"] if self.multi else "",
                 }

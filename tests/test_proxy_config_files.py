@@ -465,6 +465,7 @@ def test_move_refuses_an_unwritable_target_a_disabled_host_and_a_route_that_is_n
 
     # adopted (hand-written) route: never moved
     sim.add("apps.yml", "hand-written", "adopted.example.com")
+    sim.files["apps.yml"]["hand-written"]["service"] = "hand-written"  # not the form's
     adopted = client.post(
         "/api/proxy-hosts",
         json={
@@ -481,7 +482,7 @@ def test_move_refuses_an_unwritable_target_a_disabled_host_and_a_route_that_is_n
     assert body["config_file_movable"] is False
     assert "never moved automatically" in body["config_file_note"]
     r = client.post(f"/api/proxy-hosts/{adopted.json()['id']}/move-config-file")
-    assert r.status_code == 409 and "adopted" in r.json()["detail"]["message"]
+    assert r.status_code == 409 and "never moved automatically" in r.json()["detail"]["message"]
     assert sim.file_of("hand-written") == "apps.yml"
 
 

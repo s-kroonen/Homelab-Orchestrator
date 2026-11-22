@@ -122,6 +122,9 @@ def tm(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, service: Service) -> Any
         resolver="letsencrypt",
     )
     sim.add("legacy.yml", "hand", "hand.example.com", upstream="http://10.0.0.16:80")
+    # Hand-written: each router points at a service named after itself (not the form's).
+    for name in ("nas", "hand"):
+        sim.files["legacy.yml"][name]["service"] = name
     client = _tm_client(
         monkeypatch,
         **{**TM_ENV, "STATE_DIR": str(tmp_path), "TRAEFIK_MANAGER_CONFIG_FILE": "apps.yml"},
@@ -149,7 +152,7 @@ def test_traefik_view_pairs_routes_with_records(tm: Any) -> None:
     out = client.get("/api/pull/traefik").json()
     assert out["readable"] is True
     nas = next(r for r in out["routes"] if r["route"] == "nas")
-    assert nas["host_id"] is not None and nas["owned"] is False and nas["file"] == "legacy.yml"
+    assert nas["host_id"] is not None and nas["editable"] is False and nas["file"] == "legacy.yml"
     hand = next(r for r in out["routes"] if r["route"] == "hand")
     assert hand["host_id"] is None  # no record: it is "discovered"
     assert out["no_route"] == []

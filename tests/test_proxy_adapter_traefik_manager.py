@@ -115,7 +115,8 @@ async def test_list_routes_sends_api_key_header_and_parses_apps(
     adapter = TraefikManagerProxyAdapter(_settings())
     routes = await adapter.list_routes()
 
-    assert seen["path"] == "/api/routes"
+    # The last read is Traefik's runtime routers (other providers' routes are listed too).
+    assert seen["path"] == "/api/traefik/routers"
     assert seen["api_key"] == "secret-key"
     assert routes == [
         RouteInfo(
@@ -166,14 +167,14 @@ http:
   routers:
     media-example-com:
       rule: Host(`media.example.com`)
-      service: media-service
+      service: media-example-com-service
       entryPoints:
         - websecure
       middlewares:
         - chain-no-auth
       tls: {}
   services:
-    media-service:
+    media-example-com-service:
       loadBalancer:
         servers:
           - url: http://10.0.0.9:8096
@@ -203,6 +204,8 @@ def _router_calls(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
                             "name": "media-example-com",
                             "protocol": "http",
                             "rule": "Host(`media.example.com`)",
+                            "servers": ["http://10.0.0.9:8096"],
+                            "service_name": "media-example-com-service",
                         }
                     ],
                     "middlewares": [],
@@ -250,11 +253,11 @@ async def test_ensure_maintenance_fallback_injects_preserving_every_other_field(
 
     # Every original field survives untouched...
     assert "rule: Host(`media.example.com`)" in new_raw
-    assert "service: media-service" in new_raw
+    assert "service: media-example-com-service" in new_raw
     assert "websecure" in new_raw
     assert "chain-no-auth" in new_raw  # the hand-authored middleware
     assert "tls: {}" in new_raw
-    assert "media-service:" in new_raw
+    assert "media-example-com-service:" in new_raw
     assert "http://10.0.0.9:8096" in new_raw
     # ...and the new middleware name was appended, not used to replace
     # anything.
@@ -335,6 +338,8 @@ async def test_remove_maintenance_fallback_removes_injection_leaves_middleware_d
                             "name": "media-example-com",
                             "protocol": "http",
                             "rule": "Host(`media.example.com`)",
+                            "servers": ["http://10.0.0.9:8096"],
+                            "service_name": "media-example-com-service",
                         }
                     ],
                     "middlewares": [{"name": mw_name}],
@@ -866,10 +871,10 @@ async def test_a_hand_written_route_never_gets_the_maintenance_rule(
     )
     assert not any(e.action == "middleware.injected" for e in events)
     assert not [p for p in saved if p.endswith("/raw")]
-    assert adapter.owns_route_ref("media.yml::media-example-com", "media.example.com")
-    assert not adapter.owns_route_ref("media.yml::media-example-com")  # no hostname: by prefix
-    assert adapter.owns_route_ref("media.yml::orchestrator-media-example-com")  # legacy prefix
-    assert not adapter.owns_route_ref("media.yml::media", "media.example.com")
+    # Names only matter where nothing can be read: whether a vanished route comes back as is.
+    assert adapter.recreatable_ref("media.yml::media-example-com", "media.example.com")
+    assert adapter.recreatable_ref("media.yml::orchestrator-media-example-com", "x.example.com")
+    assert not adapter.recreatable_ref("media.yml::media", "media.example.com")
 
 
 # ---------------------------------------------------------------------------

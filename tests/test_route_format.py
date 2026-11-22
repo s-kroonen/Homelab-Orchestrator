@@ -59,6 +59,9 @@ def _old(sim: SimTM, name: str = "nas", hostname: str = HOST, **kw: Any) -> None
     kw.setdefault("middlewares", (*LEGACY, "auth-basic"))
     kw.setdefault("resolver", "letsencrypt")
     sim.add("legacy.yml", name, hostname, upstream=UPSTREAM, **kw)
+    # Hand-written: the router points at a service named after itself, not at the
+    # `<name>-service` Traefik Manager's form writes, so it is read only by its contents.
+    sim.files["legacy.yml"][name]["service"] = name
 
 
 async def _plan(session: Session, adapters: Any, settings: Settings, **kw: Any) -> rf.FormatPlan:
