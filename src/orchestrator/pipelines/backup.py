@@ -44,6 +44,7 @@ from orchestrator.domain.enums import (
     AuditResult,
     BackupGate,
     BackupMode,
+    BackupWakeMode,
     GuestKind,
     HealthState,
     PipelineKind,
@@ -53,7 +54,7 @@ from orchestrator.domain.schemas import ServiceVerdict
 from orchestrator.health.engine import HealthEngine
 from orchestrator.logging_setup import get_logger, new_correlation_id
 from orchestrator.notify.hooks import announce
-from orchestrator.pipelines.backup_wake import BackupWaker, WakeContext
+from orchestrator.pipelines.backup_wake import BackupWaker, HeldNode, WakeContext
 from orchestrator.pipelines.interrupted import fail_unexpected
 from orchestrator.pipelines.steps import (
     BackupError,
@@ -65,7 +66,7 @@ from orchestrator.pipelines.wake import WakePipeline
 from orchestrator.registry.backup_plan import (
     BackupPlan,
     resolve_backup_plan,
-    resolve_policy_prerequisites,
+    resolve_prerequisites,
 )
 from orchestrator.registry.tree import TreeIndex, effective_guest
 
@@ -542,37 +543,86 @@ class BackupPipeline:
         on the returned context, and every per-service run handed that context
         fails at that step with the same clear error (and none re-fires the wake).
         """
+        return await self.prepare_shared(
+            session,
+            requires=list(policy.requires or []),
+            wake_mode=policy.wake_mode,
+            label=f"backup-policy:{policy.name}",
+            actor=actor,
+            ttl_s=self.hold_ttl_s(services),
+        )
+
+    def hold_ttl_s(self, services: int = 1) -> int:
+        return self._waker.hold_ttl_s(services) if self._waker is not None else 0
+
+    async def prepare_shared(
+        self,
+        session: Session,
+        *,
+        requires: list[str],
+        wake_mode: BackupWakeMode,
+        label: str,
+        actor: str = "scheduler",
+        ttl_s: int,
+    ) -> WakeContext:
+        """Wake ``requires`` once for a run of jobs (a backup batch, a cleanup, the queue that
+        runs them one after another) and hold it until :meth:`release_shared`. Never raises:
+        a failure is kept on the context (``error``)."""
         ctx = WakeContext()
         if self._waker is None:
             return ctx
-        entries = resolve_policy_prerequisites(session, policy)
+        entries = resolve_prerequisites(session, requires, wake_mode)
         if not entries:
             return ctx
         try:
             await self._waker.run(
-                session,
-                entries,
-                ctx,
-                None,
-                actor=actor,
-                hold_reason=f"backup-policy:{policy.name}",
-                ttl_s=self._waker.hold_ttl_s(services),
+                session, entries, ctx, None, actor=actor, hold_reason=label, ttl_s=ttl_s
             )
         except BackupError as exc:
             log.error(
-                "backup.policy.prerequisites_failed",
-                policy=policy.name,
+                "backup.shared.prerequisites_failed",
+                job=label,
                 error=str(exc),
-                impact="Every backup in this policy run fails at the wake step.",
+                impact="Every job that needs these fails at the wake step.",
             )
         return ctx
+
+    async def renew_holds(
+        self, session: Session, ctx: WakeContext, *, label: str, ttl_s: int
+    ) -> None:
+        """Take the shared holds again with a new TTL (the next job in a queue may run for
+        hours), then let the old ones go. Never raises."""
+        if self._waker is None or not ctx.held:
+            return
+        old = list(ctx.held)
+        ctx.held.clear()
+        for held in old:
+            node = session.get(Node, held.node_id)
+            if node is None:
+                continue
+            try:
+                handle = await self._waker.hold_node(session, node, reason=label, ttl_s=ttl_s)
+                ctx.held.append(
+                    HeldNode(node_id=held.node_id, node_name=held.node_name, handle=handle)
+                )
+            except Exception as exc:  # keep the old hold rather than none
+                ctx.held.append(held)
+                log.warning("backup.shared.renew_failed", node=held.node_name, error=str(exc))
+                continue
+        stale = WakeContext(held=[h for h in old if h not in ctx.held])
+        await self._waker.release(session, stale, None)
 
     async def release_prepared(
         self, session: Session, ctx: WakeContext, policy: BackupPolicy
     ) -> None:
+        await self.release_shared(session, ctx, restore=policy.restore_power_state)
+
+    async def release_shared(self, session: Session, ctx: WakeContext, *, restore: bool) -> None:
+        """Release a shared wake's holds and, when ``restore``, put back what it powered on
+        (and what the runs it carried handed over)."""
         if self._waker is not None and ctx.held:
             await self._waker.release(session, ctx, None)
-        if self._waker is not None and ctx.prior and policy.restore_power_state:
+        if self._waker is not None and ctx.prior and restore:
             await self._waker.restore(session, ctx, None)
         elif ctx.prior:
             ctx.prior.clear()

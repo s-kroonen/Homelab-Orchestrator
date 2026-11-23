@@ -30,6 +30,8 @@ from orchestrator.domain.enums import (
     BackupGate,
     BackupMode,
     BackupWakeMode,
+    CleanupGcMode,
+    CleanupWhen,
     GuestKind,
     HealthState,
     PipelineKind,
@@ -114,6 +116,43 @@ class BackupPolicy(SQLModel, table=True):
     max_attempts: int = Field(default=3)
     # Put back what the backup changed: guests it started are stopped and a node
     # it powered on is powered off again (unless something else needs it).
+    restore_power_state: bool = Field(default=True)
+    #: The cleanup policy this policy runs in the same wake (its name, "" for none), and
+    #: whether before or after its backups. See docs/cleanup.md.
+    cleanup_policy: str = ""
+    cleanup_when: CleanupWhen = Field(default=CleanupWhen.BEFORE)
+    created_at: datetime = Field(default_factory=_utcnow)
+    updated_at: datetime = Field(default_factory=_utcnow)
+
+
+class CleanupPolicy(SQLModel, table=True):
+    """Prune and garbage-collect a PBS datastore while it is awake (docs/cleanup.md).
+
+    Run by the backup policies that name it (before or after their backups, in the same
+    wake) and/or on its own schedule. The keep rules are the backup policies' own."""
+
+    __tablename__ = "cleanup_policy"
+
+    id: int | None = Field(default=None, primary_key=True)
+    name: str = Field(index=True, unique=True)
+    #: The PBS datastore; "" is the configured one (PBS_DATASTORE).
+    datastore: str = ""
+    #: Its own schedule (cron); "" runs it only with the backup policies that name it.
+    schedule_cron: str = ""
+    #: Prune each service's snapshots by its backup policy's keep rules.
+    prune: bool = Field(default=True)
+    #: Also prune groups no policy keeps, keeping the last N; None leaves them alone.
+    prune_unowned_keep_last: int | None = None
+    gc_mode: CleanupGcMode = Field(default=CleanupGcMode.INTERVAL)
+    #: GC_MODE interval: not again within this many hours of the last one that worked.
+    gc_interval_h: int = Field(default=20)
+    #: GC_MODE above: only when the datastore is fuller than this (percent).
+    gc_above_pct: int = Field(default=80)
+    #: How long to wait for PBS (the GC) before stopping it and putting things back.
+    max_wait_h: int = Field(default=6)
+    #: Slugs to wake and hold while it runs (the storage the datastore lives on).
+    requires: list[str] = Field(default_factory=list, sa_column=Column(JSON))
+    wake_mode: BackupWakeMode = Field(default=BackupWakeMode.FOLLOW)
     restore_power_state: bool = Field(default=True)
     created_at: datetime = Field(default_factory=_utcnow)
     updated_at: datetime = Field(default_factory=_utcnow)

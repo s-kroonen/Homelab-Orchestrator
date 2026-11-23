@@ -387,6 +387,8 @@ class Settings(BaseSettings):
     # A backup does not start when the PBS datastore has less free space than this: PBS
     # would refuse the upload part-way ("job errors"). 0 turns the check off.
     pbs_min_free_bytes: int = 1024**3
+    # How often a cleanup asks PBS how its garbage collection is getting on (seconds).
+    cleanup_poll_s: float = 15.0
     # A cold node can legitimately take minutes to POST, boot, and bring its
     # guests up — this bounds the whole wake pipeline, node-online and health
     # polling both count against it.

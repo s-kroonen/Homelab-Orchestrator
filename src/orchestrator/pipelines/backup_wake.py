@@ -290,6 +290,10 @@ class BackupWaker:
         handle = await self._wake.assert_hold(session, sink, node, reason=reason, ttl_s=ttl_s)
         ctx.held.append(HeldNode(node_id=node.id, node_name=node.name, handle=handle))
 
+    async def hold_node(self, session: Session, node: Node, *, reason: str, ttl_s: int) -> str:
+        """A fresh hold on ``node`` (a queue renewing its shared hold for the next job)."""
+        return await self._wake.assert_hold(session, _LogSteps(), node, reason=reason, ttl_s=ttl_s)
+
     async def _remember_prior(self, session: Session, slug: str, ctx: WakeContext) -> None:
         """Note what the node and guest were doing before this wake, once per node
         (a node already recorded as 'we powered it on' stays that way)."""

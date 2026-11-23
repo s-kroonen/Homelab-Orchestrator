@@ -18,6 +18,8 @@ from orchestrator.domain.enums import (
     BackupGate,
     BackupMode,
     BackupWakeMode,
+    CleanupGcMode,
+    CleanupWhen,
     GuestKind,
     ProbeKind,
     WakeTrigger,
@@ -68,6 +70,31 @@ class BackupPolicySpec(BaseModel):
     max_attempts: int = Field(default=3, ge=1, le=20)
     #: Stop what the backup started and power its node back off. See
     #: BackupPolicy.restore_power_state.
+    restore_power_state: bool = True
+    #: The cleanup policy run in the same wake ("" for none) and when. See
+    #: BackupPolicy.cleanup_policy and docs/cleanup.md. Omitted from the YAML when unset.
+    cleanup_policy: str = ""
+    cleanup_when: CleanupWhen = CleanupWhen.BEFORE
+
+    _collapse_requires = field_validator("requires")(_collapse_slugs)
+
+
+class CleanupPolicySpec(BaseModel):
+    """A ``cleanup_policies`` entry: see CleanupPolicy and docs/cleanup.md."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str
+    datastore: str = ""
+    schedule_cron: str = ""
+    prune: bool = True
+    prune_unowned_keep_last: int | None = Field(default=None, ge=1, le=1000)
+    gc_mode: CleanupGcMode = CleanupGcMode.INTERVAL
+    gc_interval_h: int = Field(default=20, ge=0, le=24 * 365)
+    gc_above_pct: int = Field(default=80, ge=1, le=100)
+    max_wait_h: int = Field(default=6, ge=1, le=72)
+    requires: list[str] = Field(default_factory=list)
+    wake_mode: BackupWakeMode = BackupWakeMode.FOLLOW
     restore_power_state: bool = True
 
     _collapse_requires = field_validator("requires")(_collapse_slugs)
@@ -220,4 +247,5 @@ class RegistryFile(BaseModel):
     version: int = 1
     nodes: list[NodeSpec] = Field(default_factory=list)
     backup_policies: list[BackupPolicySpec] = Field(default_factory=list)
+    cleanup_policies: list[CleanupPolicySpec] = Field(default_factory=list)
     services: list[ServiceSpec] = Field(default_factory=list)

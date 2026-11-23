@@ -7,7 +7,9 @@ from typing import Any
 
 from orchestrator.adapters.pbs.base import (
     DatastoreStatus,
+    GcStatus,
     PbsAdapter,
+    PbsTask,
     PbsVersionInfo,
     Snapshot,
 )
@@ -139,6 +141,20 @@ class DryRunPbsAdapter(PbsAdapter):
             dry_run=dry_run,
         )
         return []
+
+    async def start_garbage_collection(self, datastore: str) -> str:
+        upid = f"UPID:dry-run:00000000:00000000:00000000:garbage_collection:{datastore}:dry-run:"
+        log.info("pbs.dry_run.gc", datastore=datastore, upid=upid)
+        return upid
+
+    async def garbage_collection_status(self, datastore: str) -> GcStatus:
+        return GcStatus(removed_bytes=0, pending_bytes=0)
+
+    async def task(self, upid: str, *, log_lines: int = 50) -> PbsTask:
+        return PbsTask(upid=upid, running=False, exit_status="OK", log_tail=["dry run"])
+
+    async def stop_task(self, upid: str) -> None:
+        log.info("pbs.dry_run.stop_task", upid=upid)
 
     async def set_protected(
         self,

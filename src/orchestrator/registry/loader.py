@@ -32,6 +32,7 @@ from orchestrator.db.models import (
     SETTING_LAST_YAML_SAVE,
     SETTING_PROXY_PENDING_DELETES,
     BackupPolicy,
+    CleanupPolicy,
     Node,
     Probe,
     ProxyHost,
@@ -44,6 +45,7 @@ from orchestrator.registry.backup_plan import clean_slug_list, requires_problems
 from orchestrator.registry.proxy_validation import validate_cert_resolver, validate_entry_points
 from orchestrator.registry.schema import (
     BackupPolicySpec,
+    CleanupPolicySpec,
     NodeSpec,
     ProbeSpec,
     ProxyHostSpec,
@@ -114,6 +116,13 @@ def write_yaml_file(path: Path, registry: RegistryFile) -> str:
     # mode="json" so enums serialise to their string values and datetimes/
     # paths are stringified — ruamel's default representer only handles primitives.
     body = registry.model_dump(mode="json", exclude_defaults=False)
+    for pol in body.get("backup_policies", []):
+        # A policy without a cleanup says nothing about one.
+        if not pol.get("cleanup_policy"):
+            pol.pop("cleanup_policy", None)
+            pol.pop("cleanup_when", None)
+    if not body.get("cleanup_policies"):
+        body.pop("cleanup_policies", None)
     for svc in body.get("services", []):
         # Tree/automation keys appear only when they say something.
         for key, default in (
@@ -178,7 +187,41 @@ def policy_spec(p: BackupPolicy) -> BackupPolicySpec:
         wake_mode=p.wake_mode,
         max_attempts=p.max_attempts,
         restore_power_state=p.restore_power_state,
+        cleanup_policy=p.cleanup_policy or "",
+        cleanup_when=p.cleanup_when,
     )
+
+
+def cleanup_policy_spec(c: CleanupPolicy) -> CleanupPolicySpec:
+    return CleanupPolicySpec(
+        name=c.name,
+        datastore=c.datastore,
+        schedule_cron=c.schedule_cron,
+        prune=c.prune,
+        prune_unowned_keep_last=c.prune_unowned_keep_last,
+        gc_mode=c.gc_mode,
+        gc_interval_h=c.gc_interval_h,
+        gc_above_pct=c.gc_above_pct,
+        max_wait_h=c.max_wait_h,
+        requires=list(c.requires or []),
+        wake_mode=c.wake_mode,
+        restore_power_state=c.restore_power_state,
+    )
+
+
+def apply_cleanup_spec(c: CleanupPolicy, spec: CleanupPolicySpec) -> None:
+    c.datastore = spec.datastore
+    c.schedule_cron = spec.schedule_cron
+    c.prune = spec.prune
+    c.prune_unowned_keep_last = spec.prune_unowned_keep_last
+    c.gc_mode = spec.gc_mode
+    c.gc_interval_h = spec.gc_interval_h
+    c.gc_above_pct = spec.gc_above_pct
+    c.max_wait_h = spec.max_wait_h
+    c.requires = clean_slug_list(spec.requires)
+    c.wake_mode = spec.wake_mode
+    c.restore_power_state = spec.restore_power_state
+    c.updated_at = datetime.now(UTC)
 
 
 def _spec_from_db(session: Session) -> RegistryFile:
@@ -265,6 +308,10 @@ def _spec_from_db(session: Session) -> RegistryFile:
             for n in nodes
         ],
         backup_policies=[policy_spec(p) for p in policies],
+        cleanup_policies=[
+            cleanup_policy_spec(c)
+            for c in session.exec(select(CleanupPolicy).order_by(CleanupPolicy.name)).all()
+        ],
         services=services_out,
     )
 
@@ -282,6 +329,7 @@ def _hash_spec(spec: RegistryFile) -> str:
     body = spec.model_dump(mode="json")
     body["nodes"] = sorted(body.get("nodes", []), key=lambda n: n["name"])
     body["backup_policies"] = sorted(body.get("backup_policies", []), key=lambda p: p["name"])
+    body["cleanup_policies"] = sorted(body.get("cleanup_policies", []), key=lambda p: p["name"])
     services = sorted(body.get("services", []), key=lambda s: s["slug"])
     for svc in services:
         svc["probes"] = sorted(
@@ -360,6 +408,22 @@ def validate_references(parsed: RegistryFile, *, strict: bool = False) -> None:
     slugs = {s.slug for s in parsed.services}
 
     problems: list[str] = []
+    cleanup_names = [c.name for c in parsed.cleanup_policies]
+    for name in sorted({n for n in cleanup_names if cleanup_names.count(n) > 1}):
+        problems.append(f"cleanup policy {name!r} is defined more than once")
+    for pol in parsed.backup_policies:
+        if pol.cleanup_policy and pol.cleanup_policy not in cleanup_names:
+            known = ", ".join(sorted(cleanup_names)) or "(none)"
+            problems.append(
+                f"backup policy {pol.name!r} runs cleanup policy {pol.cleanup_policy!r}, which "
+                f"this file does not define. Cleanup policies defined here: {known}"
+            )
+    for cpol in parsed.cleanup_policies:
+        for slug in cpol.requires:
+            if slug not in slugs:
+                problems.append(
+                    f"cleanup policy {cpol.name!r} needs {slug!r}, which this file does not define"
+                )
     for svc in parsed.services:
         for dep in svc.depends_on:
             if dep == svc.slug:
@@ -634,8 +698,24 @@ def reconcile_yaml_into_db(session: Session, path: Path) -> RegistryFile:
         pol.wake_mode = spec.wake_mode
         pol.max_attempts = spec.max_attempts
         pol.restore_power_state = spec.restore_power_state
+        pol.cleanup_policy = spec.cleanup_policy
+        pol.cleanup_when = spec.cleanup_when
         pol.updated_at = datetime.now(UTC)
 
+    session.flush()
+
+    # --- CleanupPolicies: upsert, and drop what the file no longer has -------
+    yaml_cleanup_names = {c.name for c in parsed.cleanup_policies}
+    existing_cleanups = {c.name: c for c in session.exec(select(CleanupPolicy)).all()}
+    for cspec in parsed.cleanup_policies:
+        cpol = existing_cleanups.get(cspec.name)
+        if cpol is None:
+            cpol = CleanupPolicy(name=cspec.name)
+            session.add(cpol)
+        apply_cleanup_spec(cpol, cspec)
+    for name, cpol in existing_cleanups.items():
+        if name not in yaml_cleanup_names:
+            session.delete(cpol)
     session.flush()
 
     # Reload maps now that IDs are settled.

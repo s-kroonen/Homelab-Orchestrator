@@ -316,6 +316,58 @@ def _apply_retention_precheck(ctx: ToolContext, a: dict[str, Any]) -> None:
         raise ToolError(f"policy {policy.name!r} keeps everything: nothing would be pruned")
 
 
+def _running_scheduler() -> Any:
+    from orchestrator.scheduler import current
+
+    scheduler = current()
+    if scheduler is None or not scheduler.running:
+        raise ToolError("the backup scheduler is not running (SCHEDULER_ENABLED=false?)")
+    return scheduler
+
+
+async def _list_cleanup_policies(ctx: ToolContext, a: dict[str, Any]) -> Any:
+    from orchestrator.db.models import CleanupPolicy
+    from orchestrator.scheduler import current
+    from orchestrator.web.routers.cleanup_policies import cleanup_to_dict
+
+    rows = ctx.session.exec(select(CleanupPolicy).order_by(CleanupPolicy.name)).all()
+    return [cleanup_to_dict(ctx.session, c, current()) for c in rows]
+
+
+async def _backup_queue(ctx: ToolContext, a: dict[str, Any]) -> Any:
+    from orchestrator.scheduler import current
+
+    scheduler = current()
+    return scheduler.queue() if scheduler is not None else {"held": None, "jobs": []}
+
+
+def _run_cleanup_precheck(ctx: ToolContext, a: dict[str, Any]) -> None:
+    from orchestrator.db.models import CleanupPolicy
+
+    name = a.get("name")
+    if not ctx.session.exec(select(CleanupPolicy).where(CleanupPolicy.name == name)).first():
+        raise ToolError(f"no cleanup policy {name!r}")
+    _running_scheduler()
+
+
+async def _run_cleanup(ctx: ToolContext, a: dict[str, Any]) -> Any:
+    _run_cleanup_precheck(ctx, a)
+    scheduler = _running_scheduler()
+    name, actor = a["name"], ctx.actor
+    task = asyncio.create_task(
+        scheduler.run_cleanup(name, actor=actor, reason=f"asked by {actor}"),
+        name=f"mcp-cleanup:{name}",
+    )
+    _BACKGROUND.add(task)
+    task.add_done_callback(_BACKGROUND.discard)
+    return {
+        "queued": True,
+        "cleanup": name,
+        "queue": scheduler.queue(),
+        "next": "poll list_runs with kind=cleanup, then get_run; it waits for PBS's GC",
+    }
+
+
 async def _list_runs(ctx: ToolContext, a: dict[str, Any]) -> Any:
     from orchestrator.web.routers import backup
 
@@ -1233,6 +1285,23 @@ TOOLS: dict[str, Tool] = {
             ("slug",),
         ),
         Tool(
+            "list_cleanup_policies",
+            "List cleanup policies",
+            "The datastore cleanup policies: what each prunes, when it runs garbage collection, "
+            "which backup policies run it (before or after their backups), its schedule and how "
+            "its last run went (removed, GC result).",
+            "read",
+            _list_cleanup_policies,
+        ),
+        Tool(
+            "backup_queue",
+            "Show the backup queue",
+            "Backup batches and cleanups running and waiting, in order, and what the queue "
+            "holds awake between them (one wake of the storage for all of them).",
+            "read",
+            _backup_queue,
+        ),
+        Tool(
             "list_runs",
             "List pipeline runs",
             "Recent pipeline runs (backup, wake, restore, switch, deploy), newest first. "
@@ -1811,6 +1880,22 @@ TOOLS: dict[str, Tool] = {
             lambda a: f"PRUNE old backups of {a.get('slug')} in PBS by its backup policy "
             "(snapshots the policy does not keep are deleted)",
             _apply_retention_precheck,
+        ),
+        Tool(
+            "run_cleanup",
+            "Clean a PBS datastore now",
+            "Queue a cleanup policy now: wake its storage (or join the queue that holds it), "
+            "prune every service's snapshots by its backup policy, run PBS's garbage collection "
+            "and wait until it finishes, then put the node back. Deletes backups: always needs "
+            "a person's approval. See list_cleanup_policies first.",
+            "backup",
+            _run_cleanup,
+            {"name": _s("The cleanup policy's name, as list_cleanup_policies shows it")},
+            ("name",),
+            DANGEROUS,
+            lambda a: f"CLEAN datastore by cleanup policy {a.get('name')}: prune snapshots the "
+            "backup policies do not keep, then garbage-collect",
+            _run_cleanup_precheck,
         ),
         Tool(
             "guest_power",

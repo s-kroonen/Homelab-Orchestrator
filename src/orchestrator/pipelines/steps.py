@@ -96,8 +96,14 @@ class StepRecorder:
             "finished_at": now.isoformat(),
             "detail": detail or {},
         }
+        steps = list(self._run.steps or [])
+        # A step still "running" with this name is replaced, not repeated: a long step
+        # (a GC followed to its end) reports progress in place, then its outcome.
+        if steps and steps[-1].get("name") == name and steps[-1].get("status") == "running":
+            entry["started_at"] = steps[-1].get("started_at", entry["started_at"])
+            steps.pop()
         # Reassign (not append) so SQLAlchemy sees the JSON column as dirty.
-        self._run.steps = [*self._run.steps, entry]
+        self._run.steps = [*steps, entry]
         self._session.add(self._run)
         self._session.commit()
         log.info("pipeline.step", run_id=self._run.id, step=name, status=status, **(detail or {}))

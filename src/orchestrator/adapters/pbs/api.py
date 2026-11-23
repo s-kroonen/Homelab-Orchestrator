@@ -9,7 +9,9 @@ from typing import Any
 from orchestrator.adapters.errors import TaskTimeout
 from orchestrator.adapters.pbs.base import (
     DatastoreStatus,
+    GcStatus,
     PbsAdapter,
+    PbsTask,
     PbsVersionInfo,
     Snapshot,
 )
@@ -194,6 +196,52 @@ class LivePbsAdapter(PbsAdapter):
             protected=protected,
         )
 
+    async def start_garbage_collection(self, datastore: str) -> str:
+        upid = await self._client.request("POST", f"/admin/datastore/{datastore}/gc")
+        log.info("pbs.gc.started", datastore=datastore, upid=upid)
+        return str(upid)
+
+    async def garbage_collection_status(self, datastore: str) -> GcStatus:
+        data = await self._client.request("GET", f"/admin/datastore/{datastore}/gc") or {}
+
+        def num(key: str) -> int | None:
+            value = data.get(key)
+            return int(value) if isinstance(value, int | float) else None
+
+        return GcStatus(
+            upid=str(data["upid"]) if data.get("upid") else None,
+            removed_bytes=num("removed-bytes"),
+            pending_bytes=num("pending-bytes"),
+            disk_bytes=num("disk-bytes"),
+            index_file_count=num("index-file-count"),
+            raw=dict(data),
+        )
+
+    async def task(self, upid: str, *, log_lines: int = 50) -> PbsTask:
+        node = _task_node(upid, self._node)
+        status = await self._client.request("GET", f"/nodes/{node}/tasks/{upid}/status") or {}
+        running = status.get("status") != "stopped"
+        tail: list[str] = []
+        try:
+            # The log comes from its first line; read enough and keep the end.
+            rows = await self._client.request(
+                "GET", f"/nodes/{node}/tasks/{upid}/log", params={"limit": 100000}
+            )
+            tail = [str(r.get("t", "")) for r in rows or []][-log_lines:]
+        except Exception as exc:  # the log is a nicety; never fail the poll over it
+            log.debug("pbs.task_log.unavailable", upid=upid, error=str(exc))
+        return PbsTask(
+            upid=upid,
+            running=running,
+            exit_status=None if running else status.get("exitstatus"),
+            log_tail=tail,
+        )
+
+    async def stop_task(self, upid: str) -> None:
+        node = _task_node(upid, self._node)
+        await self._client.request("DELETE", f"/nodes/{node}/tasks/{upid}")
+        log.warning("pbs.task.stopped", upid=upid)
+
     async def _wait_for_task(
         self, upid: str, *, timeout_s: int, poll_interval_s: float = 3.0
     ) -> dict[str, Any]:
@@ -207,6 +255,12 @@ class LivePbsAdapter(PbsAdapter):
             if time.monotonic() >= deadline:
                 raise TaskTimeout(f"PBS task {upid} still running after {timeout_s}s", upid=upid)
             await asyncio.sleep(poll_interval_s)
+
+
+def _task_node(upid: str, default: str) -> str:
+    """The node a UPID belongs to (``UPID:<node>:...``); PBS names it in the UPID."""
+    parts = upid.split(":")
+    return parts[1] if len(parts) > 2 and parts[0] == "UPID" and parts[1] else default
 
 
 def _snapshot_from_row(datastore: str, row: dict[str, Any]) -> Snapshot:
