@@ -484,6 +484,7 @@ def create_app() -> FastAPI:
     app.include_router(backup_policies.router)
     app.include_router(cleanup_policies.router)
     app.include_router(cleanup_policies.queue_router)
+    app.include_router(cleanup_policies.datastore_router)
     app.include_router(proxy_hosts.router)
     app.include_router(proxy_hosts.catalog_router)
     app.include_router(bulk.router)

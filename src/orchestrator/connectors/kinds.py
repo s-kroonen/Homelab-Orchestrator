@@ -412,7 +412,7 @@ async def _pbs_datastores(ctx: SourceCtx) -> list[dict[str, Any]]:
     out = []
     for name in await ctx.adapter.list_datastores():
         st = await ctx.adapter.datastore_status(name)
-        used, total = getattr(st, "used", 0) or 0, getattr(st, "total", 0) or 0
+        used, total = st.used_bytes or 0, st.total_bytes or 0
         pct = round(100 * used / total) if total else None
         out.append(
             {
@@ -502,6 +502,7 @@ class PbsConnector(Connector):
     group = "Backups"
     family = "network"
     blurb = "datastores and snapshots"
+    scripts = ("source_pbs.js",)
     resources = (
         Resource(
             "datastores",
@@ -514,6 +515,7 @@ class PbsConnector(Connector):
             ),
             _pbs_datastores,
             chips=(Chip("full", "Filling up"),),
+            view="pbs.datastores",
         ),
         Resource(
             "snapshots",

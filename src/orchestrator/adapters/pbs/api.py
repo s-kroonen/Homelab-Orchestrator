@@ -242,6 +242,67 @@ class LivePbsAdapter(PbsAdapter):
         await self._client.request("DELETE", f"/nodes/{node}/tasks/{upid}")
         log.warning("pbs.task.stopped", upid=upid)
 
+    async def delete_snapshot(
+        self, datastore: str, *, backup_type: str, backup_id: str, backup_time: int
+    ) -> None:
+        await self._client.request(
+            "DELETE",
+            f"/admin/datastore/{datastore}/snapshots",
+            params={"backup-type": backup_type, "backup-id": backup_id, "backup-time": backup_time},
+        )
+        log.warning(
+            "pbs.snapshot.deleted",
+            datastore=datastore,
+            group=f"{backup_type}/{backup_id}",
+            backup_time=backup_time,
+        )
+
+    async def own_jobs(self, datastore: str) -> list[dict[str, Any]]:
+        """Best effort, version by version: a list endpoint PBS does not have (older PBS) or
+        the token may not read is left out rather than failing the whole answer."""
+        jobs: list[dict[str, Any]] = []
+
+        def job(kind: str, row: dict[str, Any], detail: str = "") -> dict[str, Any]:
+            return {
+                "kind": kind,
+                "id": str(row.get("id") or row.get("store") or kind),
+                "schedule": row.get("schedule") or row.get("gc-schedule") or "",
+                "last_state": row.get("last-run-state"),
+                "last_end": row.get("last-run-endtime"),
+                "next_run": row.get("next-run"),
+                "detail": detail,
+            }
+
+        gc_found = False
+        try:
+            for row in await self._client.request("GET", "/admin/gc") or []:
+                if row.get("store") == datastore:
+                    jobs.append(job("gc", row))
+                    gc_found = True
+        except Exception as exc:
+            log.debug("pbs.own_jobs.gc_unavailable", error=str(exc))
+        if not gc_found:
+            try:
+                cfg = await self._client.request("GET", f"/config/datastore/{datastore}") or {}
+                if cfg.get("gc-schedule"):
+                    jobs.append(job("gc", {"schedule": cfg["gc-schedule"], "id": datastore}))
+            except Exception as exc:
+                log.debug("pbs.own_jobs.config_unavailable", error=str(exc))
+        for kind, path in (("prune", "/admin/prune"), ("verify", "/admin/verify")):
+            try:
+                rows = await self._client.request("GET", path) or []
+            except Exception as exc:
+                log.debug("pbs.own_jobs.unavailable", kind=kind, error=str(exc))
+                continue
+            for row in rows:
+                if row.get("store") != datastore:
+                    continue
+                keeps = ", ".join(
+                    f"{k}={v}" for k, v in sorted(row.items()) if k.startswith("keep-") and v
+                )
+                jobs.append(job(kind, row, keeps))
+        return jobs
+
     async def _wait_for_task(
         self, upid: str, *, timeout_s: int, poll_interval_s: float = 3.0
     ) -> dict[str, Any]:

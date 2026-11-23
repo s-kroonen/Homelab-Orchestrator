@@ -539,3 +539,71 @@ async def run_policy_now(
     _RUNS.add(task)
     task.add_done_callback(_RUNS.discard)
     return {"started": True, "policy": name, "services": services}
+
+
+@router.post("/{name}/prune-preview")
+async def prune_preview(name: str, request: Request, session: SessionDep) -> dict[str, Any]:
+    """What pruning this policy's services by its keep rules would remove now: PBS's own
+    prune as a dry run, per service, or PBS's reason when it refuses. Changes nothing. Needs
+    the datastore online; when it is not, every service says so and Prune still queues."""
+    from orchestrator.scheduler.retention import enforce_retention
+
+    policy = _get_or_404(session, name)
+    adapters = getattr(request.app.state, "adapters", None)
+    if adapters is None:
+        raise HTTPException(503, "the adapters are not ready")
+    settings = get_settings()
+    rows: list[dict[str, Any]] = []
+    for slug in _attached_services(session, policy):
+        try:
+            result = await enforce_retention(
+                session, adapters.pbs, policy, slug, settings=settings, preview=True
+            )
+            rows.append(
+                {
+                    "service": slug,
+                    "group": result.group,
+                    "would_remove": result.pruned,
+                    "skipped": result.prune_skipped_reason,
+                }
+            )
+        except Exception as exc:  # each service answers for itself
+            rows.append({"service": slug, "group": "", "would_remove": [], "error": str(exc)})
+    return {
+        "policy": name,
+        "retention": policy.retention,
+        "services": rows,
+        "total": sum(len(r["would_remove"]) for r in rows),
+    }
+
+
+class PruneIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    gc: bool = True
+
+
+@router.post("/{name}/prune", status_code=202)
+async def prune_now(
+    name: str, body: PruneIn, request: Request, session: SessionDep, admin: CurrentAdmin
+) -> dict[str, Any]:
+    """Prune this policy's services by its keep rules now, then (``gc``) run PBS's garbage
+    collection: queued like a cleanup, waking the policy's storage."""
+    _get_or_404(session, name)
+    scheduler = _scheduler(request)
+    if scheduler is None:
+        raise HTTPException(409, "the backup scheduler is not running (SCHEDULER_ENABLED=false?)")
+    audit.record(
+        session,
+        actor=admin.username,
+        action="backup_policy.prune_now",
+        target=f"policy:{name}",
+        details={"gc": body.gc},
+    )
+    session.commit()
+    task = asyncio.create_task(
+        scheduler.run_prune(name, gc=body.gc, actor=admin.username), name=f"prune-{name}"
+    )
+    _RUNS.add(task)
+    task.add_done_callback(_RUNS.discard)
+    return {"queued": True, "policy": name, "gc": body.gc}

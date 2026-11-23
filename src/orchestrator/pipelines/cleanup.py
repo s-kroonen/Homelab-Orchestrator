@@ -120,9 +120,13 @@ class CleanupPipeline:
         actor: str = "scheduler",
         reason: str = "",
         stop: asyncio.Event | None = None,
+        only_policy: str | None = None,
     ) -> PipelineRun:
         """Run one cleanup. Returns the finished run (SUCCEEDED or FAILED); never raises
-        for a failed cleanup, only for an error it has no branch for."""
+        for a failed cleanup, only for an error it has no branch for.
+
+        ``only_policy``: prune just that backup policy's services ("Prune now" on a backup
+        policy); groups no policy keeps are then neither listed nor touched."""
         datastore = self.datastore(policy)
         run = PipelineRun(
             kind=PipelineKind.CLEANUP,
@@ -153,7 +157,7 @@ class CleanupPipeline:
             self._storage(steps, prepared)
             before = await self._space(steps, "space_before", datastore)
             if policy.prune:
-                problems += await self._prune(session, steps, policy, datastore, actor)
+                problems += await self._prune(session, steps, policy, datastore, actor, only_policy)
             else:
                 steps.record("prune", "skipped", detail={"reason": "the policy does not prune"})
             gc_problem = await self._gc(session, steps, policy, datastore, before, stop)
@@ -253,6 +257,7 @@ class CleanupPipeline:
         policy: CleanupPolicy,
         datastore: str,
         actor: str,
+        only_policy: str | None = None,
     ) -> list[str]:
         """Prune by each backup policy, then list (or prune) the groups no policy keeps."""
         from orchestrator.scheduler.retention import enforce_retention
@@ -281,7 +286,7 @@ class CleanupPipeline:
                 continue
             owned.add(f"{pbs_type}/{svc.guest_id}")
             bpol = policies.get(svc.backup_policy_id)
-            if bpol is None:
+            if bpol is None or (only_policy and bpol.name != only_policy):
                 continue
             try:
                 result = await enforce_retention(
@@ -293,7 +298,7 @@ class CleanupPipeline:
                 session.rollback()
                 errors[svc.slug] = str(exc)[:300]
 
-        unowned = await self._unowned(datastore, owned)
+        unowned = [] if only_policy else await self._unowned(datastore, owned)
         unowned_removed = 0
         keep = policy.prune_unowned_keep_last
         if keep and unowned:

@@ -79,6 +79,24 @@ PBS only removes chunks nothing has used for about 24 hours. So what tonight's p
 * **Room to clean.** GC writes a little before it frees anything. On a ZFS dataset with a quota, keep the quota a few GB above what is used. If not, GC fails with `EDQUOT: Quota exceeded`, and the fix is to raise the quota for that one run.
 * **Turn off PBS's own GC and prune jobs** for the datastore (Datastore, then Prune & GC Jobs). They run while it is offline, and a PBS prune job ignores the backup policies' keep rules.
 
+## On the dashboard
+
+* **Backups → Cleanup**:
+  * the queue (what is held awake, what runs, what waits, Cancel / Stop);
+  * the cleanup policies (When, Does, Last run, Run now…, Edit, Delete);
+  * the datastore card (used, what waits for the next GC, the last GC);
+  * a warning when PBS's own GC or prune job would run on it, or the token lacks Datastore.Modify.
+* **Backups → Policies**:
+  * a backup policy's drawer has a **Cleanup** section (which cleanup policy, before or after);
+  * `⋯ → Prune now…` shows PBS's own dry run per service, then queues the prune, with GC after it if wanted.
+* **Backups → Snapshots**:
+  * each snapshot's service and what made it;
+  * **Delete** by hand (a row's `⋯`, or select several), typing the service's name to confirm. A protected snapshot and the newest verified one of a group are never deleted: refused with the reason.
+* **Activity**: a cleanup run opens in the run drawer with its steps in words, the GC's progress bar while it runs, and *Stop the GC…*.
+* **Sources → the PBS source → Datastores**:
+  * usage, the last GC as PBS reports it, and which cleanup policy cleans each datastore;
+  * for the chosen one, PBS's own GC, prune and verify jobs, and the token's permissions.
+
 ## Endpoints and tools
 
 | What | API | Assistant (MCP) |
@@ -86,6 +104,9 @@ PBS only removes chunks nothing has used for about 24 hours. So what tonight's p
 | List, create, edit, delete | `/api/cleanup-policies` | `list_cleanup_policies` |
 | Run now (queued) | `POST /api/cleanup-policies/{name}/run` | `run_cleanup` (needs a person's approval: it deletes backups) |
 | The queue | `GET /api/backup-queue`, `DELETE /api/backup-queue/{id}` | `backup_queue` |
+| Prune one backup policy now | `POST /api/backup-policies/{name}/prune-preview`, `POST /api/backup-policies/{name}/prune` | `apply_retention` (per service) |
+| Delete snapshots by hand | `POST /api/infra/pbs/snapshots/delete` | — |
+| One datastore: usage, GC, PBS's own jobs, permissions | `GET /api/pbs-datastore?name=` | — |
 
 Cleanup policies round-trip through `services.yaml` like backup policies, saved by *Save* or the autosave.
 

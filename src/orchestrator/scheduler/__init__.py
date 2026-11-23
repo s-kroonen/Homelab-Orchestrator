@@ -45,7 +45,7 @@ from orchestrator.config import Settings
 from orchestrator.db.models import BackupPolicy, CleanupPolicy, Service
 from orchestrator.db.session import session_scope
 from orchestrator.display import get_timezone
-from orchestrator.domain.enums import AuditResult, BackupWakeMode, CleanupWhen
+from orchestrator.domain.enums import AuditResult, BackupWakeMode, CleanupGcMode, CleanupWhen
 from orchestrator.logging_setup import get_logger
 from orchestrator.notify.jobs import job_failed, job_ok
 from orchestrator.pipelines.backup import BackupError, BackupPipeline, BackupSkipped, WakeContext
@@ -564,6 +564,44 @@ class BackupScheduler:
             lambda job: self._cleanup_job(name, job, actor, reason),
         )
 
+    async def run_prune(
+        self, policy_name: str, *, gc: bool, actor: str = "scheduler"
+    ) -> int | None:
+        """ "Prune now" on a backup policy: its services pruned by its keep rules, and PBS's
+        GC after when ``gc``, queued like a cleanup (it wakes the policy's storage)."""
+        with session_scope() as session:
+            policy = session.exec(
+                select(BackupPolicy).where(BackupPolicy.name == policy_name)
+            ).one_or_none()
+            if policy is None:
+                return None
+            requires = list(policy.requires or [])
+
+        async def body(job: QueuedJob) -> int | None:
+            with session_scope() as session:
+                pol = session.exec(
+                    select(BackupPolicy).where(BackupPolicy.name == policy_name)
+                ).one_or_none()
+                if pol is None:
+                    return None
+                ad_hoc = CleanupPolicy(
+                    name=f"prune:{policy_name}",
+                    prune=True,
+                    gc_mode=CleanupGcMode.INTERVAL if gc else CleanupGcMode.OFF,
+                    gc_interval_h=0,
+                    requires=list(pol.requires or []),
+                    wake_mode=pol.wake_mode,
+                    restore_power_state=pol.restore_power_state,
+                )
+                return await self._run_cleanup(
+                    session, ad_hoc, self._pipeline_factory(), job, actor,
+                    f"prune now on {policy_name}", only_policy=policy_name,
+                )  # fmt: skip
+
+        return await self._queued(  # type: ignore[no-any-return]
+            "cleanup", f"prune {policy_name}", actor, requires, body
+        )
+
     async def _cleanup_job(self, name: str, job: QueuedJob, actor: str, reason: str) -> int | None:
         with session_scope() as session:
             cleanup = session.exec(
@@ -582,6 +620,7 @@ class BackupScheduler:
         job: QueuedJob,
         actor: str,
         reason: str,
+        only_policy: str | None = None,
     ) -> int | None:
         from orchestrator.pipelines.cleanup import CleanupPipeline
 
@@ -597,7 +636,13 @@ class BackupScheduler:
         )
         try:
             run = await CleanupPipeline(pbs=self._adapters.pbs, settings=self._settings).run(
-                session, cleanup, prepared=ctx, actor=actor, reason=reason, stop=job.stop
+                session,
+                cleanup,
+                prepared=ctx,
+                actor=actor,
+                reason=reason,
+                stop=job.stop,
+                only_policy=only_policy,
             )
         except Exception as exc:
             log.error(

@@ -170,6 +170,17 @@ class PbsAdapter(ABC):
         """Ask PBS to stop a running task."""
         raise NotImplementedError
 
+    async def delete_snapshot(
+        self, datastore: str, *, backup_type: str, backup_id: str, backup_time: int
+    ) -> None:
+        """Remove one snapshot (its index; the chunks go at the next garbage collection)."""
+        raise NotImplementedError
+
+    async def own_jobs(self, datastore: str) -> list[dict[str, Any]]:
+        """PBS's own GC, prune and verify jobs on ``datastore``: ``kind``, ``id``,
+        ``schedule``, ``last_state``, ``last_end`` (epoch), ``next_run`` (epoch), ``detail``."""
+        return []
+
     @abstractmethod
     async def set_protected(
         self,

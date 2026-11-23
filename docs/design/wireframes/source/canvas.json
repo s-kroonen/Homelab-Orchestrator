@@ -18,7 +18,7 @@
     "BackupsCleanup.dc.html": {"x": 6080, "y": 4369, "w": 1440, "h": 1080, "title": "Backups — Cleanup tab: cleanup policies, the wake queue, the datastore", "expand": "fill"},
     "BackupsCleanupEdit.dc.html": {"x": 7600, "y": 4369, "w": 1440, "h": 1040, "title": "Backups — edit a cleanup policy (prune, garbage collection, waiting, wake)", "expand": "fill"},
     "BackupsPolicyCleanup.dc.html": {"x": 9120, "y": 4369, "w": 1440, "h": 900, "title": "Backups — a backup policy runs a cleanup before or after its backups", "expand": "fill"},
-    "CleanupRun.dc.html": {"x": 10640, "y": 4369, "w": 1440, "h": 900, "title": "Cleanup run — waits for PBS's garbage collection, inside the queue", "expand": "fill"},
+    "CleanupRun.dc.html": {"x": 10640, "y": 4369, "w": 1440, "h": 900, "title": "Cleanup run — waits for PBS's garbage collection, inside the queue (built in Activity's run drawer, like every run)", "expand": "fill"},
     "SourcePbsDatastores.dc.html": {"x": 12160, "y": 4369, "w": 1440, "h": 960, "title": "PBS source — Datastores: usage, last GC, PBS's own jobs, permissions", "expand": "fill"},
     "PhoneDashboard.dc.html": {"x": 0, "y": 5772, "w": 390, "h": 1300, "title": "Phone — dashboard"},
     "PhoneService.dc.html": {"x": 470, "y": 5772, "w": 390, "h": 1300, "title": "Phone — service"},

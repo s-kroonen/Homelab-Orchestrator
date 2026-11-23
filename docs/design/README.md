@@ -147,7 +147,7 @@ Something that is off on purpose (a node asleep, its services) is **off**, never
 | Backups: Cleanup tab (cleanup policies, wake queue, datastore) | [PNG](wireframes/BackupsCleanup.png) · [HTML](wireframes/BackupsCleanup.html) |
 | Backups: edit a cleanup policy | [PNG](wireframes/BackupsCleanupEdit.png) · [HTML](wireframes/BackupsCleanupEdit.html) |
 | Backups: a backup policy runs a cleanup before or after | [PNG](wireframes/BackupsPolicyCleanup.png) · [HTML](wireframes/BackupsPolicyCleanup.html) |
-| Cleanup run waiting for garbage collection | [PNG](wireframes/CleanupRun.png) · [HTML](wireframes/CleanupRun.html) |
+| Cleanup run waiting for garbage collection (shown in Activity's run drawer, as every run is) | [PNG](wireframes/CleanupRun.png) · [HTML](wireframes/CleanupRun.html) |
 | PBS source: Datastores tab | [PNG](wireframes/SourcePbsDatastores.png) · [HTML](wireframes/SourcePbsDatastores.html) |
 | Map: one row per node, shared backups, selection sidebar | [PNG](wireframes/Map.png) · [HTML](wireframes/Map.html) |
 | Traffic: one page, countries included | [PNG](wireframes/Traffic.png) · [HTML](wireframes/Traffic.html) |

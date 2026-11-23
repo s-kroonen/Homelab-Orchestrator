@@ -19,6 +19,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from sqlalchemy import func
 from sqlmodel import Session, col, select
 
+from orchestrator.config import get_settings
 from orchestrator.db.models import (
     BackupPolicy,
     BackupRecord,
@@ -636,8 +637,25 @@ def backups_view(session: Session, scheduler: Any) -> dict[str, Any]:
     ]
     services = list(session.exec(select(Service).order_by(Service.slug)).all())
     tree = TreeIndex(services)
+    from orchestrator.db.models import CleanupPolicy
+    from orchestrator.web.routers.cleanup_policies import cleanup_to_dict
+
+    cleanups = [
+        cleanup_to_dict(session, c, scheduler)
+        for c in session.exec(select(CleanupPolicy).order_by(CleanupPolicy.name)).all()
+    ]
+    try:
+        from orchestrator.connectors.registry import sources_of
+
+        pbs_sources = sources_of("pbs")
+        pbs_href = pbs_sources[0].href if pbs_sources else None
+    except Exception:  # a link, never a reason to fail the page
+        pbs_href = None
     return {
         "policies": policies,
+        "cleanups": cleanups,
+        "pbs_href": pbs_href,
+        "datastore_default": get_settings().pbs_datastore,
         "last_runs": _last_runs(session),
         "excluded": [
             {"slug": s.slug, "reason": s.backup_excluded_reason}

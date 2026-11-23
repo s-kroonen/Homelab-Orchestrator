@@ -156,6 +156,21 @@ class DryRunPbsAdapter(PbsAdapter):
     async def stop_task(self, upid: str) -> None:
         log.info("pbs.dry_run.stop_task", upid=upid)
 
+    async def delete_snapshot(
+        self, datastore: str, *, backup_type: str, backup_id: str, backup_time: int
+    ) -> None:
+        log.info(
+            "pbs.dry_run.delete_snapshot",
+            datastore=datastore,
+            group=f"{backup_type}/{backup_id}",
+            backup_time=backup_time,
+        )
+        self.simulated_snapshots = [
+            s
+            for s in self.simulated_snapshots
+            if (s.backup_type, s.backup_id, s.backup_time) != (backup_type, backup_id, backup_time)
+        ]
+
     async def set_protected(
         self,
         datastore: str,

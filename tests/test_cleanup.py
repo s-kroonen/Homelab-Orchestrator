@@ -649,3 +649,145 @@ def test_stale_entries_in_the_last_gc_lookup_are_per_datastore(
     session.commit()
     assert last_gc_at(session, "other") is not None
     assert last_gc_at(session, "example-datastore") is None
+
+
+# -- part 2: the endpoints behind the screens -----------------------------------------------
+
+
+@pytest.fixture
+def pbs_app() -> Any:
+    from orchestrator.web.app import create_app
+
+    session_module.create_all_for_tests()
+    with Session(get_engine()) as s:
+        node = Node(name="node-a", always_on=True)
+        s.add(node)
+        s.commit()
+        s.refresh(node)
+        pol = BackupPolicy(name="nightly", retention={"keep_daily": 7})
+        s.add(pol)
+        s.commit()
+        s.refresh(pol)
+        s.add(Service(slug="app", name="App", node_id=node.id, guest_kind=GuestKind.VM,
+                      guest_id=101, backup_policy_id=pol.id))  # fmt: skip
+        s.add(CleanupPolicy(name="nightly-cleanup"))
+        s.commit()
+    return create_app()
+
+
+def _snaps() -> list[Snapshot]:
+    def snap(t: int, *, verified: bool = False, protected: bool = False) -> Snapshot:
+        return Snapshot(datastore="example-datastore", backup_type="vm", backup_id="101",
+                        backup_time=t, verified=verified, protected=protected)  # fmt: skip
+
+    return [
+        snap(1_790_000_000, verified=True),  # old, verified
+        snap(1_790_100_000, protected=True),  # pinned in PBS
+        snap(1_790_200_000, verified=True),  # the newest verified: never offered
+        snap(1_790_300_000),  # newest, not verified
+    ]
+
+
+def _login(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    from tests.test_auth import _register
+
+    r = _register(client, monkeypatch, username="admin", credential_id=b"cred-1")
+    assert r.status_code == 200, r.text
+
+
+def test_snapshots_say_which_service_and_which_may_be_deleted(
+    pbs_app: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    with TestClient(pbs_app) as client:
+        _login(client, monkeypatch)
+        pbs = client.app.state.adapters.pbs  # type: ignore[attr-defined]
+        pbs.simulated_snapshots = _snaps()
+        pbs.synthesize_snapshots = False
+        rows = {r["snapshot_id"]: r for r in client.get("/api/infra/pbs/snapshots").json()}
+        ids = [s.snapshot_id for s in _snaps()]
+        assert all(r["service"] == "app" for r in rows.values())
+        assert rows[ids[0]]["keep_reason"] is None
+        assert "protected" in rows[ids[1]]["keep_reason"]
+        assert "newest verified" in rows[ids[2]]["keep_reason"]
+        assert rows[ids[2]]["newest_verified"] is True
+
+        r = client.post("/api/infra/pbs/snapshots/delete", json={"snapshot_ids": ids})
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert body["deleted"] == [ids[0], ids[3]]
+        assert set(body["refused"]) == {ids[1], ids[2]}
+        assert {s.snapshot_id for s in pbs.simulated_snapshots} == {ids[1], ids[2]}
+        assert client.post("/api/infra/pbs/snapshots/delete", json={"snapshot_ids": []}
+                           ).status_code == 400  # fmt: skip
+
+    with Session(get_engine()) as s:
+        entry = s.exec(
+            select(AuditEntry).where(AuditEntry.action == "backup.snapshots_deleted")
+        ).one()
+        assert entry.actor == "admin" and len(entry.details["deleted"]) == 2
+
+
+def test_prune_preview_and_prune_now(pbs_app: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    with TestClient(pbs_app) as client:
+        _login(client, monkeypatch)
+        r = client.post("/api/backup-policies/nightly/prune-preview")
+        assert r.status_code == 200, r.text
+        assert [x["service"] for x in r.json()["services"]] == ["app"]
+        assert r.json()["total"] == 0  # the dry-run PBS removes nothing
+
+        scheduler = client.app.state.scheduler  # type: ignore[attr-defined]
+        called: list[tuple[str, bool]] = []
+
+        async def fake_prune(name: str, *, gc: bool, actor: str = "") -> int:
+            called.append((name, gc))
+            return 1
+
+        scheduler.run_prune = fake_prune
+        r = client.post("/api/backup-policies/nightly/prune", json={"gc": False})
+        assert r.status_code == 202, r.text
+        assert client.post("/api/backup-policies/missing/prune", json={}).status_code == 404
+    assert called == [("nightly", False)]
+
+
+def test_the_datastore_summary_for_the_cleanup_tab(
+    pbs_app: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    with TestClient(pbs_app) as client:
+        _login(client, monkeypatch)
+        client.put("/api/backup-policies/nightly", json={"cleanup_policy": "nightly-cleanup"})
+        d = client.get("/api/pbs-datastore").json()
+        assert d["name"] == get_settings().pbs_datastore
+        assert d["cleaned_by"][0]["policy"] == "nightly-cleanup"
+        assert d["cleaned_by"][0]["used_by"] == [{"policy": "nightly", "when": "before"}]
+        assert "permissions" in d and "own_jobs" in d
+
+        view = client.get("/api/views/backups").json()
+        assert [c["name"] for c in view["cleanups"]] == ["nightly-cleanup"]
+        assert view["datastore_default"] == get_settings().pbs_datastore
+        page = client.get("/backup-policies")
+        assert page.status_code == 200 and 'data-tab="cleanup"' in page.text
+
+
+async def test_prune_now_prunes_only_that_policy_and_can_skip_gc(
+    session: Session, topo: dict[str, Any]
+) -> None:
+    other = BackupPolicy(name="other", retention={"keep_daily": 1})
+    session.add(other)
+    session.commit()
+    session.refresh(other)
+    topo["db"].backup_policy_id = other.id
+    topo["policy"].retention = {"keep_daily": 7}
+    for row in (topo["db"], topo["policy"]):
+        session.add(row)
+    session.commit()
+    world = _world(topo)
+    pbs = CleanPbs(world, polls=0)
+
+    run_id = await _sched(world, pbs).run_prune("nightly", gc=False)
+
+    run = session.get(PipelineRun, run_id)
+    assert run is not None and run.status is PipelineStatus.SUCCEEDED
+    assert {g for g, _ in pbs.pruned} == {"vm/101", "vm/103"}  # not db (vm/102): other policy
+    assert _steps(run)["gc"]["status"] == "skipped"
+    assert "gc" not in world.events
+    assert world.count("power_off:storage") == 1

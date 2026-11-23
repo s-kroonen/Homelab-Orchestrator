@@ -29,6 +29,9 @@ router = APIRouter(
     tags=["cleanup-policies"],
     dependencies=[Depends(require_admin)],
 )
+datastore_router = APIRouter(
+    prefix="/api/pbs-datastore", tags=["cleanup-policies"], dependencies=[Depends(require_admin)]
+)
 queue_router = APIRouter(
     prefix="/api/backup-queue", tags=["cleanup-policies"], dependencies=[Depends(require_admin)]
 )
@@ -339,3 +342,94 @@ async def cancel_job(
                  target=f"job:{job_id}", details={"done": done})  # fmt: skip
     session.commit()
     return {"job": job_id, "done": done}
+
+
+def _has_priv(perms: dict[str, Any], datastore: str, priv: str) -> bool | None:
+    """Does the token hold ``priv`` on the datastore (or above it)? None when PBS did not say."""
+    if not isinstance(perms, dict) or not perms:
+        return None
+    for path in (f"/datastore/{datastore}", "/datastore", "/"):
+        entry = perms.get(path)
+        if isinstance(entry, dict) and entry.get(priv):
+            return True
+    return False
+
+
+@datastore_router.get("")
+async def datastore_summary(
+    request: Request, session: SessionDep, name: str | None = None
+) -> dict[str, Any]:
+    """One datastore, for Backups → Cleanup and the PBS source's Datastores tab: how full,
+    PBS's last GC, what waits for the next, which cleanup policies clean it, PBS's own jobs
+    (which fail while it is offline), and whether the token may prune and collect."""
+    from orchestrator.config import get_settings
+
+    settings = get_settings()
+    ds = name or settings.pbs_datastore
+    adapters = getattr(request.app.state, "adapters", None)
+    out: dict[str, Any] = {"name": ds, "reachable": False, "error": None}
+    cleaners = [
+        c
+        for c in session.exec(select(CleanupPolicy)).all()
+        if (c.datastore or settings.pbs_datastore) == ds
+    ]
+    out["cleaned_by"] = [
+        {
+            "policy": c.name,
+            "schedule_cron": c.schedule_cron,
+            "used_by": [
+                {"policy": p.name, "when": p.cleanup_when.value}
+                for p in session.exec(
+                    select(BackupPolicy).where(BackupPolicy.cleanup_policy == c.name)
+                ).all()
+            ],
+        }
+        for c in cleaners
+    ]
+    # The last cleanup's own record: what it removed, what it left waiting, unowned groups.
+    last = None
+    for c in cleaners:
+        run = _last_run(session, c.name)
+        if run and (last is None or run["started_at"] > last["started_at"]):
+            last = {**run, "policy": c.name}
+    out["last_cleanup"] = last
+    if adapters is None:
+        out["error"] = "the adapters are not ready"
+        return out
+    pbs = adapters.pbs
+    try:
+        st = await asyncio.wait_for(pbs.datastore_status(ds), 10)
+        out.update(
+            reachable=True,
+            total_bytes=st.total_bytes,
+            used_bytes=st.used_bytes,
+            available_bytes=st.available_bytes,
+            used_fraction=st.used_fraction,
+        )
+    except Exception as exc:
+        out["error"] = str(exc)
+    if out["reachable"]:
+        try:
+            gc = await asyncio.wait_for(pbs.garbage_collection_status(ds), 10)
+            out["gc"] = {
+                "upid": gc.upid,
+                "removed_bytes": gc.removed_bytes,
+                "pending_bytes": gc.pending_bytes,
+            }
+        except Exception as exc:
+            out["gc"] = {"error": str(exc)}
+    try:
+        out["own_jobs"] = await asyncio.wait_for(pbs.own_jobs(ds), 10)
+    except Exception as exc:
+        out["own_jobs"] = []
+        out["own_jobs_error"] = str(exc)
+    try:
+        perms = await asyncio.wait_for(pbs.effective_permissions(), 10)
+        out["permissions"] = {
+            "audit": _has_priv(perms, ds, "Datastore.Audit"),
+            "modify": _has_priv(perms, ds, "Datastore.Modify"),
+            "prune": _has_priv(perms, ds, "Datastore.Prune"),
+        }
+    except Exception as exc:
+        out["permissions"] = {"error": str(exc)}
+    return out
