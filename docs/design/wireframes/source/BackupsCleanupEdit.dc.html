@@ -1,0 +1,164 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Backups: edit cleanup policy</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#0d1015}
+a{color:#8fb3ff;text-decoration:none}
+*{box-sizing:border-box}
+.pill{display:inline-flex;align-items:center;gap:6px;padding:3px 9px;border-radius:999px;font-size:12px;font-weight:600;white-space:nowrap}
+.ok{background:#11331f;color:#5fe08b}.warn{background:#3a2c10;color:#f0b44c}.fail{background:#3d1717;color:#ff8a82}.off{background:#232834;color:#b3bccb}.pending{background:#162a45;color:#8fb3ff}
+.btn{display:inline-flex;align-items:center;gap:6px;height:32px;padding:0 12px;border-radius:8px;border:1px solid #2c3340;background:#1a1f29;color:#e6e9ef;font:600 13px Inter,system-ui,sans-serif;white-space:nowrap}
+.btn.primary{background:#4f7fe0;border-color:#4f7fe0;color:#fff}.btn.ghost{background:transparent;border-color:transparent;color:#b3bccb}.btn.small{height:28px;padding:0 10px;font-size:12.5px}
+.mono{font-family:'JetBrains Mono',ui-monospace,monospace;font-size:12.5px}
+.faint{color:#9aa4b2}.sub{display:block;font-size:12px;color:#9aa4b2}
+.card{background:#141922;border:1px solid #232a36;border-radius:12px}
+th{font-size:12px;font-weight:600;color:#9aa4b2;text-align:left;padding:10px 14px;border-bottom:1px solid #232a36;white-space:nowrap}
+td{padding:10px 14px;border-bottom:1px solid #1d232e;vertical-align:middle}
+tr:last-child td{border-bottom:0}
+.tile{background:#141922;border:1px solid #232a36;border-radius:12px;padding:14px 16px}
+.tile .l{font-size:12px;color:#9aa4b2}.tile .v{font-size:24px;font-weight:700}.tile .s{font-size:12px;color:#9aa4b2}
+.bar{height:8px;background:#232834;border-radius:4px;margin-top:6px}.bar i{display:block;height:8px;border-radius:4px}
+.tabs{display:flex;gap:4px;border-bottom:1px solid #232a36}.tabs a{padding:10px 14px;color:#b3bccb}.tabs a.on{color:#fff;font-weight:600;box-shadow:inset 0 -2px 0 #4f7fe0}
+.nav-a{display:block;padding:6px 10px;border-radius:7px;font-size:14px;color:#c9d1dc}
+.nav-a.on,.nav-src.on{background:#1d2430;color:#fff;font-weight:600;box-shadow:inset 3px 0 0 #4f7fe0}
+.nav-kind{display:flex;align-items:center;gap:6px;padding:8px 10px 2px;font-size:12px;color:#8a94a5;font-weight:600}
+.nav-src{display:flex;align-items:center;gap:8px;padding:5px 10px;border-radius:7px;font-size:13.5px;color:#c9d1dc}
+.dot{width:7px;height:7px;border-radius:50%;background:#5fe08b;flex:0 0 7px}.dot.bad{background:#ff8a82}.dot.warn{background:#f0b44c}
+.lane{font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:#8a94a5;padding:0 10px 4px;display:flex;align-items:center}
+.drawer{position:absolute;top:0;right:0;bottom:0;width:540px;background:#11151c;border-left:1px solid #2c3340;box-shadow:-16px 0 40px rgba(0,0,0,.5);display:flex;flex-direction:column}
+.drawer-h{padding:18px 22px;border-bottom:1px solid #232a36}
+.drawer-b{padding:16px 22px;display:flex;flex-direction:column;gap:16px;flex:1;overflow:hidden}
+.drawer-f{padding:14px 22px;border-top:1px solid #232a36;display:flex;gap:10px;justify-content:flex-end;align-items:center}
+.sec{font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:#8a94a5;margin-bottom:6px}
+.field{display:flex;flex-direction:column;gap:5px}
+.field label{font-size:13px;font-weight:600}
+.input{height:34px;border:1px solid #2c3340;background:#0f131a;border-radius:8px;padding:0 10px;display:flex;align-items:center;font-size:13.5px}
+.help{font-size:12px;color:#9aa4b2}
+.opt{display:flex;gap:9px;align-items:flex-start;font-size:13.5px}.opt b{font-weight:600}
+.box{font-size:15px;line-height:1.2}
+.step{display:flex;gap:12px;align-items:flex-start;padding:10px 14px;border-bottom:1px solid #1d232e}
+.step:last-child{border-bottom:0}
+.overlay{position:absolute;inset:0;background:rgba(5,7,10,.55)}
+.banner{border-radius:10px;padding:10px 14px;font-size:13px}
+.banner.warn{background:#2a2110;border:1px solid #5a4314;color:#f3d39a}
+</style>
+</helmet>
+<div style="position:relative;display:flex;min-height:1040px;background:#0d1015;color:#e6e9ef;font-family:Inter,system-ui,sans-serif;font-size:14px;line-height:1.45">
+<nav aria-label="Main" style="flex:0 0 232px;background:#11151c;border-right:1px solid #222833;padding:20px 14px;display:flex;flex-direction:column;gap:16px"><div style="font-weight:700;font-size:15px;padding:0 10px">homelab-orchestrator</div><div style="display:flex;flex-direction:column;gap:2px"><div class="lane">Overview</div><a href="#" class="nav-a">Dashboard</a><a href="#" class="nav-a">Map</a><a href="#" class="nav-a">Inventory</a></div><div style="display:flex;flex-direction:column;gap:2px"><div class="lane">Services</div><a href="#" class="nav-a">Services</a><a href="#" class="nav-a on">Backups</a></div><div style="display:flex;flex-direction:column;gap:1px"><div class="lane">Sources<span style="margin-left:auto;font-size:15px;color:#8fb3ff;letter-spacing:0">+</span></div><a href="#" class="nav-a">All sources</a><div class="nav-kind"><span style="width:10px">▸</span>Proxmox<span class="faint" style="font-weight:500">1</span></div><div class="nav-kind"><span style="width:10px">▸</span>Portainer<span class="faint" style="font-weight:500">1</span></div><a href="#" class="nav-src"><span class="dot"></span>Proxy <span class="faint" style="font-weight:400">· gateway</span></a><a href="#" class="nav-src"><span class="dot warn"></span>Backups <span class="faint" style="font-weight:400">· pbs-main</span></a><a href="#" class="nav-src"><span class="dot"></span>Power <span class="faint" style="font-weight:400">· mqtt</span></a></div><div style="display:flex;flex-direction:column;gap:2px"><div class="lane">Activity</div><a href="#" class="nav-a">Activity</a><a href="#" class="nav-a">Traffic</a></div><div style="display:flex;flex-direction:column;gap:2px"><div class="lane">Settings</div><a href="#" class="nav-a">General</a><a href="#" class="nav-a">Notifications</a><a href="#" class="nav-a">AI assistants</a><a href="#" class="nav-a">Admins &amp; devices</a><a href="#" class="nav-a">System</a><a href="#" class="nav-a">Archive</a></div></nav>
+<div style="flex:1 1 auto;min-width:0;display:flex;flex-direction:column">
+<header style="display:flex;align-items:center;gap:12px;padding:12px 32px;border-bottom:1px solid #222833"><div style="font-size:13px;color:#8a94a5">Services / <span style="color:#e6e9ef">Backups</span> / Cleanup</div><span class="input" style="margin-left:auto;width:260px;color:#8a94a5">Search  <span class="mono" style="margin-left:auto">/</span></span><span class="pill ok">● Live</span><span class="btn ghost">admin ▾</span></header>
+<main style="padding:28px 32px 48px;max-width:1280px;width:100%;display:flex;flex-direction:column;gap:18px">
+
+<div style="display:flex;align-items:flex-start;gap:12px"><div><h1 style="margin:0;font-size:24px">Backups</h1><div class="faint">What is backed up, when, whether it worked, and how the datastore is kept clean.</div></div><span class="btn primary" style="margin-left:auto">+ New cleanup policy</span></div>
+<div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px">
+ <div class="tile"><div class="l">Last night</div><div class="v">7 of 7 ok</div><div class="s">backups 02:00–02:41 · cleanup 02:41–03:30</div></div>
+ <div class="tile"><div class="l">Datastore main on pbs-main</div><div class="v">78% full</div><div class="bar"><i style="width:78%;background:#d9952c"></i></div><div class="s" style="margin-top:6px">41 GB freed last night · 12 GB waits for the next GC</div></div>
+ <div class="tile"><div class="l">Next</div><div class="v">02:00</div><div class="s">nightly-cleanup → daily-frequent · one wake of storage-vm</div></div>
+</div>
+<div class="tabs" role="tablist" aria-label="Backup views"><a href="#" role="tab" class="">Policies</a><a href="#" role="tab" class="on">Cleanup</a><a href="#" role="tab" class="">Snapshots</a><a href="#" role="tab" class="">Dumps</a><a href="#" role="tab" class="">Orchestrator backups</a></div>
+<div class="card" style="padding:12px 16px;display:flex;flex-direction:column;gap:8px">
+ <div style="display:flex;align-items:center;gap:10px"><strong>Queue</strong><span class="faint" style="font-size:12.5px">Jobs that need the same storage run one after another in one wake. The node goes back off after the last one.</span></div>
+ <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:13px">
+  <span class="mono faint" style="margin-right:4px">storage-vm · node-b</span>
+  <span class="pill ok">woken 02:00</span><span class="faint">→</span>
+  <span class="pill ok">nightly-cleanup · done</span><span class="faint">→</span>
+  <span class="pill pending">daily-frequent · backups 3 of 7</span><span class="faint">→</span>
+  <span class="pill off">manual cleanup by admin · waiting</span><span class="faint">→</span>
+  <span class="pill off">put node-b back</span>
+ </div>
+</div>
+<div class="card" style="overflow:hidden">
+<table style="width:100%;border-collapse:collapse">
+<thead><tr><th>Cleanup policy</th><th>Datastore</th><th>When</th><th>Does</th><th>Last run</th><th></th></tr></thead>
+<tbody>
+<tr>
+ <td><strong>nightly-cleanup</strong><span class="sub">wakes storage-vm, puts node-b back after</span></td>
+ <td><span class="mono">pbs-main / main</span></td>
+ <td>before <a href="#">daily-frequent</a><span class="sub">set on the backup policy</span></td>
+ <td>prune by policy · GC at most every 20 h</td>
+ <td><span class="pill ok">ok · freed 41 GB</span><span class="sub">today 02:41 · took 49 min</span></td>
+ <td style="text-align:right;white-space:nowrap"><span class="btn small">Run now…</span> <span class="btn ghost small">Edit</span> <span class="btn ghost small" aria-label="More for nightly-cleanup">⋯</span></td>
+</tr>
+<tr>
+ <td><strong>storage-gc-weekly</strong><span class="sub">wakes storage-vm on its own</span></td>
+ <td><span class="mono">pbs-main / main</span></td>
+ <td>Sundays 04:00<span class="sub">and after <a href="#">weekly</a></span></td>
+ <td>GC every run · no prune</td>
+ <td><span class="pill ok">ok · Sun</span><span class="sub">removed 6 GB · took 1 h 04 min</span></td>
+ <td style="text-align:right;white-space:nowrap"><span class="btn small">Run now…</span> <span class="btn ghost small">Edit</span> <span class="btn ghost small" aria-label="More for storage-gc-weekly">⋯</span></td>
+</tr>
+<tr>
+ <td><strong>offsite-weekly</strong><span class="sub">always-on datastore, wakes nothing</span></td>
+ <td><span class="mono">pbs-offsite / cold</span></td>
+ <td>Sundays 05:00</td>
+ <td>prune by policy · GC every run</td>
+ <td><span class="pill fail">failed · Sun</span><span class="sub">PBS: permission check failed (Datastore.Modify)</span></td>
+ <td style="text-align:right;white-space:nowrap"><span class="btn small">Run now…</span> <span class="btn ghost small">Edit</span> <span class="btn ghost small" aria-label="More for offsite-weekly">⋯</span></td>
+</tr>
+</tbody></table>
+</div>
+<div style="display:grid;grid-template-columns:minmax(0,3fr) minmax(0,2fr);gap:14px">
+ <div class="card" style="padding:14px 16px;display:flex;flex-direction:column;gap:10px">
+  <div style="display:flex;align-items:center"><strong>Datastore main</strong><a href="#" style="margin-left:auto;font-size:13px">Open in pbs-main →</a></div>
+  <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;font-size:13px">
+   <div><span class="sub">Used</span>78% · 312 of 400 GB</div>
+   <div><span class="sub">Waits for the next GC</span>12 GB <span class="faint">(pruned, not yet 24 h unused)</span></div>
+   <div><span class="sub">Last GC</span>today 02:52 · removed 41 GB</div>
+  </div>
+  <div class="faint" style="font-size:12.5px">Snapshots no policy keeps: <a href="#">3 groups · 58 GB</a> (vm/120, vm/131, ct/205). Cleanup lists them and leaves them alone; delete them from Snapshots.</div>
+ </div>
+ <div class="banner warn" style="align-self:start"><strong>PBS runs its own GC on main every day at 00:00.</strong> The datastore is only up during backups, so that job fails. Turn it off in PBS (Datastore → main → Prune &amp; GC Jobs) and let nightly-cleanup do it. <a href="#">Open in pbs-main →</a></div>
+</div>
+
+</main>
+</div>
+<div class="overlay"></div>
+<aside class="drawer" aria-label="Edit cleanup policy nightly-cleanup">
+ <div class="drawer-h"><div class="faint" style="font-size:12px">Backups → Cleanup → nightly-cleanup</div><h2 style="margin:2px 0 0;font-size:18px">Edit cleanup policy</h2></div>
+ <div class="drawer-b">
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+   <div class="field"><label>Name</label><div class="input mono">nightly-cleanup</div></div>
+   <div class="field"><label>Datastore</label><div class="input">pbs-main / main <span style="margin-left:auto" class="faint">▾</span></div></div>
+  </div>
+  <div><div class="sec">When</div>
+   <div class="opt"><span class="box">☑</span><div><b>With backup policies that use it</b><div class="help">Set on the backup policy, before or after its backups: <a href="#">daily-frequent</a> runs this before its backups. They share one wake.</div></div></div>
+   <div class="opt" style="margin-top:8px"><span class="box">☐</span><div><b>Also on its own schedule</b> <span class="faint">every day · 04:00</span><div class="help">Wakes what the datastore needs, like a backup policy. When something else holds the storage then, it joins that queue instead of waking it again.</div></div></div>
+  </div>
+  <div><div class="sec">Prune</div>
+   <div class="opt"><span class="box">☑</span><div><b>Prune each service's snapshots by its backup policy</b><div class="help">The keep rules stay on the backup policy: daily-frequent keeps 7 daily (12 services), weekly keeps 8 weekly (6). Pinned and newest verified are never removed.</div></div></div>
+   <div class="opt" style="margin-top:8px"><span class="box">☐</span><div><b>Also prune groups no policy keeps</b> <span class="input" style="display:inline-flex;height:28px;margin-left:6px">keep last 3</span><div class="help">Off: they are listed in the run and left alone.</div></div></div>
+  </div>
+  <div><div class="sec">Garbage collection</div>
+   <div class="opt"><span class="box">☑</span><div><b>Run PBS's garbage collection</b> <span class="faint">— this is what frees the space</span></div></div>
+   <div style="display:flex;flex-direction:column;gap:6px;margin:8px 0 0 24px">
+    <div class="opt"><span class="box">◉</span><div>every run, at most every <span class="input" style="display:inline-flex;height:26px;width:52px">20</span> hours</div></div>
+    <div class="opt"><span class="box">○</span><div>only when the datastore is over <span class="input" style="display:inline-flex;height:26px;width:52px">80</span> % full</div></div>
+    <div class="help">PBS only removes chunks nothing has used for 24 h, so what tonight's prune frees comes back at the next GC.</div>
+   </div>
+  </div>
+  <div><div class="sec">Waiting</div>
+   <div class="field"><label>Wait for PBS at most</label><div style="display:flex;gap:8px;align-items:center"><div class="input" style="width:70px">6</div><span>hours</span></div><div class="help">The storage stays on and held until GC finishes. Past this, the GC is stopped in PBS (it starts over next time) and the node is put back.</div></div>
+  </div>
+  <div><div class="sec">Wake and power</div>
+   <div class="opt"><span class="box">☑</span><div><b>Needs</b> <span class="mono">storage-vm</span> <span class="faint">(node-b)</span><div class="help">Same as a backup policy's "Also needs". In a queue the storage is already up and stays held.</div></div></div>
+   <div class="opt" style="margin-top:8px"><span class="box">☑</span><div><b>Put it back afterwards</b><div class="help">After the last job in the queue, a node that was off is powered off again, unless something else needs it.</div></div></div>
+  </div>
+ </div>
+ <div class="drawer-f"><span class="faint" style="margin-right:auto;font-size:12.5px">Saves the policy. Next run: tonight 02:00, before daily-frequent.</span><span class="btn">Cancel</span><span class="btn primary">Save</span></div>
+</aside>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":1040}}'>
+class Component extends DCLogic { renderVals() { return {}; } }
+</script>
+</body>
+</html>
