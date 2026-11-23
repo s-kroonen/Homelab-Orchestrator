@@ -1189,7 +1189,7 @@ def test_create_persists_the_backend_route_ref_in_extra(
     )
     assert r.status_code == 201, r.text
     body = r.json()
-    assert body["extra"][ROUTE_REF_KEY] == "orchestrator-live-example-com"
+    assert body["extra"][ROUTE_REF_KEY] == "live-example-com"
     assert body["sync_state"] == "pending_create"
     assert save_calls == []  # DB only
 

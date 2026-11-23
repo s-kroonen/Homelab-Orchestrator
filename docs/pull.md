@@ -31,7 +31,8 @@ SSL" redirect middleware on the HTTPS router, HSTS and friends), names of their 
 manages any more. **Format** rewrites them, one by one, into the shape Traefik Manager creates for a
 new host and this orchestrator creates by default, so nothing mismatches:
 
-* a router named `orchestrator-<host>` (and its service) in the **configured config file**
+* a router named after its hostname (`app-example-com`, service `app-example-com-service`, as
+  Traefik Manager's own form names it) in the **configured config file**
   (`TRAEFIK_MANAGER_CONFIG_FILE`, default `{service}.yml`) - the files Traefik Manager edits, not the
   old hand-written ones;
 * bound to the HTTPS entry point(s) with the certificate resolver;

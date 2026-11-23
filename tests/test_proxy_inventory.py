@@ -269,7 +269,6 @@ def _inv(transports=None):
     return pi.build(
         _raw(),
         hosts=HOSTS,
-        owns=lambda n: n.startswith("orchestrator-"),
         transports=transports,
     )
 
@@ -278,8 +277,9 @@ def test_routers_carry_provider_file_maker_and_host():
     inv = _inv()
     by = {r.name: r for r in inv.routers}
     cloud = by["orchestrator-cloud-example-lan@file"]
+    # Who made it is its shape, not its name: router <name> with service <name>-service.
     assert (cloud.made_by, cloud.config_file, cloud.proxy_host) == (
-        "orchestrator",
+        "Traefik Manager",
         "nextcloud.yml",
         "cloud.example.lan",
     )
@@ -413,7 +413,6 @@ def _review(**kw):
     inv = pi.build(
         _review_raw(),
         hosts=[*HOSTS, SimpleNamespace(hostname="bingo.example.lan", id=5)],
-        owns=lambda n: n.startswith("orchestrator-"),
         transports=kw.pop("transports", None),
     )
     return inv, {f.id: f for f in pi.findings(inv, service_slugs=["nextcloud", "media"], **kw)}
@@ -422,7 +421,7 @@ def _review(**kw):
 def test_router_shape_decides_who_made_it():
     inv, _ = _review()
     by = {r.name: r for r in inv.routers}
-    assert by["orchestrator-cloud-example-lan@file"].made_by == "orchestrator"
+    assert by["orchestrator-cloud-example-lan@file"].made_by == "Traefik Manager"  # its shape
     assert by["bingo@file"].made_by == "Traefik Manager"  # router bingo, service bingo-service
     panel = by["panel-example-lan@file"]
     assert panel.made_by == "hand-written"
@@ -438,7 +437,7 @@ def test_review_errors_and_what_is_not_read_yet():
     assert "does not exist" in found["error:router:web-old"].detail
     assert found["unread:tcp:mqtt-tls@file"].target == "mqtt-tls"
     assert "highestRandomWeight" in found["unread:hrw:api-hrw"].detail
-    assert "no hostname can be read" in found["unread:rule:docs"].detail
+    assert "unread:rule:docs" not in found  # a HostRegexp is read and matched now
     assert found["unread:tls_options"].target == "TLS options: modern"
 
 
@@ -488,7 +487,7 @@ def test_redirect_routers_when_the_entry_point_already_redirects():
     raw["entrypoint_redirects"] = {"web": "websecure"}
     raw["runtime_routers"][1]["entryPoints"] = ["web"]
     raw["runtime_routers"][1]["middlewares"].append("maintenance-nextcloud@file")
-    inv = pi.build(raw, hosts=HOSTS, owns=lambda n: n.startswith("orchestrator-"))
+    inv = pi.build(raw, hosts=HOSTS)
     found = {f.id: f for f in pi.findings(inv)}
     red = found["cleanup:redirect_routers"]
     assert "already redirects" in red.detail and red.fix == "Delete them in Traefik Manager."

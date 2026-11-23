@@ -41,7 +41,7 @@ def _adapter() -> TraefikManagerProxyAdapter:
     return TraefikManagerProxyAdapter(_settings())
 
 
-OURS = "orchestrator-cloud-example-com"  # a route the adapter created
+OURS = "cloud-example-com"  # a route the adapter created
 
 
 def _apps(*, middlewares: list[str] | None, eps: list[str] | None = None, name: str = OURS) -> Any:
@@ -54,6 +54,9 @@ def _apps(*, middlewares: list[str] | None, eps: list[str] | None = None, name: 
         "entryPoints": eps or ["websecure"],
         "enabled": True,
         "configFile": f"{name}.yml",
+        # The form's service for the route the adapter created; a hand-written one points
+        # at a service of its own.
+        "service_name": f"{name}-service" if name == OURS else name,
     }
     if middlewares is not None:
         app["middlewares"] = middlewares
@@ -265,6 +268,7 @@ def test_attached_but_dangling_rule_counts_as_missing() -> None:
                 "entryPoints": ["websecure"],
                 "enabled": True,
                 "middlewares": [mw],
+                "service_name": f"{OURS}-service",
             }
         ],
         {mw},

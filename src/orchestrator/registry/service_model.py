@@ -264,7 +264,8 @@ def host_model(
     mine = [
         r
         for r in routes
-        if host in {h.lower() for h in r.hostnames} and getattr(r, "service", None)
+        if (r.serves(host) if hasattr(r, "serves") else host in {h.lower() for h in r.hostnames})
+        and getattr(r, "service", None)
     ]
     if not mine:
         return None

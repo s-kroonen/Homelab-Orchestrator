@@ -34,6 +34,7 @@ from typing import Any
 from urllib.parse import parse_qsl, unquote
 
 import httpx
+import yaml
 
 DEFAULT_FILE = "dynamic.yml"
 
@@ -54,7 +55,14 @@ class SimTM:
         middleware_names: tuple[str, ...] = ("redirect-to-https@file",),
         strict_service_ref: bool = False,
         share_services: bool = False,
+        entrypoint_redirect: bool = False,
+        report_middlewares: bool = False,
     ):
+        #: ``web`` redirects every request to ``websecure`` (Traefik Manager's way of sending
+        #: HTTP to HTTPS: ``entryPoints.web.http.redirections`` in the static config)
+        self.entrypoint_redirect = entrypoint_redirect
+        #: ``/api/routes`` lists each route's middlewares and service (the real app does)
+        self.report_middlewares = report_middlewares
         #: ``/save`` with a ``serviceRef`` answers 400 when no router of the target file owns
         #: that service key (the real app's "Service '...' does not exist for HTTP routes")
         self.strict_service_ref = strict_service_ref
@@ -140,7 +148,21 @@ class SimTM:
             return httpx.Response(
                 200,
                 json=[
-                    {"name": "web", "address": ":80"},
+                    {
+                        "name": "web",
+                        "address": ":80",
+                        **(
+                            {
+                                "http": {
+                                    "redirections": {
+                                        "entryPoint": {"to": "websecure", "scheme": "https"}
+                                    }
+                                }
+                            }
+                            if self.entrypoint_redirect
+                            else {}
+                        ),
+                    },
                     {"name": "websecure", "address": ":443"},
                     {"name": "traefik", "address": ":8080"},
                 ],
@@ -235,6 +257,14 @@ class SimTM:
         shares one that already serves the same backend (``route["service"]``)."""
         return str(route.get("service") or f"{name}-service")
 
+    def middlewares_of(self, name: str, route: dict[str, Any]) -> list[str]:
+        """The router's middlewares as its YAML has them (a raw write may have changed it)."""
+        if "raw" in route:
+            doc = yaml.safe_load(route["raw"]) or {}
+            block = ((doc.get("http") or {}).get("routers") or {}).get(name) or {}
+            return [str(m) for m in block.get("middlewares") or []]
+        return list(route.get("mws", []))
+
     def raw_of(self, name: str, route: dict[str, Any]) -> str:
         if "raw" in route:
             return str(route["raw"])
@@ -267,6 +297,13 @@ class SimTM:
                         "entryPoints": r["eps"],
                         "enabled": True,
                         "configFile": f if self.multi else "",
+                        # The real app reports the service each router points at.
+                        "service_name": self.service_key(name, r),
+                        **(
+                            {"middlewares": self.middlewares_of(name, r)}
+                            if self.report_middlewares
+                            else {}
+                        ),
                     }
                 )
         for key, snap in self.disabled.items():
@@ -278,6 +315,7 @@ class SimTM:
                     "rule": snap["route"]["rule"],
                     "target": snap["route"]["upstream"],
                     "entryPoints": snap["route"]["eps"],
+                    "service_name": self.service_key(key.split("::", 1)[-1], snap["route"]),
                     "enabled": False,
                     "configFile": snap["file"] if self.multi else "",
                 }

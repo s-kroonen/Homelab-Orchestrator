@@ -32,7 +32,7 @@ from orchestrator.ipdiscovery.discovery import ip_view
 from orchestrator.logging_setup import get_logger, new_correlation_id
 from orchestrator.pipelines.steps import StepRecorder
 from orchestrator.registry import route_format as rf
-from orchestrator.registry.proxy_push import owned_hosts, ref_of
+from orchestrator.registry.proxy_push import owned_hosts, ref_of, route_problem
 from orchestrator.web.auth import CurrentAdmin, require_admin
 from orchestrator.web.deps import AdaptersDep, SessionDep, SettingsDep
 
@@ -383,18 +383,25 @@ async def traefik(
     for r in routes or []:
         names = sorted(r.hostnames)
         ph = next((by_host[h.lower()] for h in names if h.lower() in by_host), None)
+        if ph is None and r.host_patterns:  # a HostRegexp route: the hosts it answers
+            ph = next((h for h in hosts if r.serves(h.hostname)), None)
         if ph is not None:
             seen.add(ph.hostname.lower())
         rows.append(
             {
                 "route": r.name,
                 "hostnames": names,
+                "rule": r.rule,
+                "patterns": list(r.host_patterns),
+                "provider": r.provider,
                 "upstream": r.upstream,
                 "file": r.config_file,
                 "enabled": r.enabled,
                 "entry_points": list(r.entry_points),
                 "cert_resolver": r.cert_resolver,
-                "owned": proxy.owns_route_ref(r.name),
+                # Can a record rewrite it (its contents decide, not who made it)?
+                "editable": (problem := route_problem(proxy, r, routes)) is None,
+                "read_only": problem or "",
                 "redirect_companion": r.name.endswith("-redirect"),
                 "host_id": ph.id if ph else None,
                 "service": (

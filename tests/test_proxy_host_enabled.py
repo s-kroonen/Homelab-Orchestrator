@@ -80,6 +80,7 @@ class ToggleTM(FakeTM):
                         "rule": r["rule"],
                         "target": r["upstream"],
                         "entryPoints": r["eps"],
+                        "service_name": r.get("service") or f"{name}-service",
                         "enabled": False,
                     }
                 )
@@ -110,25 +111,25 @@ def _row(ph_id: int) -> ProxyHost:
 
 async def test_toggle_request_shape(monkeypatch: pytest.MonkeyPatch) -> None:
     sim = SimTM(multi=False)
-    sim.add("dynamic.yml", "orchestrator-app-example-com", "app.example.com")
+    sim.add("dynamic.yml", "app-example-com", "app.example.com")
     _patch(monkeypatch, sim)
     adapter = TraefikManagerProxyAdapter(_settings(traefik_manager_api_key="secret"))
-    await adapter.set_route_enabled("orchestrator-app-example-com", False)
+    await adapter.set_route_enabled("app-example-com", False)
     (req,) = sim.toggle_requests
     assert req.method == "POST"
-    assert req.url.path == "/api/routes/orchestrator-app-example-com/toggle"
+    assert req.url.path == "/api/routes/app-example-com/toggle"
     assert json.loads(req.read()) == {"enable": False}
     assert req.headers["X-Api-Key"] == "secret"
     assert req.headers["X-Requested-With"] == "fetch"
     assert req.headers["content-type"] == "application/json"
-    assert sim.is_enabled("orchestrator-app-example-com") is False
+    assert sim.is_enabled("app-example-com") is False
 
 
 async def test_toggle_takes_the_redirect_companion_along_in_a_safe_order(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     sim = SimTM(multi=False)
-    ref = "orchestrator-app-example-com"
+    ref = "app-example-com"
     sim.add("dynamic.yml", ref, "app.example.com")
     sim.add("dynamic.yml", redirect_route_id(ref), "app.example.com", eps=("web",))
     _patch(monkeypatch, sim)
@@ -146,7 +147,7 @@ async def test_toggle_takes_the_redirect_companion_along_in_a_safe_order(
 
 
 async def test_a_failed_second_toggle_undoes_the_first(monkeypatch: pytest.MonkeyPatch) -> None:
-    ref = "orchestrator-app-example-com"
+    ref = "app-example-com"
     sim = SimTM(multi=False)
     sim.add("dynamic.yml", ref, "app.example.com")
     sim.add("dynamic.yml", redirect_route_id(ref), "app.example.com", eps=("web",))
@@ -253,7 +254,7 @@ def test_redirect_companion_is_toggled_too(
     service: Service, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     tm = ToggleTM()
-    ref = "orchestrator-app-example-com"
+    ref = "app-example-com"
     tm.seed(ref, "app.example.com", ["websecure"])
     tm.seed(redirect_route_id(ref), "app.example.com", ["web"])
     client = _client(monkeypatch, tm)

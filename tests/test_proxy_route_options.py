@@ -64,6 +64,7 @@ class Recorder:
                     "protocol": "http",
                     "rule": f"Host(`{n}.example.com`)",
                     "servers": ["http://10.0.0.5:80"],
+                    "service_name": f"{n}-service",
                 }
                 for n in self.routes
             ]
@@ -138,11 +139,11 @@ async def test_options_become_form_fields(monkeypatch: pytest.MonkeyPatch) -> No
 
 
 async def test_update_also_posts_the_options(monkeypatch: pytest.MonkeyPatch) -> None:
-    rec = Recorder(routes=["orchestrator-pbs-example-com"])
+    rec = Recorder(routes=["pbs-example-com"])
     _patch(monkeypatch, rec)
     adapter = TraefikManagerProxyAdapter(_settings())
     await adapter.update_route(
-        "orchestrator-pbs-example-com",
+        "pbs-example-com",
         hostname="pbs.example.com",
         upstream="http://10.0.0.5:8007",
         entry_points=["websecure"],
@@ -203,15 +204,15 @@ async def test_a_failed_redirect_takes_the_main_route_back(monkeypatch: pytest.M
             options=RouteOptions(http_redirect=True),
         )
     # Never a half-made pair: the main route that was just written is deleted.
-    assert rec.deletes == ["orchestrator-a-example-com"]
+    assert rec.deletes == ["a-example-com"]
 
 
 async def test_update_turning_the_redirect_off_removes_it(monkeypatch: pytest.MonkeyPatch) -> None:
-    rec = Recorder(routes=["orchestrator-a-example-com", "orchestrator-a-example-com-redirect"])
+    rec = Recorder(routes=["a-example-com", "a-example-com-redirect"])
     _patch(monkeypatch, rec)
     adapter = TraefikManagerProxyAdapter(_settings())
     await adapter.update_route(
-        "orchestrator-a-example-com",
+        "a-example-com",
         hostname="a.example.com",
         upstream="http://10.0.0.5:80",
         entry_points=["websecure"],
@@ -219,17 +220,17 @@ async def test_update_turning_the_redirect_off_removes_it(monkeypatch: pytest.Mo
         options=RouteOptions(http_redirect=False),
         previous_options=RouteOptions(http_redirect=True),
     )
-    assert rec.deletes == ["orchestrator-a-example-com-redirect"]
+    assert rec.deletes == ["a-example-com-redirect"]
 
 
 async def test_update_never_blind_deletes_when_there_was_no_redirect(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    rec = Recorder(routes=["orchestrator-a-example-com"])
+    rec = Recorder(routes=["a-example-com"])
     _patch(monkeypatch, rec)
     adapter = TraefikManagerProxyAdapter(_settings())
     await adapter.update_route(
-        "orchestrator-a-example-com",
+        "a-example-com",
         hostname="a.example.com",
         upstream="http://10.0.0.5:80",
         entry_points=["websecure"],
@@ -243,11 +244,11 @@ async def test_update_never_blind_deletes_when_there_was_no_redirect(
 async def test_update_turning_the_redirect_on_creates_it_when_missing(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    rec = Recorder(routes=["orchestrator-a-example-com"])
+    rec = Recorder(routes=["a-example-com"])
     _patch(monkeypatch, rec)
     adapter = TraefikManagerProxyAdapter(_settings())
     await adapter.update_route(
-        "orchestrator-a-example-com",
+        "a-example-com",
         hostname="a.example.com",
         upstream="http://10.0.0.5:80",
         entry_points=["websecure"],
@@ -256,22 +257,22 @@ async def test_update_turning_the_redirect_on_creates_it_when_missing(
     )
     # main edit, redirect edit refused (404) -> redirect created
     assert [(f["serviceName"], f["isEdit"]) for f in rec.saves] == [
-        ("orchestrator-a-example-com", "true"),
-        ("orchestrator-a-example-com-redirect", "false"),
+        ("a-example-com", "true"),
+        ("a-example-com-redirect", "false"),
     ]
 
 
 async def test_delete_removes_the_redirect_first_only_when_asked(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    rec = Recorder(routes=["orchestrator-a-example-com", "orchestrator-a-example-com-redirect"])
+    rec = Recorder(routes=["a-example-com", "a-example-com-redirect"])
     _patch(monkeypatch, rec)
     adapter = TraefikManagerProxyAdapter(_settings())
-    await adapter.delete_route("orchestrator-a-example-com", with_redirect=True)
-    assert rec.deletes == ["orchestrator-a-example-com-redirect", "orchestrator-a-example-com"]
+    await adapter.delete_route("a-example-com", with_redirect=True)
+    assert rec.deletes == ["a-example-com-redirect", "a-example-com"]
     rec.deletes.clear()
-    await adapter.delete_route("orchestrator-a-example-com", with_redirect=False)
-    assert rec.deletes == ["orchestrator-a-example-com"]
+    await adapter.delete_route("a-example-com", with_redirect=False)
+    assert rec.deletes == ["a-example-com"]
 
 
 async def test_list_domains_and_middlewares(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -603,7 +604,7 @@ def test_turning_the_redirect_off_in_an_edit_removes_the_router(
     assert created.status_code == 201, created.text
     pid = created.json()["id"]
     push(client)
-    assert "orchestrator-app-example-com-redirect" in fake.routes
+    assert "app-example-com-redirect" in fake.routes
     fake.deletes.clear()
     r = client.put(
         f"/api/proxy-hosts/{pid}",
@@ -612,7 +613,7 @@ def test_turning_the_redirect_off_in_an_edit_removes_the_router(
     assert r.status_code == 200, r.text
     assert fake.deletes == []  # the edit itself touches nothing
     push(client)
-    assert fake.deletes == ["orchestrator-app-example-com-redirect"]
+    assert fake.deletes == ["app-example-com-redirect"]
     assert _rows()[0].route_options == {}
 
 
@@ -633,7 +634,7 @@ def test_deleting_a_host_with_a_redirect_removes_both_routers(
     assert client.delete(f"/api/proxy-hosts/{pid}").status_code == 200
     assert fake.deletes == []
     push(client)
-    assert fake.deletes == ["orchestrator-app-example-com-redirect", "orchestrator-app-example-com"]
+    assert fake.deletes == ["app-example-com-redirect", "app-example-com"]
 
 
 def test_catalog_endpoint_offers_domains_and_redirect_availability(

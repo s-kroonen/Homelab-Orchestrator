@@ -122,6 +122,9 @@ def tm(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, service: Service) -> Any
         resolver="letsencrypt",
     )
     sim.add("legacy.yml", "hand", "hand.example.com", upstream="http://10.0.0.16:80")
+    # Hand-written: each router points at a service named after itself (not the form's).
+    for name in ("nas", "hand"):
+        sim.files["legacy.yml"][name]["service"] = name
     client = _tm_client(
         monkeypatch,
         **{**TM_ENV, "STATE_DIR": str(tmp_path), "TRAEFIK_MANAGER_CONFIG_FILE": "apps.yml"},
@@ -149,7 +152,7 @@ def test_traefik_view_pairs_routes_with_records(tm: Any) -> None:
     out = client.get("/api/pull/traefik").json()
     assert out["readable"] is True
     nas = next(r for r in out["routes"] if r["route"] == "nas")
-    assert nas["host_id"] is not None and nas["owned"] is False and nas["file"] == "legacy.yml"
+    assert nas["host_id"] is not None and nas["editable"] is False and nas["file"] == "legacy.yml"
     hand = next(r for r in out["routes"] if r["route"] == "hand")
     assert hand["host_id"] is None  # no record: it is "discovered"
     assert out["no_route"] == []
@@ -184,7 +187,7 @@ def test_format_plan_then_run_rewrites_the_route_and_records_the_run(tm: Any) ->
     run = _wait(client, started.json()["run_id"])
     assert run["status"] == "succeeded", run
     assert run["kind"] == "format"
-    assert sim.file_of("orchestrator-nas-example-com") == "apps.yml" and sim.file_of("nas") is None
+    assert sim.file_of("nas-example-com") == "apps.yml" and sim.file_of("nas") is None
     assert (
         client.post("/api/pull/traefik/format/plan", json={}).json()["items"][0]["status"]
         == "standard"
@@ -233,9 +236,7 @@ def test_kept_middlewares_can_be_chosen_per_host(tm: Any) -> None:
         ).json()["run_id"],
     )
     assert run["status"] == "succeeded", run
-    assert (
-        sim.files["apps.yml"]["orchestrator-nas-example-com"]["mws"] == []
-    )  # hsts dropped on purpose
+    assert sim.files["apps.yml"]["nas-example-com"]["mws"] == []  # hsts dropped on purpose
 
 
 def test_nodes_and_guests_that_exist_only_in_proxmox_can_be_imported(client: TestClient) -> None:
@@ -366,6 +367,6 @@ def test_cli_formats_routes_and_pulls(tm: Any) -> None:
     done = runner.invoke(cli, ["proxy", "format", "--yes"])
     assert done.exit_code == 0, done.output
     assert "formatted" in done.output and "snapshots:" in done.output
-    assert sim.file_of("orchestrator-nas-example-com") == "apps.yml" and sim.file_of("nas") is None
+    assert sim.file_of("nas-example-com") == "apps.yml" and sim.file_of("nas") is None
     pulled = runner.invoke(cli, ["sources", "pull", "traefik"])
     assert pulled.exit_code == 0 and "discovered" in pulled.output

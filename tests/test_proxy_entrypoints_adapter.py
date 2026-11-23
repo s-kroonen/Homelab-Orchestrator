@@ -247,9 +247,9 @@ async def test_runtime_routers_carry_status_error_and_entry_points(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     broken = {
-        "name": "orchestrator-a-example-com@file",
+        "name": "a-example-com@file",
         "rule": "Host(`a.example.com`)",
-        "service": "orchestrator-a-example-com-service@file",
+        "service": "a-example-com-service@file",
         "entryPoints": ["https"],
         "status": "disabled",
         "error": ['entryPoint "https" doesn\'t exist', "no valid entryPoint for this router"],

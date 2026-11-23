@@ -79,7 +79,7 @@
           el("div", {}, el("span", { class: "mono" }, r.router.split("@")[0]), r.priority != null ? el("span", { class: "faint" }, " · priority " + r.priority) : null,
             el("div", { class: "faint mono be-rule" }, r.redirect ? "HTTP -> HTTPS" : r.rule)),
           el("span", { class: "tag" }, r.redirect ? "redirect" : r.strategy))),
-        el("div", { class: "faint be-note" }, (h.tm_config_file ? "File " + h.tm_config_file + " · " : "") + (h.sync_state === "external" ? "hand-written: edit it in Traefik Manager, or convert it" : "made here · editable in Traefik Manager too")));
+        el("div", { class: "faint be-note" }, (h.tm_config_file ? "File " + h.tm_config_file + " · " : "") + (h.sync_state === "external" ? "read only here" + (h.read_only ? " (" + h.read_only + ")" : "") + ": edit it in Traefik Manager" : "editable here and in Traefik Manager")));
       const main = catchAll(h);
       const backends = el("section", { class: "be-card" }, el("div", { class: "sec-label" }, "Backends · " + (main ? main.strategy : m.strategy)),
         servers(h).map((u) => el("div", { class: "be-line" },
@@ -144,7 +144,7 @@
         { key: "off", label: "Off", test: (h) => !h.enabled || !h.served },
         { key: "several", label: "Several backends", test: (h) => composite(h) },
         { key: "bedown", label: "A backend down", test: (h) => downCount(h) > 0 },
-        { key: "handwritten", label: "Hand-written", test: (h) => h.sync_state === "external" },
+        { key: "handwritten", label: "Read only", test: (h) => h.sync_state === "external" },
         { key: "file", label: "In another file", test: (h) => h.config_file_misplaced },
       ],
       menu: (h) => [
@@ -237,14 +237,16 @@
         },
       });
     }
-    const shape = (rt) => rt.redirect_companion ? el("span", { class: "pill off" }, "redirect router")
-      : rt.owned ? el("span", { class: "pill ok" }, "standard") : el("span", { class: "pill warn" }, "hand-written");
+    // Whether a host's record can rewrite it: its contents decide, not who made it or its name.
+    const shape = (rt) => rt.redirect_companion ? el("span", { class: "pill off", title: rt.read_only || "" }, "redirect router")
+      : rt.editable ? el("span", { class: "pill ok" }, "editable") : el("span", { class: "pill warn", title: rt.read_only || "" }, "read only");
     const t = table(box, {
       rows: [], key: (rt) => rt.route, name: (rt) => rt.route, noun: ["route", "routes"], urlState: false, age,
       placeholder: "Filter routes", search: (rt) => [rt.route, rt.hostnames.join(" "), rt.upstream, rt.file, rt.service].join(" "),
       sort: { key: "host", dir: 1 },
       columns: [
-        { key: "host", label: "Host", sort: (rt) => (rt.hostnames[0] || "~"), render: (rt) => el("strong", { class: "mono" }, rt.hostnames.join(", ") || "—") },
+        { key: "host", label: "Host", sort: (rt) => (rt.hostnames[0] || "~"), render: (rt) => rt.hostnames.length ? el("strong", { class: "mono" }, rt.hostnames.join(", "))
+          : el("span", { class: "mono faint", title: "Matched by its rule, not by a host name" }, rt.rule || "—") },
         { key: "route", label: "Route", sort: true, render: (rt) => el("span", { class: "mono faint", style: { fontSize: "12.5px" } }, rt.route) },
         { key: "upstream", label: "Points to", render: (rt) => rt.upstream ? el("span", { class: "mono" }, rt.upstream) : "—" },
         { key: "file", label: "File", phone: false, render: (rt) => rt.file ? el("span", { class: "mono", style: { fontSize: "12.5px" } }, rt.file) : "—" },
@@ -252,12 +254,12 @@
         { key: "on", label: "On", render: (rt) => el("span", { class: "pill " + (rt.enabled ? "ok" : "off") }, rt.enabled ? "on" : "parked") },
         { key: "record", label: "Record", sort: (rt) => (rt.host_id ? 1 : 0),
           render: (rt) => rt.host_id ? (rt.service ? el("a", { href: "/services/" + enc(rt.service) }, rt.service) : el("span", { class: "faint" }, "recorded"))
-            : rt.redirect_companion ? el("span", { class: "faint" }, "—")
+            : rt.redirect_companion || !rt.hostnames.length ? el("span", { class: "faint" }, "—")
             : el("button", { type: "button", class: "secondary small", onclick: () => record(rt) }, "Add…") },
       ],
       chips: [
         { key: "new", label: "No record", test: (rt) => !rt.host_id && !rt.redirect_companion },
-        { key: "hand", label: "Hand-written", test: (rt) => !rt.owned && !rt.redirect_companion },
+        { key: "hand", label: "Read only", test: (rt) => !rt.editable && !rt.redirect_companion },
         { key: "parked", label: "Parked", test: (rt) => !rt.enabled },
       ],
       empty: { title: "No routes", text: ctx.source.name + " has no routes, or cannot be read." },

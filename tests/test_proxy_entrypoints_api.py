@@ -102,6 +102,8 @@ class FakeTM:
                     "rule": r["rule"],
                     "servers": [r["upstream"]],
                     "entryPoints": r["eps"],
+                    # The real app reports each router's service (the form's own by default).
+                    "service_name": r.get("service") or f"{n}-service",
                 }
                 for n, r in self.routes.items()
                 if r["provider"] == "file"  # TM only manages the file provider
@@ -169,10 +171,11 @@ def test_entrypoints_endpoint_shape(service: Service, monkeypatch: pytest.Monkey
     assert r.status_code == 200, r.text
     assert r.json() == {
         "entrypoints": [
-            {"name": "web", "address": ":80"},
-            {"name": "websecure", "address": ":443"},
-            {"name": "traefik", "address": ":8080"},
+            {"name": "web", "address": ":80", "redirect_to": ""},
+            {"name": "websecure", "address": ":443", "redirect_to": ""},
+            {"name": "traefik", "address": ":8080", "redirect_to": ""},
         ],
+        "entrypoint_redirect": False,
         "cert_resolvers": ["letsencrypt", "cloudflare"],
         "cert_resolvers_known": True,
         "cert_resolver_sources": {"letsencrypt": ["tm_settings"], "cloudflare": ["tm_settings"]},
@@ -210,7 +213,7 @@ def test_entrypoints_endpoint_is_cached_and_refresh_busts_it(
     fake.entrypoints = [{"name": "edge", "address": ":443"}]
     assert client.get("/api/proxy/entrypoints").json()["entrypoints"][0]["name"] == "web"
     fresh = client.get("/api/proxy/entrypoints?refresh=true").json()
-    assert fresh["entrypoints"] == [{"name": "edge", "address": ":443"}]
+    assert fresh["entrypoints"] == [{"name": "edge", "address": ":443", "redirect_to": ""}]
     assert fresh["default_entrypoints"] == ["edge"]  # first non-traefik, no websecure
     assert fake.entrypoint_calls == 2
 
@@ -437,11 +440,11 @@ def test_create_refuses_when_the_route_name_is_taken(
     service: Service, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     fake = FakeTM()
-    fake.seed("orchestrator-app-example-com", "other.example.com", ["web"])
+    fake.seed("app-example-com", "other.example.com", ["web"])
     client = _client(monkeypatch, fake)
     r = client.post("/api/proxy-hosts", json=_body(service, entry_points=["web"]))
     assert r.status_code == 422
-    assert "orchestrator-app-example-com" in r.json()["detail"]["errors"]["hostname"]
+    assert "app-example-com" in r.json()["detail"]["errors"]["hostname"]
 
 
 def test_create_refuses_a_hostname_served_by_another_provider(
@@ -471,7 +474,7 @@ def test_create_rolls_back_when_traefik_rejects_the_router(
     assert fail["action"] == "create"
     assert "simulated Traefik refusal" in fail["message"]
     assert "removed again" in fail["message"]
-    assert fake.deletes == ["orchestrator-app-example-com"]  # the TM route was removed again
+    assert fake.deletes == ["app-example-com"]  # the TM route was removed again
     assert fake.routes == {}
     assert len(_rows()) == 1 and _rows()[0].pushed_sig == ""  # not recorded as pushed
     assert client.get(f"/api/proxy-hosts/{r.json()['id']}").json()["sync_state"] == "pending_create"
@@ -599,7 +602,7 @@ def test_edit_failure_keeps_the_new_config_and_returns_traefiks_message(
     # The new configuration is on Traefik Manager and in our DB: kept, but not
     # recorded as pushed (it stays pending until Traefik accepts it).
     assert _rows()[0].upstream == "http://10.0.0.9:9999"
-    assert fake.routes["orchestrator-app-example-com"]["upstream"] == "http://10.0.0.9:9999"
+    assert fake.routes["app-example-com"]["upstream"] == "http://10.0.0.9:9999"
     assert fake.deletes == []
     # ...and the list shows it red with Traefik's own text.
     listed = client.get("/api/proxy-hosts").json()
@@ -612,7 +615,7 @@ def test_list_shows_the_broken_router_error_text_for_a_preexisting_route(
 ) -> None:
     """The operator's incident: a route saved with the defaulted `https`."""
     fake = FakeTM()
-    fake.seed("orchestrator-app-example-com", "app.example.com", ["https"])
+    fake.seed("app-example-com", "app.example.com", ["https"])
     client = _client(monkeypatch, fake)
     with Session(get_engine()) as s:
         s.add(
@@ -620,7 +623,7 @@ def test_list_shows_the_broken_router_error_text_for_a_preexisting_route(
                 hostname="app.example.com",
                 upstream="http://1.2.3.4:80",
                 service_id=service.id,
-                extra={ROUTE_REF_KEY: "orchestrator-app-example-com"},
+                extra={ROUTE_REF_KEY: "app-example-com"},
             )
         )
         s.commit()
@@ -640,14 +643,14 @@ def test_edit_of_a_legacy_host_with_a_broken_route_makes_you_pick_a_real_entry_p
     from tests.push_helpers import push
 
     fake = FakeTM()
-    fake.seed("orchestrator-app-example-com", "app.example.com", ["https"])
+    fake.seed("app-example-com", "app.example.com", ["https"])
     client = _client(monkeypatch, fake)
     with Session(get_engine()) as s:
         ph = ProxyHost(
             hostname="app.example.com",
             upstream="http://1.2.3.4:80",
             service_id=service.id,
-            extra={ROUTE_REF_KEY: "orchestrator-app-example-com"},
+            extra={ROUTE_REF_KEY: "app-example-com"},
         )
         s.add(ph)
         s.commit()
@@ -660,9 +663,9 @@ def test_edit_of_a_legacy_host_with_a_broken_route_makes_you_pick_a_real_entry_p
     # Picking the right one is saved here and fixes the route on the next push.
     r = client.put(f"/api/proxy-hosts/{ph_id}", json=_body(service, entry_points=["websecure"]))
     assert r.status_code == 200, r.text
-    assert fake.routes["orchestrator-app-example-com"]["eps"] == ["https"]
+    assert fake.routes["app-example-com"]["eps"] == ["https"]
     push(client)
-    assert fake.routes["orchestrator-app-example-com"]["eps"] == ["websecure"]
+    assert fake.routes["app-example-com"]["eps"] == ["websecure"]
     assert client.get(f"/api/proxy-hosts/{ph_id}").json()["traefik"]["state"] == "ok"
 
 

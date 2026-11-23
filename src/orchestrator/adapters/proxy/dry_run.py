@@ -51,7 +51,7 @@ class DryRunProxyAdapter(ProxyAdapter):
     def route_ref_for(self, hostname: str) -> str:
         return f"dry-run:{hostname}"
 
-    def owns_route_ref(self, route_ref: str) -> bool:
+    def recreatable_ref(self, route_ref: str, hostname: str) -> bool:
         return route_ref.startswith("dry-run:")
 
     async def list_routes(self) -> list[RouteInfo] | None:
@@ -90,6 +90,7 @@ class DryRunProxyAdapter(ProxyAdapter):
         cert_resolver: str = "",
         options: RouteOptions | None = None,
         config_file: str,
+        drop_middlewares: Sequence[str] = (),
     ) -> str:
         log.info("proxy.dry_run.move_route", route_ref=route_ref, config_file=config_file)
         if route_ref not in self._specs:
@@ -170,6 +171,7 @@ class DryRunProxyAdapter(ProxyAdapter):
         cert_resolver: str = "",
         options: RouteOptions | None = None,
         previous_options: RouteOptions | None = None,
+        drop_middlewares: Sequence[str] = (),
     ) -> None:
         log.info(
             "proxy.dry_run.update_route",

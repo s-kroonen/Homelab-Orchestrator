@@ -78,11 +78,23 @@ class RouteInfo:
     #: hostname, split by path; the higher priority is tried first).
     rule: str = ""
     priority: int | None = None
+    #: Where Traefik gets the router from: ``file`` for the ones Traefik Manager lists (and
+    #: can change), else the provider (``docker``, ...) - read only here.
+    provider: str = "file"
+    #: The router's HostRegexp patterns (Python regular expressions for a whole hostname),
+    #: when its rule matches hostnames by pattern rather than by name.
+    host_patterns: tuple[str, ...] = ()
 
     @property
     def ref(self) -> str:
         """What to send the backend to address exactly this route."""
         return self.route_id or self.name
+
+    def serves(self, hostname: str) -> bool:
+        """Does this router answer ``hostname`` (by a Host() name or a HostRegexp)?"""
+        from orchestrator.registry.traefik_status import rule_serves
+
+        return rule_serves(self.hostnames, self.host_patterns, hostname)
 
 
 def find_route(
@@ -102,8 +114,7 @@ def find_route(
         return None
     pool = [r for r in cands if r.route_id == ref] or cands
     if hostname and len(pool) > 1:
-        host = hostname.strip().lower()
-        by_host = [r for r in pool if host in {h.lower() for h in r.hostnames}]
+        by_host = [r for r in pool if r.serves(hostname)]
         pool = by_host or pool
     return pool[0]
 
@@ -125,6 +136,9 @@ class EntryPointInfo:
 
     name: str
     address: str = ""
+    #: The entry point every request on this one is redirected to (Traefik's
+    #: ``http.redirections.entryPoint.to``, e.g. ``websecure``); ``""`` = none.
+    redirect_to: str = ""
 
 
 #: Human labels for the sources a certificate resolver can be seen in (the key
@@ -172,7 +186,7 @@ class RouteOptions:
     * ``skip_upstream_tls_verify``: only meaningful for an ``https://``
       upstream with a self-signed certificate (PBS, Proxmox).
     * ``tls_main`` / ``tls_sans``: request one certificate covering these names
-      (e.g. ``kroon-en.nl`` + ``*.kroon-en.nl``) instead of one per host.
+      (e.g. ``example.lan`` + ``*.example.lan``) instead of one per host.
       Needs a cert resolver able to do it (DNS challenge for a wildcard).
     * ``http_redirect``: also answer plain HTTP and redirect it to HTTPS.
     * ``hsts``: attach the configured HSTS headers middleware
@@ -353,11 +367,27 @@ class ProxyAdapter(ABC):
         later push does not dirty the registry. Default: the hostname."""
         return hostname
 
-    def owns_route_ref(self, route_ref: str) -> bool:
-        """Does ``route_ref`` look like a route THIS orchestrator created (as
-        opposed to one adopted from the backend, which is never overwritten or
-        deleted)? Default: yes."""
-        return True
+    def route_editable(self, route: RouteInfo, routes: Sequence[RouteInfo] = ()) -> str | None:
+        """Can this route be rewritten from a proxy host's record without losing anything?
+        ``None`` = yes; otherwise the reason, for a person. Judged by the route's contents
+        (``routes`` is everything listed, for what the route shares with others) - never by
+        who made it or how it is named. A route that is not editable is still read, shown
+        and linked; only switched on or off. Default: yes."""
+        return None
+
+    def recreatable_ref(self, route_ref: str, hostname: str) -> bool:
+        """Would :meth:`create_route` make (or has an older version made) a route with this
+        reference for ``hostname``? Only asked when there is no route to look at - it
+        vanished, or the backend cannot be read - so the record is the only thing left: a
+        route that is gone is created again from it only when this says it would come back
+        the same. Default: the reference :meth:`route_ref_for` gives."""
+        return route_ref == self.route_ref_for(hostname)
+
+    def entrypoint_redirects_http(self) -> bool:
+        """True when the backend was last seen sending every plain-HTTP request to HTTPS
+        itself (Traefik: a redirect on the ``web`` entry point), so a host needs no redirect
+        route of its own. Read from what the adapter last saw; never does I/O."""
+        return False
 
     @abstractmethod
     async def list_routes(self) -> list[RouteInfo] | None:
@@ -460,6 +490,7 @@ class ProxyAdapter(ABC):
         cert_resolver: str = "",
         options: RouteOptions | None = None,
         previous_options: RouteOptions | None = None,
+        drop_middlewares: Sequence[str] = (),
     ) -> None:
         """Update the route ``route_ref`` identifies to point at the given
         ``hostname``/``upstream``/``entry_points``/``cert_resolver`` (all of
@@ -493,6 +524,7 @@ class ProxyAdapter(ABC):
         cert_resolver: str = "",
         options: RouteOptions | None = None,
         config_file: str,
+        drop_middlewares: Sequence[str] = (),
     ) -> str:
         """Re-save the route ``route_ref`` identifies into ``config_file`` (and
         take it out of the file it was in), together with its companion
@@ -625,7 +657,7 @@ class ProxyAdapter(ABC):
 
     async def list_domains(self) -> list[str] | None:
         """Base domains the operator serves (Traefik Manager's configured
-        domains, e.g. ``kroon-en.nl``) - the form offers ``domain`` +
+        domains, e.g. ``example.lan``) - the form offers ``domain`` +
         ``*.domain`` as a ready-made wildcard certificate. ``None`` = unknown."""
         return None
 
