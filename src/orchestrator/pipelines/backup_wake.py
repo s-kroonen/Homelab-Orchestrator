@@ -43,11 +43,16 @@ from orchestrator.adapters.errors import AdapterError, AdapterUnreachable
 from orchestrator.audit import log as audit
 from orchestrator.config import Settings
 from orchestrator.db.models import Node, NodeState, Service
-from orchestrator.domain.enums import GuestKind
+from orchestrator.domain.enums import AuditResult, GuestKind
 from orchestrator.logging_setup import get_logger
 from orchestrator.notify.hooks import announce
 from orchestrator.pipelines.steps import Recorder, RetryableBackupError
-from orchestrator.pipelines.wake import WakeError, WakePipeline, WakeUnsupportedError
+from orchestrator.pipelines.wake import (
+    WakeError,
+    WakePipeline,
+    WakeUnsupportedError,
+    live_holds,
+)
 from orchestrator.registry.backup_plan import BLOCKER_NO_POWER_TARGET, PlanStep
 
 log = get_logger(__name__)
@@ -76,6 +81,41 @@ class _LogSteps:
         started_at: datetime | None = None,
     ) -> None:
         log.info("backup.wake.step", step=name, status=status, **(detail or {}))
+
+
+class _BatchSteps(_LogSteps):
+    """Step sink for a scheduled batch putting nodes back after its last service. The batch
+    has no run of its own to hold the step, so each ``restore_state`` outcome also goes to
+    the audit log (the activity feed), where a node left on can be seen."""
+
+    def __init__(self, session: Session) -> None:
+        self._session = session
+
+    def record(
+        self,
+        name: str,
+        status: str,
+        *,
+        detail: dict[str, Any] | None = None,
+        started_at: datetime | None = None,
+    ) -> None:
+        super().record(name, status, detail=detail, started_at=started_at)
+        if not name.startswith("restore_state:"):
+            return
+        node = name.split(":", 1)[1]
+        try:
+            audit.record(
+                self._session,
+                actor="backup",
+                action="backup.restore_state",
+                target=f"node:{node}",
+                result=AuditResult.ERROR if status == "failed" else AuditResult.OK,
+                details={"status": status, "batch": True, **(detail or {})},
+            )
+            self._session.commit()
+        except Exception as exc:  # the audit is a nicety; never fail the put-back over it
+            self._session.rollback()
+            log.warning("backup.restore_state_audit_failed", node=node, error=str(exc))
 
 
 @dataclass
@@ -282,7 +322,7 @@ class BackupWaker:
         node simply stays on. ``defer_to``: a scheduled batch is still running, so
         a node it powered on is handed to the batch to power off at the very end
         rather than between two services."""
-        sink: Recorder = steps or _LogSteps()
+        sink: Recorder = steps or _BatchSteps(session)
         if defer_to is not None:
             # The batch's own wakes must not look like "somebody else's".
             defer_to.wake_run_ids |= ctx.wake_run_ids
@@ -333,7 +373,7 @@ class BackupWaker:
     ) -> None:
         busy = self._busy_reason(session, ctx, node)
         if busy:
-            sink.record(step, "skipped", detail={"reason": busy})
+            await self._left_on(session, sink, step, node, prior, busy)
             return
         if prior.was_online:
             for vmid, kind in prior.started_guests:
@@ -354,7 +394,7 @@ class BackupWaker:
             await asyncio.sleep(grace)
             busy = self._busy_reason(session, ctx, node)
             if busy:
-                sink.record(step, "skipped", detail={"reason": busy})
+                await self._left_on(session, sink, step, node, prior, busy)
                 return
         started = datetime.now(UTC)
         why = "backup finished: back to the prior state"
@@ -376,12 +416,51 @@ class BackupWaker:
             detail={"action": "power_off", "power_mgr_target": node.power_mgr_target},
         )
 
+    @staticmethod
+    async def _left_on(
+        session: Session,
+        sink: Recorder,
+        step: str,
+        node: Node,
+        prior: NodePrior,
+        reason: str,
+    ) -> None:
+        """Something else needs the node: leave it as it is, and say so. A node the backup
+        powered on and now leaves on is announced, so it is not found days later."""
+        sink.record(step, "skipped", detail={"reason": reason})
+        if prior.was_online:
+            return  # it was on before the backup; leaving it on changes nothing
+        log.warning(
+            "backup.restore_state_left_on",
+            node=node.name,
+            reason=reason,
+            impact="The backup powered this node on and left it on.",
+        )
+        try:
+            await announce(
+                session,
+                level="node",
+                key=node.name,
+                name=node.name,
+                event="power_restore_skipped",
+                severity="warn",
+                title=f"{node.name} was left on after the backup",
+                body=(
+                    f"The backup powered {node.name} on and did not power it off again: "
+                    f"{reason}. It stays on until that is done or someone turns it off."
+                ),
+                scope={"node": node.name},
+            )
+        except Exception:  # announce is best-effort
+            log.warning("backup.restore_announce_failed", node=node.name)
+
     def _busy_reason(self, session: Session, ctx: WakeContext, node: Node) -> str | None:
         """Why this node must be left alone, or None."""
         state = session.get(NodeState, node.id) if node.id is not None else None
-        if state is not None and state.hold_count > 0:
-            who = ", ".join(str(r.get("reason", "?")) for r in state.current_hold_reasons)
-            return f"other work still holds it ({who or f'hold_count={state.hold_count}'})"
+        held = live_holds(state)
+        if held:
+            who = ", ".join(str(r.get("reason", "?")) for r in held)
+            return f"other work still holds it ({who})"
         if self._wake.wakes_since(session, node, ctx.started_at, exclude=ctx.wake_run_ids):
             return "something else woke a service on it during the backup"
         return None

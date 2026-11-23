@@ -80,6 +80,26 @@ _KIND_TO_PBS_TYPE: dict[GuestKind, str] = {
 }
 
 
+def _human(size: int) -> str:
+    value = float(size)
+    for unit in ("B", "KB", "MB", "GB", "TB"):
+        if value < 1024 or unit == "TB":
+            return f"{value:.0f} {unit}" if unit == "B" else f"{value:.1f} {unit}"
+        value /= 1024
+    return f"{size} B"
+
+
+def task_error_lines(log_tail: list[str], *, limit: int = 3) -> str:
+    """The lines of a Proxmox task log that say why it failed: its ``ERROR:`` lines, or
+    else its last lines. "job errors" alone says nothing (OR-95)."""
+    lines = [ln.strip() for ln in log_tail or [] if ln and ln.strip()]
+    errors = [
+        ln for ln in lines if "error" in ln.lower() and ln.upper() != "TASK ERROR: JOB ERRORS"
+    ]
+    picked = errors[-limit:] if errors else lines[-limit:]
+    return " | ".join(picked)[:800]
+
+
 class BackupPipeline:
     def __init__(
         self,
@@ -568,16 +588,25 @@ class BackupPipeline:
         """
         started = datetime.now(UTC)
         status = await self._pbs.datastore_status(self._settings.pbs_datastore)
-        steps.record(
-            "pbs_preflight",
-            "ok",
-            started_at=started,
-            detail={
-                "datastore": status.name,
-                "used_bytes": status.used_bytes,
-                "available_bytes": status.available_bytes,
-            },
-        )
+        detail = {
+            "datastore": status.name,
+            "total_bytes": status.total_bytes,
+            "used_bytes": status.used_bytes,
+            "available_bytes": status.available_bytes,
+        }
+        floor = self._settings.pbs_min_free_bytes
+        # total 0: PBS did not say how big the datastore is (or a dry run), so free space
+        # says nothing either.
+        if floor > 0 and status.total_bytes > 0 and status.available_bytes < floor:
+            steps.record("pbs_preflight", "failed", started_at=started, detail=detail)
+            raise BackupError(
+                f"the PBS datastore {status.name!r} is full: {_human(status.available_bytes)} "
+                f"free of {_human(status.total_bytes)}. PBS would refuse the upload, so no "
+                "backup was started and the last known-good backup is untouched. Free space: "
+                "prune old snapshots, then run PBS's garbage collection (pruning alone frees "
+                "nothing), or add space."
+            )
+        steps.record("pbs_preflight", "ok", started_at=started, detail=detail)
 
     async def _run_gate(
         self,
@@ -919,10 +948,16 @@ class BackupPipeline:
                 "vzdump_finished",
                 "failed",
                 started_at=started,
-                detail={"upid": handle.upid, "exit_status": status.exit_status},
+                detail={
+                    "upid": handle.upid,
+                    "exit_status": status.exit_status,
+                    "log": task_error_lines(status.log_tail),
+                },
             )
+            why = task_error_lines(status.log_tail)
             raise BackupError(
                 f"vzdump for {service.slug} failed: {status.exit_status or 'unknown'}"
+                + (f". Proxmox: {why}" if why else "")
             )
         steps.record(
             "vzdump_finished",

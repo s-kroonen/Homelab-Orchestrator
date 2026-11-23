@@ -25,6 +25,7 @@ import contextlib
 import time
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from typing import Any
 
 from sqlmodel import Session, desc, select
 
@@ -58,6 +59,33 @@ from orchestrator.pipelines.steps import Recorder, StepRecorder
 from orchestrator.registry.tree import effective_guest, is_served
 
 log = get_logger(__name__)
+
+
+def live_holds(state: NodeState | None, now: datetime | None = None) -> list[dict[str, Any]]:
+    """The holds on a node that still count: released ones are gone from the list, and
+    one past its ``until`` (its release never came: the process that took it restarted)
+    no longer counts. A hold from before holds had an ``until`` counts until the next
+    start-up clears it (:func:`orchestrator.pipelines.interrupted.clear_stale_holds`)."""
+    if state is None or state.hold_count <= 0:
+        return []
+    now = now or datetime.now(UTC)
+    live: list[dict[str, Any]] = []
+    for entry in state.current_hold_reasons or []:
+        until = entry.get("until")
+        if until:
+            try:
+                end = datetime.fromisoformat(str(until))
+            except ValueError:
+                end = None
+            if end is not None:
+                end = end if end.tzinfo else end.replace(tzinfo=UTC)
+                if end <= now:
+                    continue
+        live.append(entry)
+    if not state.current_hold_reasons:
+        # A count with no reasons kept: still held, by someone unknown.
+        return [{"reason": f"hold_count={state.hold_count}"}]
+    return live
 
 
 class WakeError(Exception):
@@ -645,16 +673,21 @@ class WakePipeline:
         woke for the whole backup — a hold must outlive the wake that asked for
         it, so the wake's own (short, ``wake_timeout_s``) hold is not enough.
         ``ttl_s`` defaults to the wake timeout."""
-        handle = await self._power.hold(
-            node.power_mgr_target,
-            reason=reason,
-            ttl_s=ttl_s if ttl_s is not None else self._settings.wake_timeout_s,
-        )
+        ttl = ttl_s if ttl_s is not None else self._settings.wake_timeout_s
+        handle = await self._power.hold(node.power_mgr_target, reason=reason, ttl_s=ttl)
         state = self._node_state(session, node)
         state.hold_count += 1
+        now = datetime.now(UTC)
         state.current_hold_reasons = [
             *state.current_hold_reasons,
-            {"handle": handle, "reason": reason, "at": datetime.now(UTC).isoformat()},
+            {
+                "handle": handle,
+                "reason": reason,
+                "at": now.isoformat(),
+                # Past this the hold counts for nothing, even if its release never came
+                # (a restart mid-run): see live_holds.
+                "until": (now + timedelta(seconds=max(ttl, 1))).isoformat(),
+            },
         ]
         session.add(state)
         session.commit()

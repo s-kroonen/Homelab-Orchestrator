@@ -498,13 +498,19 @@ class LiveProxmoxAdapter(ProxmoxAdapter):
     async def task_status(self, node: str, upid: str) -> TaskStatus:
         status = await self._client.request("GET", f"/nodes/{node}/tasks/{upid}/status")
         status = status or {}
+        finished = str(status.get("status", "")) == "stopped"
 
         log_tail: list[str] = []
         try:
+            # Proxmox returns the log from its first line, and why a task failed is at its
+            # end: once it has finished, read all of it and keep the end. While it runs
+            # (polled every few seconds) the first lines are enough.
             entries = await self._client.request(
-                "GET", f"/nodes/{node}/tasks/{upid}/log", params={"limit": 50}
+                "GET",
+                f"/nodes/{node}/tasks/{upid}/log",
+                params={"limit": 5000 if finished else 50},
             )
-            log_tail = [str(e.get("t", "")) for e in entries or []]
+            log_tail = [str(e.get("t", "")) for e in entries or []][-50:]
         except Exception as exc:  # log is a nicety — never fail the poll over it
             log.debug("proxmox.task_log.unavailable", upid=upid, error=str(exc))
 

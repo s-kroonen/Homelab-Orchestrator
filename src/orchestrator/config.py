@@ -384,6 +384,9 @@ class Settings(BaseSettings):
     # After a backup, wait this long before powering a node it woke back off, so a
     # request that arrives right at the end is not pulled out from under.
     backup_power_off_grace_s: int = 30
+    # A backup does not start when the PBS datastore has less free space than this: PBS
+    # would refuse the upload part-way ("job errors"). 0 turns the check off.
+    pbs_min_free_bytes: int = 1024**3
     # A cold node can legitimately take minutes to POST, boot, and bring its
     # guests up — this bounds the whole wake pipeline, node-online and health
     # polling both count against it.
