@@ -286,8 +286,28 @@ Set per backup policy (Backup policies -> Edit, or `orchestrator-cli policy upda
   (graceful) after `BACKUP_POWER_OFF_GRACE_S`. A node that was already on stays on. A node is
   left alone - and the step says why - when something else still holds it, when someone
   else woke a service on it during the backup, or when it is always-on / has no power target.
-  A scheduled batch powers the node off once, after its last service. If powering off fails
-  you get a `power_restore_failed` notification.
+  A scheduled batch powers the node off once, after its last service; the batch has no run
+  of its own, so that step is in the activity feed as `backup.restore_state`. This holds
+  whether the backups worked or failed. If powering off fails you get a
+  `power_restore_failed` notification; a node the backup powered on and leaves on because
+  something else still needs it gives a `power_restore_skipped` warning ("was left on after
+  the backup") with the reason.
+* **Holds that outlive their run**: every hold the orchestrator counts on a node carries an
+  expiry (its TTL). One past it no longer counts as "something else still holds it", and at
+  start-up every hold is dropped (`node.holds_cleared` in the activity feed): the runs that
+  took them did not survive the restart. Before this (OR-95), a wake cut off by a restart left
+  its hold counted for good, and from then on no backup powered that node off again.
+
+### When PBS is full
+
+The PBS preflight reads the datastore's free space. With less than `PBS_MIN_FREE_BYTES`
+(default 1 GiB; 0 turns the check off) the backup stops there, before the integrity gate and
+the dump, with an error that says how full it is. Its node is put back as after any failure.
+Before, the dump ran and failed part-way with Proxmox's "job errors"; a failed dump now
+carries the error lines of Proxmox's task log ("Proxmox: ERROR: ... no space left on device").
+
+Pruning old snapshots marks them removed; the space only comes back after PBS's garbage
+collection, which needs the datastore online.
 
 Before this, nodes were only *held* during a backup and then released, relying on the power
 manager to switch them off; the MQTT power manager has no idle shutdown of its own, so a node
