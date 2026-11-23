@@ -600,6 +600,11 @@ ENV_SECTIONS: tuple[EnvSection, ...] = (
                 "Seconds to wait after a backup before powering a node it woke back off.",
             ),
             EnvKey(
+                "PBS_MIN_FREE_BYTES",
+                "A backup does not start when the PBS datastore has less free space than "
+                "this many bytes (PBS would refuse the upload part-way). 0 turns the check off.",
+            ),
+            EnvKey(
                 "WAKE_TIMEOUT_S",
                 "Bounds the whole wake pipeline — a cold node can take minutes to POST, "
                 "boot, and bring its guests up.",
