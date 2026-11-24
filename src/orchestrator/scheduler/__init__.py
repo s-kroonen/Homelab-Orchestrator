@@ -30,7 +30,8 @@ from __future__ import annotations
 import asyncio
 import traceback
 from collections.abc import Callable
-from datetime import datetime
+from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from typing import Any
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -41,10 +42,10 @@ from orchestrator.adapters.errors import AdapterError, AdapterUnreachable, TaskT
 from orchestrator.adapters.factory import AdapterBundle
 from orchestrator.audit import log as audit
 from orchestrator.config import Settings
-from orchestrator.db.models import BackupPolicy, Service
+from orchestrator.db.models import BackupPolicy, CleanupPolicy, Service
 from orchestrator.db.session import session_scope
 from orchestrator.display import get_timezone
-from orchestrator.domain.enums import AuditResult
+from orchestrator.domain.enums import AuditResult, BackupWakeMode, CleanupGcMode, CleanupWhen
 from orchestrator.logging_setup import get_logger
 from orchestrator.notify.jobs import job_failed, job_ok
 from orchestrator.pipelines.backup import BackupError, BackupPipeline, BackupSkipped, WakeContext
@@ -54,6 +55,7 @@ log = get_logger(__name__)
 
 _JOB_PREFIX = "policy:"
 _DUMP_PREFIX = "dump:"
+_CLEANUP_PREFIX = "cleanup:"
 _DUMP_SYNC_JOB = "dump-sync"
 
 
@@ -105,6 +107,63 @@ def resolve_targets(session: Session, policy: BackupPolicy) -> list[str]:
     return [s for s in slugs if s not in excluded]
 
 
+_JOB_SEQ = 0
+#: The scheduler this process started (for callers without the app, like the MCP tools).
+_CURRENT: BackupScheduler | None = None
+
+
+def current() -> BackupScheduler | None:
+    return _CURRENT
+
+
+@dataclass
+class QueuedJob:
+    """A backup batch or a cleanup, waiting for or holding the queue."""
+
+    id: int
+    kind: str  # "backup" | "cleanup"
+    name: str
+    actor: str
+    requires: frozenset[str]
+    task: asyncio.Task[Any] | None = None
+    state: str = "waiting"  # "waiting" | "running"
+    queued_at: datetime = field(default_factory=lambda: datetime.now(UTC))
+    started_at: datetime | None = None
+    #: Set to stop a running cleanup's GC.
+    stop: asyncio.Event = field(default_factory=asyncio.Event)
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "kind": self.kind,
+            "name": self.name,
+            "actor": self.actor,
+            "state": self.state,
+            "requires": sorted(self.requires),
+            "queued_at": self.queued_at.isoformat(),
+            "started_at": self.started_at.isoformat() if self.started_at else None,
+        }
+
+
+@dataclass
+class _Carried:
+    """The wake the queue carries from job to job."""
+
+    ctx: WakeContext
+    requires: frozenset[str]
+    restore: bool
+    pipeline: BackupPipeline
+    since: datetime = field(default_factory=lambda: datetime.now(UTC))
+
+
+def _cleanup_of(session: Session, policy: BackupPolicy) -> CleanupPolicy | None:
+    if not policy.cleanup_policy:
+        return None
+    return session.exec(
+        select(CleanupPolicy).where(CleanupPolicy.name == policy.cleanup_policy)
+    ).one_or_none()
+
+
 class BackupScheduler:
     def __init__(
         self,
@@ -127,8 +186,15 @@ class BackupScheduler:
         #: Cron expressions run in this zone (the dashboard's timezone setting).
         self.timezone: Any = self._scheduler.timezone
         self._lock = asyncio.Lock()
+        #: The jobs running and waiting, in order (see queue()).
+        self._jobs: list[QueuedJob] = []
+        #: What the queue holds awake between jobs.
+        self._carried: _Carried | None = None
+        self._background: set[asyncio.Task[Any]] = set()
         #: policy name -> why it has no job (bad cron). Shown on the dashboard.
         self.errors: dict[str, str] = {}
+        #: cleanup policy name -> why it has no job (bad cron).
+        self.cleanup_errors: dict[str, str] = {}
         #: service slug -> why its dump has no job (bad cron).
         self.dump_errors: dict[str, str] = {}
 
@@ -136,6 +202,8 @@ class BackupScheduler:
 
     def start(self) -> None:
         """Start APScheduler and register jobs. Needs a running event loop."""
+        global _CURRENT
+        _CURRENT = self
         self._scheduler.start()
         self.sync_jobs()
         # Dump schedules live on services, which change without telling the scheduler: look again.
@@ -221,8 +289,44 @@ class BackupScheduler:
                 # nightly backup when it comes back within the hour.
                 misfire_grace_time=3600,
             )
+        self.sync_cleanup_jobs()
         self.sync_dump_jobs()
         log.info("scheduler.synced", policies=len(wanted), errors=len(self.errors))
+
+    def sync_cleanup_jobs(self) -> None:
+        """One job per cleanup policy with its own schedule. Idempotent."""
+        with session_scope() as session:
+            wanted = {
+                c.name: c.schedule_cron.strip()
+                for c in session.exec(select(CleanupPolicy)).all()
+                if c.schedule_cron.strip()
+            }
+        for job in self._scheduler.get_jobs():
+            if job.id.startswith(_CLEANUP_PREFIX) and job.id[len(_CLEANUP_PREFIX) :] not in wanted:
+                job.remove()
+        self.cleanup_errors = {}
+        for name, cron in wanted.items():
+            try:
+                trigger = parse_cron(cron, self.timezone)
+            except ValueError as exc:
+                self.cleanup_errors[name] = str(exc)
+                log.error("scheduler.cleanup.invalid_cron", cleanup=name, cron=cron, error=str(exc))
+                continue
+            self._scheduler.add_job(
+                self.run_cleanup,
+                trigger,
+                args=[name],
+                id=f"{_CLEANUP_PREFIX}{name}",
+                name=f"cleanup policy {name}",
+                replace_existing=True,
+                max_instances=1,
+                coalesce=True,
+                misfire_grace_time=3600,
+            )
+
+    def next_cleanup_time(self, name: str) -> datetime | None:
+        job = self._scheduler.get_job(f"{_CLEANUP_PREFIX}{name}")
+        return job.next_run_time if job is not None else None
 
     def purge_archive(self) -> None:
         from orchestrator.registry.archive import purge_expired
@@ -292,58 +396,353 @@ class BackupScheduler:
 
     # -- the job itself ------------------------------------------------------
 
-    async def run_policy(self, policy_name: str) -> dict[str, dict[str, Any]]:
-        """One firing: back up every target, prune the ones that succeeded.
+    # -- the queue -----------------------------------------------------------
+    #
+    # Backup batches and cleanups run one at a time, in the order they were asked for. What
+    # they need woken (a policy's "needs": the storage the datastore lives on) is woken once
+    # and carried from one job to the next while it covers them: the node is powered on once
+    # for a cleanup and the backups after it, and put back after the last job that needs it.
+
+    def queue(self) -> dict[str, Any]:
+        """The jobs running and waiting, in order, and what the queue holds awake."""
+        jobs = [j.as_dict() for j in self._jobs]
+        held = (
+            {
+                "requires": sorted(self._carried.requires),
+                "nodes": [h.node_name for h in self._carried.ctx.held],
+                "since": self._carried.since.isoformat(),
+            }
+            if self._carried is not None
+            else None
+        )
+        return {"held": held, "jobs": jobs}
+
+    def cancel(self, job_id: int) -> str:
+        """Cancel a waiting job, or stop a running cleanup's GC. Returns what was done."""
+        job = next((j for j in self._jobs if j.id == job_id), None)
+        if job is None:
+            raise KeyError(job_id)
+        if job.state == "waiting":
+            if job.task is not None:
+                job.task.cancel()
+            return "cancelled"
+        if job.kind == "cleanup":
+            job.stop.set()
+            return "stopping"
+        raise ValueError("a running backup batch cannot be stopped from here")
+
+    async def _queued(
+        self, kind: str, name: str, actor: str, requires: list[str], body: Any
+    ) -> Any:
+        global _JOB_SEQ
+        _JOB_SEQ += 1
+        job = QueuedJob(
+            id=_JOB_SEQ,
+            kind=kind,
+            name=name,
+            actor=actor,
+            requires=frozenset(requires),
+            task=asyncio.current_task(),
+        )
+        self._jobs.append(job)
+        try:
+            async with self._lock:
+                job.state = "running"
+                job.started_at = datetime.now(UTC)
+                try:
+                    return await body(job)
+                finally:
+                    if job in self._jobs:
+                        self._jobs.remove(job)
+                    await self._hand_over()
+        finally:
+            if job in self._jobs:
+                self._jobs.remove(job)
+            if job.state == "waiting":
+                # Cancelled before it ran: the job ahead may have kept the storage held for
+                # it. Let the queue look again once it is free.
+                task = asyncio.get_running_loop().create_task(self._release_if_idle())
+                self._background.add(task)
+                task.add_done_callback(self._background.discard)
+
+    async def _release_if_idle(self) -> None:
+        async with self._lock:
+            await self._hand_over()
+
+    async def _hand_over(self) -> None:
+        """After a job: keep the carried wake for a waiting job it covers, else put it back."""
+        carried = self._carried
+        if carried is None:
+            return
+        if any(j.requires and j.requires <= carried.requires for j in self._jobs):
+            return
+        self._carried = None
+        try:
+            with session_scope() as session:
+                await carried.pipeline.release_shared(session, carried.ctx, restore=carried.restore)
+        except Exception as exc:  # never leave the queue wedged over a put-back
+            log.error("scheduler.queue.release_failed", error=str(exc))
+
+    async def _shared_wake(
+        self,
+        session: Session,
+        pipeline: BackupPipeline,
+        *,
+        requires: list[str],
+        wake_mode: BackupWakeMode,
+        restore: bool,
+        label: str,
+        ttl_s: int,
+        actor: str,
+    ) -> WakeContext:
+        """The wake a job runs under: the carried one when it covers ``requires`` (its holds
+        renewed for this job), else a new one (the carried one put back first)."""
+        need = frozenset(requires)
+        carried = self._carried
+        if carried is not None and need <= carried.requires and not carried.ctx.error:
+            carried.restore = carried.restore and restore
+            await carried.pipeline.renew_holds(session, carried.ctx, label=label, ttl_s=ttl_s)
+            return carried.ctx
+        # Even with nothing to wake the job gets a carried context: the runs in it hand over
+        # what THEY woke (a node a service's backup powered on) to be put back at the end.
+        if carried is not None:
+            self._carried = None
+            await carried.pipeline.release_shared(session, carried.ctx, restore=carried.restore)
+        ctx = await pipeline.prepare_shared(
+            session, requires=list(requires), wake_mode=wake_mode, label=label, actor=actor,
+            ttl_s=ttl_s,
+        )  # fmt: skip
+        self._carried = _Carried(ctx=ctx, requires=need, restore=restore, pipeline=pipeline)
+        return ctx
+
+    # -- the jobs ------------------------------------------------------------
+
+    async def run_policy(
+        self, policy_name: str, *, actor: str = "scheduler"
+    ) -> dict[str, dict[str, Any]]:
+        """One firing: its cleanup before or after (when it has one), back up every target,
+        prune the ones that succeeded. Queued behind whatever is running.
 
         Never raises — an exception escaping an APScheduler job is logged by
         APScheduler and then forgotten; every failure here is caught, logged
         with an impact line, and audited, then the next service runs.
         """
-        async with self._lock:
+        with session_scope() as session:
+            policy = session.exec(
+                select(BackupPolicy).where(BackupPolicy.name == policy_name)
+            ).one_or_none()
+            if policy is None:
+                log.warning("scheduler.policy.missing", policy=policy_name)
+                return {}
+            cleanup = _cleanup_of(session, policy)
+            requires = list(
+                dict.fromkeys(
+                    [*(policy.requires or []), *((cleanup.requires or []) if cleanup else [])]
+                )
+            )
+        return await self._queued(  # type: ignore[no-any-return]
+            "backup", policy_name, actor, requires, lambda job: self._backup_job(policy_name, job)
+        )
+
+    async def run_cleanup(
+        self, name: str, *, actor: str = "scheduler", reason: str = "its schedule"
+    ) -> int | None:
+        """Run a cleanup policy on its own, queued. Returns its run id (None: no such policy)."""
+        with session_scope() as session:
+            cleanup = session.exec(
+                select(CleanupPolicy).where(CleanupPolicy.name == name)
+            ).one_or_none()
+            if cleanup is None:
+                log.warning("scheduler.cleanup.missing", cleanup=name)
+                return None
+            requires = list(cleanup.requires or [])
+        return await self._queued(  # type: ignore[no-any-return]
+            "cleanup",
+            name,
+            actor,
+            requires,
+            lambda job: self._cleanup_job(name, job, actor, reason),
+        )
+
+    async def run_prune(
+        self, policy_name: str, *, gc: bool, actor: str = "scheduler"
+    ) -> int | None:
+        """ "Prune now" on a backup policy: its services pruned by its keep rules, and PBS's
+        GC after when ``gc``, queued like a cleanup (it wakes the policy's storage)."""
+        with session_scope() as session:
+            policy = session.exec(
+                select(BackupPolicy).where(BackupPolicy.name == policy_name)
+            ).one_or_none()
+            if policy is None:
+                return None
+            requires = list(policy.requires or [])
+
+        async def body(job: QueuedJob) -> int | None:
             with session_scope() as session:
-                policy = session.exec(
+                pol = session.exec(
                     select(BackupPolicy).where(BackupPolicy.name == policy_name)
                 ).one_or_none()
-                if policy is None:
-                    log.warning("scheduler.policy.missing", policy=policy_name)
-                    return {}
-                slugs = resolve_targets(session, policy)
-                log.info("scheduler.policy.fire", policy=policy_name, services=slugs)
-                outcomes: dict[str, dict[str, Any]] = {}
-                # The policy's own prerequisites (e.g. the storage VM) are woken
-                # ONCE for the whole batch and held until the last service is
-                # done — not woken and released per service. Per-service extras
-                # and each target are still handled per service, in its own run.
-                pipeline = self._pipeline_factory()
-                attempts = max(1, int(policy.max_attempts or 1))
-                pending = list(slugs)
-                for attempt in range(1, attempts + 1):
-                    if attempt > 1:
-                        # Only what was blocked / not yet healthy comes back, after a
-                        # pause - the other services in the batch are already done.
-                        await asyncio.sleep(self._settings.backup_retry_delay_s)
-                        session.expire_all()
-                        log.info(
-                            "scheduler.policy.retry",
-                            policy=policy_name,
-                            attempt=attempt,
-                            of=attempts,
-                            services=pending,
-                        )
-                    prepared = await pipeline.prepare_policy(
-                        session, policy, actor="scheduler", services=len(pending)
+                if pol is None:
+                    return None
+                ad_hoc = CleanupPolicy(
+                    name=f"prune:{policy_name}",
+                    prune=True,
+                    gc_mode=CleanupGcMode.INTERVAL if gc else CleanupGcMode.OFF,
+                    gc_interval_h=0,
+                    requires=list(pol.requires or []),
+                    wake_mode=pol.wake_mode,
+                    restore_power_state=pol.restore_power_state,
+                )
+                return await self._run_cleanup(
+                    session, ad_hoc, self._pipeline_factory(), job, actor,
+                    f"prune now on {policy_name}", only_policy=policy_name,
+                )  # fmt: skip
+
+        return await self._queued(  # type: ignore[no-any-return]
+            "cleanup", f"prune {policy_name}", actor, requires, body
+        )
+
+    async def _cleanup_job(self, name: str, job: QueuedJob, actor: str, reason: str) -> int | None:
+        with session_scope() as session:
+            cleanup = session.exec(
+                select(CleanupPolicy).where(CleanupPolicy.name == name)
+            ).one_or_none()
+            if cleanup is None:
+                return None
+            pipeline = self._pipeline_factory()
+            return await self._run_cleanup(session, cleanup, pipeline, job, actor, reason)
+
+    async def _run_cleanup(
+        self,
+        session: Session,
+        cleanup: CleanupPolicy,
+        pipeline: BackupPipeline,
+        job: QueuedJob,
+        actor: str,
+        reason: str,
+        only_policy: str | None = None,
+    ) -> int | None:
+        from orchestrator.pipelines.cleanup import CleanupPipeline
+
+        ctx = await self._shared_wake(
+            session,
+            pipeline,
+            requires=list(cleanup.requires or []),
+            wake_mode=cleanup.wake_mode,
+            restore=cleanup.restore_power_state,
+            label=f"cleanup:{cleanup.name}",
+            ttl_s=self._cleanup_ttl_s(cleanup),
+            actor=actor,
+        )
+        try:
+            run = await CleanupPipeline(pbs=self._adapters.pbs, settings=self._settings).run(
+                session,
+                cleanup,
+                prepared=ctx,
+                actor=actor,
+                reason=reason,
+                stop=job.stop,
+                only_policy=only_policy,
+            )
+        except Exception as exc:
+            log.error(
+                "scheduler.cleanup.crashed",
+                cleanup=cleanup.name,
+                error=str(exc),
+                traceback=traceback.format_exc(),
+            )
+            session.rollback()
+            return None
+        return run.id
+
+    def _cleanup_ttl_s(self, cleanup: CleanupPolicy) -> int:
+        return int(cleanup.max_wait_h * 3600 + self._settings.wake_timeout_s * 2 + 600)
+
+    async def _datastore_full(self, cleanup: CleanupPolicy) -> bool:
+        """Is the cleanup's datastore too full to back up into (the preflight's floor)?"""
+        floor = self._settings.pbs_min_free_bytes
+        if floor <= 0:
+            return False
+        try:
+            status = await self._adapters.pbs.datastore_status(
+                cleanup.datastore or self._settings.pbs_datastore
+            )
+        except Exception:
+            return False
+        return status.total_bytes > 0 and status.available_bytes < floor
+
+    async def _backup_job(self, policy_name: str, job: QueuedJob) -> dict[str, dict[str, Any]]:
+        with session_scope() as session:
+            policy = session.exec(
+                select(BackupPolicy).where(BackupPolicy.name == policy_name)
+            ).one_or_none()
+            if policy is None:
+                return {}
+            slugs = resolve_targets(session, policy)
+            log.info("scheduler.policy.fire", policy=policy_name, services=slugs)
+            pipeline = self._pipeline_factory()
+            cleanup = _cleanup_of(session, policy)
+            outcomes: dict[str, dict[str, Any]] = {}
+            attempts = max(1, int(policy.max_attempts or 1))
+            pending = list(slugs)
+            ttl = pipeline.hold_ttl_s(len(pending))
+            label = f"backup-policy:{policy.name}"
+
+            ran_cleanup = False
+            if cleanup is not None:
+                # Wake what both need once, then decide: before, or after unless too full.
+                both = list(dict.fromkeys([*(policy.requires or []), *(cleanup.requires or [])]))
+                await self._shared_wake(
+                    session, pipeline, requires=both, wake_mode=policy.wake_mode,
+                    restore=policy.restore_power_state and cleanup.restore_power_state,
+                    label=label, ttl_s=max(ttl, self._cleanup_ttl_s(cleanup)), actor="scheduler",
+                )  # fmt: skip
+                first = policy.cleanup_when is CleanupWhen.BEFORE
+                why = f"before the backups of {policy.name}"
+                if not first and await self._datastore_full(cleanup):
+                    first, why = True, f"the datastore is too full for {policy.name}'s backups"
+                if first:
+                    await self._run_cleanup(session, cleanup, pipeline, job, "scheduler", why)
+                    ran_cleanup = True
+
+            for attempt in range(1, attempts + 1):
+                if attempt > 1:
+                    # Only what was blocked / not yet healthy comes back, after a
+                    # pause - the other services in the batch are already done.
+                    await asyncio.sleep(self._settings.backup_retry_delay_s)
+                    session.expire_all()
+                    log.info(
+                        "scheduler.policy.retry",
+                        policy=policy_name,
+                        attempt=attempt,
+                        of=attempts,
+                        services=pending,
                     )
-                    try:
-                        for slug in pending:
-                            outcomes[slug] = await self._run_one(
-                                session, policy, slug, pipeline, prepared, attempt, attempts
-                            )
-                    finally:
-                        await pipeline.release_prepared(session, prepared, policy)
-                    pending = [s for s in pending if outcomes[s].get("retry")]
-                    if not pending:
-                        break
-                return outcomes
+                # The policy's own prerequisites (e.g. the storage VM) are woken ONCE for the
+                # whole batch - and for the jobs queued around it - not per service.
+                prepared = await self._shared_wake(
+                    session, pipeline, requires=list(policy.requires or []),
+                    wake_mode=policy.wake_mode, restore=policy.restore_power_state,
+                    label=label, ttl_s=pipeline.hold_ttl_s(len(pending)), actor="scheduler",
+                )  # fmt: skip
+                for slug in pending:
+                    outcomes[slug] = await self._run_one(
+                        session, policy, slug, pipeline, prepared, attempt, attempts
+                    )
+                pending = [s for s in pending if outcomes[s].get("retry")]
+                if not pending:
+                    break
+
+            if cleanup is not None and not ran_cleanup:
+                await self._run_cleanup(
+                    session,
+                    cleanup,
+                    pipeline,
+                    job,
+                    "scheduler",
+                    f"after the backups of {policy.name}",
+                )
+            return outcomes
 
     async def _run_one(
         self,
@@ -456,6 +855,7 @@ class BackupScheduler:
 
 __all__ = [
     "BackupScheduler",
+    "current",
     "job_id",
     "next_fire_time",
     "parse_cron",

@@ -58,6 +58,7 @@ from orchestrator.web.routers import (
     backup,
     backup_policies,
     bulk,
+    cleanup_policies,
     connections,
     dashboard,
     deploys,
@@ -481,6 +482,9 @@ def create_app() -> FastAPI:
     app.include_router(infra.router)
     app.include_router(backup.router)
     app.include_router(backup_policies.router)
+    app.include_router(cleanup_policies.router)
+    app.include_router(cleanup_policies.queue_router)
+    app.include_router(cleanup_policies.datastore_router)
     app.include_router(proxy_hosts.router)
     app.include_router(proxy_hosts.catalog_router)
     app.include_router(bulk.router)

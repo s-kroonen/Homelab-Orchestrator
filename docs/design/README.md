@@ -142,6 +142,13 @@ Something that is off on purpose (a node asleep, its services) is **off**, never
 | Proxy host: create / edit drawer | [PNG](wireframes/ProxyEdit.png) · [HTML](wireframes/ProxyEdit.html) |
 | Confirm a destructive action | [PNG](wireframes/ConfirmPowerOff.png) · [HTML](wireframes/ConfirmPowerOff.html) |
 | Backups: policies, snapshots, dumps, orchestrator backups | [PNG](wireframes/Backups.png) · [HTML](wireframes/Backups.html) |
+| Backups: prune now (what a policy would remove) | [PNG](wireframes/BackupsPrune.png) · [HTML](wireframes/BackupsPrune.html) |
+| Backups: delete a snapshot by hand | [PNG](wireframes/BackupsDelete.png) · [HTML](wireframes/BackupsDelete.html) |
+| Backups: Cleanup tab (cleanup policies, wake queue, datastore) | [PNG](wireframes/BackupsCleanup.png) · [HTML](wireframes/BackupsCleanup.html) |
+| Backups: edit a cleanup policy | [PNG](wireframes/BackupsCleanupEdit.png) · [HTML](wireframes/BackupsCleanupEdit.html) |
+| Backups: a backup policy runs a cleanup before or after | [PNG](wireframes/BackupsPolicyCleanup.png) · [HTML](wireframes/BackupsPolicyCleanup.html) |
+| Cleanup run waiting for garbage collection (shown in Activity's run drawer, as every run is) | [PNG](wireframes/CleanupRun.png) · [HTML](wireframes/CleanupRun.html) |
+| PBS source: Datastores tab | [PNG](wireframes/SourcePbsDatastores.png) · [HTML](wireframes/SourcePbsDatastores.html) |
 | Map: one row per node, shared backups, selection sidebar | [PNG](wireframes/Map.png) · [HTML](wireframes/Map.html) |
 | Traffic: one page, countries included | [PNG](wireframes/Traffic.png) · [HTML](wireframes/Traffic.html) |
 | Activity: one feed, run details in the drawer | [PNG](wireframes/Activity.png) · [HTML](wireframes/Activity.html) |

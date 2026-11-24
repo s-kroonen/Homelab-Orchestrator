@@ -5,7 +5,7 @@
  * Data: embedded at first paint; refreshed in place on run, audit and alert events. */
 (function () {
   "use strict";
-  const { $, el, clear, fill, api, fmt, region, drawer } = window.UI;
+  const { $, el, clear, fill, api, fmt, region, drawer, confirm } = window.UI;
   const O = window.Objects;
   const V = JSON.parse($("#initial").textContent);
   const F = Object.assign({}, V.filters);
@@ -14,11 +14,11 @@
   const MAX = 200;
   let limit = 100;
   const MAIN = [["backup", "Backups"], ["wake", "Wakes"], ["deploy", "Deploys"], ["admin", "Changes"], ["alert", "Alerts"]];
-  const MORE = [["restore", "restores"], ["switch", "on / off"], ["dump", "dumps"], ["format", "route formats"]];
+  const MORE = [["restore", "restores"], ["switch", "on / off"], ["dump", "dumps"], ["format", "route formats"], ["cleanup", "datastore cleanups"]];
   const RUN_CLS = { succeeded: "ok", failed: "fail", running: "pending", pending: "pending", cancelled: "off", partial: "warn", skipped: "warn" };
   const SEV_CLS = { info: "ok", warn: "warn", error: "fail", critical: "fail" };
   const ALERT_OK = new Set(["recovered", "recovery_succeeded", "restore_succeeded", "dump_succeeded", "deploy_succeeded", "update_succeeded"]);
-  const OF = { backup: "Backup of", wake: "Woke", restore: "Restore of", switch: "Switched", deploy: "Deploy of", dump: "Dump of", format: "Route format of" };
+  const OF = { backup: "Backup of", wake: "Woke", restore: "Restore of", switch: "Switched", deploy: "Deploy of", dump: "Dump of", format: "Route format of", cleanup: "Cleanup" };
 
   // --- the filters ---------------------------------------------------------------------------------
   const kinds = $("#f-kinds");
@@ -68,7 +68,9 @@
     if (ev.type === "run") {
       const what = ev.kind === "wake" && ev.status === "running" ? "Waking" : OF[ev.kind] || ev.kind;
       const verb = ev.status === "succeeded" || what === "Waking" ? "" : ev.status === "failed" ? " failed" : " " + ev.status;
-      const lead = ev.service ? [what + " ", svcLink(ev.service), verb] : [what.replace(/ of$/, "") + verb];
+      const head = ev.kind === "cleanup" ? cleanupHead(ev) : null;
+      const lead = ev.service ? [what + " ", svcLink(ev.service), verb]
+        : head ? ["Cleanup " + head.policy + " of " + head.datastore + verb] : [what.replace(/ of$/, "") + verb];
       return { cls: RUN_CLS[ev.status] || "off", tag: ev.kind, strong: ev.status === "failed" || ev.status === "skipped",
         text: [lead, el("span", { class: "faint" }, [ev.error ? " · " + ev.error : "", ev.actor ? " · by " + ev.actor : ""].join(""))] };
     }
@@ -100,6 +102,44 @@
         : d.href ? el("a", { href: d.href, class: "faint", style: { fontSize: "12px" } }, "open") : el("span"));
   }
 
+  // --- a cleanup run (CleanupRun wireframe, shown in this drawer) -------------------------------------
+  function cleanupHead(ev) {
+    const first = (ev.steps || []).find((s) => s.name === "cleanup");
+    return first ? first.detail : null;
+  }
+  const CLEAN_STEPS = {
+    storage: (d) => d.error ? "could not be woken: " + d.error : d.held && d.held.length ? "woken for the queue · held on " + d.held.join(", ") + " until the last job is done" : d.reason || "",
+    space_before: (d) => d.used_pct + "% full · " + fmt.bytes(d.available_bytes) + " free of " + fmt.bytes(d.total_bytes),
+    space_after: (d) => d.used_pct + "% full · " + fmt.bytes(d.available_bytes) + " free" + (d.gc_pending_bytes != null ? " · " + fmt.bytes(d.gc_pending_bytes) + " waits for the next GC" : ""),
+    prune: (d) => d.reason ? d.reason : [d.removed + " snapshot" + (d.removed === 1 ? "" : "s") + " removed",
+      Object.keys(d.by_service || {}).length ? Object.entries(d.by_service).map(([k, v]) => k + " " + v).join(", ") : "",
+      (d.unowned || []).length ? (d.unowned.length + " group" + (d.unowned.length === 1 ? "" : "s") + " no policy keeps " + d.unowned_action + ": " + d.unowned.join(", ")) : "",
+      d.errors ? "errors: " + Object.entries(d.errors).map(([k, v]) => k + ": " + v).join("; ") : ""].filter(Boolean).join(" · "),
+    gc: (d) => d.reason ? d.reason : d.error ? d.error : d.log ? d.log : d.removed ? "removed " + d.removed + (d.pending ? " · " + d.pending + " pending" : "") : d.phase ? "phase " + d.phase + " of 2: " + (d.phase === 1 ? "marking the chunks in use" + (d.of ? " · read " + d.indexes + " of " + d.of + " index files" : "") : "removing the rest") : "started",
+    sync_records: (d) => d.reason ? d.reason : d.dropped != null ? d.dropped + " record" + (d.dropped === 1 ? "" : "s") + " of snapshots PBS no longer has dropped" : d.would_drop != null ? "would drop " + d.would_drop + " (dry run)" : d.error || "",
+  };
+  const CLEAN_LABEL = { storage: "Storage up and held", space_before: "Space before", prune: "Prune by policy", gc: "Garbage collection", space_after: "Space after", sync_records: "Sync backup records", aborted: "Stopped" };
+  function cleanupSteps(ev) {
+    const steps = (ev.steps || []).filter((s) => s.name !== "cleanup");
+    return el("div", { class: "card flush" }, steps.map((s) => {
+      const text = (CLEAN_STEPS[s.name] || ((d) => d.error || ""))(s.detail || {});
+      const pct = s.name === "gc" && s.status === "running" && s.detail ? s.detail.percent : null;
+      return el("div", { class: "event-row", style: { gridTemplateColumns: "6.5rem minmax(0,1fr)" } },
+        el("span", {}, el("span", { class: "pill " + (STEP_CLS[s.status] || "off") }, s.status)),
+        el("div", {}, el("strong", {}, CLEAN_LABEL[s.name] || s.name.replace(/_/g, " ")), el("div", { class: "faint", style: { fontSize: "12.5px", overflowWrap: "anywhere" } }, text),
+          pct != null ? [el("div", { class: "run-progress", role: "img", "aria-label": pct + "%" }, el("span", { style: { width: pct + "%" } })), el("div", { class: "faint", style: { fontSize: "12px" } }, pct + "%" + (s.detail.phase === 1 ? " · then phase 2 removes chunks unused for 24 h" : ""))] : null));
+    }));
+  }
+  async function stopCleanup(ev) {
+    let q = null;
+    try { q = await api.get("/api/backup-queue", { suppressToast: true }); } catch (_e) { /* below */ }
+    const head = cleanupHead(ev) || {};
+    const job = q && q.jobs.find((j) => j.kind === "cleanup" && j.state === "running");
+    if (!job) { toast("No running cleanup in the queue", "error"); return; }
+    if (!await confirm({ title: "Stop the GC of " + (head.policy || job.name) + "?", body: "PBS stops its garbage collection; it starts over next time. The run ends as failed and the queue moves on.", action: "Stop the GC" })) return;
+    try { await api.del("/api/backup-queue/" + job.id, { suppressToast: true }); toast("Stopping the GC", "ok"); } catch (e) { toast(e.message, "error"); }
+  }
+
   // --- a run, in the drawer -----------------------------------------------------------------------------
   const STEP_CLS = { ok: "ok", failed: "fail", indeterminate: "warn", skipped: "off", running: "pending" };
   function retryOf(ev) {
@@ -113,7 +153,7 @@
     const retry = retryOf(ev);
     const steps = ev.steps || [];
     drawer({
-      title: (OF[ev.kind] ? OF[ev.kind] + " " + (ev.service || "") : ev.kind).trim(),
+      title: ev.kind === "cleanup" && cleanupHead(ev) ? "Cleaning " + cleanupHead(ev).datastore + " · " + cleanupHead(ev).policy : (OF[ev.kind] ? OF[ev.kind] + " " + (ev.service || "") : ev.kind).trim(),
       sub: ["run " + ev.id, fmt.short(ev.started_at) + (ev.finished_at ? " → " + fmt.short(ev.finished_at).split(" ").pop() : " · still running"), ev.actor ? "by " + ev.actor : ""].filter(Boolean).join(" · "),
       saveLabel: retry ? "Retry" : "Done",
       async onSave() { if (retry) await retry(); },
@@ -122,8 +162,14 @@
         ev.error ? el("div", { class: "banner fail" }, ev.error) : null,
         el("div", { class: "sys-actions" }, ev.service ? el("a", { class: "btn secondary small", href: "/services/" + enc(ev.service) }, "Open service") : null,
           ev.kind === "backup" ? el("a", { class: "btn secondary small", href: "/backup-policies?tab=snapshots" }, "Snapshots") : null),
-        el("h3", { class: "ai-h" }, "Steps"),
-        steps.length ? el("ol", { class: "run-steps" }, steps.map((s) => el("li", {}, el("span", { class: "pill " + (STEP_CLS[s.status] || "off") }, s.status), " " + String(s.name).replace(/_/g, " "),
+        ev.kind === "cleanup" ? [
+          el("p", { class: "faint" }, (cleanupHead(ev) || {}).reason ? "Why: " + cleanupHead(ev).reason : ""),
+          ev.status === "running" ? el("div", { class: "sys-actions" }, el("button", { type: "button", class: "secondary small", onclick: () => stopCleanup(ev) }, "Stop the GC…"),
+            el("a", { class: "btn ghost small", href: "/backup-policies?tab=cleanup" }, "The queue")) : el("div", { class: "sys-actions" }, el("a", { class: "btn secondary small", href: "/backup-policies?tab=cleanup" }, "Cleanup policies")),
+          el("h3", { class: "ai-h" }, "Steps"), cleanupSteps(ev),
+          ev.status === "running" ? el("p", { class: "faint", style: { fontSize: "12.5px" } }, "The run waits for PBS to finish. The queue holds the storage: the next job starts when this is done, and anything else that needs it joins the queue instead of waking it again. If the orchestrator restarts, PBS finishes the GC on its own and the hold expires.") : null] : null,
+        ev.kind === "cleanup" ? null : el("h3", { class: "ai-h" }, "Steps"),
+        ev.kind === "cleanup" ? null : steps.length ? el("ol", { class: "run-steps" }, steps.map((s) => el("li", {}, el("span", { class: "pill " + (STEP_CLS[s.status] || "off") }, s.status), " " + String(s.name).replace(/_/g, " "),
           s.detail && Object.keys(s.detail).length ? el("div", { class: "faint mono", style: { overflowWrap: "anywhere" } }, Object.entries(s.detail).map(([k, v]) => k + "=" + (typeof v === "object" ? JSON.stringify(v) : v)).join(", ")) : null)))
           : el("p", { class: "faint" }, "No steps recorded yet."),
         (ev.audit || []).length ? [el("h3", { class: "ai-h" }, "What was recorded"), el("div", {}, ev.audit.map((a) => el("div", { class: "faint", style: { fontSize: "12.5px" } }, fmt.short(a.at) + " · " + a.action + " (" + a.result + ") · " + a.actor)))] : null,

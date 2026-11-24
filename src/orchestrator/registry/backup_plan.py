@@ -252,13 +252,23 @@ def resolve_backup_plan(
 def resolve_policy_prerequisites(session: Session, policy: BackupPolicy) -> list[PlanStep]:
     """Just the policy-level prerequisites — what a scheduled run wakes ONCE for
     the whole batch of services the policy backs up."""
+    return resolve_prerequisites(session, policy.requires or [], policy.wake_mode)
+
+
+def resolve_prerequisites(
+    session: Session, requires: Iterable[str], wake_mode: BackupWakeMode
+) -> list[PlanStep]:
+    """What to wake, in order, for a job that needs ``requires`` (a backup policy's batch, a
+    cleanup policy). Nothing under ``NEVER``."""
+    if wake_mode is BackupWakeMode.NEVER:
+        return []
     seen: set[str] = set()
     steps: list[PlanStep] = []
-    for slug in policy.requires or []:
+    for slug in requires:
         if slug not in seen:
             seen.add(slug)
-            steps.append(_step_for(session, slug, REASON_POLICY, policy.wake_mode))
-    return [] if policy.wake_mode is BackupWakeMode.NEVER else steps
+            steps.append(_step_for(session, slug, REASON_POLICY, wake_mode))
+    return steps
 
 
 # ---------------------------------------------------------------------------

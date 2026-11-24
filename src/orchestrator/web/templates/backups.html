@@ -6,12 +6,13 @@
   <h1>Backups</h1>
   <div class="actions"><button type="button" id="new-policy">+ New policy</button></div>
 </div>
-<p class="page-sub">What is backed up, when, and whether it worked.</p>
+<p class="page-sub">What is backed up, when, whether it worked, and how the datastore is kept clean.</p>
 
 <div class="stat-row" id="tiles"></div>
 
 <div class="tabs" role="tablist" aria-label="Backups">
   <button role="tab" data-tab="policies">Policies</button>
+  <button role="tab" data-tab="cleanup">Cleanup</button>
   <button role="tab" data-tab="snapshots">Snapshots</button>
   <button role="tab" data-tab="dumps">Dumps</button>
   <button role="tab" data-tab="orchestrator">Orchestrator backups</button>
@@ -27,6 +28,21 @@
     <div class="card-head"><h2 id="h-left">Not backed up</h2></div>
     <div id="left"></div>
   </section>
+</div>
+
+<div role="tabpanel" data-tab="cleanup" hidden>
+  <section class="card" aria-labelledby="h-queue" id="queue-card">
+    <div class="card-head"><h2 id="h-queue">Queue</h2><span class="faint" style="font-size: 12.5px">Jobs that need the same storage run one after another in one wake. The node goes back off after the last one.</span></div>
+    <div id="queue"></div>
+  </section>
+  <div class="card flush" id="cleanups" style="margin-top: 18px"></div>
+  <div class="cleanup-grid">
+    <section class="card" aria-labelledby="h-ds" id="ds-card">
+      <div class="card-head"><h2 id="h-ds">Datastore</h2><span style="flex:1"></span><a href="/sources?kind=pbs" id="ds-link">Open in PBS →</a></div>
+      <div id="ds"></div>
+    </section>
+    <div id="pbs-jobs"></div>
+  </div>
 </div>
 
 <div role="tabpanel" data-tab="snapshots" hidden>

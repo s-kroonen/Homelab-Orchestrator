@@ -1,0 +1,170 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Backups: prune now</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#0d1015}
+a{color:#8fb3ff;text-decoration:none}a:hover{color:#b8d0ff}
+*{box-sizing:border-box}
+.pill{display:inline-flex;align-items:center;gap:6px;padding:3px 9px;border-radius:999px;font-size:12px;font-weight:600;white-space:nowrap}
+.ok{background:#11331f;color:#5fe08b}.warn{background:#3a2c10;color:#f0b44c}.fail{background:#3d1717;color:#ff8a82}.off{background:#232834;color:#b3bccb}.pending{background:#162a45;color:#8fb3ff}
+.btn{display:inline-flex;align-items:center;gap:6px;height:32px;padding:0 12px;border-radius:8px;border:1px solid #2c3340;background:#1a1f29;color:#e6e9ef;font:600 13px Inter,system-ui,sans-serif;cursor:pointer;white-space:nowrap}
+.btn.primary{background:#4f7fe0;border-color:#4f7fe0;color:#fff}.btn.ghost{background:transparent;border-color:transparent;color:#b3bccb}
+.btn.danger{background:#7a2b2b;border-color:#7a2b2b;color:#fff}
+.mono{font-family:'JetBrains Mono',ui-monospace,monospace;font-size:12.5px}
+.faint{color:#9aa4b2}
+th{font-size:12px;font-weight:600;color:#9aa4b2;text-align:left;padding:10px 14px;border-bottom:1px solid #232a36;white-space:nowrap}
+td{padding:10px 14px;border-bottom:1px solid #1d232e;vertical-align:middle}
+.drawer{position:absolute;top:0;right:0;bottom:0;width:560px;background:#11151c;border-left:1px solid #2c3340;box-shadow:-16px 0 40px rgba(0,0,0,.5);display:flex;flex-direction:column}
+.drawer-h{padding:18px 22px;border-bottom:1px solid #232a36}
+.drawer-b{padding:18px 22px;display:flex;flex-direction:column;gap:14px;flex:1;overflow:hidden}
+.drawer-f{padding:14px 22px;border-top:1px solid #232a36;display:flex;gap:10px;justify-content:flex-end;align-items:center}
+.svc{background:#141922;border:1px solid #232a36;border-radius:10px}
+.svc-h{display:flex;align-items:center;gap:10px;padding:10px 14px;border-bottom:1px solid #1d232e}
+.snap{display:flex;gap:10px;align-items:center;padding:6px 14px;font-size:13px}
+</style>
+</helmet>
+<div style="position: relative; display: flex; flex-wrap: wrap; min-height: 1040px; background: #0d1015; color: #e6e9ef; font-family: Inter, system-ui, sans-serif; font-size: 14px; line-height: 1.45">
+  <nav aria-label="Main" style="flex: 0 0 232px; background: #11151c; border-right: 1px solid #222833; padding: 20px 14px; display: flex; flex-direction: column; gap: 18px">
+    <div style="font-weight: 700; font-size: 15px; padding: 0 10px">homelab-orchestrator</div>
+    <sc-for list="{{nav}}" as="g" hint-placeholder-count="5">
+      <div style="display: flex; flex-direction: column; gap: 2px">
+        <div style="font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: #8a94a5; padding: 0 10px 4px">{{g.heading}}</div>
+        <sc-for list="{{g.items}}" as="it" hint-placeholder-count="3">
+          <a href="#" style="{{it.style}}">{{it.label}}</a>
+        </sc-for>
+      </div>
+    </sc-for>
+  </nav>
+  <div style="flex: 999 1 560px; min-width: 0; display: flex; flex-direction: column">
+    <header style="display: flex; flex-wrap: wrap; align-items: center; gap: 12px; padding: 12px 32px; border-bottom: 1px solid #222833">
+      <div style="font-size: 13px; color: #8a94a5">Infrastructure / <span style="color: #e6e9ef">Backups</span></div>
+      <span class="pill ok" style="margin-left: auto">● Live</span>
+      <button class="btn ghost" type="button">admin ▾</button>
+    </header>
+    <main style="padding: 28px 32px 48px; max-width: 1280px; width: 100%; display: flex; flex-direction: column; gap: 18px">
+      <h1 style="margin: 0; font-size: 24px; font-weight: 700">Backups</h1>
+      <div style="display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px">
+        <div style="background: #141922; border: 1px solid #232a36; border-radius: 12px; padding: 14px 16px">
+          <div style="font-size: 12px; color: #9aa4b2">Last night</div>
+          <div style="font-size: 24px; font-weight: 700">12 of 12 ok</div>
+          <div style="font-size: 12px; color: #f0b44c">pruning failed for 4 · <a href="#">see why</a></div>
+        </div>
+        <div style="background: #141922; border: 1px solid #232a36; border-radius: 12px; padding: 14px 16px">
+          <div style="font-size: 12px; color: #9aa4b2">Datastore [main] on PBS</div>
+          <div style="font-size: 24px; font-weight: 700">93% full</div>
+          <div style="height: 8px; background: #232834; border-radius: 4px; margin-top: 6px"><div style="width: 93%; height: 8px; background: #d9952c; border-radius: 4px"></div></div>
+        </div>
+        <div style="background: #141922; border: 1px solid #232a36; border-radius: 12px; padding: 14px 16px">
+          <div style="font-size: 12px; color: #9aa4b2">Next run</div>
+          <div style="font-size: 24px; font-weight: 700">03:00</div>
+          <div style="font-size: 12px; color: #9aa4b2">daily-frequent · 12 services</div>
+        </div>
+      </div>
+      <div role="tablist" aria-label="Backup views" style="display: flex; gap: 4px; border-bottom: 1px solid #232a36">
+        <a role="tab" aria-selected="true" href="#" style="padding: 10px 14px; color: #ffffff; font-weight: 600; box-shadow: inset 0 -2px 0 #4f7fe0">Policies</a>
+        <a role="tab" aria-selected="false" href="#" style="padding: 10px 14px; color: #b3bccb">Snapshots</a>
+        <a role="tab" aria-selected="false" href="#" style="padding: 10px 14px; color: #b3bccb">Dumps</a>
+        <a role="tab" aria-selected="false" href="#" style="padding: 10px 14px; color: #b3bccb">Orchestrator backups</a>
+      </div>
+      <div style="background: #141922; border: 1px solid #232a36; border-radius: 12px; overflow: hidden">
+        <table style="width: 100%; border-collapse: collapse">
+          <thead><tr><th>Policy</th><th>Keeps</th><th>Services</th><th>Last prune</th><th></th></tr></thead>
+          <tbody>
+            <tr>
+              <td><span style="font-weight: 600">daily-frequent</span></td>
+              <td>7 daily</td><td>12</td>
+              <td><span class="pill fail">failed · 4 services</span></td>
+              <td style="text-align: right; white-space: nowrap; position: relative">
+                <button class="btn ghost" type="button" aria-label="More for daily-frequent">⋯</button>
+              </td>
+            </tr>
+            <tr><td><span style="font-weight: 600">weekly</span></td><td>8 weekly</td><td>6</td><td><span class="pill ok">ok · Sun</span></td><td style="text-align: right"><button class="btn ghost" type="button" aria-label="More for weekly">⋯</button></td></tr>
+          </tbody>
+        </table>
+      </div>
+    </main>
+  </div>
+
+  <aside class="drawer" aria-label="Prune now: daily-frequent">
+    <div class="drawer-h">
+      <div style="font-size: 12px" class="faint">Policies → daily-frequent → ⋯ → Prune now…</div>
+      <h2 style="margin: 2px 0 4px; font-size: 18px">daily-frequent: keeps 7 daily</h2>
+      <div class="faint" style="font-size: 13px">What PBS would remove now, as its own dry run. Nothing is deleted until you press Prune.</div>
+    </div>
+    <div class="drawer-b">
+      <div style="display: flex; gap: 10px; flex-wrap: wrap">
+        <span class="pill warn">{{total}} snapshots · {{size}}</span>
+        <span class="pill ok">newest verified of each kept (protected)</span>
+      </div>
+      <sc-for list="{{services}}" as="s" hint-placeholder-count="3">
+        <div class="svc">
+          <div class="svc-h">
+            <span style="display: flex; gap: 8px; align-items: center; font-weight: 600"><span aria-hidden="true" style="font-size: 16px">{{s.box}}</span> {{s.name}}</span>
+            <span class="mono faint">{{s.group}}</span>
+            <span class="pill {{s.cls}}" style="margin-left: auto">{{s.state}}</span>
+          </div>
+          <sc-for list="{{s.rows}}" as="r" hint-placeholder-count="2">
+            <div class="snap"><span class="mono" style="flex: 0 0 170px">{{r.when}}</span><span class="faint" style="flex: 1">{{r.note}}</span><span class="mono faint">{{r.size}}</span></div>
+          </sc-for>
+        </div>
+      </sc-for>
+      <div style="background: #141922; border: 1px solid #232a36; border-radius: 10px; padding: 10px 14px; font-size: 13px">
+        <strong>Space comes back after PBS's garbage collection.</strong>
+        <span class="faint"> Next scheduled GC on [main]: tonight 05:00. </span><a href="#">Run GC after pruning</a>
+      </div>
+    </div>
+    <div class="drawer-f">
+      <span class="faint" style="margin-right: auto; font-size: 12.5px">Audited as you. Backups that are protected are never removed.</span>
+      <button class="btn" type="button">Cancel</button>
+      <button class="btn danger" type="button">Prune {{total}} snapshots</button>
+    </div>
+  </aside>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":1040}}'>
+class Component extends DCLogic {
+  renderVals() {
+    const cur = 'Backups';
+    const base = 'display:block;padding:6px 10px;border-radius:7px;font-size:14px;color:#c9d1dc';
+    const on = base + ';background:#1d2430;color:#ffffff;font-weight:600;box-shadow:inset 3px 0 0 #4f7fe0';
+    const groups = [
+      ['Overview', ['Dashboard', 'Map']],
+      ['Services', ['Services']],
+      ['Infrastructure', ['Nodes & guests', 'Proxy hosts', 'Containers', 'Backups']],
+      ['Activity', ['Activity', 'Traffic']],
+      ['Settings', ['Connections', 'Notifications', 'AI assistants', 'Admins & devices', 'System', 'Archive']],
+    ];
+    return {
+      nav: groups.map(([heading, items]) => ({ heading, items: items.map((label) => ({ label, style: label === cur ? on : base })) })),
+      total: 21, size: '~410 GB logical',
+      services: [
+        { name: 'haos', group: 'vm/111', box: '☑', cls: 'warn', state: '7 to remove', rows: [
+          { when: '2026-10-28 14:18', note: 'older than 7 days', size: '32 GB' },
+          { when: '2026-10-29 … 11-08', note: '6 more, older than 7 days', size: '192 GB' },
+        ] },
+        { name: 'portainer', group: 'vm/102', box: '☑', cls: 'warn', state: '7 to remove', rows: [
+          { when: '2026-10-28 … 11-08', note: '7 older than 7 days', size: '84 GB' },
+        ] },
+        { name: 'gateway-vm', group: 'vm/103', box: '☑', cls: 'warn', state: '7 to remove', rows: [
+          { when: '2026-10-28 … 11-08', note: '7 older than 7 days', size: '102 GB' },
+        ] },
+        { name: 'nextcloud', group: 'vm/107', box: '☐', cls: 'fail', state: 'PBS refused', rows: [
+          { when: '', note: 'PBS: keep-daily: value must be at least 1', size: '' },
+        ] },
+        { name: 'mailcow', group: 'vm/108', box: '☐', cls: 'off', state: 'nothing to remove', rows: [] },
+      ],
+    };
+  }
+}
+</script>
+</body>
+</html>

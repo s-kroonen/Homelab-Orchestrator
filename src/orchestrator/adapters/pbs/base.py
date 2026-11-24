@@ -52,6 +52,33 @@ class DatastoreStatus:
 
 
 @dataclass(frozen=True)
+class GcStatus:
+    """What PBS says about a datastore's garbage collection: the last one's numbers, and
+    the task (``upid``) of the one running or last run. Missing numbers are None."""
+
+    upid: str | None = None
+    removed_bytes: int | None = None
+    pending_bytes: int | None = None
+    disk_bytes: int | None = None
+    index_file_count: int | None = None
+    raw: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class PbsTask:
+    """One PBS task (a GC, a verify, a prune job): running or stopped, and the end of its log."""
+
+    upid: str
+    running: bool
+    exit_status: str | None = None
+    log_tail: list[str] = field(default_factory=list)
+
+    @property
+    def succeeded(self) -> bool:
+        return not self.running and self.exit_status == "OK"
+
+
+@dataclass(frozen=True)
 class PbsVersionInfo:
     version: str
     release: str = ""
@@ -124,6 +151,35 @@ class PbsAdapter(ABC):
         dry_run: bool = False,
     ) -> list[Snapshot]:
         """Return the snapshots that would be / were removed."""
+
+    # -- garbage collection and tasks (docs/cleanup.md) ---------------------------------
+
+    async def start_garbage_collection(self, datastore: str) -> str:
+        """Start PBS's garbage collection on ``datastore``; return its task's UPID."""
+        raise NotImplementedError
+
+    async def garbage_collection_status(self, datastore: str) -> GcStatus:
+        """The last (or running) garbage collection of ``datastore``."""
+        raise NotImplementedError
+
+    async def task(self, upid: str, *, log_lines: int = 50) -> PbsTask:
+        """One task: running or not, its exit status, the last ``log_lines`` of its log."""
+        raise NotImplementedError
+
+    async def stop_task(self, upid: str) -> None:
+        """Ask PBS to stop a running task."""
+        raise NotImplementedError
+
+    async def delete_snapshot(
+        self, datastore: str, *, backup_type: str, backup_id: str, backup_time: int
+    ) -> None:
+        """Remove one snapshot (its index; the chunks go at the next garbage collection)."""
+        raise NotImplementedError
+
+    async def own_jobs(self, datastore: str) -> list[dict[str, Any]]:
+        """PBS's own GC, prune and verify jobs on ``datastore``: ``kind``, ``id``,
+        ``schedule``, ``last_state``, ``last_end`` (epoch), ``next_run`` (epoch), ``detail``."""
+        return []
 
     @abstractmethod
     async def set_protected(

@@ -22,8 +22,8 @@ from sqlmodel import Session, col, select
 
 from orchestrator.audit import log as audit
 from orchestrator.config import get_settings
-from orchestrator.db.models import BackupPolicy, BackupRecord, Service
-from orchestrator.domain.enums import BackupMode, BackupWakeMode
+from orchestrator.db.models import BackupPolicy, BackupRecord, CleanupPolicy, Service
+from orchestrator.domain.enums import BackupMode, BackupWakeMode, CleanupWhen
 from orchestrator.registry.archive import archive_policy
 from orchestrator.registry.backup_plan import (
     clean_slug_list,
@@ -68,6 +68,9 @@ class PolicyCreate(BaseModel):
     wake_mode: str = "follow"
     max_attempts: int = 3
     restore_power_state: bool = True
+    #: The cleanup policy run in the same wake ("" for none), "before" or "after" the backups.
+    cleanup_policy: str = ""
+    cleanup_when: str = "before"
 
 
 class PolicyUpdate(BaseModel):
@@ -82,6 +85,8 @@ class PolicyUpdate(BaseModel):
     wake_mode: str | None = None
     max_attempts: int | None = None
     restore_power_state: bool | None = None
+    cleanup_policy: str | None = None
+    cleanup_when: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -109,6 +114,20 @@ def _validate_max_attempts(raw: Any) -> int:
     if not 1 <= value <= 20:
         raise _bad("max_attempts must be between 1 and 20")
     return value
+
+
+def _validate_cleanup(session: Session, name: Any, when: Any) -> tuple[str, CleanupWhen]:
+    name = str(name or "").strip()
+    try:
+        when_v = CleanupWhen(str(when or "before").strip().lower())
+    except ValueError:
+        raise _bad("cleanup_when must be before or after") from None
+    if (
+        name
+        and not session.exec(select(CleanupPolicy).where(CleanupPolicy.name == name)).one_or_none()
+    ):
+        raise _bad(f"no cleanup policy named {name!r}")
+    return name, when_v
 
 
 def _validate_name(name: str) -> str:
@@ -268,6 +287,8 @@ def policy_to_dict(
         "wake_mode": policy.wake_mode.value,
         "max_attempts": policy.max_attempts,
         "restore_power_state": policy.restore_power_state,
+        "cleanup_policy": policy.cleanup_policy or "",
+        "cleanup_when": policy.cleanup_when.value,
         # Prerequisites whose node can never be woken (no power target), so the
         # form and list can warn before a backup fails on it.
         "requires_blockers": [
@@ -296,6 +317,8 @@ def _snapshot(policy: BackupPolicy) -> dict[str, Any]:
         "wake_mode": policy.wake_mode.value,
         "max_attempts": policy.max_attempts,
         "restore_power_state": policy.restore_power_state,
+        "cleanup_policy": policy.cleanup_policy or "",
+        "cleanup_when": policy.cleanup_when.value,
     }
 
 
@@ -373,6 +396,9 @@ async def create_policy(
         max_attempts=_validate_max_attempts(body.max_attempts),
         restore_power_state=bool(body.restore_power_state),
     )
+    policy.cleanup_policy, policy.cleanup_when = _validate_cleanup(
+        session, body.cleanup_policy, body.cleanup_when
+    )
     session.add(policy)
     session.flush()  # assigns policy.id, needed to attach services below
     membership = _sync_service_membership(session, policy, services)
@@ -422,6 +448,12 @@ async def update_policy(
         if body.restore_power_state is None:
             raise _bad("restore_power_state must be true or false")
         policy.restore_power_state = body.restore_power_state
+    if "cleanup_policy" in fields or "cleanup_when" in fields:
+        policy.cleanup_policy, policy.cleanup_when = _validate_cleanup(
+            session,
+            body.cleanup_policy if "cleanup_policy" in fields else policy.cleanup_policy,
+            body.cleanup_when if "cleanup_when" in fields else policy.cleanup_when.value,
+        )
     membership = {}
     if "services" in fields:
         membership = _sync_service_membership(
@@ -507,3 +539,71 @@ async def run_policy_now(
     _RUNS.add(task)
     task.add_done_callback(_RUNS.discard)
     return {"started": True, "policy": name, "services": services}
+
+
+@router.post("/{name}/prune-preview")
+async def prune_preview(name: str, request: Request, session: SessionDep) -> dict[str, Any]:
+    """What pruning this policy's services by its keep rules would remove now: PBS's own
+    prune as a dry run, per service, or PBS's reason when it refuses. Changes nothing. Needs
+    the datastore online; when it is not, every service says so and Prune still queues."""
+    from orchestrator.scheduler.retention import enforce_retention
+
+    policy = _get_or_404(session, name)
+    adapters = getattr(request.app.state, "adapters", None)
+    if adapters is None:
+        raise HTTPException(503, "the adapters are not ready")
+    settings = get_settings()
+    rows: list[dict[str, Any]] = []
+    for slug in _attached_services(session, policy):
+        try:
+            result = await enforce_retention(
+                session, adapters.pbs, policy, slug, settings=settings, preview=True
+            )
+            rows.append(
+                {
+                    "service": slug,
+                    "group": result.group,
+                    "would_remove": result.pruned,
+                    "skipped": result.prune_skipped_reason,
+                }
+            )
+        except Exception as exc:  # each service answers for itself
+            rows.append({"service": slug, "group": "", "would_remove": [], "error": str(exc)})
+    return {
+        "policy": name,
+        "retention": policy.retention,
+        "services": rows,
+        "total": sum(len(r["would_remove"]) for r in rows),
+    }
+
+
+class PruneIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    gc: bool = True
+
+
+@router.post("/{name}/prune", status_code=202)
+async def prune_now(
+    name: str, body: PruneIn, request: Request, session: SessionDep, admin: CurrentAdmin
+) -> dict[str, Any]:
+    """Prune this policy's services by its keep rules now, then (``gc``) run PBS's garbage
+    collection: queued like a cleanup, waking the policy's storage."""
+    _get_or_404(session, name)
+    scheduler = _scheduler(request)
+    if scheduler is None:
+        raise HTTPException(409, "the backup scheduler is not running (SCHEDULER_ENABLED=false?)")
+    audit.record(
+        session,
+        actor=admin.username,
+        action="backup_policy.prune_now",
+        target=f"policy:{name}",
+        details={"gc": body.gc},
+    )
+    session.commit()
+    task = asyncio.create_task(
+        scheduler.run_prune(name, gc=body.gc, actor=admin.username), name=f"prune-{name}"
+    )
+    _RUNS.add(task)
+    task.add_done_callback(_RUNS.discard)
+    return {"queued": True, "policy": name, "gc": body.gc}

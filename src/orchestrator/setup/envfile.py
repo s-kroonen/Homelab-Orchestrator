@@ -605,6 +605,10 @@ ENV_SECTIONS: tuple[EnvSection, ...] = (
                 "this many bytes (PBS would refuse the upload part-way). 0 turns the check off.",
             ),
             EnvKey(
+                "CLEANUP_POLL_S",
+                "Seconds between a cleanup's questions to PBS while its garbage collection runs.",
+            ),
+            EnvKey(
                 "WAKE_TIMEOUT_S",
                 "Bounds the whole wake pipeline — a cold node can take minutes to POST, "
                 "boot, and bring its guests up.",

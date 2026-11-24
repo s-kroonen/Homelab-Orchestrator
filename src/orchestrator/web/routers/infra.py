@@ -22,7 +22,7 @@ from sqlmodel import Session, select
 from orchestrator.adapters.errors import AdapterError, AdapterUnreachable
 from orchestrator.audit import log as audit
 from orchestrator.connectors.ownership import nodes_of, proxmox_for_node, proxmox_of
-from orchestrator.db.models import Node, Service, ServiceState
+from orchestrator.db.models import BackupPolicy, BackupRecord, Node, Service, ServiceState
 from orchestrator.domain.enums import GuestKind, PowerState
 from orchestrator.registry.tree import TreeIndex
 from orchestrator.web.auth import CurrentAdmin, require_admin
@@ -886,28 +886,130 @@ async def datastore_usage(adapters: AdaptersDep, settings: SettingsDep) -> dict[
     }
 
 
+def _group_services(session: Session) -> dict[str, str]:
+    """PBS backup group ("vm/101") -> the service backed up into it."""
+    kinds = {GuestKind.VM: "vm", GuestKind.CT: "ct"}
+    out: dict[str, str] = {}
+    for svc in session.exec(select(Service)).all():
+        kind = kinds.get(svc.guest_kind)
+        if kind and svc.guest_id is not None:
+            out.setdefault(f"{kind}/{svc.guest_id}", svc.slug)
+    return out
+
+
+def _newest_verified(snapshots: list[Any]) -> set[str]:
+    """Per group, the newest verified snapshot: never offered for deletion."""
+    best: dict[str, Any] = {}
+    for s in snapshots:
+        if s.verified and (s.group not in best or s.backup_time > best[s.group].backup_time):
+            best[s.group] = s
+    return {s.snapshot_id for s in best.values()}
+
+
+def _keep_reason(s: Any, newest: set[str]) -> str | None:
+    if s.protected:
+        return "protected in PBS: unprotect it there first if you really mean it"
+    if s.snapshot_id in newest:
+        return "the newest verified backup of its group"
+    return None
+
+
 @router.get("/pbs/snapshots")
 async def list_snapshots(
     adapters: AdaptersDep,
     settings: SettingsDep,
+    session: SessionDep,
     backup_type: str | None = None,
     backup_id: str | None = None,
 ) -> list[dict[str, Any]]:
     snapshots = await adapters.pbs.list_snapshots(
         settings.pbs_datastore, backup_type=backup_type, backup_id=backup_id
     )
+    services = _group_services(session)
+    newest = _newest_verified(snapshots)
+    made_by = {r.pbs_snapshot_id: r.policy_id for r in session.exec(select(BackupRecord)).all()}
+    policy_names = {p.id: p.name for p in session.exec(select(BackupPolicy)).all()}
     return [
         {
             "snapshot_id": s.snapshot_id,
             "group": s.group,
+            "service": services.get(s.group),
             "backup_time": s.backup_time,
             "size_bytes": s.size_bytes,
             "verified": s.verified,
             "protected": s.protected,
             "owner": s.owner,
+            "newest_verified": s.snapshot_id in newest,
+            "made_by": (
+                policy_names.get(made_by[s.snapshot_id], "manual")
+                if s.snapshot_id in made_by
+                else None
+            ),
+            "keep_reason": _keep_reason(s, newest),
         }
         for s in snapshots
     ]
+
+
+class SnapshotDeleteIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    snapshot_ids: list[str]
+
+
+@router.post("/pbs/snapshots/delete")
+async def delete_snapshots(
+    body: SnapshotDeleteIn,
+    session: SessionDep,
+    adapters: AdaptersDep,
+    settings: SettingsDep,
+    admin: CurrentAdmin,
+) -> dict[str, Any]:
+    """Delete snapshots by hand. Never a protected one or the newest verified one of a group
+    (refused with the reason). The space comes back at the next garbage collection."""
+    if not body.snapshot_ids:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "no snapshots given")
+    try:
+        snapshots = await adapters.pbs.list_snapshots(settings.pbs_datastore)
+    except AdapterError as exc:
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, f"PBS: {exc}") from exc
+    by_id = {s.snapshot_id: s for s in snapshots}
+    newest = _newest_verified(snapshots)
+    deleted: list[str] = []
+    refused: dict[str, str] = {}
+    for sid in dict.fromkeys(body.snapshot_ids):
+        snap = by_id.get(sid)
+        if snap is None:
+            refused[sid] = "PBS has no such snapshot (already gone?)"
+            continue
+        reason = _keep_reason(snap, newest)
+        if reason:
+            refused[sid] = reason
+            continue
+        try:
+            await adapters.pbs.delete_snapshot(
+                settings.pbs_datastore,
+                backup_type=snap.backup_type,
+                backup_id=snap.backup_id,
+                backup_time=snap.backup_time,
+            )
+        except AdapterError as exc:
+            refused[sid] = f"PBS: {exc}"
+            continue
+        deleted.append(sid)
+        for rec in session.exec(
+            select(BackupRecord).where(BackupRecord.pbs_snapshot_id == sid)
+        ).all():
+            session.delete(rec)
+    audit.record(
+        session,
+        actor=admin.username,
+        action="backup.snapshots_deleted",
+        target=f"datastore:{settings.pbs_datastore}",
+        details={"deleted": deleted, "refused": refused},
+    )
+    session.commit()
+    return {"deleted": deleted, "refused": refused}
 
 
 class ResyncIn(BaseModel):

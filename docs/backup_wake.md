@@ -307,7 +307,9 @@ Before, the dump ran and failed part-way with Proxmox's "job errors"; a failed d
 carries the error lines of Proxmox's task log ("Proxmox: ERROR: ... no space left on device").
 
 Pruning old snapshots marks them removed; the space only comes back after PBS's garbage
-collection, which needs the datastore online.
+collection, which needs the datastore online. A **cleanup policy** does both while the
+orchestrator has the storage awake, before or after a backup policy's backups in the same wake:
+see [cleanup.md](cleanup.md).
 
 Before this, nodes were only *held* during a backup and then released, relying on the power
 manager to switch them off; the MQTT power manager has no idle shutdown of its own, so a node

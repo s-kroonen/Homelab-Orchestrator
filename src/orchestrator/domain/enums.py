@@ -64,6 +64,21 @@ class BackupWakeMode(StrEnum):
     NEVER = "never"  # wake nothing; back up whatever is up
 
 
+class CleanupGcMode(StrEnum):
+    """When a cleanup policy runs PBS's garbage collection (docs/cleanup.md)."""
+
+    INTERVAL = "interval"  # every run, but not again within ``gc_interval_h``
+    ABOVE = "above"  # only when the datastore is fuller than ``gc_above_pct``
+    OFF = "off"  # never: prune only
+
+
+class CleanupWhen(StrEnum):
+    """Where a backup policy runs its cleanup policy: before or after its backups."""
+
+    BEFORE = "before"
+    AFTER = "after"
+
+
 class BackupGate(StrEnum):
     """What a sub-service means for its root's backup (see Service.backup_gate)."""
 
@@ -104,6 +119,8 @@ class PipelineKind(StrEnum):
     DUMP = "dump"
     #: proxy routes rewritten into the standard shape (docs/sources.md)
     FORMAT = "format"
+    #: a PBS datastore pruned and garbage-collected by a cleanup policy (docs/cleanup.md)
+    CLEANUP = "cleanup"
 
 
 class PipelineStatus(StrEnum):
