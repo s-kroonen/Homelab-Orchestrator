@@ -206,7 +206,7 @@ def test_manual_backup_wakes_first_and_fails_clearly_when_it_cannot(client: Test
     pol = _policy(client, requires=["stuck"])
     client.put("/api/registry/services/app", json={"backup_policy_id": pol["id"]})
 
-    r = client.post("/api/backup/app")
+    r = client.post("/api/backup/app?wait=true")
 
     assert r.status_code == 400
     assert "cannot be woken: no power target configured" in r.json()["detail"]
@@ -223,7 +223,7 @@ def test_manual_backup_wake_false_skips_the_wake_and_audits(client: TestClient) 
     pol = _policy(client, requires=["stuck"])
     client.put("/api/registry/services/app", json={"backup_policy_id": pol["id"]})
 
-    r = client.post("/api/backup/app?wake=false")
+    r = client.post("/api/backup/app?wake=false&wait=true")
 
     # the probe cannot answer here -> the gate refuses, but the wake phase was skipped, not failed
     assert r.status_code in (400, 409) and "cannot be woken" not in r.json()["detail"]
@@ -238,8 +238,8 @@ def test_manual_backup_wake_false_skips_the_wake_and_audits(client: TestClient) 
 
 def test_runs_can_be_filtered_by_slug(client: TestClient) -> None:
     _topology(client)
-    client.post("/api/backup/app?wake=false")
-    client.post("/api/backup/db?wake=false")
+    client.post("/api/backup/app?wake=false&wait=true")
+    client.post("/api/backup/db?wake=false&wait=true")
     assert {r["service_slug"] for r in client.get("/api/runs?slug=app").json()} == {"app"}
     assert len(client.get("/api/runs").json()) == 2
 
@@ -303,7 +303,7 @@ def test_a_service_without_a_required_check_is_skipped_before_anything_is_woken(
     pol = _policy(client, requires=["truenas"])
     client.put("/api/registry/services/app", json={"backup_policy_id": pol["id"]})
 
-    r = client.post("/api/backup/app")
+    r = client.post("/api/backup/app?wait=true")
 
     assert r.status_code == 409
     assert (

@@ -54,6 +54,20 @@ class BackupSkipped(BackupError):
         self.why = why
 
 
+class BackupAlreadyRunning(BackupError):
+    """A backup of this service is already running (OR-98): a second one is refused before it
+    starts, so two dumps and two verifies of one guest never fight over the same storage.
+    No run is recorded for the refused one."""
+
+    def __init__(self, slug: str, run_id: int | None) -> None:
+        super().__init__(
+            f"a backup of {slug!r} is already running"
+            + (f" (run #{run_id})" if run_id is not None else "")
+        )
+        self.slug = slug
+        self.run_id = run_id
+
+
 class Recorder(Protocol):
     """What the pipelines need from a step sink. :class:`StepRecorder` writes to a
     ``PipelineRun``; a batch with no run of its own (a scheduled policy waking its

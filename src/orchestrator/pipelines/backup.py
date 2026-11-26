@@ -20,11 +20,13 @@ and the dump never run, exactly like a gate refusal.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import time
+from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlmodel import Session, select
+from sqlmodel import Session, col, select
 
 from orchestrator.adapters.errors import AdapterError, AdapterUnreachable, TaskTimeout
 from orchestrator.adapters.pbs.base import PbsAdapter, Snapshot
@@ -54,9 +56,11 @@ from orchestrator.domain.schemas import ServiceVerdict
 from orchestrator.health.engine import HealthEngine
 from orchestrator.logging_setup import get_logger, new_correlation_id
 from orchestrator.notify.hooks import announce
+from orchestrator.pipelines import backup_timing
 from orchestrator.pipelines.backup_wake import BackupWaker, HeldNode, WakeContext
 from orchestrator.pipelines.interrupted import fail_unexpected
 from orchestrator.pipelines.steps import (
+    BackupAlreadyRunning,
     BackupError,
     BackupSkipped,
     RetryableBackupError,
@@ -70,9 +74,29 @@ from orchestrator.registry.backup_plan import (
 )
 from orchestrator.registry.tree import TreeIndex, effective_guest
 
-__all__ = ["BackupError", "BackupPipeline", "BackupSkipped", "StepRecorder", "WakeContext"]
+__all__ = [
+    "BackupAlreadyRunning",
+    "BackupError",
+    "BackupPipeline",
+    "BackupSkipped",
+    "StepRecorder",
+    "WakeContext",
+    "active_backup",
+    "follow_verify",
+    "pending_verify_started",
+    "sync_verified",
+]
 
 log = get_logger(__name__)
+
+#: Services being backed up in this process, slug -> run id: one backup per service at a time.
+_ACTIVE: dict[str, int] = {}
+
+
+def active_backup(slug: str) -> int | None:
+    """The run id of the backup of ``slug`` running now, if one is."""
+    return _ACTIVE.get(slug)
+
 
 # PBS backup-type strings, keyed by our guest kind.
 _KIND_TO_PBS_TYPE: dict[GuestKind, str] = {
@@ -141,8 +165,13 @@ class BackupPipeline:
         prepared: WakeContext | None = None,
         attempt: int = 1,
         attempts: int = 1,
+        on_run: Callable[[PipelineRun], None] | None = None,
     ) -> PipelineRun:
         """Back up one service. Returns the completed :class:`PipelineRun`.
+
+        Only one backup of a service runs at a time: a second one raises
+        :class:`BackupAlreadyRunning` before it records anything. ``on_run`` is called with the
+        run as soon as it exists (the queue shows it while it runs).
 
         ``gate=False`` bypasses the integrity gate. It exists for deliberate
         operator override and is audited as such — it is never the default, and
@@ -162,6 +191,8 @@ class BackupPipeline:
         """
         correlation_id = new_correlation_id()
         service, node, policy = self._resolve(session, slug)
+        if slug in _ACTIVE:
+            raise BackupAlreadyRunning(slug, _ACTIVE[slug])
 
         run = PipelineRun(
             kind=PipelineKind.BACKUP,
@@ -172,7 +203,37 @@ class BackupPipeline:
         session.add(run)
         session.commit()
         session.refresh(run)
+        assert run.id is not None
+        _ACTIVE[slug] = run.id
+        try:
+            if on_run is not None:
+                on_run(run)
+            return await self._run(
+                session, run, service, node, policy, slug=slug, actor=actor, verify=verify,
+                gate=gate, wake=wake, prepared=prepared, attempt=attempt, attempts=attempts,
+            )  # fmt: skip
+        finally:
+            if _ACTIVE.get(slug) == run.id:
+                del _ACTIVE[slug]
 
+    async def _run(
+        self,
+        session: Session,
+        run: PipelineRun,
+        service: Service,
+        node: Node,
+        policy: BackupPolicy | None,
+        *,
+        slug: str,
+        actor: str,
+        verify: bool,
+        gate: bool,
+        wake: bool,
+        prepared: WakeContext | None,
+        attempt: int,
+        attempts: int,
+    ) -> PipelineRun:
+        correlation_id = run.correlation_id
         steps = StepRecorder(session, run)
         audit.record(
             session,
@@ -203,11 +264,11 @@ class BackupPipeline:
             await self._preflight(steps)
             await self._run_gate(session, steps, service, gate=gate)
             await self._run_sub_gate(session, steps, service, gate=gate)
-            snapshot = await self._dump_and_locate(steps, service, node, policy)
+            snapshot = await self._dump_and_locate(session, steps, service, node, policy)
             record = self._record_backup(session, steps, service, policy, run, snapshot)
 
             if verify:
-                await self._verify(session, steps, snapshot, record)
+                await self._verify(session, steps, service, snapshot, record)
             else:
                 steps.record("pbs_verify", "skipped", detail={"reason": "verify=False"})
 
@@ -221,7 +282,11 @@ class BackupPipeline:
                 action="backup.succeeded",
                 target=f"service:{slug}",
                 correlation_id=correlation_id,
-                details={"run_id": run.id, "snapshot": snapshot.snapshot_id},
+                details={
+                    "run_id": run.id,
+                    "snapshot": snapshot.snapshot_id,
+                    "verify": record.verify_state or ("ok" if record.verified else None),
+                },
             )
             session.commit()
             return run
@@ -478,7 +543,10 @@ class BackupPipeline:
             steps,
             actor=actor,
             hold_reason=f"backup:{service.slug}",
-            ttl_s=self._waker.hold_ttl_s(),
+            ttl_s=max(
+                self._waker.hold_ttl_s(),
+                backup_timing.hold_ttl_s(session, self._settings, service.id),
+            ),
             shared=shared,
         )
 
@@ -955,6 +1023,7 @@ class BackupPipeline:
 
     async def _dump_and_locate(
         self,
+        session: Session,
         steps: StepRecorder,
         service: Service,
         node: Node,
@@ -970,6 +1039,7 @@ class BackupPipeline:
             )
 
         mode = (policy.mode if policy else BackupMode.SNAPSHOT).value
+        limit = backup_timing.deadline(session, self._settings, service.id, "dump")
 
         started = datetime.now(UTC)
         handle = await self._proxmox.vzdump(
@@ -983,13 +1053,16 @@ class BackupPipeline:
             "vzdump_started",
             "ok",
             started_at=started,
-            detail={"upid": handle.upid, "node": node.name, "vmid": service.guest_id},
+            detail={
+                "upid": handle.upid,
+                "node": node.name,
+                "vmid": service.guest_id,
+                **limit.as_detail(),
+            },
         )
 
         started = datetime.now(UTC)
-        status = await self._proxmox.wait_for_task(
-            node.name, handle.upid, timeout_s=self._settings.backup_task_timeout_s
-        )
+        status = await self._proxmox.wait_for_task(node.name, handle.upid, timeout_s=limit.seconds)
         # Proxmox freezes a VM's filesystems for the snapshot and thaws them after; a dump
         # that went wrong can leave them frozen, and the VM then stops writing.
         await self._freeze_check(steps, service, node)
@@ -1031,6 +1104,9 @@ class BackupPipeline:
                 f"{self._settings.pve_backup_storage!r} really targets that datastore"
             )
         snapshot = snapshots[0]
+        # PBS knows how earlier verifies of this guest ended (one we stopped waiting for, one
+        # run by PBS's own job): bring the records in line.
+        sync_verified(session, snapshots)
         steps.record(
             "snapshot_located",
             "ok",
@@ -1067,19 +1143,53 @@ class BackupPipeline:
         self,
         session: Session,
         steps: StepRecorder,
+        service: Service,
         snapshot: Snapshot,
         record: BackupRecord,
     ) -> None:
-        started = datetime.now(UTC)
-        verified = await self._pbs.verify_snapshot(
-            snapshot.datastore,
-            backup_type=snapshot.backup_type,
-            backup_id=snapshot.backup_id,
-            backup_time=snapshot.backup_time,
-            timeout_s=self._settings.verify_task_timeout_s,
+        limit = backup_timing.deadline(
+            session, self._settings, service.id, "verify", size_bytes=snapshot.size_bytes
         )
+        started = datetime.now(UTC)
+        try:
+            verified = await self._pbs.verify_snapshot(
+                snapshot.datastore,
+                backup_type=snapshot.backup_type,
+                backup_id=snapshot.backup_id,
+                backup_time=snapshot.backup_time,
+                timeout_s=limit.seconds,
+            )
+        except TaskTimeout as exc:
+            # The backup is in PBS; only its check is not done yet. Not a failure: the queue
+            # follows the verify to its end (follow_verify) and keeps its storage up meanwhile.
+            record.verify_upid = exc.upid
+            record.verify_state = "running"
+            session.add(record)
+            session.commit()
+            steps.record(
+                "pbs_verify",
+                "running",
+                started_at=started,
+                detail={
+                    "snapshot": snapshot.snapshot_id,
+                    "upid": exc.upid,
+                    **limit.as_detail(),
+                    "note": "PBS is still verifying past its deadline. The backup is there; "
+                    "its verify is followed until PBS finishes, and its storage stays up.",
+                },
+            )
+            log.warning(
+                "backup.verify.past_deadline",
+                service=service.slug,
+                snapshot=snapshot.snapshot_id,
+                deadline_s=limit.seconds,
+                upid=exc.upid,
+                impact="The run succeeds; the record is marked verified when PBS finishes.",
+            )
+            return
         record.verified = verified
         record.verified_at = datetime.now(UTC) if verified else None
+        record.verify_state = "ok" if verified else "failed"
         session.add(record)
         session.commit()
 
@@ -1087,7 +1197,7 @@ class BackupPipeline:
             "pbs_verify",
             "ok" if verified else "failed",
             started_at=started,
-            detail={"snapshot": snapshot.snapshot_id, "verified": verified},
+            detail={"snapshot": snapshot.snapshot_id, "verified": verified, **limit.as_detail()},
         )
         if not verified:
             raise BackupError(
@@ -1096,6 +1206,11 @@ class BackupPipeline:
             )
 
     # -- helpers -------------------------------------------------------------
+
+    def check_target(self, session: Session, slug: str) -> None:
+        """Raise :class:`BackupError` when ``slug`` cannot be backed up at all (unknown, a
+        sub-service, excluded, no node): checked before a backup is queued."""
+        self._resolve(session, slug)
 
     def _resolve(self, session: Session, slug: str) -> tuple[Service, Node, BackupPolicy | None]:
         service = session.exec(select(Service).where(Service.slug == slug)).one_or_none()
@@ -1145,3 +1260,180 @@ class BackupPipeline:
         run.error = error
         session.add(run)
         session.commit()
+
+
+# -- a verify that outlasted its deadline --------------------------------------------------
+
+
+def _update_step(run: PipelineRun, name: str, status: str, detail: dict[str, Any]) -> None:
+    """Settle a run's step that was left "running" (the verify, followed after the run)."""
+    now = datetime.now(UTC).isoformat()
+    steps = list(run.steps or [])
+    for i in range(len(steps) - 1, -1, -1):
+        if steps[i].get("name") == name:
+            steps[i] = {
+                **steps[i],
+                "status": status,
+                "finished_at": now,
+                "detail": {**(steps[i].get("detail") or {}), **detail},
+            }
+            break
+    else:
+        steps.append(
+            {
+                "name": name,
+                "status": status,
+                "started_at": now,
+                "finished_at": now,
+                "detail": detail,
+            }
+        )
+    run.steps = steps
+
+
+def pending_verify_started(session: Session, record: BackupRecord) -> datetime:
+    """When the verify that is being followed started (its run's step), else the record's time."""
+    run = session.get(PipelineRun, record.pipeline_run_id) if record.pipeline_run_id else None
+    for step in reversed((run.steps if run else None) or []):
+        if step.get("name") == "pbs_verify" and step.get("started_at"):
+            at = datetime.fromisoformat(step["started_at"])
+            return at if at.tzinfo else at.replace(tzinfo=UTC)
+    at = record.created_at
+    return at if at.tzinfo else at.replace(tzinfo=UTC)
+
+
+async def follow_verify(
+    session: Session,
+    pbs: PbsAdapter,
+    settings: Settings,
+    record_id: int,
+    *,
+    stop: asyncio.Event | None = None,
+    poll_s: float | None = None,
+) -> str:
+    """Wait for a verify that outlasted its deadline, then settle its record and run from what
+    PBS says: ``ok`` / ``failed``. ``unknown`` when PBS is still at it ``verify_task_max_s``
+    after it started, or ``stop`` is set: the record says so and the queue moves on (PBS
+    finishes it anyway; the snapshot list shows the result). Never raises."""
+    record = session.get(BackupRecord, record_id)
+    if record is None or not record.verify_upid or record.verify_state != "running":
+        return "gone"
+    upid = record.verify_upid
+    started = pending_verify_started(session, record)
+    give_up_at = started.timestamp() + settings.verify_task_max_s
+    poll = max(0.05, poll_s if poll_s is not None else settings.cleanup_poll_s)
+    while True:
+        try:
+            task = await pbs.task(upid, log_lines=8)
+        except AdapterError as exc:
+            log.warning("backup.verify.follow_failed", upid=upid, error=str(exc))
+            task = None
+        if task is not None and not task.running:
+            return await _settle_verify(session, settings, record, task.exit_status, task.log_tail)
+        if time.time() >= give_up_at or (stop is not None and stop.is_set()):
+            why = "asked to stop" if stop is not None and stop.is_set() else "past its ceiling"
+            record.verify_state = "unknown"
+            session.add(record)
+            run = (
+                session.get(PipelineRun, record.pipeline_run_id) if record.pipeline_run_id else None
+            )
+            if run is not None:
+                _update_step(
+                    run,
+                    "pbs_verify",
+                    "indeterminate",
+                    {"note": f"no longer followed ({why}); PBS may still finish it"},
+                )
+                session.add(run)
+            session.commit()
+            log.warning("backup.verify.not_followed", upid=upid, why=why)
+            return "unknown"
+        if stop is not None:
+            with contextlib.suppress(TimeoutError):
+                await asyncio.wait_for(stop.wait(), timeout=poll)
+        else:
+            await asyncio.sleep(poll)
+
+
+async def _settle_verify(
+    session: Session,
+    settings: Settings,
+    record: BackupRecord,
+    exit_status: str | None,
+    log_tail: list[str],
+) -> str:
+    ok = exit_status == "OK"
+    now = datetime.now(UTC)
+    record.verified = ok
+    record.verified_at = now if ok else None
+    record.verify_state = "ok" if ok else "failed"
+    session.add(record)
+    run = session.get(PipelineRun, record.pipeline_run_id) if record.pipeline_run_id else None
+    detail: dict[str, Any] = {"verified": ok, "exit_status": exit_status, "followed": True}
+    if not ok:
+        detail["log"] = task_error_lines(log_tail)
+    if run is not None:
+        _update_step(run, "pbs_verify", "ok" if ok else "failed", detail)
+        if not ok:
+            run.status = PipelineStatus.FAILED
+            run.error = (
+                f"PBS verify failed for {record.pbs_snapshot_id} — the backup exists but its "
+                f"integrity is not confirmed: {exit_status or 'unknown'}"
+            )
+        session.add(run)
+    audit.record(
+        session,
+        actor="system",
+        action="backup.verified" if ok else "backup.verify_failed",
+        target=f"service:{record.service_slug}",
+        result=AuditResult.OK if ok else AuditResult.ERROR,
+        details={
+            "record": record.id,
+            "snapshot": record.pbs_snapshot_id,
+            "upid": record.verify_upid,
+        },
+    )
+    session.commit()
+    log.info(
+        "backup.verify.settled", snapshot=record.pbs_snapshot_id, ok=ok, exit_status=exit_status
+    )
+    if not ok:
+        service = session.get(Service, record.service_id) if record.service_id is not None else None
+        name = service.name if service else record.service_slug
+        await announce(
+            session,
+            level="service",
+            key=record.service_slug,
+            name=name,
+            event="backup_failed",
+            severity="error",
+            title=f"Backup of {name} FAILED its verify",
+            body=(run.error if run is not None and run.error else str(exit_status))[:1500],
+            scope={"slug": record.service_slug, "group": service.group if service else None},
+        )
+    return "ok" if ok else "failed"
+
+
+def sync_verified(session: Session, snapshots: list[Snapshot]) -> int:
+    """Mark the backup records PBS lists as verified (its ``verification`` is ``ok``) verified
+    here too. Returns how many changed. Never un-verifies: PBS drops the field on a re-verify
+    that is still running."""
+    good = [s.snapshot_id for s in snapshots if s.verified]
+    if not good:
+        return 0
+    records = session.exec(
+        select(BackupRecord).where(
+            BackupRecord.verified == False,  # noqa: E712
+            col(BackupRecord.pbs_snapshot_id).in_(good),
+        )
+    ).all()
+    now = datetime.now(UTC)
+    for record in records:
+        record.verified = True
+        record.verified_at = record.verified_at or now
+        record.verify_state = "ok"
+        session.add(record)
+    if records:
+        session.commit()
+        log.info("backup.verified_from_pbs", records=[r.pbs_snapshot_id for r in records])
+    return len(records)

@@ -544,6 +544,30 @@ async def _run_backup(ctx: ToolContext, a: dict[str, Any]) -> Any:
     adapters, settings, actor = ctx.adapters, ctx.settings, ctx.actor
     verify, wake = a.get("verify", True), a.get("wake", True)
 
+    from orchestrator import scheduler
+
+    sched = scheduler.current()
+    if sched is not None and sched.running:
+        # In the queue like every other backup: one per service, in the same wake as the rest.
+        try:
+            out = await backup.start_backup(
+                ctx.session, adapters, settings, slug, actor=actor, verify=verify, wake=wake
+            )
+        except HTTPException as exc:
+            detail = exc.detail
+            msg = detail.get("message") if isinstance(detail, dict) else detail
+            raise ToolError(f"{exc.status_code}: {msg}") from exc
+        return {
+            "started": out.get("status") == "running",
+            "queued": True,
+            "service": slug,
+            "job_id": out.get("job_id"),
+            "run_id": out.get("run_id"),
+            "ahead": out.get("ahead", 0),
+            "next": "Queued behind what runs now. Poll get_run(run_id); with no run_id yet, "
+            f"backup_queue shows it, or list_runs(slug='{slug}', kind='backup').",
+        }
+
     async def go() -> dict[str, Any]:
         with Session(get_engine()) as s:
             try:
@@ -1444,9 +1468,11 @@ TOOLS: dict[str, Tool] = {
         Tool(
             "run_backup",
             "Run a backup",
-            "Start a backup of a service now (wakes what it needs first, dumps, verifies). It "
-            "usually takes minutes: you get a run id back; poll get_run. Refused when the "
-            "service is excluded from backups or one is already running.",
+            "Back up a service now (wakes what it needs first, dumps, verifies). It is queued "
+            "behind the backups and cleanups running now, in the same wake; you get a job id "
+            "and, once it started, a run id: poll get_run (backup_queue shows it while it "
+            "waits). Refused when the service is excluded from backups or a backup of it is "
+            "already running or queued.",
             "backup",
             _run_backup,
             {

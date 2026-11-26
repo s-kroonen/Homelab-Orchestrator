@@ -47,7 +47,8 @@
   const VERDICT_CLS = { healthy: "ok", failed: "fail", down: "off", unknown: "off", skipped: "off" };
   const stepsList = (steps) => el("ol", { class: "steps" }, (steps || []).map((s) => {
     const d = s.detail || {};
-    const note = d.error || d.reason || d.note || d.message || (d.size ? fmt.bytes(d.size) : "");
+    const limit = d.deadline_s ? "allowed " + (d.deadline_s >= 5400 ? (d.deadline_s / 3600).toFixed(1) + " h" : Math.round(d.deadline_s / 60) + " min") + (d.deadline_why ? " (" + d.deadline_why + ")" : "") : "";
+    const note = d.error || d.reason || d.note || d.message || (d.size ? fmt.bytes(d.size) : "") || limit;
     return el("li", { class: s.status === "failed" ? "failed" : s.status === "skipped" ? "" : "ok" }, s.name + (note ? " — " + note : ""));
   }));
   async function put(body, what) {
@@ -937,20 +938,46 @@
   async function backupNow() {
     if (backupRunning) return;
     backupRunning = true; backupSteps = []; drawBackups(); T.show("related");
-    toast("Backing up " + (S.name || slug) + "; waking what it needs first can take minutes");
-    let baseId = 0;
+    const name = S.name || slug;
     const latest = async () => { const r = await api.get("/api/runs?slug=" + enc(slug) + "&limit=1", { suppressToast: true }); return r.length ? r[0] : null; };
+    let baseId = 0;
     try { baseId = ((await latest()) || {}).id || 0; } catch (_e) { /* best effort */ }
-    let polling = true;
-    const poller = (async () => { while (polling) { await new Promise((r) => setTimeout(r, 2000)); if (!polling) break; try { const run = await latest(); if (run && run.id > baseId) { backupSteps = run.steps; drawBackups(); } } catch (_e) { /* keep polling */ } } })();
-    try {
-      const run = await api.post("/api/backup/" + enc(slug) + "?verify=true", undefined, { suppressToast: true });
-      backupSteps = run.steps;
-      toast("Backup " + run.status + (run.error ? ": " + run.error : ""), run.status === "succeeded" ? "ok" : "error");
-    } catch (e) {
-      toast(e.message, "error");
-      try { const run = await latest(); if (run && run.id > baseId) backupSteps = run.steps; } catch (_e) { /* nothing more */ }
-    } finally { polling = false; await poller; backupRunning = false; backups.refresh(); }
+    const end = (run) => {
+      if (run) {
+        backupSteps = run.steps;
+        const pending = (run.steps || []).some((st) => st.name === "pbs_verify" && st.status === "running");
+        if (run.status === "succeeded") toast(pending ? "Backed up " + name + "; PBS is still verifying it" : "Backed up " + name, "ok");
+        else toast("Backup " + run.status + (run.error ? ": " + run.error : ""), run.status === "skipped" ? "" : "error");
+      }
+      backupRunning = false; backups.refresh();
+    };
+    let out;
+    try { out = await api.post("/api/backup/" + enc(slug) + "?verify=true", undefined, { suppressToast: true }); }
+    catch (e) { toast(e.message, "error"); end(null); return; }
+    // No scheduler running: it ran here and has finished.
+    if (!out.queued) { end(out); return; }
+    toast(out.status === "running" ? "Backing up " + name + "; waking what it needs first can take minutes"
+      : "Queued: " + out.ahead + " job" + (out.ahead === 1 ? "" : "s") + " ahead of it", "ok");
+    const DONE = ["succeeded", "failed", "skipped", "cancelled"];
+    for (;;) {
+      await new Promise((r) => setTimeout(r, 3000));
+      try {
+        const run = await latest();
+        if (run && run.id > baseId) {
+          backupSteps = run.steps; drawBackups();
+          if (DONE.includes(run.status)) { end(run); return; }
+          continue;
+        }
+        // No run yet: still waiting in the queue, or it ended before it started.
+        const q = await api.get("/api/backup-queue", { suppressToast: true });
+        if (!(q.jobs || []).some((j) => j.id === out.job_id)) {
+          const again = await latest();
+          end(again && again.id > baseId ? again : null);
+          if (!(again && again.id > baseId)) toast("The backup of " + name + " ended before it started; see Activity", "error");
+          return;
+        }
+      } catch (_e) { /* keep following */ }
+    }
   }
   async function proposeRestore() {
     if (!await confirm({ title: "Propose a restore?", body: "Restores the latest verified backup over " + (S.root || slug) + "'s guest. You approve it on the next page; nothing is restored before that.", action: "Propose" })) return;

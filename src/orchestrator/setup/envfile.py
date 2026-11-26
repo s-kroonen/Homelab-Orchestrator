@@ -588,8 +588,25 @@ ENV_SECTIONS: tuple[EnvSection, ...] = (
         "timeouts",
         "Task timeouts",
         (
-            EnvKey("BACKUP_TASK_TIMEOUT_S", "A large VM dump can legitimately take hours."),
+            EnvKey(
+                "BACKUP_TASK_TIMEOUT_S",
+                "How long a dump and a verify may take for a guest with no backup history yet. "
+                "After that each guest's deadline is learned from its own recent runs.",
+            ),
             EnvKey("VERIFY_TASK_TIMEOUT_S"),
+            EnvKey(
+                "BACKUP_DEADLINE_FACTOR",
+                "A learned deadline is this many times the slowest of the guest's last 5 runs "
+                "(plus 5 minutes), never under BACKUP_DEADLINE_MIN_S nor over the *_MAX_S ceiling.",
+            ),
+            EnvKey("BACKUP_DEADLINE_MIN_S"),
+            EnvKey("BACKUP_TASK_MAX_S"),
+            EnvKey("VERIFY_TASK_MAX_S"),
+            EnvKey(
+                "VERIFY_MIN_MIB_S",
+                "With no history yet, a verify's deadline is raised to the snapshot's size read "
+                "at this many MiB/s.",
+            ),
             EnvKey(
                 "BACKUP_RETRY_DELAY_S",
                 "Seconds before a scheduled backup that was blocked, or whose target did not "

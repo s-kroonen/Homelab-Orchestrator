@@ -375,8 +375,18 @@ class Settings(BaseSettings):
     gateway_service: str = ""
 
     # ---- Task timeouts ----------------------------------------------------
+    # A dump's and a verify's deadline is learned per guest from its own recent runs
+    # (pipelines/backup_timing.py): about `backup_deadline_factor` x the slowest of the last
+    # few, never under `backup_deadline_min_s` nor over the *_max_s ceiling. These two are
+    # the deadline while a guest has no history yet.
     backup_task_timeout_s: int = 7200  # a large VM dump can legitimately take hours
     verify_task_timeout_s: int = 1800
+    backup_deadline_factor: float = 2.0
+    backup_deadline_min_s: int = 600
+    backup_task_max_s: int = 43200
+    verify_task_max_s: int = 21600
+    # With no history, a verify's deadline is raised to the snapshot's size read at this speed.
+    verify_min_mib_s: float = 15.0
     # A scheduled backup that was blocked or whose target did not become healthy
     # after boot is tried again this many seconds later, up to the policy's
     # max_attempts (default 3), then it gives up and notifies.

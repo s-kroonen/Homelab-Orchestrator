@@ -12,6 +12,8 @@ the background; the run rows are identical either way.
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -19,7 +21,12 @@ from sqlmodel import Session, col, desc, select
 
 from orchestrator.adapters.errors import AdapterError
 from orchestrator.db.models import BackupPolicy, BackupRecord, PipelineRun, Service
-from orchestrator.pipelines.backup import BackupError, BackupPipeline, BackupSkipped
+from orchestrator.pipelines.backup import (
+    BackupAlreadyRunning,
+    BackupError,
+    BackupPipeline,
+    BackupSkipped,
+)
 from orchestrator.registry import boot
 from orchestrator.registry.backup_plan import BackupPlan, resolve_backup_plan
 from orchestrator.web.auth import require_admin
@@ -143,10 +150,78 @@ async def trigger_backup(
             "phase (recorded and audited as an explicit override)."
         ),
     ),
+    wait: bool = Query(
+        False,
+        description=(
+            "Run it here and answer when it has finished, outside the queue. By default it is "
+            "queued behind what runs now (in the same wake) and the answer comes at once."
+        ),
+    ),
 ) -> dict[str, Any]:
-    return await run_backup(
+    if wait:
+        return await run_backup(
+            session, adapters, settings, slug, actor="api", verify=verify, wake=wake
+        )
+    return await start_backup(
         session, adapters, settings, slug, actor="api", verify=verify, wake=wake
     )
+
+
+def _already(slug: str, busy: dict[str, Any]) -> HTTPException:
+    run_id = busy.get("run_id")
+    where = f" (run #{run_id})" if run_id else ""
+    state = "waiting in the queue" if busy.get("state") == "waiting" else "running"
+    return HTTPException(
+        status_code=409,
+        detail={
+            "message": f"A backup of {slug} is already {state}{where}.",
+            "run_id": run_id,
+            "errors": {},
+        },
+    )
+
+
+async def start_backup(
+    session: Session,
+    adapters: Any,
+    settings: Any,
+    slug: str,
+    *,
+    actor: str,
+    verify: bool = True,
+    wake: bool = True,
+) -> dict[str, Any]:
+    """Queue one service's backup (OR-98) and answer at once: ``{"queued": True, "job_id",
+    "run_id" (once it started), "status": "running" | "queued", "ahead": jobs before it}``.
+    A second backup of a service that is already queued or running is refused (409). With no
+    scheduler running it runs here as :func:`run_backup` does."""
+    from orchestrator import scheduler
+
+    pipeline = BackupPipeline(proxmox=adapters.proxmox, pbs=adapters.pbs, settings=settings)
+    try:
+        pipeline.check_target(session, slug)
+    except BackupError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    sched = scheduler.current()
+    if sched is None or not sched.running:
+        return {"queued": False, **(await run_backup(
+            session, adapters, settings, slug, actor=actor, verify=verify, wake=wake
+        ))}  # fmt: skip
+    busy = sched.backup_busy(slug)
+    if busy is not None:
+        raise _already(slug, busy)
+    job = sched.queue_backup(slug, actor=actor, verify=verify, wake=wake)
+    with contextlib.suppress(TimeoutError):
+        await asyncio.wait_for(job.run_known.wait(), timeout=1.0)
+    jobs = sched.queue()["jobs"]
+    ahead = next((i for i, j in enumerate(jobs) if j["id"] == job.id), 0)
+    return {
+        "queued": True,
+        "job_id": job.id,
+        "run_id": job.run_id,
+        "status": "running" if job.state == "running" else "queued",
+        "ahead": ahead,
+    }
 
 
 async def run_backup(
@@ -166,6 +241,8 @@ async def run_backup(
     )
     try:
         run = await pipeline.run_for_service(session, slug, actor=actor, verify=verify, wake=wake)
+    except BackupAlreadyRunning as exc:
+        raise _already(slug, {"state": "running", "run_id": exc.run_id}) from exc
     except BackupSkipped as exc:
         # 409: nothing broke, but the service is not in a state a backup may be taken in.
         raise HTTPException(status_code=409, detail=f"Backup skipped: {exc}") from exc
@@ -246,6 +323,7 @@ async def list_backups(
             "size_bytes": r.size_bytes,
             "verified": r.verified,
             "verified_at": r.verified_at.isoformat() if r.verified_at else None,
+            "verify_state": r.verify_state,
             "protected": r.protected,
             "created_at": r.created_at.isoformat() if r.created_at else None,
             "pipeline_run_id": r.pipeline_run_id,
