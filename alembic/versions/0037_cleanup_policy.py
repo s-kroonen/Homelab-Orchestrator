@@ -40,9 +40,7 @@ def upgrade() -> None:
         sa.Column("max_wait_h", sa.Integer(), nullable=False, server_default="6"),
         sa.Column("requires", sa.JSON(), nullable=True),
         sa.Column("wake_mode", sa.String(), nullable=False, server_default="FOLLOW"),
-        sa.Column(
-            "restore_power_state", sa.Boolean(), nullable=False, server_default=sa.true()
-        ),
+        sa.Column("restore_power_state", sa.Boolean(), nullable=False, server_default=sa.true()),
         sa.Column("created_at", sa.DateTime(), nullable=False),
         sa.Column("updated_at", sa.DateTime(), nullable=False),
     )

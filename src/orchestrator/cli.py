@@ -928,9 +928,7 @@ def scan(slug: str | None, scan_all: bool) -> None:
 
             stmt = select(Service).order_by(Service.slug)
             stmt = (
-                stmt.where(Service.slug == slug)
-                if slug
-                else stmt.where(Service.enabled == True)  # noqa: E712
+                stmt.where(Service.slug == slug) if slug else stmt.where(Service.enabled == True)  # noqa: E712
             )
             services = session.exec(stmt).all()
 

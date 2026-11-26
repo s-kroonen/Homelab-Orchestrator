@@ -27,7 +27,10 @@ def upgrade() -> None:
         "dump_record",
         sa.Column("id", sa.Integer(), primary_key=True),
         sa.Column(
-            "service_id", sa.Integer(), sa.ForeignKey("service.id", ondelete="SET NULL"), nullable=True
+            "service_id",
+            sa.Integer(),
+            sa.ForeignKey("service.id", ondelete="SET NULL"),
+            nullable=True,
         ),
         sa.Column("service_slug", sa.String(), nullable=False),
         sa.Column(

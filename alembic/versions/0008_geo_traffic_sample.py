@@ -59,9 +59,7 @@ def upgrade() -> None:
         sa.Column("status_code", sa.Integer(), nullable=False, server_default="0"),
         sa.Column("hit_count", sa.Integer(), nullable=False, server_default="1"),
     )
-    op.create_index(
-        "ix_geo_traffic_sample_proxy_host_id", "geo_traffic_sample", ["proxy_host_id"]
-    )
+    op.create_index("ix_geo_traffic_sample_proxy_host_id", "geo_traffic_sample", ["proxy_host_id"])
     op.create_index("ix_geo_traffic_sample_sampled_at", "geo_traffic_sample", ["sampled_at"])
     op.create_index("ix_geo_traffic_sample_client_ip", "geo_traffic_sample", ["client_ip"])
 

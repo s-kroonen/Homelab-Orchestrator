@@ -27,8 +27,7 @@ def normalize_policy(raw: dict[str, Any] | None) -> dict[str, Any]:
     unknown = set(raw) - set(DEFAULTS)
     if unknown:
         raise ValueError(
-            f"unknown recovery key(s): {', '.join(sorted(unknown))} "
-            f"(known: {', '.join(DEFAULTS)})"
+            f"unknown recovery key(s): {', '.join(sorted(unknown))} (known: {', '.join(DEFAULTS)})"
         )
     out = {**DEFAULTS, **raw}
     if not isinstance(out["enabled"], bool):

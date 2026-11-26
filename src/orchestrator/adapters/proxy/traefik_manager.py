@@ -1050,10 +1050,7 @@ class TraefikManagerProxyAdapter(ProxyAdapter):
         service's maintenance-fallback ``errors`` middleware."""
         buf = io.StringIO()
         doc = _yaml.load(
-            "errors:\n"
-            "  status: []\n"
-            f"  service: {service_name}\n"
-            f"  query: /maintenance/{slug}\n"
+            f"errors:\n  status: []\n  service: {service_name}\n  query: /maintenance/{slug}\n"
         )
         doc["errors"]["status"] = list(_ERRORS_MIDDLEWARE_STATUS)
         _yaml.dump(doc, buf)

@@ -14,7 +14,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 
 import sqlalchemy as sa
-import sqlmodel  # noqa: F401  (models use sqlmodel.AutoString etc.)
+import sqlmodel
 from alembic import op
 
 revision: str = "0001_baseline"
@@ -141,7 +141,9 @@ def upgrade() -> None:
         ),
         sa.UniqueConstraint("credential_id", name="uq_credential_id"),
     )
-    op.create_index("ix_webauthn_credential_credential_id", "webauthn_credential", ["credential_id"])
+    op.create_index(
+        "ix_webauthn_credential_credential_id", "webauthn_credential", ["credential_id"]
+    )
 
     # ---- Runtime state (never touched by YAML reconcile) -----------------
     op.create_table(
@@ -221,9 +223,7 @@ def upgrade() -> None:
         sa.Column("last_seen_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("hold_count", sa.Integer(), nullable=False, server_default="0"),
         sa.Column("current_hold_reasons", sa.JSON(), nullable=False),
-        sa.ForeignKeyConstraint(
-            ["node_id"], ["node.id"], name="fk_state_node", ondelete="CASCADE"
-        ),
+        sa.ForeignKeyConstraint(["node_id"], ["node.id"], name="fk_state_node", ondelete="CASCADE"),
     )
 
     op.create_table(

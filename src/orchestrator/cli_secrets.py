@@ -45,8 +45,7 @@ def status() -> None:
         report = vault.status(get_settings(), session)
     click.echo(f"Master key   {report.key_id}  ({report.key_path})")
     click.echo(
-        f"Connections  {report.connections_encrypted} encrypted, "
-        f"{report.connections_plain} plain"
+        f"Connections  {report.connections_encrypted} encrypted, {report.connections_plain} plain"
     )
     click.echo(f"Database     {report.db_encrypted} encrypted, {report.db_plain} plain")
     if report.plain:

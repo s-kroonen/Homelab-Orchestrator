@@ -770,7 +770,7 @@ def reconcile_yaml_into_db(session: Session, path: Path) -> RegistryFile:
         policy = policies_by_name.get(spec.backup_policy) if spec.backup_policy else None
         if spec.backup_policy and policy is None:
             raise ValueError(
-                f"service {spec.slug!r} references unknown backup_policy " f"{spec.backup_policy!r}"
+                f"service {spec.slug!r} references unknown backup_policy {spec.backup_policy!r}"
             )
 
         svc = existing_services.get(spec.slug)

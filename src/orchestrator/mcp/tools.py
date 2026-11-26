@@ -1524,7 +1524,9 @@ TOOLS: dict[str, Tool] = {
             },
             ("slug",),
             _deploy_risk,
-            lambda a: f"Deploy {a.get('slug')} WITHOUT its guards. Reason: {a.get('reason') or '-'}",
+            lambda a: (
+                f"Deploy {a.get('slug')} WITHOUT its guards. Reason: {a.get('reason') or '-'}"
+            ),
         ),
         Tool(
             "wake_service",
@@ -1551,8 +1553,9 @@ TOOLS: dict[str, Tool] = {
             },
             ("node", "action"),
             _node_risk,
-            lambda a: f"{a.get('action')} node {a.get('node')}"
-            + (" (forced)" if a.get("force") else ""),
+            lambda a: (
+                f"{a.get('action')} node {a.get('node')}" + (" (forced)" if a.get("force") else "")
+            ),
         ),
         Tool(
             "switch_service",
@@ -1886,9 +1889,11 @@ TOOLS: dict[str, Tool] = {
             {"hostname": _s("The proxy host's hostname")},
             ("hostname",),
             DANGEROUS,
-            lambda a: f"LINK proxy host {a.get('hostname')} to the Traefik Manager route that "
-            "serves it (the orchestrator's record and services.yaml only; no route file is "
-            "written)",
+            lambda a: (
+                f"LINK proxy host {a.get('hostname')} to the Traefik Manager route that "
+                "serves it (the orchestrator's record and services.yaml only; no route file is "
+                "written)"
+            ),
             _adopt_route_precheck,
         ),
         Tool(
@@ -1903,8 +1908,10 @@ TOOLS: dict[str, Tool] = {
             {"slug": SLUG},
             ("slug",),
             DANGEROUS,
-            lambda a: f"PRUNE old backups of {a.get('slug')} in PBS by its backup policy "
-            "(snapshots the policy does not keep are deleted)",
+            lambda a: (
+                f"PRUNE old backups of {a.get('slug')} in PBS by its backup policy "
+                "(snapshots the policy does not keep are deleted)"
+            ),
             _apply_retention_precheck,
         ),
         Tool(
@@ -1919,15 +1926,16 @@ TOOLS: dict[str, Tool] = {
             {"name": _s("The cleanup policy's name, as list_cleanup_policies shows it")},
             ("name",),
             DANGEROUS,
-            lambda a: f"CLEAN datastore by cleanup policy {a.get('name')}: prune snapshots the "
-            "backup policies do not keep, then garbage-collect",
+            lambda a: (
+                f"CLEAN datastore by cleanup policy {a.get('name')}: prune snapshots the "
+                "backup policies do not keep, then garbage-collect"
+            ),
             _run_cleanup_precheck,
         ),
         Tool(
             "guest_power",
             "Proxmox guest power",
-            "Start (acts at once) or stop (needs a person's approval) any Proxmox VM or "
-            "container.",
+            "Start (acts at once) or stop (needs a person's approval) any Proxmox VM or container.",
             "control",
             _guest_power,
             {
@@ -1955,8 +1963,10 @@ TOOLS: dict[str, Tool] = {
             },
             ("endpoint_id", "stack", "confirm_name"),
             DANGEROUS,
-            lambda a: f"DELETE stack {a.get('stack')} on environment {a.get('endpoint_id')}"
-            + (" and take it down" if a.get("take_down") else ""),
+            lambda a: (
+                f"DELETE stack {a.get('stack')} on environment {a.get('endpoint_id')}"
+                + (" and take it down" if a.get("take_down") else "")
+            ),
         ),
     )
 }

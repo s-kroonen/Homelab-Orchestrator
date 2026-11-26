@@ -92,8 +92,7 @@ def busy_reason(
         ).all():
             if running.id != ignore_run:
                 return (
-                    f"a {running.kind.value} is already running for this service "
-                    f"(run {running.id})"
+                    f"a {running.kind.value} is already running for this service (run {running.id})"
                 )
     return None
 

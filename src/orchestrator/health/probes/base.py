@@ -96,7 +96,7 @@ def register_probe(cls: type[Probe]) -> type[Probe]:
     existing = _REGISTRY.get(cls.kind)
     if existing is not None and existing is not cls:
         raise RuntimeError(
-            f"two probe classes claim kind {cls.kind!r}: " f"{existing.__name__} and {cls.__name__}"
+            f"two probe classes claim kind {cls.kind!r}: {existing.__name__} and {cls.__name__}"
         )
     _REGISTRY[cls.kind] = cls
     return cls

@@ -110,8 +110,7 @@ def ask(
     if not interactive:
         if spec.required and default in (None, "", []):
             raise click.UsageError(
-                f"--set {spec.key}=VALUE is required when running non-interactively "
-                f"({spec.prompt})"
+                f"--set {spec.key}=VALUE is required when running non-interactively ({spec.prompt})"
             )
         return default
 

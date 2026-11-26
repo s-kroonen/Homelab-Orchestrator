@@ -168,8 +168,7 @@ class SshTransport(CommandTransport):
         except (OSError, asyncssh.Error) as exc:
             via = f" via jump host {self._jump_host}" if self._jump_host else ""
             raise TransportUnreachable(
-                f"ssh: could not run command on "
-                f"{self._user}@{self._host}:{self._port}{via} ({exc})"
+                f"ssh: could not run command on {self._user}@{self._host}:{self._port}{via} ({exc})"
             ) from exc
         except TimeoutError as exc:
             raise TransportUnreachable(

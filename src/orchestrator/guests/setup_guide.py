@@ -128,8 +128,7 @@ def _enable(facts: GuestFacts) -> Step:
 
 _RESTART = Step(
     "Stop and start the VM once",
-    "A reboot from inside the guest is not enough: the option adds a device. Then press "
-    "Read now.",
+    "A reboot from inside the guest is not enough: the option adds a device. Then press Read now.",
 )
 
 

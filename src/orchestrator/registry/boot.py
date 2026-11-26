@@ -347,9 +347,7 @@ def backup_timeline(session: Session, plan_steps: list[Any]) -> dict[str, Any]:
 def _guest_names(session: Session, node: Node) -> dict[int, str]:
     """vmid -> the service that runs in it (the registry's name for it)."""
     rows = session.exec(
-        select(Service)
-        .where(Service.node_id == node.id)
-        .where(Service.parent_id == None)  # noqa: E711
+        select(Service).where(Service.node_id == node.id).where(Service.parent_id == None)  # noqa: E711
     ).all()
     return {s.guest_id: s.name or s.slug for s in rows if s.guest_id is not None}
 
