@@ -1,0 +1,27 @@
+# Guardrail files need the owner's review (keep in sync with .guardrails).
+# GitHub: enforced with the ruleset option "Require review from Code Owners" (private repos: paid plan).
+# GitLab: Code Owner approval needs Premium; the CI guardrails job covers Free.
+/.claude/                     @s-kroonen
+/AGENTS.md                    @s-kroonen
+/CLAUDE.md                    @s-kroonen
+/CONSTITUTION.md              @s-kroonen
+/.specify/                    @s-kroonen
+/.github/                     @s-kroonen
+/.gitlab-ci.yml               @s-kroonen
+/scripts/                     @s-kroonen
+/check.config                 @s-kroonen
+/project.config               @s-kroonen
+/lefthook.yml                 @s-kroonen
+/.gitleaks.toml               @s-kroonen
+/.trivyignore.yaml            @s-kroonen
+/osv-scanner.toml             @s-kroonen
+/.semgrepignore               @s-kroonen
+/.opengrep/                   @s-kroonen
+/.vale.ini                    @s-kroonen
+/.vale/                       @s-kroonen
+/tests/security-canary/       @s-kroonen
+/docs/security-exceptions.md  @s-kroonen
+/CODEOWNERS                   @s-kroonen
+/.guardrails                  @s-kroonen
+
+# project: below this line (the standard never edits what follows)

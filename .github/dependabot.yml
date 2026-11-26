@@ -1,0 +1,19 @@
+# Dependency updates as PRs (GitHub Dependabot). A cool-down skips releases younger than 14 days:
+# most malicious or broken releases are found and pulled within that time.
+# Pinned security tools in check.config are bumped by hand (scripts/install-tools).
+version: 2
+updates:
+  - package-ecosystem: github-actions   # keeps the commit SHA pins and their version comments
+    directory: /
+    schedule: { interval: weekly }
+    cooldown: { default-days: 14 }
+    commit-message: { prefix: ci }
+    groups:
+      actions: { patterns: ["*"] }
+  - package-ecosystem: uv
+    directory: /
+    schedule: { interval: weekly }
+    cooldown: { default-days: 14 }
+    commit-message: { prefix: build, prefix-development: build }
+    open-pull-requests-limit: 5
+# Add a docker entry (directory of the Dockerfile) once the project has one.

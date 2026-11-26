@@ -1,0 +1,24 @@
+# Git hooks (https://lefthook.dev): one Go binary, no Node or Python needed, works for any stack.
+# Install once per clone:  lefthook install
+#
+# Hooks are fast feedback, not enforcement: `git commit --no-verify` skips them. CI runs the same
+# scripts/check stages and is the gate that counts.
+
+pre-commit:
+  commands:
+    branch:
+      run: scripts/check branch      # no commits on main/dev; <type>/<KEY>-<n>-<slug>. Override once: ALLOW_BRANCH=1
+    check-fast:
+      run: scripts/check fast
+
+commit-msg:
+  commands:
+    format:
+      run: scripts/check commit-msg {1}
+
+pre-push:
+  commands:
+    tests:
+      run: scripts/check test
+
+# project: below this line (the standard never edits what follows)

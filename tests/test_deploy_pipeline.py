@@ -270,7 +270,9 @@ async def test_the_override_skips_the_pre_guards_and_is_audited(env: AdapterBund
         )
         s.refresh(run)
     # the post-guard still judges it - and the service really is failed
-    assert _steps(run)["pre_guards"] == "skipped" and env.portainer.calls == ["redeploy dev-xymbols"]  # type: ignore[union-attr]
+    assert _steps(run)["pre_guards"] == "skipped" and env.portainer.calls == [
+        "redeploy dev-xymbols"
+    ]  # type: ignore[union-attr]
     with Session(get_engine()) as s:
         audit = [a for a in s.exec(select(AuditEntry)).all() if a.action == "deploy.unguarded"]
     assert len(audit) == 1 and audit[0].details["reason"] == "fixing a broken build"

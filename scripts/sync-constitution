@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+#
+# CONSTITUTION.md (repository root) is the one source of the project principles: read by people
+# and by every AI tool, with or without Spec Kit. Spec Kit's commands read
+# .specify/memory/constitution.md, so this copies the source there. `scripts/check fast` fails when
+# the two differ. Never edit the copy.
+set -euo pipefail
+cd "$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+
+[[ -f CONSTITUTION.md ]] || { echo "CONSTITUTION.md is missing." >&2; exit 1; }
+if [[ ! -d .specify ]]; then
+    echo "No .specify/ (Spec Kit not set up): nothing to sync."
+    exit 0
+fi
+mkdir -p .specify/memory
+cp CONSTITUTION.md .specify/memory/constitution.md
+echo "Synced CONSTITUTION.md -> .specify/memory/constitution.md"

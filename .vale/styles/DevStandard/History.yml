@@ -1,0 +1,21 @@
+extends: existence
+message: "'%s' tells history. Describe what exists now in the present tense; history lives in git and CHANGELOG.md."
+link: docs/process/writing.md
+level: error
+scope: [text, comment]
+ignorecase: true
+tokens:
+  - now
+  - no longer
+  - no more
+  - anymore
+  - previously
+  - formerly
+  - recently
+  - newly
+  - updated to
+  - added by
+  - used to (be|have|do|work)
+  - (is|are) new
+  - new (in|since)
+  - (was|were|has been|have been|had been) (added|changed|updated|removed|renamed|introduced|replaced|dropped|fixed|moved)

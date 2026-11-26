@@ -1,0 +1,12 @@
+# Toolchain and dependencies for scripts/check, for the stack in .copier-answers.yml (python).
+# Actions are pinned to a commit SHA (version in the comment); Dependabot proposes updates.
+name: setup
+description: Toolchain and dependencies for scripts/check
+runs:
+  using: composite
+  steps:
+    - uses: astral-sh/setup-uv@1db35dd8eee11c5894872e0b383ae6c406cf738d # v10.4.0
+      with:
+        enable-cache: true
+    - shell: bash
+      run: uv sync --frozen

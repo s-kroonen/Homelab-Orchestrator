@@ -1,0 +1,56 @@
+# Guardrail files: the files that check or constrain changes. Only a human maintainer changes them.
+# One extended regular expression per line, matched against repo-relative paths.
+# Read by .claude/hooks/protect-paths.sh (blocks agent edits) and by the CI guardrails check
+# (reads this list from the target branch, so a change can't switch it off).
+
+# Agent configuration and rules
+^\.claude/
+^AGENTS\.md$
+^CLAUDE\.md$
+
+# Spec Kit setup (templates, presets, extensions, scripts, the synced constitution copy).
+# CONSTITUTION.md itself is not listed: /speckit-constitution edits it; the owner reviews and commits it.
+# specs/ and .specify/assessments/ are normal work and stay editable.
+^\.specify/(templates|presets|extensions|scripts|memory|workflows|integrations)/
+^\.specify/(extensions|presets|init-options|integration)\.(json|yml|yaml)$
+
+# MCP servers: a person adds them (and lists them in .claude/settings.json), an agent never does
+^\.mcp\.json$
+
+# CI
+^\.github/
+^\.gitlab-ci\.yml$
+^\.gitlab/
+
+# The checks, their configuration and their exceptions
+^scripts/
+^check\.config$
+^project\.config$
+^lefthook\.yml$
+^\.gitleaks\.toml$
+^\.gitleaksignore$
+^\.trivyignore\.yaml$
+^osv-scanner\.toml$
+^\.semgrepignore$
+^\.markdownlint-cli2\.jsonc$
+^\.vale\.ini$
+^\.vale/
+^\.opengrep/
+^tests/security-canary/
+^tests/quality-canary/
+^tests/hooks/
+^docs/security-exceptions\.md$
+^renovate\.json$
+^\.copier-answers\.yml$
+^CODEOWNERS$
+^\.guardrails$
+
+# project: below this line (the standard never edits what follows)
+# Project-specific: linter / analyzer / test configuration (uncomment what applies)
+# ^analysis_options\.yaml$
+# ^(.*/)?eslint\.config\.(m?js|ts)$
+# ^(.*/)?tsconfig.*\.json$
+# ^pyproject\.toml$
+# ^(.*/)?(jest|vitest)\.config\.(m?js|ts)$
+^tools/mypy-baseline\.txt$
+^tools/mypy_baseline\.py$

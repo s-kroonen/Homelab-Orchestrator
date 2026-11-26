@@ -1,0 +1,42 @@
+# Fails a pull request that changes a guardrail file (.guardrails), unless a maintainer approved it
+# with the label "guardrail-change". The list is read from the TARGET branch (git show), so the PR
+# can't switch the check off. Plain pull_request trigger: no secrets, read-only token, the PR's
+# code is never executed (only git and grep run).
+name: guardrails
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+
+permissions:
+  contents: read
+
+jobs:
+  guardrails:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+          APPROVED: ${{ contains(github.event.pull_request.labels.*.name, 'guardrail-change') }}
+        run: |
+          # No list on the base branch (a new or adopting repository): no guardrails yet.
+          if ! git cat-file -e "$BASE:.guardrails" 2>/dev/null; then
+            git show "$HEAD:.guardrails" 2>/dev/null | grep -vE '^[[:space:]]*(#|$)' > "$RUNNER_TEMP/patterns" || true
+            adds="$(git diff --name-only "$BASE...$HEAD" | grep -Ef "$RUNNER_TEMP/patterns" || true)"
+            echo "::notice::The base branch has no .guardrails: there are no guardrail files yet, so nothing is checked."
+            echo "Files that become guardrail files with this PR:"; echo "${adds:-none}"
+            exit 0
+          fi
+          git show "$BASE:.guardrails" | grep -vE '^[[:space:]]*(#|$)' > "$RUNNER_TEMP/patterns" || true
+          hits="$(git diff --name-only "$BASE...$HEAD" | grep -Ef "$RUNNER_TEMP/patterns" || true)"
+          if [ -z "$hits" ]; then echo "No guardrail files changed."; exit 0; fi
+          echo "Guardrail files changed:"; echo "$hits"
+          if [ "$APPROVED" = "true" ]; then echo "Label guardrail-change is set: allowed. Review these with extra care."; exit 0; fi
+          echo "::error::This PR changes guardrail files. A maintainer reviews them and adds the label 'guardrail-change'."
+          exit 1

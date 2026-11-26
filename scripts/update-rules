@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+#
+# Vendors the opengrep rule sets listed in OPENGREP_OPEN_RULESETS (check.config, project.config) from
+# opengrep-rules at the pinned commit into .opengrep/rules/open/. Only rule files are kept; the
+# test fixtures next to them are dropped, or the normal scan would report them.
+#
+# Licence: opengrep-rules is LGPL 2.1 with the Commons Clause (inherited from semgrep-rules):
+# free to use in your own CI, not to sell as a product. Custom rules in .opengrep/rules/custom/ are ours.
+# The vendored rules are guardrail files: review the diff of an update like code.
+set -euo pipefail
+cd "$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+source ./check.config
+# shellcheck source=/dev/null
+[[ -f project.config ]] && source ./project.config
+: "${OPENGREP_RULES_COMMIT:?set OPENGREP_RULES_COMMIT in check.config}"
+
+src="$(mktemp -d)"
+trap 'rm -rf "$src"' EXIT
+git -c advice.detachedHead=false clone -q --filter=blob:none --no-checkout https://github.com/opengrep/opengrep-rules "$src"
+git -C "$src" checkout -q "$OPENGREP_RULES_COMMIT"
+
+rm -rf .opengrep/rules/open
+for set in $OPENGREP_OPEN_RULESETS; do
+    [[ -d "$src/$set" ]] || { echo "No rule set '$set' in opengrep-rules" >&2; exit 1; }
+    while IFS= read -r -d '' f; do
+        mkdir -p ".opengrep/rules/open/$(dirname "${f#"$src"/}")"
+        cp "$f" ".opengrep/rules/open/${f#"$src"/}"
+    done < <(find "$src/$set" -type f \( -name '*.yaml' -o -name '*.yml' \) \
+                 ! -name '*.test.yaml' ! -name '*.test.yml' ! -name '*.fixed.*' -print0)
+done
+cp "$src/LICENSE" .opengrep/rules/open/LICENSE
+printf 'opengrep-rules %s\nrule sets: %s\n' "$OPENGREP_RULES_COMMIT" "$OPENGREP_OPEN_RULESETS" > .opengrep/rules/open/SOURCE
+echo "Vendored $(find .opengrep/rules/open -name '*.y*ml' | wc -l) rules into .opengrep/rules/open/."

@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+#
+# Prepares a clone for development and for AI agents: git hooks, security tools, rule sets and the
+# project's dependencies. Safe to run again. Cloud agent sessions run it from the SessionStart hook.
+set -euo pipefail
+cd "$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+source ./check.config
+# shellcheck source=/dev/null
+[[ -f project.config ]] && source ./project.config
+
+if [[ "$(uname -s)-$(uname -m)" == "Linux-x86_64" ]]; then scripts/install-tools; fi
+export PATH="$PWD/.tools/bin:$PATH"
+if command -v lefthook >/dev/null 2>&1; then lefthook install
+else echo "WARNING: lefthook not found, git hooks NOT installed (macOS: brew install lefthook; Windows: winget install evilmartians.lefthook)." >&2; fi
+[[ -d .opengrep/rules/open ]] || scripts/update-rules
+if [[ -n "${INSTALL_CMD:-}" && "$INSTALL_CMD" != "none" ]]; then bash -c "$INSTALL_CMD"; fi
+echo "Setup done. Try: scripts/check fast"

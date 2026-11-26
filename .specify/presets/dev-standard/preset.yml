@@ -1,0 +1,58 @@
+schema_version: "1.0"
+
+preset:
+  id: "dev-standard"
+  name: "Dev Standard"
+  version: "0.2.0"
+  description: >-
+    dev-standard on top of Spec Kit: the constitution lives in CONSTITUTION.md (works without Spec
+    Kit too), specs get a Proof table and a Security & Data section, plans get a Guardrails &
+    Security gate and a Departures-during-build record.
+  author: "dev-standard"
+  license: "MIT"
+
+requires:
+  speckit_version: ">=1.4.4"
+
+provides:
+  templates:
+    - type: "template"
+      name: "constitution-template"
+      file: "templates/constitution-template.md"
+      description: "Constitution with the six dev-standard principles and project placeholders"
+      replaces: "constitution-template"
+    - type: "template"
+      name: "spec-template"
+      file: "templates/spec-template.md"
+      description: "Spec Kit spec template plus issue key, Proof table and Security & Data"
+      replaces: "spec-template"
+    - type: "template"
+      name: "plan-template"
+      file: "templates/plan-template.md"
+      description: "Spec Kit plan template plus Guardrails & Security gate and Departures during build"
+      replaces: "plan-template"
+    - type: "command"
+      name: "speckit.constitution"
+      file: "commands/speckit.constitution.md"
+      description: "Constitution command that edits CONSTITUTION.md and syncs the Spec Kit copy"
+      replaces: "speckit.constitution"
+    - type: "command"
+      name: "speckit.bug.assess"
+      file: "commands/speckit.bug.assess.md"
+      strategy: "append"
+      description: "Adds the Escalation check section to the bug assessment"
+    - type: "command"
+      name: "speckit.assess.intake"
+      file: "commands/speckit.assess.intake.md"
+      strategy: "append"
+      description: "Adds documentation and package registry hosts to the URL trust policy"
+    - type: "command"
+      name: "speckit.assess.research"
+      file: "commands/speckit.assess.research.md"
+      strategy: "append"
+      description: "Adds documentation and package registry hosts to the URL trust policy"
+
+tags:
+  - "dev-standard"
+  - "governance"
+  - "security"

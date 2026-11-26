@@ -1,0 +1,8 @@
+extends: existence
+message: "No emojis."
+link: docs/process/writing.md
+level: error
+scope: [text, comment]
+nonword: true
+tokens:
+  - '[\x{1F000}-\x{1FAFF}\x{2600}-\x{26FF}\x{2705}\x{274C}\x{2728}\x{2757}]'

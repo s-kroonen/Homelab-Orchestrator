@@ -1,0 +1,126 @@
+#!/usr/bin/env bash
+#
+# Does this package really exist, and is it alive? Asks the registry itself (AI tools invent
+# package names, and look-alike names carry malware). Cite the output in a research note or a plan.
+#
+#   scripts/verify-package <ecosystem> <name> [version]
+#   ecosystems: pypi, npm, crates, nuget, pub
+#
+# Prints: exists, latest version, licence, date of the latest release, maintainers (where the
+# registry tells), and whether the requested version exists.
+# Exit: 0 found (and the version, if given), 1 not found, 2 usage, 3 registry unreachable.
+# Needs curl and jq. It only reads public registry APIs; nothing is installed or run.
+set -uo pipefail
+
+eco="${1:-}" name="${2:-}" want="${3:-}"
+[[ -n "$eco" && -n "$name" ]] || { sed -n '3,12p' "$0"; exit 2; }
+command -v curl >/dev/null && command -v jq >/dev/null || { echo "verify-package needs curl and jq." >&2; exit 2; }
+[[ "$name" =~ ^[A-Za-z0-9@][A-Za-z0-9._/@-]*$ ]] || { echo "Not a package name: $name" >&2; exit 2; }
+[[ -z "$want" || "$want" =~ ^[A-Za-z0-9][A-Za-z0-9.+_-]*$ ]] || { echo "Not a version: $want" >&2; exit 2; }
+
+UA="dev-standard-verify-package"
+tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
+
+# get <url> <outfile>: 0 ok, 1 not found (404), 3 unreachable or server error.
+get() {
+    local code
+    code="$(curl -sS -m 25 -L -A "$UA" --compressed -H 'Accept: application/json' -o "$2" -w '%{http_code}' "$1" 2>/dev/null)" || return 3
+    case "$code" in 2*) return 0 ;; 404|410) return 1 ;; *) return 3 ;; esac
+}
+get_or_exit() {
+    get "$1" "$2"; local rc=$?
+    case $rc in
+        1) echo "exists:    NO  ($eco has no package '$name')"; echo "A name an AI suggested that the registry does not know is invented: it is not an option."; exit 1 ;;
+        3) echo "The $eco registry could not be reached ($1). Try again; do not treat this as 'exists'." >&2; exit 3 ;;
+    esac
+}
+lower() { tr 'A-Z' 'a-z' <<<"$1"; }
+date_only() { cut -c1-10 <<<"${1:-}"; }
+
+version_line() {   # <exists yes|no> <released>
+    [[ -z "$want" ]] && return
+    if [[ "$1" == yes ]]; then echo "version $want: yes (released $(date_only "$2"))"
+    else echo "version $want: NO (not published on $eco)"; version_missing=1; fi
+}
+
+version_missing=0
+latest="" licence="" released="" maintainers="n/a" url="" vexists=no vreleased=""
+
+case "$eco" in
+pypi)
+    get_or_exit "https://pypi.org/pypi/$name/json" "$tmp/p.json"
+    latest="$(jq -r '.info.version' "$tmp/p.json")"
+    licence="$(jq -r '.info.license_expression // empty' "$tmp/p.json")"
+    [[ -z "$licence" ]] && licence="$(jq -r '[.info.classifiers[]? | select(startswith("License ::")) | split(" :: ")[-1]] | join(", ")' "$tmp/p.json")"
+    [[ -z "$licence" ]] && licence="$(jq -r '.info.license // empty' "$tmp/p.json" | head -n1 | cut -c1-60)"
+    released="$(jq -r '[.urls[]?.upload_time_iso_8601] | sort | first // empty' "$tmp/p.json")"
+    maintainers="n/a (PyPI does not publish them; owner: $(jq -r '.info.author // .info.maintainer // "unknown"' "$tmp/p.json" | cut -c1-40))"
+    url="https://pypi.org/project/$name/"
+    if [[ -n "$want" ]]; then
+        if get "https://pypi.org/pypi/$name/$want/json" "$tmp/v.json"; then vexists=yes; vreleased="$(jq -r '[.urls[]?.upload_time_iso_8601] | sort | first // empty' "$tmp/v.json")"; fi
+    fi ;;
+npm)
+    enc="${name//\//%2F}"
+    get_or_exit "https://registry.npmjs.org/$enc" "$tmp/p.json"
+    latest="$(jq -r '.["dist-tags"].latest // empty' "$tmp/p.json")"
+    licence="$(jq -r --arg v "$latest" '.versions[$v].license | if type == "object" then .type else . end // empty' "$tmp/p.json")"
+    released="$(jq -r --arg v "$latest" '.time[$v] // empty' "$tmp/p.json")"
+    maintainers="$(jq -r '.maintainers | length' "$tmp/p.json")"
+    url="https://www.npmjs.com/package/$name"
+    if [[ -n "$want" ]] && jq -e --arg v "$want" '.versions[$v]' "$tmp/p.json" >/dev/null 2>&1; then vexists=yes; vreleased="$(jq -r --arg v "$want" '.time[$v] // empty' "$tmp/p.json")"; fi ;;
+crates)
+    get_or_exit "https://crates.io/api/v1/crates/$name" "$tmp/p.json"
+    latest="$(jq -r '.crate.max_stable_version // .crate.max_version' "$tmp/p.json")"
+    licence="$(jq -r --arg v "$latest" '.versions[] | select(.num == $v) | .license // empty' "$tmp/p.json")"
+    released="$(jq -r --arg v "$latest" '.versions[] | select(.num == $v) | .created_at' "$tmp/p.json")"
+    if get "https://crates.io/api/v1/crates/$name/owners" "$tmp/o.json"; then maintainers="$(jq -r '.users | length' "$tmp/o.json") owners"; fi
+    url="https://crates.io/crates/$name"
+    if [[ -n "$want" ]] && jq -e --arg v "$want" '.versions[] | select(.num == $v)' "$tmp/p.json" >/dev/null 2>&1; then
+        vexists=yes; vreleased="$(jq -r --arg v "$want" '.versions[] | select(.num == $v) | .created_at' "$tmp/p.json")"; fi ;;
+nuget)
+    id="$(lower "$name")"
+    get_or_exit "https://api.nuget.org/v3-flatcontainer/$id/index.json" "$tmp/i.json"
+    latest="$(jq -r '[.versions[] | select(contains("-") | not)] | last // (.versions | last)' "$tmp/i.json")"
+    if get "https://api.nuget.org/v3/registration5-gz-semver2/$id/index.json" "$tmp/r.json"; then
+        # Small packages inline their versions; larger ones list pages that must be fetched.
+        jq -c '.items[]' "$tmp/r.json" > "$tmp/pages.jsonl"
+        : > "$tmp/entries.jsonl"
+        while IFS= read -r page; do
+            if jq -e '.items' <<<"$page" >/dev/null 2>&1; then jq -c '.items[].catalogEntry' <<<"$page" >> "$tmp/entries.jsonl"
+            else
+                pu="$(jq -r '.["@id"]' <<<"$page")"
+                get "$pu" "$tmp/pg.json" && jq -c '.items[].catalogEntry' "$tmp/pg.json" >> "$tmp/entries.jsonl"
+            fi
+        done < "$tmp/pages.jsonl"
+        entry() { jq -c --arg v "$1" 'select((.version | ascii_downcase) == ($v | ascii_downcase))' "$tmp/entries.jsonl" | head -n1; }
+        e="$(entry "$latest")"
+        licence="$(jq -r '.licenseExpression // (.licenseUrl // empty)' <<<"$e" 2>/dev/null)"
+        released="$(jq -r '.published // empty' <<<"$e" 2>/dev/null)"
+        maintainers="n/a (authors: $(jq -r '.authors // "unknown"' <<<"$e" 2>/dev/null | cut -c1-40))"
+        if [[ -n "$want" ]]; then ev="$(entry "$want")"; [[ -n "$ev" ]] && { vexists=yes; vreleased="$(jq -r '.published // empty' <<<"$ev")"; }; fi
+    elif [[ -n "$want" ]] && jq -e --arg v "$(lower "$want")" '.versions | map(ascii_downcase) | index($v)' "$tmp/i.json" >/dev/null 2>&1; then vexists=yes; fi
+    url="https://www.nuget.org/packages/$name" ;;
+pub)
+    get_or_exit "https://pub.dev/api/packages/$name" "$tmp/p.json"
+    latest="$(jq -r '.latest.version' "$tmp/p.json")"
+    released="$(jq -r '.latest.published // empty' "$tmp/p.json")"
+    if get "https://pub.dev/api/packages/$name/score" "$tmp/s.json"; then licence="$(jq -r '[.tags[]? | select(startswith("license:")) | sub("license:"; "")] | join(", ")' "$tmp/s.json")"; fi
+    if get "https://pub.dev/api/packages/$name/publisher" "$tmp/pub.json"; then maintainers="publisher $(jq -r '.publisherId // "none (individual uploader)"' "$tmp/pub.json")"; fi
+    url="https://pub.dev/packages/$name"
+    if [[ -n "$want" ]] && jq -e --arg v "$want" '.versions[] | select(.version == $v)' "$tmp/p.json" >/dev/null 2>&1; then
+        vexists=yes; vreleased="$(jq -r --arg v "$want" '.versions[] | select(.version == $v) | .published' "$tmp/p.json")"; fi ;;
+*) echo "Unknown ecosystem '$eco' (pypi, npm, crates, nuget, pub)." >&2; exit 2 ;;
+esac
+
+printf 'ecosystem:   %s\n' "$eco"
+printf 'package:     %s\n' "$name"
+printf 'exists:      yes\n'
+printf 'latest:      %s\n' "${latest:-unknown}"
+printf 'licence:     %s\n' "${licence:-not stated by the registry (check the repository)}"
+printf 'released:    %s (latest)\n' "$(date_only "${released:-}")"
+printf 'maintainers: %s\n' "$maintainers"
+printf 'registry:    %s\n' "$url"
+printf 'checked:     %s\n' "$(date +%F)"
+version_line "$vexists" "$vreleased"
+[[ $version_missing -eq 0 ]] || exit 1
+exit 0

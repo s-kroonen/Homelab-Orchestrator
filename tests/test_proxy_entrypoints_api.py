@@ -493,8 +493,9 @@ def test_create_reports_the_exact_traefik_text_for_a_stale_entry_point(
     r = client.post("/api/proxy-hosts", json=_body(service, entry_points=["https"]))
     assert r.status_code == 201, r.text
     (fail,) = failures(push(client))
-    assert 'entryPoint "https" doesn\'t exist · no valid entryPoint for this router' in (
-        fail["message"]
+    assert (
+        'entryPoint "https" doesn\'t exist · no valid entryPoint for this router'
+        in (fail["message"])
     )
     assert fake.routes == {}
 

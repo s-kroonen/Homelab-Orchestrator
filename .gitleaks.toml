@@ -1,0 +1,54 @@
+# gitleaks configuration: the default rules plus narrow, reviewed exceptions.
+# An exception names the rule(s) AND the path, so anything else in that file is still flagged.
+# Every exception needs a comment saying why it is not a secret. (gitleaks ≥ 8.25 syntax)
+
+[extend]
+useDefault = true
+
+# Example: Firebase client config is public (it ships in every build; access is controlled by
+# Firebase rules), so only Firebase-format API keys in these files are allowed.
+# [[allowlists]]
+# description = "Firebase client API keys"
+# targetRules = ["gcp-api-key", "generic-api-key"]
+# condition = "AND"
+# paths = ['''^lib/firebase_options\.dart$''', '''^android/app/google-services\.json$''']
+
+# --- Own rules: what the default rules miss (tested by scripts/check canary, which builds the examples at run time) ---
+
+[[rules]]
+id = "url-credentials"
+description = "Credentials inside a URL (scheme://user:password@host)"
+regex = '''[a-zA-Z][a-zA-Z0-9+.-]{1,20}://[^\s:@/'"<>{}$]{1,64}:([^\s:@/'"<>{}$]{6,128})@[A-Za-z0-9.-]+'''
+secretGroup = 1
+entropy = 3.0
+keywords = ["://"]
+
+[[rules.allowlists]]
+description = "Obvious placeholders"
+stopwords = ["password", "passwd", "changeme", "example", "placeholder", "secret", "xxxx", "your", "dummy", "redacted"]
+
+[[rules]]
+id = "discord-webhook-url"
+description = "Discord webhook URL (it carries the token)"
+regex = '''https://(?:ptb\.|canary\.)?discord(?:app)?\.com/api/(?:v[0-9]+/)?webhooks/[0-9]{15,25}/[A-Za-z0-9_-]{40,}'''
+keywords = ["webhooks"]
+
+[[rules]]
+id = "typed-secret-constant"
+description = "Secret in a typed constant (const API_KEY: &str = \"...\", const token: string = \"...\")"
+regex = '''(?i)\b(?:const|static|final|let|var|val)\s+[a-z0-9_]*(?:api[_-]?key|secret|token|passw(?:or)?d|private[_-]?key|credential)[a-z0-9_]*\s*:\s*[&\w<>\[\]'\s]{2,30}=\s*["']([^"'\s]{12,})["']'''
+secretGroup = 1
+entropy = 3.0
+keywords = ["const", "static", "final", "let", "var", "val"]
+
+[[rules.allowlists]]
+description = "Obvious placeholders"
+stopwords = ["password", "passwd", "changeme", "example", "placeholder", "secret", "xxxx", "your", "dummy", "redacted"]
+
+[[allowlists]]
+description = "Example env files hold placeholders only"
+paths = ['''(^|/)\.env(\.[a-z]+)?\.example$''']
+
+[[allowlists]]
+description = "Vendored opengrep rules describe secret formats by design (docs/security-exceptions.md, E-000)"
+paths = ['''^\.opengrep/rules/open/''']

@@ -1,0 +1,61 @@
+#!/usr/bin/env bash
+#
+# Works out the next release version from the Conventional Commits since the last tag vX.Y.Z,
+# so nobody has to decide it by hand:
+#   any "!" after the type or a "BREAKING CHANGE" footer  -> major (minor while the version is 0.x)
+#   any feat                                                -> minor
+#   otherwise any fix or perf                               -> patch
+#   nothing releasable (only docs, chore, ci, test, ...)    -> no release (exit 3)
+#
+#   scripts/next-version            prints e.g. 0.4.0
+#   scripts/next-version --notes    prints the changelog section for that version (Markdown)
+set -euo pipefail
+cd "$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+
+last="$(git describe --tags --abbrev=0 --match 'v[0-9]*.[0-9]*.[0-9]*' 2>/dev/null || true)"
+# A newer release tag that this branch doesn't contain means main wasn't merged back: stop, or the
+# same version would be computed again (tested: 0.2.0 twice instead of 0.2.1).
+newest="$(git tag -l 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname | head -n 1)"
+if [[ -n "$newest" && "$newest" != "$last" ]]; then
+    echo "Tag $newest exists but this branch doesn't contain it: merge main into dev first (release back-merge PR)." >&2
+    exit 4
+fi
+range="${last:+$last..}HEAD"
+current="${last#v}"; current="${current:-0.0.0}"
+IFS=. read -r major minor patch <<<"$current"
+
+subjects="$(git log --format='%s' "$range")"
+bodies="$(git log --format='%b' "$range")"
+re_type='^([a-z]+)(\([^)]*\))?(!)?: '
+
+bump=""
+while IFS= read -r s; do
+    [[ "$s" =~ $re_type ]] || continue
+    t="${BASH_REMATCH[1]}"; bang="${BASH_REMATCH[3]:-}"
+    if [[ -n "$bang" ]]; then bump=major; break; fi
+    if [[ "$t" == feat ]]; then bump=minor
+    elif [[ "$t" =~ ^(fix|perf)$ && -z "$bump" ]]; then bump="patch"; fi
+done <<<"$subjects"
+grep -qE '^BREAKING[ -]CHANGE:' <<<"$bodies" && bump=major
+
+case "$bump" in
+    major) if [[ "$major" -eq 0 ]]; then next="0.$((minor + 1)).0"; else next="$((major + 1)).0.0"; fi ;;
+    minor) next="$major.$((minor + 1)).0" ;;
+    patch) next="$major.$minor.$((patch + 1))" ;;
+    *) echo "No releasable commits since ${last:-the start} (only docs/chore/ci/test/...)." >&2; exit 3 ;;
+esac
+
+if [[ "${1:-}" != "--notes" ]]; then echo "$next"; exit 0; fi
+
+section() { # title, type regex
+    local lines
+    lines="$(grep -E "^($2)(\([^)]*\))?!?: " <<<"$subjects" | sed -E 's/^[a-z]+(\(([^)]*)\))?!?: (.*)$/- \3 (\2)/; s/ \(\)$//' || true)"
+    [[ -n "$lines" ]] && printf '\n### %s\n\n%s\n' "$1" "$lines"
+    return 0
+}
+echo "## [$next] - $(date +%F)"
+grep -qE '!: |^BREAKING' <<<"$subjects"$'\n'"$bodies" && printf '\n### Breaking changes\n\n%s\n' "$(grep -E '^[a-z]+(\([^)]*\))?!: ' <<<"$subjects" | sed -E 's/^[a-z]+(\(([^)]*)\))?!: (.*)$/- \3 (\2)/')"
+section "Added" "feat"
+section "Fixed" "fix"
+section "Performance" "perf"
+exit 0

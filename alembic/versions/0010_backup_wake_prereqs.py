@@ -39,9 +39,7 @@ def upgrade() -> None:
             sa.Column("requires", sa.JSON(), nullable=False, server_default="[]"),
         )
         batch.add_column(
-            sa.Column(
-                "wake_before_backup", sa.Boolean(), nullable=False, server_default=sa.true()
-            ),
+            sa.Column("wake_before_backup", sa.Boolean(), nullable=False, server_default=sa.true()),
         )
     with op.batch_alter_table("service") as batch:
         batch.add_column(

@@ -1590,8 +1590,7 @@ async def guest_power_for_service(
     if action == "stop" and _backup_currently_running(session, svc.id):
         raise HTTPException(
             status.HTTP_409_CONFLICT,
-            f"a backup is currently running for {slug!r} — refusing to stop its "
-            "guest mid-backup",
+            f"a backup is currently running for {slug!r} — refusing to stop its guest mid-backup",
         )
 
     try:

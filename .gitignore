@@ -1,3 +1,43 @@
+# Tools and agent state
+.tools/
+.claude/settings.local.json
+docs/handover/*
+!docs/handover/.gitkeep
+
+# Dependencies and build output (every stack)
+node_modules/
+.venv/
+target/
+dist/
+build/
+.dart_tool/
+obj/
+
+# Test and coverage output
+coverage/
+coverage.xml
+lcov.info
+.coverage
+.vitest-cache/
+__pycache__/
+
+# Secrets: never commit
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*service-account*.json
+
+# OS / editors
+.DS_Store
+.idea/
+.vscode/*
+!.vscode/extensions.json
+
+# Python tooling created by uvx is outside the repo; nothing else needed at day 0
+
+# project: below this line (the standard never edits what follows)
 # Python
 __pycache__/
 *.py[cod]

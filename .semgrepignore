@@ -1,0 +1,19 @@
+# Paths opengrep skips in the normal scan (it also honours .gitignore).
+# The canary is scanned separately by `scripts/check canary`.
+tests/security-canary/
+tests/quality-canary/
+# Spike code (throwaway, spike/* branches only)
+spikes/
+# Vendored rules (their own examples would be reported).
+.opengrep/
+# Coverage reports (generated HTML/JS)
+coverage/
+# Dependencies and build output
+node_modules/
+.dart_tool/
+build/
+dist/
+.venv/
+.tools/
+# Public client configuration, reviewed (docs/security-exceptions.md), e.g. Firebase web config:
+# lib/firebase_options.dart

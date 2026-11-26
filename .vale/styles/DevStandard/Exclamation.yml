@@ -1,0 +1,8 @@
+extends: existence
+message: "No exclamation marks."
+link: docs/process/writing.md
+level: error
+scope: [text, comment]
+nonword: true
+tokens:
+  - '\w!(\s|$)'

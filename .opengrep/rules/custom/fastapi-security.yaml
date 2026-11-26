@@ -1,0 +1,33 @@
+rules:
+  - id: fastapi-input-to-dangerous-sink
+    mode: taint
+    languages: [python]
+    severity: ERROR
+    message: A FastAPI route parameter reaches '$SINK' without validation (command, SQL, path, SSRF, eval).
+    metadata: { category: security, cwe: ["CWE-78", "CWE-89", "CWE-22", "CWE-918", "CWE-95"] }
+    pattern-sources:
+      - patterns:
+          - pattern-inside: |
+              @$APP.$METHOD(...)
+              def $F(..., $P, ...):
+                  ...
+          - metavariable-regex: { metavariable: $METHOD, regex: '^(get|post|put|patch|delete|websocket)$' }
+          - pattern: $P
+      - patterns:
+          - pattern-inside: |
+              @$APP.$METHOD(...)
+              async def $F(..., $P, ...):
+                  ...
+          - metavariable-regex: { metavariable: $METHOD, regex: '^(get|post|put|patch|delete|websocket)$' }
+          - pattern: $P
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: open($SINK, ...)
+              - pattern: pathlib.Path($SINK)
+              - pattern: subprocess.$RUN($SINK, ...)
+              - pattern: os.system($SINK)
+              - pattern: requests.$VERB($SINK, ...)
+              - pattern: httpx.$VERB($SINK, ...)
+              - pattern: $CONN.execute($SINK, ...)
+              - pattern: eval($SINK)

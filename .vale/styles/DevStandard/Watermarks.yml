@@ -1,0 +1,13 @@
+extends: existence
+message: "'%s' is an AI watermark. The role of AI is described once, in AGENTS.md and the README; commits, PRs, code and docs carry no trace lines."
+link: docs/process/writing.md
+level: error
+scope: raw
+ignorecase: true
+nonword: true
+tokens:
+  - 'Co-Authored-By:[^\n]*(Claude|Anthropic|Copilot|ChatGPT|OpenAI|Gemini|Codex|Cursor|Aider|Devin)'
+  - 'Claude-Session:'
+  - 'Generated (with|by) \[?(Claude|Copilot|ChatGPT|Codex|Cursor|Gemini)'
+  - '🤖'
+  - 'claude\.ai/(code|chat)/\S*session\S*'

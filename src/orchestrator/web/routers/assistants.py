@@ -94,7 +94,9 @@ def overview_view(settings: Settings) -> dict[str, Any]:
                     else (
                         "read"
                         if t.risk == "read"
-                        else "act" if not callable(t.risk) else "act, dangerous in some cases"
+                        else "act"
+                        if not callable(t.risk)
+                        else "act, dangerous in some cases"
                     )
                 ),
                 "description": t.description,

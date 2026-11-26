@@ -114,8 +114,7 @@ def router_state(
         # Still the previous configuration: the reload has not happened yet.
         return RouteVerification(
             NOT_LOADED,
-            "Traefik is still serving the previous entry points "
-            f"({', '.join(info.entry_points)}).",
+            f"Traefik is still serving the previous entry points ({', '.join(info.entry_points)}).",
             **common,  # type: ignore[arg-type]
         )
     return RouteVerification(OK, "", **common)  # type: ignore[arg-type]

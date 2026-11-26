@@ -58,8 +58,7 @@ from orchestrator.registry.backup_plan import BLOCKER_NO_POWER_TARGET, PlanStep
 log = get_logger(__name__)
 
 NO_POWER_TARGET_MESSAGE = (
-    "cannot be woken: no power target configured "
-    "(set the node's power target or mark it always on)"
+    "cannot be woken: no power target configured (set the node's power target or mark it always on)"
 )
 _UNTOUCHED = "No backup was taken and the last known-good backup is untouched."
 

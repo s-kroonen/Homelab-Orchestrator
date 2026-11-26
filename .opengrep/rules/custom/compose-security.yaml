@@ -1,0 +1,24 @@
+# Compose hardening rules that work on modern compose files (no legacy "version:" key needed).
+# The open opengrep-rules compose rules only match files that still start with "version:".
+rules:
+  - id: compose-privileged-service
+    languages: [yaml]
+    severity: ERROR
+    message: A service runs privileged (root on the host). Remove 'privileged', add only the capabilities it needs.
+    metadata: { category: security, cwe: ["CWE-250"] }
+    paths: { include: ["*compose*.yml", "*compose*.yaml"] }
+    pattern: "privileged: true"
+  - id: compose-host-network
+    languages: [yaml]
+    severity: WARNING
+    message: A service uses the host network, bypassing network isolation. Publish only the ports it needs.
+    metadata: { category: security, cwe: ["CWE-668"] }
+    paths: { include: ["*compose*.yml", "*compose*.yaml"] }
+    pattern: "network_mode: host"
+  - id: compose-docker-socket-mount
+    languages: [yaml]
+    severity: ERROR
+    message: The Docker socket is mounted into a container; that container controls the host. Use a socket proxy with a read-only API if it must.
+    metadata: { category: security, cwe: ["CWE-250"] }
+    paths: { include: ["*compose*.yml", "*compose*.yaml"] }
+    pattern-regex: '/var/run/docker\.sock:'

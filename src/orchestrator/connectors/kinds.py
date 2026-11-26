@@ -595,7 +595,9 @@ class PbsConnector(Connector):
             tone = (
                 "fail"
                 if (worst["pct"] or 0) >= 95
-                else "warn" if (worst["pct"] or 0) >= 85 else None
+                else "warn"
+                if (worst["pct"] or 0) >= 85
+                else None
             )
             ov.tiles.append(
                 {
@@ -1095,7 +1097,9 @@ async def _proxy_routers(ctx: SourceCtx) -> list[dict[str, Any]]:
                 (
                     "docker"
                     if r.provider == "docker"
-                    else "internal" if r.provider == "internal" else "other"
+                    else "internal"
+                    if r.provider == "internal"
+                    else "other"
                 ),
             )
         )

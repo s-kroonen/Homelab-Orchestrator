@@ -1,0 +1,3 @@
+# Claude Code hook cases of this project, run by `scripts/check hooks` after tests/hooks/cases.tsv.
+# A project file: an update never touches it. Same columns as cases.tsv:
+# expected exit (0 allowed, 2 blocked) TAB branch TAB bash|edit TAB command or path

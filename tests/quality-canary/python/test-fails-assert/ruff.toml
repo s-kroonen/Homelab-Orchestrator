@@ -1,0 +1,2 @@
+# Stops ruff from using the project config.
+line-length = 100

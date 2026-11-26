@@ -1,0 +1,5 @@
+# osv-scanner (weekly, non-blocking report). Same exceptions as .trivyignore.yaml, same end dates.
+# [[IgnoredVulns]]
+# id = "GHSA-m9gg-hp2v-232j"
+# ignoreUntil = 2027-02-01
+# reason = "See docs/security-exceptions.md#E-001"

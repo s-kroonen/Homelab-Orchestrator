@@ -318,8 +318,7 @@ def _dynamic_responder(router_hostname: str, counter: list[int]) -> Any:
             return httpx.Response(
                 200,
                 text=(
-                    f'traefik_router_requests_total{{code="200",router="r1@docker"}} '
-                    f"{counter[0]}\n"
+                    f'traefik_router_requests_total{{code="200",router="r1@docker"}} {counter[0]}\n'
                 ),
                 headers={"content-type": "text/plain"},
             )

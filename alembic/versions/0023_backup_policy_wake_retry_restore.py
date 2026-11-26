@@ -36,9 +36,7 @@ def upgrade() -> None:
             sa.Column("max_attempts", sa.Integer(), nullable=False, server_default="3")
         )
         batch.add_column(
-            sa.Column(
-                "restore_power_state", sa.Boolean(), nullable=False, server_default=sa.true()
-            )
+            sa.Column("restore_power_state", sa.Boolean(), nullable=False, server_default=sa.true())
         )
 
 

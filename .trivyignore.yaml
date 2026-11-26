@@ -1,0 +1,15 @@
+# Reviewed vulnerability and misconfiguration exceptions for trivy (deps gate, config, image).
+# Every entry: a statement saying why it doesn't affect us, a link to docs/security-exceptions.md,
+# and expired_at. After that date the check fails again, so the exception is re-reviewed.
+vulnerabilities: []
+#  - id: CVE-2026-101916
+#    statement: "grpc-js via firebase/firestore; not imported, not in the bundle. docs/security-exceptions.md#E-001"
+#    expired_at: 2027-02-01
+misconfigurations: []
+# Licences (scripts/check licenses; production dependencies; severity set by LICENSE_SEVERITY in check.config):
+# an exception names the licence and the lockfile, says why it is fine, and ends.
+licenses: []
+#  - id: GPL-3.0-only
+#    paths: [package-lock.json]
+#    statement: "a separate command-line tool we call, not linked into the product. docs/security-exceptions.md#E-002"
+#    expired_at: 2027-02-01

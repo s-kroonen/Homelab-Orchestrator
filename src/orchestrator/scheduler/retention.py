@@ -122,7 +122,8 @@ def _verified_snapshot_ids(session: Session, slug: str) -> set[str]:
     """
     rows = session.exec(
         select(BackupRecord.pbs_snapshot_id).where(
-            BackupRecord.service_slug == slug, BackupRecord.verified == True  # noqa: E712
+            BackupRecord.service_slug == slug,
+            BackupRecord.verified == True,  # noqa: E712
         )
     ).all()
     return set(rows)
