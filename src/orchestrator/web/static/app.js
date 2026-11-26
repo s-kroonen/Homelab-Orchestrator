@@ -25,6 +25,15 @@
  *   {"detail": {"message", "errors"}} body) for inline form errors. This means a caller that does nothing special with the
  *   rejection (no try/catch, or a catch that only updates its own inline
  *   .msg element) still always shows the user *something* on failure.
+ *
+ * Write feedback (OR-97). Every write (method other than GET/HEAD) is counted while in flight:
+ *   window.OrchBusy.writes()   number of writes in flight right now
+ *   window.OrchBusy.on(fn)     fn(writes) on every change; returns an unsubscribe function
+ * While the count is above 0 <html> carries the class `api-busy` (the CSS shows the spinner on
+ * ui.js's `[aria-busy]` buttons only then). A thin bar at the very top (#busy-bar, created lazily)
+ * appears once a write has been in flight for 150 ms, and a write that runs over 2 s shows one
+ * "Working…" toast (kind "pending") until the last slow write settles. `opts.quiet: true` opts a
+ * background write out of the count, the bar and the toast.
  */
 (function () {
   "use strict";
@@ -115,8 +124,81 @@
     return err;
   }
 
+  // --- write feedback ------------------------------------------------------------------------
+  const BAR_DELAY_MS = 150;
+  const SLOW_MS = 2000;
+  let writes = 0;
+  let slow = 0;
+  let barTimer = null;
+  let dismissSlow = null;
+  const listeners = new Set();
+
+  function ensureBar() {
+    let bar = document.getElementById("busy-bar");
+    if (!bar) {
+      bar = document.createElement("div");
+      bar.id = "busy-bar";
+      bar.setAttribute("aria-hidden", "true");
+      bar.hidden = true;
+      document.body.appendChild(bar);
+    }
+    return bar;
+  }
+
+  function changed() {
+    document.documentElement.classList.toggle("api-busy", writes > 0);
+    if (writes > 0 && !barTimer) {
+      barTimer = setTimeout(() => { if (writes > 0) ensureBar().hidden = false; }, BAR_DELAY_MS);
+    } else if (writes === 0) {
+      clearTimeout(barTimer);
+      barTimer = null;
+      const bar = document.getElementById("busy-bar");
+      if (bar) bar.hidden = true;
+    }
+    for (const fn of Array.from(listeners)) {
+      try { fn(writes); } catch (_e) { /* a listener must not break a request */ }
+    }
+  }
+
+  // Starts counting one write; the returned function ends it (call it exactly once, in a finally).
+  function beginWrite() {
+    writes += 1;
+    let isSlow = false;
+    const timer = setTimeout(() => {
+      isSlow = true;
+      slow += 1;
+      if (!dismissSlow) dismissSlow = toast("Working…", "pending", { timeoutMs: 0 });
+    }, SLOW_MS);
+    changed();
+    return () => {
+      clearTimeout(timer);
+      writes -= 1;
+      if (isSlow) {
+        slow -= 1;
+        if (slow === 0 && dismissSlow) { dismissSlow(); dismissSlow = null; }
+      }
+      changed();
+    };
+  }
+
+  window.OrchBusy = {
+    writes: () => writes,
+    on(fn) { listeners.add(fn); return () => listeners.delete(fn); },
+  };
+
   async function apiFetch(method, url, body, opts) {
     const options = opts || {};
+    const verb = String(method || "GET").toUpperCase();
+    const counted = verb !== "GET" && verb !== "HEAD" && !options.quiet;
+    const endWrite = counted ? beginWrite() : null;
+    try {
+      return await request(method, url, body, options);
+    } finally {
+      if (endWrite) endWrite();
+    }
+  }
+
+  async function request(method, url, body, options) {
     let resp;
     try {
       resp = await fetch(url, {

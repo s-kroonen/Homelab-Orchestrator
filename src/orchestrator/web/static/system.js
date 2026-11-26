@@ -95,7 +95,7 @@
     try { const r = await api.post("/api/system/migrate", undefined, { suppressToast: true }); toast(r.message + (r.backup ? " Backup: " + r.backup : ""), "ok"); } catch (e) { toast(e.message, "error"); }
     reloadInfo();
   }
-  async function cancelRestore() { try { await api.del("/api/system/restore"); } catch (_e) { /* toast */ } reloadInfo(); }
+  async function cancelRestore() { try { await api.del("/api/system/restore"); toast("Restore cancelled", "ok"); } catch (_e) { /* toast */ } reloadInfo(); }
 
   // --- time zone ----------------------------------------------------------------------------------
   const tz = $("#tz-input");

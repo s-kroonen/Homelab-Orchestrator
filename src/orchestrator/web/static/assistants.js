@@ -90,7 +90,7 @@
   }
   async function revoke(g) {
     if (!await confirm({ title: "Revoke " + g.label + "?", body: "It stops working at once. The assistant has to sign in again (or get a new token) to come back.", typeName: g.label, action: "Revoke" })) return;
-    try { await api.post("/api/assistants/grants/" + g.id + "/revoke", {}); } catch (_e) { return; }
+    try { await api.post("/api/assistants/grants/" + g.id + "/revoke", {}); toast("Revoked " + g.label, "ok"); } catch (_e) { return; }
     grants.refresh();
   }
   const gt = table($("#grants"), {

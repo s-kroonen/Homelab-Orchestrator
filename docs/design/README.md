@@ -118,6 +118,8 @@ Something that is off on purpose (a node asleep, its services) is **off**, never
 * **Feedback:** results of an action → toast; a wrong field → message under the field; a state
   that persists (pending push, database upgrade, dry run) → banner or header pill. No per-section
   message lines.
+  A clicked button shows a spinner while its request runs, a thin bar at the top shows any write
+  in flight, and a write that takes over 2 s shows a "Working…" toast until it finishes.
 * **Tables:** sortable headers (▲▼), wide tables scroll inside their card, never the page.
 * **Empty and off states:** say what to do next ("No services on this node yet. Import its
   guests").

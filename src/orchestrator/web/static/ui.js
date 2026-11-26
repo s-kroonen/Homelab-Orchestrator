@@ -1,12 +1,16 @@
 /* The shared building blocks of every page (docs/design/README.md). Loaded once by base.html,
  * after app.js (toast, apiFetch, OrchTime) and live.js (OrchLive).
  *
- *   UI.$ / UI.$$ / UI.el                 DOM helpers, so pages stop defining their own
+ *   UI.$ / UI.$$ / UI.el                 DOM helpers, so pages stop defining their own. An `onclick`
+ *                                        that returns a promise marks the node aria-busy (a spinner
+ *                                        while a request runs, see app.css) and ignores clicks on it
+ *                                        until the promise settles
  *   UI.api.get/post/put/del(url, body)   apiFetch with the error toast
  *   UI.fmt.time/ago/bytes                one way to show a time or a size
  *   UI.drawer({...})                     every create and edit: fields, inline errors, Test, Save
  *   UI.confirm({...})                    every destructive action: what else is affected, type the name
- *   UI.menu(button, items)               the ⋯ row and header menus
+ *   UI.menu(button, items)               the ⋯ row and header menus; an item whose onClick returns a
+ *                                        promise marks the ⋯ button busy until it settles
  *   UI.tabs(root)                        tabs that live in the URL (?tab=)
  *   UI.region(el, {...})                 a section that loads itself, refreshes on live events and
  *                                        says how old it is; never a page reload
@@ -20,6 +24,25 @@
   const $ = (sel, root) => (root || document).querySelector(sel);
   const $$ = (sel, root) => Array.from((root || document).querySelectorAll(sel));
 
+  // A click handler that returns a promise keeps its node aria-busy until the promise settles, and
+  // further clicks are swallowed meanwhile. Not `disabled`: that would drop the keyboard focus.
+  // The spinner itself is CSS (html.api-busy [aria-busy]), so a handler that only waits on a confirm
+  // dialog shows none.
+  function markBusy(node, work) {
+    if (!work || typeof work.then !== "function") return work;
+    node.setAttribute("aria-busy", "true");
+    node.dataset.busy = "";
+    const clear = () => { node.removeAttribute("aria-busy"); delete node.dataset.busy; };
+    work.then(clear, clear);
+    return work;
+  }
+  function busyClick(node, fn) {
+    return function (ev) {
+      if (node.hasAttribute("aria-busy")) { ev.preventDefault(); ev.stopImmediatePropagation(); return undefined; }
+      return markBusy(node, fn.call(this, ev));
+    };
+  }
+
   // el("a", {href: "/x", class: "btn", onclick: fn, dataset: {id: 1}}, "text", node, [more])
   function el(tag, attrs, ...children) {
     const node = document.createElement(tag);
@@ -29,6 +52,7 @@
       else if (k === "text") node.textContent = v;
       else if (k === "dataset") Object.assign(node.dataset, v);
       else if (k === "style" && typeof v === "object") Object.assign(node.style, v);
+      else if (k === "onclick" && typeof v === "function") node.addEventListener("click", busyClick(node, v));
       else if (k.startsWith("on") && typeof v === "function") node.addEventListener(k.slice(2), v);
       else if (v === true) node.setAttribute(k, "");
       else node.setAttribute(k, String(v));
@@ -132,7 +156,10 @@
       const node = it.href
         ? el("a", { href: it.href, role: "menuitem", class: cls }, it.label)
         : el("button", { type: "button", role: "menuitem", class: cls, disabled: !!it.disabled, title: it.title }, it.label);
-      node.addEventListener("click", () => { closeMenu(); if (it.onClick) it.onClick(); });
+      node.addEventListener("click", () => {
+        closeMenu();
+        if (it.onClick) markBusy(anchor, it.onClick());
+      });
       box.append(node);
     }
     document.body.append(box);
