@@ -106,7 +106,8 @@ For each plan entry, in order:
 Holds last until the **whole backup** ends and are released in a `finally` —
 success, failure or cancellation — so the manager's idle shutdown cannot pull the
 TrueNAS node out from under a running dump. Their TTL is long enough for a wake
-plus a dump plus a verify, so a crashed orchestrator cannot pin a node forever.
+plus the guest's dump and verify deadlines (see *How long a dump and a verify may take*), so
+a crashed orchestrator cannot pin a node forever.
 
 If nothing needs doing — no prerequisites, and the target's node is already up or
 always on — the phase records nothing and holds nothing: such a backup is
@@ -207,13 +208,57 @@ and `apply_retention` (the same run as the night's; always a person's approval).
 
 ## Manual backups
 
-The dashboard's **Run backup now**, `POST /api/backup/{slug}` and
-`orchestrator-cli backup SLUG` go through the same path and so wake too. The
-HTTP call is still synchronous (it returns the finished run); because a cold
-storage node can take minutes, the run row is created first and every step is
-committed as it happens, so the service page polls `GET /api/runs?slug=…&limit=1`
-and shows the wake steps live. No database write transaction is held open while a
-node boots.
+The dashboard's **Back up now**, `POST /api/backup/{slug}`, the bulk *Back up* action and the
+assistant's `run_backup` go through **the backup queue** (OR-98), like the policies' batches
+and the cleanups ([cleanup.md](cleanup.md#the-queue)):
+
+* the call answers at once: `{"queued": true, "job_id", "run_id" (once it started), "status":
+  "running" | "queued", "ahead": jobs before it}`;
+* it runs behind what runs now, in the same wake: a backup by hand while the storage is up for
+  a cleanup does not power it on twice;
+* the service page follows the run (`GET /api/runs?slug=…&limit=1`) and shows its steps live.
+
+**One backup per service at a time.** A second one while one is running or waiting is refused
+with 409 and the run it would duplicate. A policy's batch that reaches a service being backed
+up by hand skips it (`already_running`); that one counts. Before, two clicks a second apart
+started two dumps (Proxmox ran them one after the other) and two verifies that shared the disk,
+each at half the speed, and both runs failed on the verify's deadline.
+
+`?wait=true` runs it outside the queue and answers when it has finished, and
+`orchestrator-cli backup SLUG` does the same; so does the API when the scheduler is off.
+
+## How long a dump and a verify may take
+
+Each guest's deadline is learned from its own runs (`pipelines/backup_timing.py`):
+
+| | |
+|---|---|
+| History | the last 5 dumps (`vzdump_finished`) or verifies (`pbs_verify`) that worked |
+| Deadline | `BACKUP_DEADLINE_FACTOR` (2) x the slowest of them + 5 min |
+| Bounds | never under `BACKUP_DEADLINE_MIN_S` (10 min), never over `BACKUP_TASK_MAX_S` (12 h) / `VERIFY_TASK_MAX_S` (6 h) |
+| No history yet | `BACKUP_TASK_TIMEOUT_S` (2 h) / `VERIFY_TASK_TIMEOUT_S` (30 min); a verify at least the snapshot's size read at `VERIFY_MIN_MIB_S` (15 MiB/s) |
+
+So a container that verifies in a minute gets 10 minutes, and a big VM on slow storage gets
+what it has needed before, times two. The deadline and why are in the step's detail
+(`vzdump_started`, `pbs_verify`: `deadline_s`, `deadline_why`, `history_s`). The holds a
+batch takes are sized from the same numbers.
+
+**A verify past its deadline is not a failed backup.** The backup is in PBS; only its check is
+not done:
+
+1. the run ends **succeeded**, its `pbs_verify` step `running` with PBS's task id, and the
+   record `verify_state: running`;
+2. a `verify` job in the queue follows PBS's task. While it waits, the storage it needs stays
+   held (the queue carries the wake to it), so the node is not powered off under PBS;
+3. when PBS finishes, the record and the step say what PBS said. A failed verify fails the run
+   then and sends `backup_failed`;
+4. past `VERIFY_TASK_MAX_S` from its start (or *Stop waiting* on the queue card) the record is
+   `verify_state: unknown` and the queue moves on. PBS finishes it anyway.
+
+After a restart, verifies still being followed are followed again (nothing is woken for
+them). A backup's snapshot listing and a cleanup's `sync_records` also mark records verified
+when PBS lists their snapshot as verified, so a verify the orchestrator stopped waiting for,
+or one PBS's own verify job ran, counts.
 
 ## Example: TrueNAS behind PBS
 

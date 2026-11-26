@@ -301,10 +301,18 @@
   }
   async function cancelJob(j) {
     const running = j.state === "running";
-    if (!await confirm({ title: running ? "Stop the GC of " + j.name + "?" : "Cancel " + j.name + "?", body: running ? "PBS stops its garbage collection; it starts over next time. The run ends as failed and the queue moves on." : "It is taken out of the queue; it does not run.", action: running ? "Stop the GC" : "Cancel it" })) return;
-    try { const r = await api.del("/api/backup-queue/" + j.id, { suppressToast: true }); toast(r.done === "stopping" ? "Stopping the GC" : "Cancelled", "ok"); } catch (e) { toast(e.message, "error"); }
+    const verify = j.kind === "verify";
+    const title = !running ? "Cancel " + jobName(j) + "?" : verify ? "Stop waiting for the verify of " + j.name + "?" : "Stop the GC of " + j.name + "?";
+    const body = !running ? "It is taken out of the queue; it does not run."
+      : verify ? "PBS keeps verifying; the orchestrator stops waiting, so the storage may be put back before PBS is done. The backup is marked 'verify unknown'."
+        : "PBS stops its garbage collection; it starts over next time. The run ends as failed and the queue moves on.";
+    if (!await confirm({ title, body, action: !running ? "Cancel it" : verify ? "Stop waiting" : "Stop the GC" })) return;
+    try { const r = await api.del("/api/backup-queue/" + j.id, { suppressToast: true }); toast(r.done === "stopping" ? (verify ? "Stopped waiting for the verify" : "Stopping the GC") : "Cancelled", "ok"); } catch (e) { toast(e.message, "error"); }
     loadQueue();
   }
+  // A queued job in words: a policy's batch, one service's backup, a cleanup, a verify followed.
+  const jobName = (j) => j.kind === "verify" ? "verify of " + j.name : j.kind === "backup" && j.service ? "backup of " + j.name : j.name;
+  const jobDoing = (j) => j.kind === "verify" ? "PBS verifying" : j.kind === "backup" ? "backing up" : "cleaning";
   function drawQueue() {
     const box = clear($("#queue"));
     if (!Q) { box.append(el("p", { class: "faint", style: { margin: 0 } }, "The queue could not be read.")); return; }
@@ -315,9 +323,10 @@
       el("span", { class: "pill ok" }, "woken " + whenText(Q.held.since)));
     for (const j of Q.jobs) {
       chips.push(el("span", { class: "faint" }, "→"));
-      const label = (j.kind === "backup" ? j.name : j.name) + " · " + (j.state === "running" ? (j.kind === "backup" ? "backing up" : "cleaning") : "waiting");
-      chips.push(el("span", { class: "pill " + (j.state === "running" ? "pending" : "off") }, label),
-        j.kind === "cleanup" || j.state === "waiting" ? el("button", { type: "button", class: "ghost small", "aria-label": (j.state === "running" ? "Stop " : "Cancel ") + j.name, onclick: () => cancelJob(j) }, j.state === "running" ? "Stop…" : "Cancel…") : null);
+      const label = jobName(j) + " · " + (j.state === "running" ? jobDoing(j) : "waiting");
+      const pill = el("span", { class: "pill " + (j.state === "running" ? "pending" : "off") }, label);
+      chips.push(j.service ? el("a", { href: "/activity?kind=backup&service=" + enc(j.service), title: "Its runs in Activity" }, pill) : pill,
+        j.kind === "cleanup" || j.kind === "verify" || j.state === "waiting" ? el("button", { type: "button", class: "ghost small", "aria-label": (j.state === "running" ? "Stop " : "Cancel ") + j.name, onclick: () => cancelJob(j) }, j.state === "running" ? "Stop…" : "Cancel…") : null);
     }
     if (Q.held) chips.push(el("span", { class: "faint" }, "→"), el("span", { class: "pill off" }, "put " + (Q.held.nodes.join(", ") || "it") + " back"));
     box.append(el("div", { class: "queue-row" }, chips));

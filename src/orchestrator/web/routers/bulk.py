@@ -177,7 +177,7 @@ async def bulk_services(
     ``params: {"group": "...", "backup_policy_id": 3 | null,
     "wake_trigger": "call" | "button"}`` /
     ``discover_ip`` (IP discovery now; a stopped guest is reported, not failed)."""
-    from orchestrator.web.routers.backup import run_backup
+    from orchestrator.web.routers.backup import start_backup
     from orchestrator.web.routers.dashboard import (
         ServiceUpdate,
         apply_service_update,
@@ -260,9 +260,13 @@ async def bulk_services(
             out = start_wake(session, adapters, settings, slug, actor=admin.username)
             return f"wake run #{out['run_id']} {'started' if out['started'] else 'already running'}"
         # backup
-        run = await run_backup(
+        run = await start_backup(
             session, adapters, settings, slug, actor=admin.username, verify=verify
         )
+        if run.get("queued"):
+            if run.get("run_id"):
+                return f"backup run #{run['run_id']} started"
+            return f"backup queued ({run.get('ahead', 0)} ahead)"
         if run["status"] != "succeeded":
             raise RuntimeError(f"backup run #{run['id']} {run['status']}: {run['error'] or ''}")
         return f"backup run #{run['id']} succeeded"

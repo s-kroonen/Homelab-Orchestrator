@@ -43,7 +43,7 @@ cleanup_policies:
 
 ## The queue
 
-Backup batches and cleanups run **one at a time, in the order they were asked for**: by a schedule, by *Run now*, or by the assistant. What a job needs woken is woken once and **carried to the next job while it covers that job's needs**:
+Backup batches, backups by hand (OR-98), cleanups and verifies still running in PBS run **one at a time, in the order they were asked for**: by a schedule, by *Run now* / *Back up now*, or by the assistant. What a job needs woken is woken once and **carried to the next job while it covers that job's needs**:
 - the node is powered on once for a cleanup and the backups after it;
 - it is put back only after the last job that needs it (the OR-95 path, with its grace period).
 
@@ -52,9 +52,10 @@ A job that fires while the queue is busy waits its turn and then runs in the sam
 * `GET /api/backup-queue` shows the jobs running and waiting, and what is held awake. The assistant's tool is `backup_queue`.
 * `DELETE /api/backup-queue/{id}`:
   * cancels a waiting job;
-  * on a running cleanup, stops its GC in PBS.
+  * on a running cleanup, stops its GC in PBS;
+  * on a verify being followed, stops waiting for it (PBS finishes it anyway).
 
-  A running backup batch cannot be stopped here.
+  A running backup cannot be stopped here.
 
 ## A cleanup run
 

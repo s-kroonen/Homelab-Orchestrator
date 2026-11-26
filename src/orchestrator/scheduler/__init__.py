@@ -42,13 +42,23 @@ from orchestrator.adapters.errors import AdapterError, AdapterUnreachable, TaskT
 from orchestrator.adapters.factory import AdapterBundle
 from orchestrator.audit import log as audit
 from orchestrator.config import Settings
-from orchestrator.db.models import BackupPolicy, CleanupPolicy, Service
+from orchestrator.db.models import BackupPolicy, BackupRecord, CleanupPolicy, PipelineRun, Service
 from orchestrator.db.session import session_scope
 from orchestrator.display import get_timezone
 from orchestrator.domain.enums import AuditResult, BackupWakeMode, CleanupGcMode, CleanupWhen
 from orchestrator.logging_setup import get_logger
 from orchestrator.notify.jobs import job_failed, job_ok
-from orchestrator.pipelines.backup import BackupError, BackupPipeline, BackupSkipped, WakeContext
+from orchestrator.pipelines import backup_timing
+from orchestrator.pipelines.backup import (
+    BackupAlreadyRunning,
+    BackupError,
+    BackupPipeline,
+    BackupSkipped,
+    WakeContext,
+    active_backup,
+    follow_verify,
+    pending_verify_started,
+)
 from orchestrator.scheduler.retention import RetentionError, enforce_retention
 
 log = get_logger(__name__)
@@ -118,10 +128,11 @@ def current() -> BackupScheduler | None:
 
 @dataclass
 class QueuedJob:
-    """A backup batch or a cleanup, waiting for or holding the queue."""
+    """A backup batch, one service's backup, a cleanup or a verify being followed, waiting
+    for or holding the queue."""
 
     id: int
-    kind: str  # "backup" | "cleanup"
+    kind: str  # "backup" | "cleanup" | "verify"
     name: str
     actor: str
     requires: frozenset[str]
@@ -129,14 +140,21 @@ class QueuedJob:
     state: str = "waiting"  # "waiting" | "running"
     queued_at: datetime = field(default_factory=lambda: datetime.now(UTC))
     started_at: datetime | None = None
-    #: Set to stop a running cleanup's GC.
+    #: Set to stop a running cleanup's GC, or to stop following a verify.
     stop: asyncio.Event = field(default_factory=asyncio.Event)
+    #: One service's backup (not a policy's batch): its slug, and its run once it started.
+    service: str | None = None
+    run_id: int | None = None
+    #: Set once the job's run exists, or the job ended without one.
+    run_known: asyncio.Event = field(default_factory=asyncio.Event)
 
     def as_dict(self) -> dict[str, Any]:
         return {
             "id": self.id,
             "kind": self.kind,
             "name": self.name,
+            "service": self.service,
+            "run_id": self.run_id,
             "actor": self.actor,
             "state": self.state,
             "requires": sorted(self.requires),
@@ -226,6 +244,7 @@ class BackupScheduler:
             max_instances=1,
             coalesce=True,
         )
+        self.resume_verifies()
         log.info("scheduler.started", jobs=len(self._scheduler.get_jobs()))
 
     async def shutdown(self) -> None:
@@ -426,25 +445,54 @@ class BackupScheduler:
             if job.task is not None:
                 job.task.cancel()
             return "cancelled"
-        if job.kind == "cleanup":
+        if job.kind in ("cleanup", "verify"):
             job.stop.set()
             return "stopping"
-        raise ValueError("a running backup batch cannot be stopped from here")
+        raise ValueError("a running backup cannot be stopped from here")
+
+    def _new_job(self, kind: str, name: str, actor: str, requires: list[str]) -> QueuedJob:
+        global _JOB_SEQ
+        _JOB_SEQ += 1
+        job = QueuedJob(
+            id=_JOB_SEQ, kind=kind, name=name, actor=actor, requires=frozenset(requires)
+        )
+        # In the queue at once (not when a task first runs), so a job that ends right after
+        # adding one hands its wake over to it.
+        self._jobs.append(job)
+        return job
 
     async def _queued(
         self, kind: str, name: str, actor: str, requires: list[str], body: Any
     ) -> Any:
-        global _JOB_SEQ
-        _JOB_SEQ += 1
-        job = QueuedJob(
-            id=_JOB_SEQ,
-            kind=kind,
-            name=name,
-            actor=actor,
-            requires=frozenset(requires),
-            task=asyncio.current_task(),
-        )
-        self._jobs.append(job)
+        job = self._new_job(kind, name, actor, requires)
+        job.task = asyncio.current_task()
+        return await self._execute(job, body)
+
+    def _spawn(self, job: QueuedJob, body: Any) -> QueuedJob:
+        """Run an already queued job in the background."""
+
+        async def go() -> None:
+            try:
+                await self._execute(job, body)
+            except asyncio.CancelledError:
+                pass
+            except Exception as exc:  # the job's own run records what went wrong
+                log.error(
+                    "scheduler.queue.job_crashed",
+                    job=job.name,
+                    kind=job.kind,
+                    error=str(exc),
+                    traceback=traceback.format_exc(),
+                )
+            finally:
+                job.run_known.set()
+
+        job.task = asyncio.get_running_loop().create_task(go(), name=f"queue:{job.kind}:{job.name}")
+        self._background.add(job.task)
+        job.task.add_done_callback(self._background.discard)
+        return job
+
+    async def _execute(self, job: QueuedJob, body: Any) -> Any:
         try:
             async with self._lock:
                 job.state = "running"
@@ -602,6 +650,150 @@ class BackupScheduler:
             "cleanup", f"prune {policy_name}", actor, requires, body
         )
 
+    # -- one service's backup, by hand ----------------------------------------------------
+
+    def backup_busy(self, slug: str) -> dict[str, Any] | None:
+        """A backup of ``slug`` running or waiting in the queue: what it is, else None."""
+        run_id = active_backup(slug)
+        if run_id is not None:
+            return {"state": "running", "run_id": run_id, "job": None}
+        for job in self._jobs:
+            if job.kind == "backup" and job.service == slug:
+                return {"state": job.state, "run_id": job.run_id, "job": job.as_dict()}
+        return None
+
+    def queue_backup(
+        self, slug: str, *, actor: str, verify: bool = True, wake: bool = True
+    ) -> QueuedJob:
+        """Back up one service in the queue, behind what runs now and in the same wake as the
+        jobs around it. Returns at once; ``job.run_id`` is set when its run starts. The caller
+        checks :meth:`backup_busy` first; the pipeline refuses a second one anyway."""
+        with session_scope() as session:
+            service = session.exec(select(Service).where(Service.slug == slug)).one_or_none()
+            policy = (
+                session.get(BackupPolicy, service.backup_policy_id)
+                if service is not None and service.backup_policy_id
+                else None
+            )
+            requires = list(policy.requires or []) if policy is not None and wake else []
+        job = self._new_job("backup", slug, actor, requires)
+        job.service = slug
+        return self._spawn(
+            job, lambda j: self._service_backup_job(slug, j, actor=actor, verify=verify, wake=wake)
+        )
+
+    async def _service_backup_job(
+        self, slug: str, job: QueuedJob, *, actor: str, verify: bool, wake: bool
+    ) -> int | None:
+        def started(run: PipelineRun) -> None:
+            job.run_id = run.id
+            job.run_known.set()
+
+        with session_scope() as session:
+            service = session.exec(select(Service).where(Service.slug == slug)).one_or_none()
+            policy = (
+                session.get(BackupPolicy, service.backup_policy_id)
+                if service is not None and service.backup_policy_id
+                else None
+            )
+            pipeline = self._pipeline_factory()
+            prepared: WakeContext | None = None
+            if wake and policy is not None:
+                ttl = max(
+                    pipeline.hold_ttl_s(1),
+                    backup_timing.hold_ttl_s(
+                        session, self._settings, service.id if service else None
+                    ),
+                )
+                prepared = await self._shared_wake(
+                    session, pipeline, requires=list(policy.requires or []),
+                    wake_mode=policy.wake_mode, restore=policy.restore_power_state,
+                    label=f"backup:{slug}", ttl_s=ttl, actor=actor,
+                )  # fmt: skip
+            try:
+                run = await pipeline.run_for_service(
+                    session, slug, actor=actor, verify=verify, wake=wake, prepared=prepared,
+                    on_run=started,
+                )  # fmt: skip
+            except BackupError as exc:  # skipped / failed: the run (if any) says why
+                log.info("scheduler.backup.by_hand.ended", service=slug, error=str(exc))
+                return job.run_id
+            except AdapterError as exc:
+                log.warning("scheduler.backup.by_hand.failed", service=slug, error=str(exc))
+                return job.run_id
+            self._follow_pending(session, run, policy, actor=actor)
+            return run.id
+
+    # -- a verify that outlasted its deadline ----------------------------------------------
+
+    def _follow_pending(
+        self, session: Session, run: PipelineRun, policy: BackupPolicy | None, *, actor: str
+    ) -> QueuedJob | None:
+        """When ``run``'s verify is still going in PBS, queue a job that waits for it, so the
+        storage it needs stays up (the queue carries it) until PBS is done."""
+        record = session.exec(
+            select(BackupRecord).where(
+                BackupRecord.pipeline_run_id == run.id, BackupRecord.verify_state == "running"
+            )
+        ).first()
+        if record is None or record.id is None:
+            return None
+        record_id, slug = record.id, record.service_slug
+        requires = list(policy.requires or []) if policy is not None else []
+        wake_mode = policy.wake_mode if policy is not None else BackupWakeMode.FOLLOW
+        restore = policy.restore_power_state if policy is not None else True
+        job = self._new_job("verify", slug, actor, requires)
+        job.service = slug
+        job.run_id = run.id
+
+        async def body(j: QueuedJob) -> str:
+            with session_scope() as s:
+                rec = s.get(BackupRecord, record_id)
+                if rec is None:
+                    return "gone"
+                left = (
+                    pending_verify_started(s, rec).timestamp()
+                    + self._settings.verify_task_max_s
+                    - datetime.now(UTC).timestamp()
+                )
+                if requires:
+                    await self._shared_wake(
+                        s, self._pipeline_factory(), requires=requires, wake_mode=wake_mode,
+                        restore=restore, label=f"verify:{slug}",
+                        ttl_s=int(max(0, left)) + self._settings.wake_timeout_s * 2 + 600,
+                        actor=actor,
+                    )  # fmt: skip
+                return await follow_verify(
+                    s, self._adapters.pbs, self._settings, record_id, stop=j.stop
+                )
+
+        log.info("scheduler.verify.follow", service=slug, run_id=run.id, record=record_id)
+        return self._spawn(job, body)
+
+    def resume_verifies(self) -> int:
+        """After a restart: follow again the verifies that were still running in PBS. Nothing
+        is woken for them (PBS answers about its tasks with the datastore offline; a verify that
+        lost its storage has ended and says so). Returns how many."""
+        with session_scope() as session:
+            records = session.exec(
+                select(BackupRecord).where(BackupRecord.verify_state == "running")
+            ).all()
+            pending = [(r.id, r.service_slug, r.pipeline_run_id) for r in records if r.id]
+        for record_id, slug, run_id in pending:
+            job = self._new_job("verify", slug, "system", [])
+            job.service, job.run_id = slug, run_id
+
+            async def body(j: QueuedJob, rid: int = record_id) -> str:
+                with session_scope() as s:
+                    return await follow_verify(
+                        s, self._adapters.pbs, self._settings, rid, stop=j.stop
+                    )
+
+            self._spawn(job, body)
+        if pending:
+            log.info("scheduler.verify.resumed", records=len(pending))
+        return len(pending)
+
     async def _cleanup_job(self, name: str, job: QueuedJob, actor: str, reason: str) -> int | None:
         with session_scope() as session:
             cleanup = session.exec(
@@ -685,7 +877,7 @@ class BackupScheduler:
             outcomes: dict[str, dict[str, Any]] = {}
             attempts = max(1, int(policy.max_attempts or 1))
             pending = list(slugs)
-            ttl = pipeline.hold_ttl_s(len(pending))
+            ttl = self._batch_ttl_s(session, pipeline, pending)
             label = f"backup-policy:{policy.name}"
 
             ran_cleanup = False
@@ -723,7 +915,8 @@ class BackupScheduler:
                 prepared = await self._shared_wake(
                     session, pipeline, requires=list(policy.requires or []),
                     wake_mode=policy.wake_mode, restore=policy.restore_power_state,
-                    label=label, ttl_s=pipeline.hold_ttl_s(len(pending)), actor="scheduler",
+                    label=label, ttl_s=self._batch_ttl_s(session, pipeline, pending),
+                    actor="scheduler",
                 )  # fmt: skip
                 for slug in pending:
                     outcomes[slug] = await self._run_one(
@@ -743,6 +936,18 @@ class BackupScheduler:
                     f"after the backups of {policy.name}",
                 )
             return outcomes
+
+    def _batch_ttl_s(self, session: Session, pipeline: BackupPipeline, slugs: list[str]) -> int:
+        """How long a batch's hold must last: each guest's own learned dump + verify deadline
+        (pipelines/backup_timing.py), never less than the defaults give."""
+        learned = 0
+        for slug in slugs:
+            service = session.exec(select(Service).where(Service.slug == slug)).one_or_none()
+            learned += (
+                backup_timing.hold_ttl_s(session, self._settings, service.id if service else None)
+                - self._settings.wake_timeout_s * 2
+            )
+        return max(pipeline.hold_ttl_s(len(slugs)), learned + self._settings.wake_timeout_s * 2)
 
     async def _run_one(
         self,
@@ -764,6 +969,16 @@ class BackupScheduler:
                 attempt=attempt,
                 attempts=attempts,
             )
+        except BackupAlreadyRunning as exc:
+            # Taken by hand (or by another policy) a moment ago: that one counts.
+            log.info("scheduler.backup.already_running", policy=policy.name, service=slug)
+            return {
+                "backup": "skipped",
+                "why": "already_running",
+                "error": str(exc),
+                "attempt": attempt,
+                "retry": False,
+            }
         except BackupSkipped as exc:
             # Not a failure: it is unhealthy, nothing can check it, or it is off and may not be
             # woken. The pipeline logged, audited and (unless it retries) announced it.
@@ -814,6 +1029,8 @@ class BackupScheduler:
             return {"backup": "crashed", "error": str(exc)}
 
         outcome: dict[str, Any] = {"backup": "succeeded", "run_id": run.id}
+        if self._follow_pending(session, run, policy, actor="scheduler") is not None:
+            outcome["verify"] = "running"
         try:
             result = await enforce_retention(
                 session, self._adapters.pbs, policy, slug, settings=self._settings

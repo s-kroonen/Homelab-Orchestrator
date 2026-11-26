@@ -676,6 +676,11 @@ class BackupRecord(SQLModel, table=True):
     size_bytes: int | None = None
     verified: bool = Field(default=False)
     verified_at: datetime | None = None
+    #: PBS's task id of a verify that outlasted its deadline (OR-98), and how that verify
+    #: stands: "ok" / "failed" / "running" (PBS still verifying) / "unknown" (no longer
+    #: followed). Empty for records from before, where ``verified`` alone tells.
+    verify_upid: str | None = None
+    verify_state: str | None = None
     protected: bool = Field(default=False, index=True)  # the known-good pin
     created_at: datetime = Field(default_factory=_utcnow, index=True)
 

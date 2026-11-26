@@ -334,7 +334,7 @@ async def test_backup_records_whose_snapshot_is_gone_are_dropped(
         session, c, prepared=WakeContext(), actor="t"
     )
 
-    assert _steps(run)["sync_records"]["detail"] == {"dropped": 1, "kept": 1}
+    assert _steps(run)["sync_records"]["detail"] == {"dropped": 1, "kept": 1, "verified": 0}
     left = [r.pbs_snapshot_id for r in session.exec(select(BackupRecord)).all()]
     assert left == [kept.snapshot_id]
 

@@ -46,7 +46,7 @@ from orchestrator.domain.enums import (
 )
 from orchestrator.logging_setup import get_logger, new_correlation_id
 from orchestrator.notify.hooks import announce
-from orchestrator.pipelines.backup import task_error_lines
+from orchestrator.pipelines.backup import sync_verified, task_error_lines
 from orchestrator.pipelines.backup_wake import WakeContext
 from orchestrator.pipelines.interrupted import fail_unexpected
 from orchestrator.pipelines.steps import StepRecorder
@@ -449,10 +449,13 @@ class CleanupPipeline:
         for rec in gone:
             session.delete(rec)
         session.commit()
+        # And the other way: what PBS verified (a verify the orchestrator stopped waiting
+        # for, PBS's own verify job) counts as verified here too.
+        verified = sync_verified(session, snapshots)
         steps.record(
             "sync_records",
             "ok",
-            detail={"dropped": len(gone), "kept": len(records) - len(gone)},
+            detail={"dropped": len(gone), "kept": len(records) - len(gone), "verified": verified},
         )
 
 
