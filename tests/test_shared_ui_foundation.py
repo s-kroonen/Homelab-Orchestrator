@@ -225,3 +225,67 @@ def test_app_js_defines_global_error_surfacing(app: Any) -> None:
     assert "data.detail" in js
     assert "data.message" in js
     assert "data.error" in js
+
+
+def _static(app: Any, name: str) -> str:
+    with TestClient(app) as client:
+        r = client.get(f"/static/{name}")
+    assert r.status_code == 200
+    return r.text
+
+
+def test_app_js_counts_writes_in_flight_and_marks_the_page(app: Any) -> None:
+    """OR-97: every non-GET apiFetch is counted (always released in a finally), exposed as
+    window.OrchBusy, and mirrored as the ``api-busy`` class on <html>."""
+    js = _static(app, "app.js")
+    assert "window.OrchBusy" in js
+    assert "writes: () => writes" in js
+    assert "on(fn)" in js
+    assert 'verb !== "GET" && verb !== "HEAD"' in js
+    assert "finally" in js and "endWrite()" in js
+    assert 'classList.toggle("api-busy", writes > 0)' in js
+
+
+def test_app_js_shows_a_progress_bar_and_a_slow_write_toast(app: Any) -> None:
+    js = _static(app, "app.js")
+    assert 'id = "busy-bar"' in js
+    assert "BAR_DELAY_MS = 150" in js
+    assert "SLOW_MS = 2000" in js
+    assert 'toast("Working…", "pending", { timeoutMs: 0 })' in js
+    assert "dismissSlow()" in js
+
+
+def test_app_js_quiet_writes_opt_out_of_feedback(app: Any) -> None:
+    js = _static(app, "app.js")
+    assert "!options.quiet" in js
+    assert "opts.quiet" in js  # documented in the header
+
+
+def test_app_css_styles_the_busy_bar_pending_toast_and_button_spinner(app: Any) -> None:
+    css = _static(app, "app.css")
+    assert "#busy-bar" in css
+    assert "var(--accent)" in css.split("#busy-bar::after")[1].split("}")[0]
+    assert ".toast.pending { border-left-color: var(--pending); }" in css
+    assert 'html.api-busy [aria-busy="true"]' in css
+    assert "cursor: progress" in css
+    assert "#busy-bar::after { animation: none;" in css  # reduced motion: a static bar
+
+
+def test_ui_el_marks_a_button_busy_while_its_click_returns_a_promise(app: Any) -> None:
+    js = _static(app, "ui.js")
+    assert 'typeof work.then !== "function"' in js
+    assert 'setAttribute("aria-busy", "true")' in js
+    assert "node.dataset.busy" in js
+    assert "ev.stopImmediatePropagation()" in js
+    assert 'k === "onclick"' in js
+    # not `disabled`: that would drop the keyboard focus
+    assert "node.disabled" not in js.split("function markBusy")[1].split("function busyClick")[0]
+
+
+def test_ui_menu_marks_its_anchor_busy_while_an_item_runs(app: Any) -> None:
+    js = _static(app, "ui.js")
+    assert "markBusy(anchor, it.onClick())" in js
+
+
+def test_hand_made_busy_wrapper_is_gone_from_service_js(app: Any) -> None:
+    assert "const busy = (btn" not in _static(app, "service.js")

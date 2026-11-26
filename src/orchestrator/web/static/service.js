@@ -57,7 +57,6 @@
     view.refresh();
     return out;
   }
-  const busy = (btn, fn) => async () => { btn.disabled = true; try { await fn(); } finally { btn.disabled = false; } };
 
   // --- header ------------------------------------------------------------------------------------
   // The guest it runs on, linked to that guest's drawer on its Proxmox Guests tab, with a

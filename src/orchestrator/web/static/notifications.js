@@ -71,7 +71,7 @@
   }
   async function remove(r) {
     if (!await confirm({ title: "Delete rule " + r.name + "?", action: "Delete" })) return;
-    try { await api.del("/api/notifications/rules/" + r.id); rules.refresh(); } catch (_e) { /* toast */ }
+    try { await api.del("/api/notifications/rules/" + r.id); toast("Deleted " + r.name, "ok"); rules.refresh(); } catch (_e) { /* toast */ }
   }
   // Without rules the built-in default applies: shown as a row of its own, and copied into a
   // real rule (which then replaces it) to change it.
