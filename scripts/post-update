@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+#
+# Steps that keep a project consistent after a new version of the standard was merged in. Called by
+# the last Copier migration (plain `copier update`) and by scripts/update-standard; safe to run again.
+#   1. the constitution copy of Spec Kit follows CONSTITUTION.md (scripts/sync-constitution);
+#   2. the vendored rule sets follow OPENGREP_RULES_COMMIT / OPENGREP_OPEN_RULESETS (scripts/update-rules);
+#      they are vendored when missing (an update from an old release drops them) or when they differ. Needs network;
+#      a failure is reported and does not stop the update.
+# Tools pinned in check.config are not installed here: run scripts/setup afterwards.
+set -uo pipefail
+cd "$(git rev-parse --show-toplevel 2>/dev/null || pwd)" || exit 1
+source ./check.config
+# shellcheck source=/dev/null
+[[ -f project.config ]] && source ./project.config
+
+[[ -x scripts/sync-constitution ]] || chmod +x scripts/sync-constitution 2>/dev/null
+if [[ -f CONSTITUTION.md ]]; then scripts/sync-constitution || echo "post-update: scripts/sync-constitution failed." >&2; fi
+
+src=".opengrep/rules/open/SOURCE"
+want="$(printf 'opengrep-rules %s\nrule sets: %s' "${OPENGREP_RULES_COMMIT:-}" "${OPENGREP_OPEN_RULESETS:-}")"
+if [[ ! -f "$src" || "$(cat "$src")" != "$want" ]]; then
+    echo "post-update: the vendored rule sets are missing or differ from check.config; vendoring them."
+    scripts/update-rules || echo "post-update: scripts/update-rules failed; run it again with network access." >&2
+fi
+exit 0

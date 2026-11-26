@@ -1,0 +1,5 @@
+# CodeQL configuration. The canary holds planted bugs on purpose; keep it out of code scanning.
+name: codeql-config
+paths-ignore:
+  - tests/security-canary
+  - .opengrep

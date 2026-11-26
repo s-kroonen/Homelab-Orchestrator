@@ -1,0 +1,164 @@
+#!/usr/bin/env bash
+#
+# Branch rules and repository settings as code (GitHub), so the gates actually block.
+#
+#   scripts/repo-settings plan     print what would be applied (JSON), change nothing
+#   scripts/repo-settings apply    apply it (needs `gh` logged in with admin rights on the repo)
+#   scripts/repo-settings verify   exit 1 when the live settings differ (CI runs this weekly)
+#   scripts/repo-settings --gitlab plan|apply|verify    the same for GitLab with `glab api` (Maintainer rights)
+#
+# What it sets:
+#   - ruleset "dev-standard" on main and dev: no deletion, no force push, PR required, conversations
+#     resolved, required checks "result" (checks.yml) and "guardrails" (guardrails.yml), up to date
+#     with the base; EMPTY bypass list (also the owner goes through a PR);
+#   - with ENABLE_CODEQL=true: CodeQL alerts of severity high or higher block the merge;
+#   - squash commits use the PR title (checked by scripts/check pr-title), branches deleted on merge;
+#   - labels a person uses: test-change, no-regression-test, new-dependency, large-change,
+#     guardrail-change, agent.
+# Private personal repositories need GitHub Pro for rulesets.
+# GitLab (--gitlab; UNTESTED against a live project): protected branches main and dev (push: no one,
+# merge: Maintainers, no force push), "Pipelines must succeed", "All threads must be resolved",
+# squash title = MR title, source branch deleted, the same labels. Approvals and Code Owner
+# approval are Premium features and are not set.
+set -euo pipefail
+cd "$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+
+platform=github; args=()
+for a in "$@"; do if [[ "$a" == --gitlab ]]; then platform=gitlab; else args+=("$a"); fi; done
+mode="${args[0]:-plan}"
+REQUIRED_APPROVALS="${REQUIRED_APPROVALS:-0}"   # solo maintainer: 0 (you can't approve your own PR); a team: 1+
+ENABLE_CODEQL="${ENABLE_CODEQL:-false}"
+repo="${GH_REPO:-$(gh repo view --json nameWithOwner --jq .nameWithOwner 2>/dev/null || echo OWNER/REPO)}"
+
+ruleset() {
+    local codeql=""
+    [[ "$ENABLE_CODEQL" == "true" ]] && codeql=',
+    {"type": "code_scanning", "parameters": {"code_scanning_tools": [
+      {"tool": "CodeQL", "security_alerts_threshold": "high_or_higher", "alerts_threshold": "errors"}]}}'
+    cat <<EOF
+{
+  "name": "dev-standard",
+  "target": "branch",
+  "enforcement": "active",
+  "bypass_actors": [],
+  "conditions": {"ref_name": {"include": ["refs/heads/main", "refs/heads/dev"], "exclude": []}},
+  "rules": [
+    {"type": "deletion"},
+    {"type": "non_fast_forward"},
+    {"type": "pull_request", "parameters": {
+      "required_approving_review_count": ${REQUIRED_APPROVALS},
+      "dismiss_stale_reviews_on_push": true,
+      "require_code_owner_review": false,
+      "require_last_push_approval": false,
+      "required_review_thread_resolution": true,
+      "allowed_merge_methods": ["squash", "merge"]}},
+    {"type": "required_status_checks", "parameters": {
+      "strict_required_status_checks_policy": true,
+      "do_not_enforce_on_create": false,
+      "required_status_checks": [{"context": "result"}, {"context": "guardrails"}]}}${codeql}
+  ]
+}
+EOF
+}
+
+repo_fields='{"squash_merge_commit_title": "PR_TITLE", "squash_merge_commit_message": "PR_BODY",
+  "delete_branch_on_merge": true, "allow_rebase_merge": false, "allow_auto_merge": false}'
+labels=("test-change:d93f0b:A person approves a change that weakens or removes tests"
+        "large-change:fbca04:A person allows an agent PR above the size limit"
+        "guardrail-change:b60205:A person approves a change to guardrail files"
+        "no-regression-test:d93f0b:A person waives the regression test for this fix"
+        "new-dependency:fbca04:A person approves a dependency not named in a plan or decision"
+        "agent:5319e7:Opened by an AI agent")
+
+
+# --- GitLab -------------------------------------------------------------------------------------
+gl_project='{"only_allow_merge_if_pipeline_succeeds": true, "only_allow_merge_if_all_discussions_are_resolved": true,
+  "remove_source_branch_after_merge": true, "squash_option": "default_on", "squash_commit_template": "%{title}",
+  "merge_method": "merge"}'
+gl_branches=(main dev)
+gl_branch_json() {   # name
+    jq -n --arg n "$1" '{name: $n, push_access_level: 0, merge_access_level: 40, allow_force_push: false}'
+}
+gitlab() {
+    case "$mode" in
+        plan)
+            echo "# protected branches:"; for b in "${gl_branches[@]}"; do gl_branch_json "$b" | jq -c .; done
+            echo "# project settings:"; jq . <<<"$gl_project"
+            echo "# labels:"; printf '  %s\n' "${labels[@]%%:*}"
+            echo "# required: CI/CD variable RELEASE_BOT_TOKEN (project access token, scope api) for the release back-merge MR" ;;
+        apply)
+            command -v glab >/dev/null || { echo "glab is not installed or not logged in." >&2; exit 1; }
+            for b in "${gl_branches[@]}"; do
+                glab api -X DELETE "projects/:id/protected_branches/$b" >/dev/null 2>&1 || true
+                gl_branch_json "$b" | glab api -X POST "projects/:id/protected_branches" -H 'Content-Type: application/json' --input - >/dev/null
+            done
+            jq -c . <<<"$gl_project" | glab api -X PUT "projects/:id" -H 'Content-Type: application/json' --input - >/dev/null
+            for l in "${labels[@]}"; do
+                IFS=: read -r name color desc <<<"$l"
+                body="$(jq -nc --arg n "$name" --arg c "#$color" --arg d "$desc" '{name: $n, color: $c, description: $d}')"
+                echo "$body" | glab api -X POST "projects/:id/labels" -H 'Content-Type: application/json' --input - >/dev/null 2>&1 \
+                    || echo "$body" | glab api -X PUT "projects/:id/labels/$name" -H 'Content-Type: application/json' --input - >/dev/null
+            done
+            echo "Applied. Check with: scripts/repo-settings --gitlab verify" ;;
+        verify)
+            command -v glab >/dev/null || { echo "glab is not installed or not logged in." >&2; exit 1; }
+            local bad=0 live
+            for b in "${gl_branches[@]}"; do
+                if ! live="$(glab api "projects/:id/protected_branches/$b" 2>/dev/null)"; then echo "MISSING protected branch $b"; bad=1; continue; fi
+                [[ "$(jq -r '.push_access_levels[0].access_level' <<<"$live")" == 0 ]] || { echo "$b: pushes are allowed"; bad=1; }
+                [[ "$(jq -r '.allow_force_push' <<<"$live")" == false ]] || { echo "$b: force push is allowed"; bad=1; }
+            done
+            live="$(glab api "projects/:id")"
+            for k in only_allow_merge_if_pipeline_succeeds only_allow_merge_if_all_discussions_are_resolved remove_source_branch_after_merge; do
+                [[ "$(jq -r --arg k "$k" '.[$k]' <<<"$live")" == true ]] || { echo "project setting off: $k"; bad=1; }
+            done
+            [[ "$(jq -r '.squash_commit_template // ""' <<<"$live")" == '%{title}' ]] || { echo "squash commit is not the MR title"; bad=1; }
+            [[ $bad -eq 0 ]] && echo "Project settings match dev-standard." || exit 1 ;;
+        *) sed -n '3,12p' "$0"; exit 2 ;;
+    esac
+}
+if [[ "$platform" == gitlab ]]; then gitlab; exit 0; fi
+
+case "$mode" in
+    plan)
+        echo "# repository: $repo"; echo "# ruleset:"; ruleset | jq .
+        echo "# repository fields:"; jq . <<<"$repo_fields"
+        echo "# labels:"; printf '  %s\n' "${labels[@]%%:*}"
+        ;;
+    apply)
+        existing="$(gh api "repos/$repo/rulesets" --jq '.[] | select(.name=="dev-standard") | .id' || true)"
+        if [[ -n "$existing" ]]; then ruleset | gh api -X PUT "repos/$repo/rulesets/$existing" --input - >/dev/null
+        else ruleset | gh api -X POST "repos/$repo/rulesets" --input - >/dev/null; fi
+        jq -c . <<<"$repo_fields" | gh api -X PATCH "repos/$repo" --input - >/dev/null
+        for l in "${labels[@]}"; do
+            IFS=: read -r name color desc <<<"$l"
+            gh label create "$name" --color "$color" --description "$desc" --force -R "$repo" >/dev/null
+        done
+        echo "Applied to $repo. Check with: scripts/repo-settings verify"
+        ;;
+    verify)
+        bad=0
+        id="$(gh api "repos/$repo/rulesets" --jq '.[] | select(.name=="dev-standard") | .id' || true)"
+        if [[ -z "$id" ]]; then echo "MISSING ruleset dev-standard"; bad=1
+        else
+            live="$(gh api "repos/$repo/rulesets/$id")"
+            [[ "$(jq -r .enforcement <<<"$live")" == active ]] || { echo "ruleset not active"; bad=1; }
+            [[ "$(jq '.bypass_actors | length' <<<"$live")" == 0 ]] || { echo "ruleset has bypass actors"; bad=1; }
+            for t in deletion non_fast_forward pull_request required_status_checks; do
+                jq -e --arg t "$t" '.rules | map(.type) | index($t)' <<<"$live" >/dev/null || { echo "rule missing: $t"; bad=1; }
+            done
+            for c in result guardrails; do
+                jq -e --arg c "$c" '.rules[] | select(.type=="required_status_checks") | .parameters.required_status_checks | map(.context) | index($c)' <<<"$live" >/dev/null \
+                    || { echo "required check missing: $c"; bad=1; }
+            done
+            if [[ "$ENABLE_CODEQL" == "true" ]]; then
+                jq -e '.rules | map(.type) | index("code_scanning")' <<<"$live" >/dev/null || { echo "rule missing: code_scanning"; bad=1; }
+            fi
+        fi
+        sq="$(gh api "repos/$repo" --jq '.squash_merge_commit_title // ""')"
+        if [[ -z "$sq" ]]; then echo "note: merge settings need an admin token to read; squash title not checked"
+        elif [[ "$sq" != PR_TITLE ]]; then echo "squash title is not the PR title"; bad=1; fi
+        [[ $bad -eq 0 ]] && echo "Repository settings match dev-standard." || exit 1
+        ;;
+    *) sed -n '3,9p' "$0"; exit 2 ;;
+esac

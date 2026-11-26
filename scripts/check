@@ -1,0 +1,1080 @@
+#!/usr/bin/env bash
+#
+# One entry point for every check. Git hooks, coding agents (Claude Code hooks) and CI
+# (GitHub Actions, GitLab CI) all call this script, so a check means the same everywhere.
+#
+#   scripts/check fast               constitution sync, code-needs-gates, stack decision, spikes, research notes,
+#                                    tracked .env files, format, lint, typecheck, staged secrets  (pre-commit, agent Stop hook)
+#   scripts/check test               tests; fails when the project has zero tests           (pre-push, Stop hook, CI)
+#   scripts/check coverage [base]    changed lines >= COVERAGE_CHANGED_MIN %, total >= COVERAGE_TOTAL_MIN %
+#   scripts/check safety             safety-tagged tests exist and pass (SAFETY_REQUIRED=true)
+#   scripts/check test-integrity [base]  deleted tests, new skip markers, removed assertions, snapshot rewrites
+#   scripts/check build              production build
+#   scripts/check architecture|complexity|perf|e2e|contract|security-native|fuzz|dast
+#                                    the stack-layer commands of docs/process/stack-layer.md (skipped when "none")
+#   scripts/check stack-layer        once code exists, every stack-layer command is decided (a command or "none" + reason)
+#   scripts/check secrets            gitleaks over the full git history; no tracked .env files
+#   scripts/check deps               GATE: lockfile per manifest + fixable HIGH/CRITICAL vulnerabilities (trivy)
+#                                    + known malicious packages (osv-scanner, MAL- advisories)
+#   scripts/check licenses           forbidden / restricted licences of the dependencies (trivy)
+#   scripts/check deps-report        REPORT: all known vulnerabilities, all severities, incl. dev (osv-scanner)
+#   scripts/check sast               static security analysis (opengrep: open rules + custom rules)
+#   scripts/check config             Dockerfile / IaC misconfiguration (trivy config)
+#   scripts/check canary             the scanners still find the planted bugs in tests/security-canary
+#   scripts/check quality-canary     every quality gate still fails on its planted case in tests/quality-canary
+#   scripts/check image <ref>        vulnerabilities in a built image (trivy image)
+#   scripts/check pr-size [base]     fail a too large change
+#   scripts/check pr-title "<title>" the PR title is a valid commit subject (it becomes the squash commit), no AI watermark
+#   scripts/check commit-msg <f>     commit message format and no AI watermark (commit-msg hook)
+#   scripts/check branch             commits only on <type>/<KEY>-<n>-<slug>, spike/…, release/v…, agent branches (pre-commit)
+#   scripts/check regression-test [base]  a fix/ branch adds or changes a test
+#   scripts/check new-deps [base]    every added dependency is named in a plan or decision record
+#   scripts/check todo-ids [base]    agent branches don't number new TODO.md items (they write <KEY>-?)
+#   scripts/check hooks              the Claude Code hooks still block what tests/hooks/cases.tsv says
+#   scripts/check research           research notes have their header; decisions link evidence; no stale evidence (also in fast)
+#   scripts/check proof [base]       changed specs: Issue matches the branch, every FR-/SC- has a proof
+#   scripts/check scope [base]       WARN only: changed files the plan and tasks don't mention
+#   scripts/check docs [base]        markdownlint + relative links + the writing rule (Vale: errors fail, warnings print);
+#                                    with a base branch Vale reads only the changed files
+#   scripts/check docs-file <path>   the writing rule (Vale) for one file; used by the PostToolUse hook
+#   scripts/check pr-text            the PR or MR body (env PR_BODY): writing rule (Vale) and no AI watermark
+#   scripts/check standard-version   is a newer dev-standard out? prints its upgrade notes; never fails (weekly CI job, needs network)
+#   scripts/check all                everything above that needs no base branch
+#
+# The standard's settings and pinned tools live in check.config (replaced by every update); the
+# project's own values live in project.config (sourced after it, never touched by an update). Security tools run from the local binary
+# when present (scripts/install-tools, GitLab job images) or else from their pinned container image.
+# Exit code: 0 when every requested check passed, 1 otherwise.
+
+# STOP_STAGES, FORMAT_FILE_CMD and LINT_FILE_CMD are read by the hooks, not here.
+# shellcheck disable=SC2034
+set -uo pipefail
+
+ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+cd "$ROOT" || exit 1
+export PATH="$ROOT/.tools/bin:$PATH"
+
+# Defaults; check.config and then project.config override them.
+FORMAT_CMD="" LINT_CMD="" TYPECHECK_CMD="" TEST_CMD="" BUILD_CMD=""
+TEST_LIST_CMD=""            # prints one line per test; zero lines = no tests = failure
+SKIP_MARKERS=""             # ERE matching a skipped/focused test in this stack
+ASSERT_PATTERN=""           # ERE matching an assertion in this stack
+TEST_PATHS='(^|/)(tests?|__tests__|spec)/|(_test|_spec|\.test|\.spec|Tests?)\.[A-Za-z]+$'
+SNAPSHOT_PATHS='(__snapshots__/|\.snap$|\.snapshot$)'
+COVERAGE_CMD="" COVERAGE_FILE="" COVERAGE_CHANGED_MIN=80 COVERAGE_TOTAL_MIN=0
+# Stack layer (docs/process/stack-layer.md): "" = not decided yet, "none" = not applicable (+ a # reason).
+ARCH_CMD="" COMPLEXITY_CMD="" PERF_CMD="" E2E_CMD="" CONTRACT_CMD="" SECURITY_NATIVE_CMD="" FUZZ_CMD="" DAST_CMD=""
+PLAYBOOK_VARS="ARCH_CMD COMPLEXITY_CMD PERF_CMD E2E_CMD CONTRACT_CMD SECURITY_NATIVE_CMD FUZZ_CMD DAST_CMD"
+SAFETY_REQUIRED=false SAFETY_TEST_CMD="" SAFETY_TEST_LIST_CMD=""
+SOURCE_EXTS="py|pyi|js|jsx|mjs|cjs|ts|tsx|rs|cs|fs|vb|dart|go|java|kt|kts|swift|c|cc|cpp|h|hpp|rb|php|lua|ex|exs|scala"
+NON_CODE_PATHS='^(docs/|specs/|spikes/|scripts/|tests/security-canary/|tests/quality-canary/|\.opengrep/|\.specify/|\.claude/|\.github/|\.gitlab/)'
+LOCKFILE_RULES='Cargo.toml:Cargo.lock pyproject.toml:uv.lock|poetry.lock|pdm.lock|requirements.txt package.json:package-lock.json|pnpm-lock.yaml|yarn.lock|bun.lock *.csproj:packages.lock.json *.fsproj:packages.lock.json pubspec.yaml:pubspec.lock go.mod:go.sum Gemfile:Gemfile.lock composer.json:composer.lock'
+STACK_DECISION="docs/decisions/0002-choose-the-stack.md"
+ISSUE_KEY="APP"
+WORK_TYPES="feat|fix|docs|chore|refactor|perf|test|build|ci"   # branch prefixes <type>/<KEY>-<n>-<slug>
+AGENT_BRANCH_RE='^(fix|release|claude)/|^ccr-'                 # branches an agent works on (todo-ids)
+TODO_FILE="TODO.md"
+DEP_DOCS="specs/*/plan.md docs/decisions/*.md"                 # where a new dependency must be named
+COMMIT_TYPES="feat|fix|docs|refactor|perf|test|build|ci|chore|revert"
+COMMIT_KEY_REQUIRED="feat|fix"   # these types must carry the issue key as scope
+PR_MAX_LINES=800
+FIX_MAX_LINES=200            # fix/ branches: bigger than this is not a small fix (AGENTS.md: escalate)
+SENSITIVE_PATHS='(^|/)(auth|security|crypto|safety|migrations?)(/|[._-])|(^|/)\.env'   # a fix/ branch touching these needs a person
+LICENSE_SEVERITY="HIGH,CRITICAL"             # trivy: forbidden = CRITICAL, restricted = HIGH
+RESEARCH_DIR="docs/research"
+DECISIONS_DIR="docs/decisions"
+RESEARCH_MAX_AGE_DAYS=90     # findings older than this are re-checked before a decision uses them
+RESEARCH_EXEMPT_ADRS="0001"  # decisions that need no research evidence
+MARKDOWNLINT_VERSION="0.24.0"
+STOP_STAGES="fast test build"   # read by .claude/hooks/run-checks.sh
+FORMAT_FILE_CMD=""              # read by .claude/hooks/format-file.sh; {file} = the edited file
+LINT_FILE_CMD=""                # read by .claude/hooks/lint-file.sh (run after the format step); {file} = the edited file
+VALE_EXCLUDE=""                 # ERE of paths Vale skips (content in another language, vendored text)
+VALE_SKIP='^(\.git|\.specify|\.opengrep|\.tools|node_modules|spikes|specs)/|(^|/)node_modules/|^tests/[a-z-]*-canary/|^docs/handover/|^\.claude/skills/speckit-'
+VALE_CODE_EXTS="py|pyi|js|jsx|mjs|cjs|ts|tsx|rs|go|cs|java|kt|kts|swift|c|cc|cpp|h|hpp|rb|php|scala"   # languages whose comments Vale reads
+WATERMARK_PATTERN='^[[:space:]]*Co-Authored-By:.*(Claude|Anthropic|Copilot|ChatGPT|OpenAI|Gemini|Codex|Cursor|Aider|Devin)|^[[:space:]]*Claude-Session:|Generated (with|by) \[?(Claude|Copilot|ChatGPT|Codex|Cursor|Gemini)|🤖|claude\.ai/(code|chat)/[^[:space:]]*session'
+VALE_IMAGE=""                   # no official image is pinned: install the binary (scripts/install-tools)
+SECURITY_SEVERITY="HIGH,CRITICAL"
+CANARY_DIR="tests/security-canary"
+QUALITY_CANARY_DIR="tests/quality-canary"   # check.config points it at tests/quality-canary/<stack>
+SKIP_DIRS="node_modules,.dart_tool,build,dist,.venv,.tools,target,bin,obj"
+GITLEAKS_IMAGE="ghcr.io/gitleaks/gitleaks:v8.30.1"
+OSV_IMAGE="ghcr.io/google/osv-scanner:v2.3.1"
+TRIVY_IMAGE="aquasec/trivy:0.76.1"
+OPENGREP_IMAGE=""
+OPENGREP_RULES=".opengrep/rules/custom"
+OPENGREP_EXCLUDE_RULES=""
+[[ -f check.config ]] && source ./check.config
+[[ -f project.config ]] && source ./project.config   # the project's values win over the standard's
+
+failed=()
+bold() { printf '\033[1m%s\033[0m\n' "$*"; }
+pass() { printf '\033[32mPASS\033[0m %s\n' "$*"; }
+fail() { printf '\033[31mFAIL\033[0m %s\n' "$*"; failed+=("$1"); }
+skip() { printf '\033[33mSKIP\033[0m %s\n' "$*"; }
+warn() { printf '\033[33mWARN\033[0m %s\n' "$*"; }
+in_ci() { [[ -n "${CI:-}" ]]; }
+default_base() { echo "origin/${CI_MERGE_REQUEST_TARGET_BRANCH_NAME:-${GITHUB_BASE_REF:-dev}}"; }
+current_branch() { echo "${GITHUB_HEAD_REF:-${CI_MERGE_REQUEST_SOURCE_BRANCH_NAME:-$(git rev-parse --abbrev-ref HEAD 2>/dev/null)}}"; }
+count_lines() { grep -cve '^[[:space:]]*$' || true; }
+
+# A project command. Empty = not configured (skip locally, FAIL in CI); "none" = not applicable.
+step() {
+    local name="$1" cmd="$2"
+    if [[ "$cmd" == "none" ]]; then skip "$name (not applicable, check.config or project.config)"; return; fi
+    if [[ -z "$cmd" ]]; then
+        if in_ci; then fail "$name" "(no command in check.config or project.config)"; else skip "$name (no command in check.config or project.config)"; fi
+        return
+    fi
+    bold "── $name: $cmd"
+    if bash -c "$cmd"; then pass "$name"; else fail "$name"; fi
+}
+
+# Run a security tool in directory $1: local binary, or its pinned image with $1 mounted read-only.
+tool_in() {
+    local dir="$1" bin="$2" image="$3"; shift 3
+    if command -v "$bin" >/dev/null 2>&1; then
+        (cd "$dir" && "$bin" "$@")
+    elif [[ -n "$image" ]] && docker info >/dev/null 2>&1; then
+        docker run --rm -v "$dir:/scan:${TOOL_MOUNT:-ro}" -w /scan "$image" "$@"
+    else
+        echo "$bin not found and no container runtime; run scripts/install-tools or start Docker." >&2
+        return 127
+    fi
+}
+tool() { tool_in "$ROOT" "$@"; }
+
+run_tool() {
+    local name="$1"; shift
+    bold "── $name"
+    "$@"
+    local rc=$?
+    if [[ $rc -eq 0 ]]; then pass "$name"
+    elif [[ $rc -eq 127 ]] && ! in_ci; then skip "$name (tool not installed)"
+    else fail "$name"; fi
+}
+
+opengrep_args() {
+    local r
+    for r in $OPENGREP_RULES; do printf -- '--config\0%s\0' "$r"; done
+    for r in $OPENGREP_EXCLUDE_RULES; do printf -- '--exclude-rule\0%s\0' "$r"; done
+}
+
+# Product source files (tracked or new), outside docs, specs, spikes, canaries and tooling.
+source_files() {
+    git ls-files --cached --others --exclude-standard 2>/dev/null \
+        | grep -E "\.(${SOURCE_EXTS})$" | grep -vE "$NON_CODE_PATHS" || true
+}
+
+# --- fast --------------------------------------------------------------------------------------
+
+# The constitution has one source (CONSTITUTION.md); Spec Kit reads a synced copy.
+constitution() {
+    [[ -f .specify/memory/constitution.md ]] || return 0
+    bold "── constitution in sync"
+    if cmp -s CONSTITUTION.md .specify/memory/constitution.md; then pass "constitution"
+    else fail "constitution"; echo "  .specify/memory/constitution.md differs: edit CONSTITUTION.md, then run scripts/sync-constitution"; fi
+}
+
+# Code may only exist once the stack layer gives it gates (lint and tests).
+code_needs_gates() {
+    local files n
+    files="$(source_files)"; n="$(count_lines <<<"$files")"
+    [[ "$n" -eq 0 ]] && return 0
+    bold "── code needs gates ($n source files)"
+    if [[ "$LINT_CMD" == "none" || -z "$LINT_CMD" || "$TEST_CMD" == "none" || -z "$TEST_CMD" ]]; then
+        fail "code-needs-gates"
+        echo "  Source files exist but LINT_CMD / TEST_CMD are not set. Decide the stack ($STACK_DECISION)"
+        echo "  and add the stack layer, or move experiments to spikes/ on a spike/* branch. First files:"
+        head -n 5 <<<"$files" | sed 's/^/    /'
+    else
+        pass "code-needs-gates"
+    fi
+}
+
+# Feature plans build on the stack decision; they don't make it.
+stack_decision() {
+    compgen -G "specs/*/plan.md" >/dev/null || return 0
+    bold "── stack decision accepted"
+    if [[ -f "$STACK_DECISION" ]] && grep -qiE '^- \*\*Status\*\*: *accepted' "$STACK_DECISION"; then pass "stack-decision"
+    else fail "stack-decision"; echo "  specs/*/plan.md exists but $STACK_DECISION is not accepted: plans must not choose the stack."; fi
+}
+
+# Spike code is throwaway: it lives on spike/* branches only.
+spikes() {
+    [[ -n "$(git ls-files spikes 2>/dev/null)" ]] || return 0
+    local b; b="$(current_branch)"
+    bold "── spikes stay on spike branches"
+    if [[ "$b" =~ ^spike/ ]]; then pass "spikes"
+    else fail "spikes"; echo "  spikes/ is tracked on '$b'. Spike code never reaches dev or main: copy findings into docs/research and drop it."; fi
+}
+
+# Git hooks are local feedback; say so when they aren't installed (CI doesn't need them).
+hooks_installed() {
+    in_ci && return 0
+    local hook; hook="$(git rev-parse --git-path hooks/commit-msg 2>/dev/null)"
+    grep -qs lefthook "$hook" || warn "git hooks not installed: run scripts/setup (commit-msg and pre-commit checks are off)"
+}
+
+fast() {
+    hooks_installed
+    constitution
+    code_needs_gates
+    stack_decision
+    spikes
+    research
+    tracked_env
+    step "format" "$FORMAT_CMD"
+    step "lint" "$LINT_CMD"
+    step "typecheck" "$TYPECHECK_CMD"
+    if git rev-parse --verify -q HEAD >/dev/null; then
+        run_tool "secrets (staged)" tool gitleaks "$GITLEAKS_IMAGE" git --pre-commit --staged --redact --no-banner .
+    fi
+}
+
+# --- research ------------------------------------------------------------------------------------
+
+today() { echo "${CHECK_TODAY:-$(date +%F)}"; }
+epoch() { date -d "$1" +%s 2>/dev/null; }
+valid_date() { [[ "$1" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] && epoch "$1" >/dev/null; }
+
+# Value of a header field "- **Name**: value" (a value on the next line counts too). Placeholders
+# like <date> and empty values print nothing.
+note_field() {
+    local v
+    v="$(awk -v f="$2" '
+        { line=$0; sub(/^[[:space:]]*([-*+][[:space:]]+)?/, "", line) }
+        found && NF { if (line !~ /^\*\*/) print line; exit }
+        index(line, "**" f "**:") == 1 { v=substr(line, length(f) + 6); gsub(/^[[:space:]]+|[[:space:]]+$/, "", v); if (v != "") { print v; exit } found=1 }
+    ' "$1")"
+    [[ "$v" =~ ^\<.*\>$ ]] && v=""
+    printf '%s' "$v"
+}
+
+# "2h", "3 days", "1 week" or a date: when the time-box ends, as seconds since the epoch.
+timebox_end() {
+    local start="$1" box="${2,,}" n unit
+    if [[ "$box" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2} ]]; then epoch "${BASH_REMATCH[0]}"; return; fi
+    if [[ "$box" =~ ([0-9]+)[[:space:]]*(h|hr|hrs|hour|hours|d|day|days|w|wk|week|weeks)([^a-z]|$) ]]; then
+        n="${BASH_REMATCH[1]}"; unit="${BASH_REMATCH[2]}"
+        case "$unit" in h*) n=$(( (n + 23) / 24 )) ;; w*) n=$(( n * 7 )) ;; esac
+        echo $(( $(epoch "$start") + n * 86400 )); return
+    fi
+}
+
+research_notes() {
+    local f; for f in "$RESEARCH_DIR"/*.md; do
+        [[ -f "$f" ]] || continue
+        case "$(basename "$f")" in README.md|*-template.md) continue ;; esac
+        echo "$f"
+    done
+}
+
+# Research notes are dated, verified and re-checked; decisions cite them (docs/research/README.md).
+#   FAIL  a note without its header fields, an invalid Status/date, a re-check date further away than
+#         RESEARCH_MAX_AGE_DAYS, an accepted decision without evidence, a proposed decision that
+#         links a note past its re-check date (or marked stale)
+#   WARN  an open note past its time-box
+research() {
+    [[ -d "$RESEARCH_DIR" || -d "$DECISIONS_DIR" ]] || return 0
+    local now; now="$(epoch "$(today)")"
+    [[ -n "$now" ]] || { skip "research (no GNU date)"; return; }
+    bold "── research notes and decisions"
+    local f name field val problems=() warnings=() n=0 stale=()
+    while IFS= read -r f; do
+        [[ -z "$f" ]] && continue
+        n=$((n + 1)); name="$(basename "$f")"
+        local date_v recheck status box
+        for field in Date Question Time-box Status Sources Verified "Re-check by"; do
+            val="$(note_field "$f" "$field")"
+            [[ -n "$val" ]] || problems+=("$name: header field '$field' is missing or still a placeholder")
+        done
+        date_v="$(note_field "$f" Date)"; recheck="$(note_field "$f" "Re-check by")"
+        status="$(note_field "$f" Status)"; box="$(note_field "$f" Time-box)"
+        [[ -z "$status" || "$status" =~ ^(open|answered|stale)$ ]] || problems+=("$name: Status must be open, answered or stale (got '$status')")
+        if [[ -n "$date_v" ]] && ! valid_date "$date_v"; then problems+=("$name: Date '$date_v' is not YYYY-MM-DD"); date_v=""; fi
+        if [[ -n "$recheck" ]] && ! valid_date "$recheck"; then problems+=("$name: Re-check by '$recheck' is not YYYY-MM-DD"); recheck=""; fi
+        if [[ -n "$date_v" && -n "$recheck" ]]; then
+            if (( $(epoch "$recheck") > $(epoch "$date_v") + RESEARCH_MAX_AGE_DAYS * 86400 )); then
+                problems+=("$name: Re-check by $recheck is more than $RESEARCH_MAX_AGE_DAYS days after Date $date_v")
+            fi
+        fi
+        if [[ "$status" == stale ]] || { [[ -n "$recheck" ]] && (( now > $(epoch "$recheck") )); }; then stale+=("$name"); fi
+        if [[ "$status" == open && -n "$date_v" && -n "$box" ]]; then
+            local end; end="$(timebox_end "$date_v" "$box")"
+            if [[ -z "$end" ]]; then warnings+=("$name: can't read the Time-box '$box' (use e.g. 4h, 2 days, 1 week or a date)")
+            elif (( now > end )); then warnings+=("$name: open past its time-box ($box from $date_v): answer it, extend it on purpose, or stop"); fi
+        fi
+    done < <(research_notes)
+
+    local adr num adr_status links l notes_linked
+    for adr in "$DECISIONS_DIR"/[0-9]*.md; do
+        [[ -f "$adr" ]] || continue
+        name="$(basename "$adr")"; num="${name%%-*}"
+        adr_status="$(grep -iE '^- \*\*Status\*\*:' "$adr" | head -n1 | sed -E 's/^- \*\*Status\*\*:[[:space:]]*//' | tr 'A-Z' 'a-z' | awk '{print $1}')"
+        # Evidence = research notes and assessments that exist, linked from the decision.
+        notes_linked=()
+        links="$(grep -oE 'research/[A-Za-z0-9._/-]+\.md' "$adr" | sed 's#^research/##' | sort -u)"
+        while IFS= read -r l; do
+            [[ -z "$l" || "$l" == README.md || "$l" == *-template.md ]] && continue
+            [[ -f "$RESEARCH_DIR/$l" ]] && notes_linked+=("$l")
+        done <<<"$links"
+        local assess=0
+        while IFS= read -r l; do [[ -e "$l" ]] && assess=1; done < <(grep -oE '\.specify/assessments/[A-Za-z0-9._/-]+' "$adr" | sort -u)
+        if [[ "$adr_status" == accepted && ${#notes_linked[@]} -eq 0 && $assess -eq 0 ]]; then
+            case " $RESEARCH_EXEMPT_ADRS " in *" $num "*) ;; *) problems+=("$name: accepted, but links no existing research note or assessment (Evidence section)") ;; esac
+        fi
+        if [[ "$adr_status" == proposed ]]; then
+            for l in "${notes_linked[@]}"; do
+                [[ " ${stale[*]-} " == *" $l "* ]] && problems+=("$name: links $l, which is past its re-check date or marked stale: re-check it first")
+            done
+        fi
+    done
+
+    [[ ${#warnings[@]} -gt 0 ]] && printf '  WARN %s\n' "${warnings[@]}"
+    if [[ ${#problems[@]} -eq 0 ]]; then pass "research ($n notes${warnings[*]:+, ${#warnings[@]} warnings})"
+    else printf '  %s\n' "${problems[@]}"; fail "research"; fi
+}
+
+# --- stack layer (docs/process/stack-layer.md) ---------------------------------------------------
+
+# A playbook command: skipped when "none"; an empty value is reported by `stack-layer`, not here,
+# so a day-0 project (no code) stays green.
+playbook_step() {
+    local name="$1" cmd="$2"
+    if [[ -z "$cmd" ]]; then skip "$name (not decided yet: docs/process/stack-layer.md)"; return; fi
+    step "$name" "$cmd"
+}
+
+# Once code exists, every playbook variable is a command or "none" with a reason comment in
+# project.config. Empty = undecided: WARN locally, FAIL in CI.
+stack_layer() {
+    local n; n="$(count_lines <<<"$(source_files)")"
+    if [[ "$n" -eq 0 ]]; then skip "stack-layer (no code yet)"; return; fi
+    bold "── stack layer decided ($n source files)"
+    local v val open=()
+    for v in $PLAYBOOK_VARS; do
+        val="${!v}"
+        if [[ -z "$val" ]]; then open+=("$v is empty")
+        elif [[ "$val" == none ]] && ! grep -qE "^${v}=[\"']none[\"'][[:space:]]*#[[:space:]]*[^[:space:]]" project.config check.config 2>/dev/null; then
+            open+=("$v is \"none\" without a reason: write  $v=\"none\"   # why it does not apply")
+        fi
+    done
+    if [[ "$COVERAGE_TOTAL_MIN" == 0 ]]; then warn "COVERAGE_TOTAL_MIN is 0: raise it to the current total (step 12 of the playbook)"; fi
+    if [[ ${#open[@]} -eq 0 ]]; then pass "stack-layer"; return; fi
+    printf '  %s\n' "${open[@]}"
+    echo "  Work through docs/process/stack-layer.md (skill /stack-layer): set a command or \"none\" + reason in project.config."
+    if in_ci; then fail "stack-layer"; else warn "stack-layer: ${#open[@]} undecided (fails in CI)"; fi
+}
+
+# --- tests ---------------------------------------------------------------------------------------
+
+test_stage() {
+    step "test" "$TEST_CMD"
+    [[ "$TEST_CMD" == "none" || -z "$TEST_CMD" ]] && return
+    bold "── test count"
+    if [[ -z "$TEST_LIST_CMD" ]]; then
+        if in_ci; then fail "test-count"; echo "  TEST_LIST_CMD is required: without it 'zero tests' passes."; else skip "test-count (no TEST_LIST_CMD)"; fi
+        return
+    fi
+    local n; n="$(bash -c "$TEST_LIST_CMD" 2>/dev/null | count_lines)"
+    if [[ "$n" -gt 0 ]]; then pass "test-count ($n tests)"; else fail "test-count"; echo "  No tests found: 'pass with no tests' is a failure (constitution III)."; fi
+}
+
+coverage() {
+    local base="${1:-$(default_base)}"
+    [[ "$COVERAGE_CMD" == "none" ]] && { skip "coverage (not applicable, check.config or project.config)"; return; }
+    if [[ -z "$COVERAGE_CMD" ]]; then
+        if [[ -n "$(source_files)" ]] && in_ci; then fail "coverage"; echo "  Code exists but COVERAGE_CMD is not set."; else skip "coverage (no COVERAGE_CMD)"; fi
+        return
+    fi
+    step "coverage run" "$COVERAGE_CMD"
+    [[ -f "$COVERAGE_FILE" ]] || { fail "coverage"; echo "  $COVERAGE_FILE was not produced."; return; }
+    # Total (Cobertura line-rate or LCOV LH/LF).
+    local total
+    if grep -q '<coverage' "$COVERAGE_FILE"; then
+        total="$(grep -oE '<coverage[^>]*line-rate="[0-9.]+"' "$COVERAGE_FILE" | head -n1 | grep -oE '[0-9.]+"$' | tr -d '"' | awk '{printf "%.1f", $1*100}')"
+    else
+        total="$(awk -F: '/^LF:/{f+=$2} /^LH:/{h+=$2} END{ if (f>0) printf "%.1f", h*100/f; else print "0" }' "$COVERAGE_FILE")"
+    fi
+    bold "── coverage total: ${total}% (min ${COVERAGE_TOTAL_MIN}%)"
+    if awk -v t="$total" -v m="$COVERAGE_TOTAL_MIN" 'BEGIN{exit !(t+0 >= m+0)}'; then pass "coverage-total"; else fail "coverage-total"; fi
+    # Changed lines, against the base branch.
+    if git rev-parse --verify -q "$base" >/dev/null; then
+        bold "── coverage of changed lines vs $base (min ${COVERAGE_CHANGED_MIN}%)"
+        if uvx --quiet --from diff-cover==9.2.0 diff-cover "$COVERAGE_FILE" --compare-branch="$base" --fail-under="$COVERAGE_CHANGED_MIN" --quiet; then
+            pass "coverage-changed"
+        else fail "coverage-changed"; fi
+    else
+        skip "coverage-changed (no $base)"
+    fi
+}
+
+safety() {
+    [[ "$SAFETY_REQUIRED" == "true" ]] || return 0
+    [[ -n "$(source_files)" ]] || { skip "safety (no code yet)"; return; }
+    bold "── safety tests"
+    if [[ -z "$SAFETY_TEST_LIST_CMD" || -z "$SAFETY_TEST_CMD" ]]; then fail "safety"; echo "  SAFETY_REQUIRED=true needs SAFETY_TEST_CMD and SAFETY_TEST_LIST_CMD."; return; fi
+    local n; n="$(bash -c "$SAFETY_TEST_LIST_CMD" 2>/dev/null | count_lines)"
+    if [[ "$n" -eq 0 ]]; then fail "safety"; echo "  No safety-tagged tests: physical safety (constitution VII) must be tested."; return; fi
+    step "safety ($n tests)" "$SAFETY_TEST_CMD"
+}
+
+# Changes that weaken tests: blocked on agent PRs; a person approves them with ALLOW_TEST_CHANGES=1
+# (CI sets it when the PR has the label 'test-change').
+test_integrity() {
+    local base="${1:-$(default_base)}" findings=()
+    git rev-parse --verify -q "$base" >/dev/null || { skip "test-integrity (no $base)"; return; }
+    bold "── test integrity vs $base"
+    local f
+    while IFS= read -r f; do [[ -n "$f" ]] && findings+=("deleted test file: $f"); done \
+        < <(git diff --name-only --diff-filter=D "$base"...HEAD | grep -E "$TEST_PATHS" || true)
+    while IFS= read -r f; do [[ -n "$f" ]] && findings+=("snapshot changed: $f"); done \
+        < <(git diff --name-only "$base"...HEAD | grep -E "$SNAPSHOT_PATHS" || true)
+    if [[ -n "$SKIP_MARKERS" ]]; then
+        local added
+        added="$(git diff -U0 "$base"...HEAD -- . ':!scripts' ':!check.config' ':!project.config' ':!tests/quality-canary' | grep -E '^\+[^+]' | grep -E -- "$SKIP_MARKERS" || true)"
+        [[ -n "$added" ]] && findings+=("new skip/focus marker: $(head -n1 <<<"$added" | cut -c1-100)")
+    fi
+    if [[ -n "$ASSERT_PATTERN" ]]; then
+        local files removed added_n
+        files="$(git diff --name-only "$base"...HEAD | grep -E "$TEST_PATHS" | grep -vE '^tests/quality-canary/' || true)"
+        if [[ -n "$files" ]]; then
+            removed="$(git diff -U0 "$base"...HEAD -- $files | grep -E '^-[^-]' | grep -cE -- "$ASSERT_PATTERN" || true)"
+            added_n="$(git diff -U0 "$base"...HEAD -- $files | grep -E '^\+[^+]' | grep -cE -- "$ASSERT_PATTERN" || true)"
+            [[ "$removed" -gt "$added_n" ]] && findings+=("assertions removed: $removed removed, $added_n added")
+        fi
+    fi
+    if [[ ${#findings[@]} -eq 0 ]]; then pass "test-integrity"; return; fi
+    printf '  %s\n' "${findings[@]}"
+    if [[ "${ALLOW_TEST_CHANGES:-0}" == "1" ]]; then warn "test-integrity: approved by a person (label test-change)"
+    else fail "test-integrity"; echo "  A person reviews these and adds the label 'test-change' (agents never do)."; fi
+}
+
+# Every quality gate must fail on its planted case: tests/quality-canary/<case>/ where <case>
+# starts with format-, lint-, typecheck-, test-fails-, test-zero- or skip-marker-.
+quality_canary() {
+    [[ -d "$QUALITY_CANARY_DIR" ]] || return 0
+    bold "── quality canary ($QUALITY_CANARY_DIR)"
+    local dir name gate cmd caught=() missed=()
+    for dir in "$QUALITY_CANARY_DIR"/*/; do
+        [[ -d "$dir" ]] || continue
+        name="$(basename "$dir")"
+        if [[ "$name" == clean-* ]]; then
+            # Control case: every gate must PASS here, or the other cases may "fail" for a wrong reason.
+            local g c bad=""
+            for g in FORMAT_CMD LINT_CMD TYPECHECK_CMD TEST_CMD; do
+                c="${!g}"; [[ -z "$c" || "$c" == none ]] && continue
+                (cd "$dir" && bash -c "$c") >/dev/null 2>&1 || bad+=" ${g%_CMD}"
+            done
+            if [[ -n "$TEST_LIST_CMD" ]] && [[ "$( (cd "$dir" && bash -c "$TEST_LIST_CMD") 2>/dev/null | count_lines)" -eq 0 ]]; then bad+=" TEST_LIST"; fi
+            if [[ -z "$bad" ]]; then caught+=("$name"); else missed+=("$name (control case failed:$bad: the gates are broken, not the code)"); fi
+            continue
+        fi
+        case "$name" in
+            format-*)      gate=format;     cmd="$FORMAT_CMD" ;;
+            lint-*)        gate=lint;       cmd="$LINT_CMD" ;;
+            typecheck-*)   gate=typecheck;  cmd="$TYPECHECK_CMD" ;;
+            test-fails-*)  gate="test";      cmd="$TEST_CMD" ;;
+            test-zero-*)   gate=test-count; cmd="$TEST_LIST_CMD" ;;
+            skip-marker-*) gate=skip-marker; cmd="" ;;
+            *) continue ;;
+        esac
+        if [[ "$gate" == skip-marker ]]; then
+            if [[ -n "$SKIP_MARKERS" ]] && grep -rqE -- "$SKIP_MARKERS" "$dir"; then caught+=("$name"); else missed+=("$name"); fi
+            continue
+        fi
+        if [[ -z "$cmd" || "$cmd" == none ]]; then missed+=("$name (no command)"); continue; fi
+        if [[ "$gate" == test-count ]]; then
+            local n; n="$( (cd "$dir" && bash -c "$cmd") 2>/dev/null | count_lines)"
+            [[ "$n" -eq 0 ]] && caught+=("$name") || missed+=("$name ($n tests listed)")
+        elif (cd "$dir" && bash -c "$cmd") >/dev/null 2>&1; then missed+=("$name")
+        else caught+=("$name"); fi
+    done
+    if [[ ${#caught[@]} -eq 0 && ${#missed[@]} -eq 0 ]]; then skip "quality-canary (no cases)"; return; fi
+    if [[ ${#missed[@]} -eq 0 ]]; then pass "quality-canary (${#caught[@]} planted cases caught)"
+    else printf '  gate did not fail on: %s\n' "${missed[@]}"; fail "quality-canary"; fi
+}
+
+# --- security ------------------------------------------------------------------------------------
+
+secrets() {
+    tracked_env
+    run_tool "secrets (full history)" tool gitleaks "$GITLEAKS_IMAGE" git --redact --no-banner --exit-code 1 .
+}
+
+# .env files hold real secrets; only the examples may be tracked.
+tracked_env() {
+    local bad
+    bad="$(git ls-files 2>/dev/null | grep -E '(^|/)\.env(\.[A-Za-z0-9_-]+)?$' | grep -vE '(^|/)\.env(\.[A-Za-z0-9_-]+)?\.example$|(^|/)\.env\.example$' || true)"
+    [[ -z "$bad" ]] && return 0
+    bold "── tracked .env files"
+    fail "env-files"; sed 's/^/  tracked: /' <<<"$bad"
+    echo "  Remove them from git (git rm --cached) and rotate what they held; keep placeholders in .env.example."
+}
+
+
+# Without a lockfile the scanners see nothing; a manifest needs its lockfile next to it or above it.
+lockfiles() {
+    local rule manifest locks m dir ok missing=()
+    for rule in $LOCKFILE_RULES; do
+        manifest="${rule%%:*}"; locks="${rule#*:}"
+        while IFS= read -r m; do
+            [[ -z "$m" ]] && continue
+            dir="$(dirname "$m")"; ok=false
+            while :; do
+                local l; for l in ${locks//|/ }; do [[ -f "$dir/$l" ]] && ok=true; done
+                [[ "$ok" == true || "$dir" == "." ]] && break
+                dir="$(dirname "$dir")"
+            done
+            [[ "$ok" == true ]] || missing+=("$m (needs ${locks//|/ or })")
+        done < <(git ls-files --cached --others --exclude-standard -- "$manifest" "**/$manifest" 2>/dev/null \
+                   | grep -vE "^($CANARY_DIR|$QUALITY_CANARY_DIR|spikes)/" | sort -u)
+    done
+    bold "── lockfiles"
+    if [[ ${#missing[@]} -eq 0 ]]; then pass "lockfiles"
+    else printf '  no lockfile: %s\n' "${missing[@]}"; fail "lockfiles"; echo "  Without a lockfile the dependency scan sees nothing."; fi
+}
+
+# Gate: fixable HIGH/CRITICAL in production dependencies, and no known malicious package.
+# Exceptions: .trivyignore.yaml, each with a statement and expired_at; an expired exception fails
+# again. Dev-only findings: deps-report.
+deps() {
+    lockfiles
+    run_tool "dependencies (gate, trivy)" tool trivy "$TRIVY_IMAGE" fs --quiet --scanners vuln \
+        --severity "$SECURITY_SEVERITY" --ignore-unfixed --exit-code 1 \
+        --ignorefile .trivyignore.yaml --skip-dirs "$SKIP_DIRS,$CANARY_DIR,$QUALITY_CANARY_DIR,spikes" .
+    malicious_packages
+}
+
+# GATE: no known malicious package (osv.dev advisories with a MAL- id), whatever its severity.
+# osv.dev unreachable: WARN locally, FAIL in CI. Other findings: deps-report.
+malicious_packages() {
+    bold "── malicious packages (osv-scanner, MAL- advisories)"
+    local out err rc ids
+    out="$(mktemp)"; err="$(mktemp)"
+    tool osv-scanner "$OSV_IMAGE" scan source --recursive --config osv-scanner.toml --format json . >"$out" 2>"$err"; rc=$?
+    case $rc in
+        0|1|128) ;;   # clean, other vulnerabilities (not this gate), no packages found
+        *)
+            rm -f "$out"; head -n 3 "$err" | sed 's/^/  /'; rm -f "$err"
+            if in_ci; then fail "malicious-packages"; echo "  osv-scanner could not run or reach osv.dev (exit $rc)."
+            else warn "malicious-packages: osv-scanner could not run or reach osv.dev (exit $rc); fails in CI"; fi
+            return ;;
+    esac
+    rm -f "$err"
+    local skip_re='(^|/)(tests/(security|quality)-canary|spikes)/'
+    if command -v jq >/dev/null 2>&1; then
+        ids="$(jq -r --arg ex "$skip_re" '.results[]? | select(.source.path | test($ex) | not) | .source.path as $p | .packages[]? | .package as $k | .vulnerabilities[]? | select(.id | startswith("MAL-")) | "\(.id) \($k.ecosystem)/\($k.name)@\($k.version) (\($p))"' "$out" 2>/dev/null | sort -u)"
+    elif command -v python3 >/dev/null 2>&1; then
+        ids="$(python3 - "$out" "$skip_re" <<'PY' 2>/dev/null
+import json, re, sys
+d = json.load(open(sys.argv[1]))
+seen = set()
+for r in d.get("results") or []:
+    p = r.get("source", {}).get("path", "")
+    if re.search(sys.argv[2], p): continue
+    for pk in r.get("packages") or []:
+        for v in pk.get("vulnerabilities") or []:
+            if v.get("id", "").startswith("MAL-"):
+                k = pk.get("package", {}); seen.add(f'{v["id"]} {k.get("ecosystem")}/{k.get("name")}@{k.get("version")} ({p})')
+print("\n".join(sorted(seen)))
+PY
+)"
+    else
+        ids="$(grep -oE '"id": ?"MAL-[A-Za-z0-9-]+"' "$out" | sort -u)"
+    fi
+    rm -f "$out"
+    if [[ -z "$ids" ]]; then pass "malicious-packages (no MAL- advisory)"
+    else fail "malicious-packages"; printf '  %s\n' "$ids"; echo "  Remove the package now, check what it could have run (install scripts), rotate secrets on that machine."; fi
+}
+
+# Licences of the dependencies (trivy, from the installed packages: run after INSTALL_CMD).
+# Exceptions: .trivyignore.yaml "licenses:" with a statement and expired_at.
+licenses() {
+    run_tool "licenses (trivy: $LICENSE_SEVERITY)" tool trivy "$TRIVY_IMAGE" fs --quiet --scanners license \
+        --severity "$LICENSE_SEVERITY" --exit-code 1 --ignorefile .trivyignore.yaml \
+        --skip-dirs ".git,.tools,$CANARY_DIR,$QUALITY_CANARY_DIR,spikes,.opengrep" .
+}
+
+# Report: everything osv.dev knows, all severities, dev dependencies included. Never fails.
+deps_report() {
+    bold "── dependencies (report, osv-scanner)"
+    tool osv-scanner "$OSV_IMAGE" scan source --recursive --config osv-scanner.toml . \
+        && pass "deps-report (nothing found)" \
+        || skip "deps-report: findings above (or osv.dev unreachable); review, they don't block"
+}
+
+sast() {
+    local args=()
+    mapfile -d '' args < <(opengrep_args)
+    # .semgrepignore keeps the canaries, spikes and public client config out of the normal scan.
+    run_tool "sast (opengrep)" tool opengrep "$OPENGREP_IMAGE" scan "${args[@]}" --error --quiet .
+}
+
+config() {
+    run_tool "config (trivy)" tool trivy "$TRIVY_IMAGE" config --quiet --exit-code 1 \
+        --severity "$SECURITY_SEVERITY" --skip-dirs "$SKIP_DIRS,$CANARY_DIR,$QUALITY_CANARY_DIR,spikes" .
+}
+
+# The canary: planted bugs that the scanners must keep finding. Protects against tool upgrades,
+# rule changes and exclusions that silently blind a scan. Secrets are generated at run time so no
+# secret-like string is ever committed (and push protection stays quiet).
+canary() {
+    bold "── canary ($CANARY_DIR)"
+    if [[ ! -f "$CANARY_DIR/expected.txt" ]]; then skip "canary (no $CANARY_DIR/expected.txt)"; return; fi
+    local work; work="$(mktemp -d)"
+    mkdir -p "$work/target" "$work/rules" "$work/out"
+    cp -r "$CANARY_DIR/." "$work/target/"
+    rm -f "$work/target/expected.txt" "$work/target/README.md"
+    printf 'aws_key = "%s%s"\nstripe = "%s%s"\n' "AKIA" "QYLPMN5HHHFPZAM2" "sk_live_" \
+        "51HqT9bLkZy3XzQ8WmP4vN2sR7tU6yA1cD5eF8gH0jK2lM4nO6pQ8rS0tU2vW4xY6zA8" > "$work/target/generated-secrets.txt"
+    # The rules of .gitleaks.toml that go beyond the defaults: URL credentials, Discord webhook, typed constant.
+    printf 'db = "%s://app:%s@db.internal.example:5432/app"\nhook = "https://%s/api/webhooks/%s/%s"\nconst API_KEY: &str = "%s";\n' \
+        "postgres" "Zk3-9fPqL2xV8w" "discord.com" "1234567890123456789" \
+        "Aq3Zk9Pq2LxV8wRt5Yb7UcN4MdE6HfG1JiKoPlSa0TyXvWuBnCm2DrZe3qh" "q8Zk3-9fPqL2xV8wRt5Yb7" >> "$work/target/generated-secrets.txt"
+    local GITLEAKS_CFG=""; cp .gitleaks.toml "$work/.gitleaks.toml" 2>/dev/null && GITLEAKS_CFG=1
+    local i=0 r cfg=()
+    for r in $OPENGREP_RULES; do [[ -e "$r" ]] || continue; cp -r "$r" "$work/rules/$i"; cfg+=(--config "rules/$i"); i=$((i + 1)); done
+
+    tool_in "$work" opengrep "$OPENGREP_IMAGE" scan "${cfg[@]}" --json --quiet target > "$work/out/opengrep.json" 2>/dev/null
+    TOOL_MOUNT=rw tool_in "$work" gitleaks "$GITLEAKS_IMAGE" dir target --no-banner --exit-code 0 \
+        ${GITLEAKS_CFG:+--config .gitleaks.toml} --report-format json --report-path out/gitleaks.json >/dev/null 2>&1
+    tool_in "$work" trivy "$TRIVY_IMAGE" config --quiet --format json target > "$work/out/trivy.json" 2>/dev/null
+
+    local found
+    found="$( { grep -ohE '"check_id": ?"[^"]*"' "$work/out/opengrep.json" | sed -E 's/.*"([^"]*)"$/opengrep:\1/; s/opengrep:.*\./opengrep:/'
+                grep -ohE '"RuleID": ?"[^"]*"' "$work/out/gitleaks.json" | sed -E 's/.*"([^"]*)"$/gitleaks:\1/'
+                grep -ohE '"ID": ?"[^"]*"' "$work/out/trivy.json" | sed -E 's/.*"([^"]*)"$/trivy:\1/'
+              } 2>/dev/null | sort -u)"
+    rm -rf "$work"
+
+    local missing=() line
+    while IFS= read -r line; do
+        line="${line%%#*}"; line="${line//[[:space:]]/}"
+        [[ -z "$line" ]] && continue
+        grep -qxF "$line" <<<"$found" || missing+=("$line")
+    done < "$CANARY_DIR/expected.txt"
+
+    if [[ ${#missing[@]} -eq 0 ]]; then
+        pass "canary ($(count_lines <<<"$found") planted findings detected)"
+    else
+        printf '  not detected: %s\n' "${missing[@]}"
+        fail "canary"
+    fi
+}
+
+image() {
+    local ref="${1:?usage: scripts/check image <image-ref>}"
+    bold "── image (trivy): $ref"
+    if command -v trivy >/dev/null 2>&1; then
+        trivy image --quiet --exit-code 1 --ignore-unfixed --ignorefile .trivyignore.yaml --severity "$SECURITY_SEVERITY" "$ref"
+    else
+        docker run --rm -v /var/run/docker.sock:/var/run/docker.sock -v "$ROOT:/repo:ro" -w /repo "$TRIVY_IMAGE" \
+            image --quiet --exit-code 1 --ignore-unfixed --ignorefile .trivyignore.yaml --severity "$SECURITY_SEVERITY" "$ref"
+    fi && pass "image" || fail "image"
+}
+
+# --- process -------------------------------------------------------------------------------------
+
+pr_size() {
+    local base="${1:-$(default_base)}" lines b max="$PR_MAX_LINES" fixbranch=false
+    b="$(current_branch)"
+    [[ "$b" =~ ^fix/ ]] && { fixbranch=true; max="$FIX_MAX_LINES"; }
+    lines="$(git diff --numstat "$base"...HEAD -- . ':!*.lock' ':!package-lock.json' ':!pubspec.lock' \
+        | awk '{ s += $1 + $2 } END { print s + 0 }')"
+    bold "── pr-size: $lines changed lines against $base (max $max${fixbranch:+, fix branch})"
+    local bad=0
+    if [[ "$lines" -gt "$max" ]]; then bad=1; echo "  $lines lines is more than $max."; fi
+    if $fixbranch; then
+        # A fix that reaches security, data, safety or migrations is not a small fix: a person takes it.
+        local sensitive; sensitive="$(git diff --name-only "$base"...HEAD | grep -E "$SENSITIVE_PATHS" || true)"
+        if [[ -n "$sensitive" ]]; then bad=1; echo "  A fix/ branch touches sensitive paths (SENSITIVE_PATHS in check.config):"; sed 's/^/    /' <<<"$sensitive"; fi
+    fi
+    if [[ $bad -eq 0 ]]; then pass "pr-size"
+    else fail "pr-size"; echo "  Split the change or hand it to a person; a person who has reviewed it adds the label 'large-change'."; fi
+}
+
+# AI watermarks (trailers naming an AI tool, session links, "generated with" lines) in the text on
+# stdin; prints the offending lines. The role of AI is described once, in AGENTS.md and the README.
+watermark_lines() { grep -iE -- "$WATERMARK_PATTERN" || true; }
+
+commit_msg() {
+    # Conventional Commits with the issue key as scope: feat(APP-12): add fixture groups
+    local file="${1:?usage: scripts/check commit-msg <file>}" first type marks
+    marks="$(grep -vE '^#' "$file" | watermark_lines)"
+    if [[ -n "$marks" ]]; then
+        echo "Commit messages carry no AI watermark (AGENTS.md rule 9):" >&2
+        sed 's/^/  /' <<<"$marks" >&2
+        return 1
+    fi
+    first="$(head -n 1 "$file")"
+    [[ "$first" =~ ^(Merge|Revert|fixup!|squash!) ]] && return 0
+    local re="^(${COMMIT_TYPES})(\\(([A-Za-z0-9._/-]+)\\))?(!)?: [^ ].*$"
+    if ! [[ "$first" =~ $re ]]; then
+        echo "Commit message must be a Conventional Commit: <type>(${ISSUE_KEY}-<n>): <summary>" >&2
+        echo "  types: ${COMMIT_TYPES//|/, }" >&2
+        echo "  got:   $first" >&2
+        return 1
+    fi
+    type="${BASH_REMATCH[1]}"; local scope="${BASH_REMATCH[3]:-}"   # save before the next =~ overwrites it
+    if [[ "$type" =~ ^(${COMMIT_KEY_REQUIRED})$ ]] && ! [[ "$scope" =~ ^${ISSUE_KEY}-[0-9]+$ ]]; then
+        echo "A '$type' commit needs the issue as scope: $type(${ISSUE_KEY}-<n>): <summary>" >&2
+        echo "  got:   $first" >&2
+        return 1
+    fi
+    return 0
+}
+
+# The PR title becomes the squash commit subject, so it must pass the same rule. A "Merge" or
+# "Revert" title is not allowed here (it would hide the change from scripts/next-version).
+pr_title() {
+    local title="${1:?usage: scripts/check pr-title \"<title>\"}" f
+    bold "── pr-title: $title"
+    if [[ "$title" =~ ^(Merge|Revert|fixup!|squash!) ]]; then fail "pr-title"; echo "  Use a Conventional Commit title."; return; fi
+    if [[ -n "$(watermark_lines <<<"$title")" ]]; then fail "pr-title"; echo "  The title carries an AI watermark."; return; fi
+    f="$(mktemp)"; printf '%s\n' "$title" > "$f"
+    if commit_msg "$f"; then pass "pr-title"; else fail "pr-title"; fi
+    rm -f "$f"
+}
+
+# Branch names carry the work type and issue; main and dev only change through a PR.
+# A maintainer can override once with ALLOW_BRANCH=1 (the branch rules on the server still apply).
+branch_name() {
+    in_ci && return 0
+    git rev-parse --verify -q HEAD >/dev/null || return 0   # the very first commit
+    local b; b="$(current_branch)"
+    local re="^(${WORK_TYPES})/${ISSUE_KEY}-[0-9]+-[a-z0-9-]+$|^spike/${ISSUE_KEY}-[0-9]+-[a-z0-9-]+$|^release/v[0-9]+\.[0-9]+\.[0-9]+$|^claude/|^ccr-"
+    if [[ "$b" =~ $re ]]; then return 0; fi
+    if [[ "${ALLOW_BRANCH:-0}" == "1" ]]; then warn "branch '$b' allowed by ALLOW_BRANCH=1"; return 0; fi
+    fail "branch"
+    if [[ "$b" == main || "$b" == dev ]]; then echo "  No commits on $b: create <type>/${ISSUE_KEY}-<n>-<slug> and open a PR."
+    else echo "  Branch '$b' should be <type>/${ISSUE_KEY}-<n>-<slug> (types: ${WORK_TYPES//|/, }), spike/…, or release/v<x.y.z>."; fi
+}
+
+# A bug fix proves itself with a test that failed before the fix (AGENTS.md, constitution III).
+# A person can waive it with the PR label 'no-regression-test' (ALLOW_NO_TEST=1).
+regression_test() {
+    local base="${1:-$(default_base)}" b; b="$(current_branch)"
+    [[ "$b" =~ ^fix/ ]] || return 0
+    git rev-parse --verify -q "$base" >/dev/null || { skip "regression-test (no $base)"; return; }
+    bold "── regression test on $b"
+    local tests; tests="$(git diff --name-only --diff-filter=AM "$base"...HEAD | grep -E "$TEST_PATHS" | grep -vE '^tests/(quality|security)-canary/' || true)"
+    if [[ -n "$tests" ]]; then pass "regression-test ($(count_lines <<<"$tests") test files)"
+    elif [[ "${ALLOW_NO_TEST:-0}" == "1" ]]; then warn "regression-test: waived by a person (label no-regression-test)"
+    else fail "regression-test"; echo "  A fix/ branch adds or changes a test that fails without the fix."; fi
+}
+
+# Dependency names in manifest lines on stdin (direct dependencies only); $1 = manifest path.
+dep_names() {
+    local m="$1"
+    case "$m" in
+        *package.json)   grep -oE '^[[:space:]]*"(@?[A-Za-z0-9._/-]+)"[[:space:]]*:[[:space:]]*"(\^|~|>=?|<=?|=|[0-9]|workspace:|npm:|github:|git\+|file:|latest)' | sed -E 's/^[[:space:]]*"([^"]+)".*/\1/' ;;
+        *pyproject.toml|*requirements*.txt) grep -oE '^[[:space:]]*"?([A-Za-z0-9][A-Za-z0-9._-]*)(\[[^]]*\])?[[:space:]]*(==|>=|<=|~=|!=|>|<|;|"|$)' | sed -E 's/^[[:space:]]*"?([A-Za-z0-9._-]+).*/\1/' | grep -vxE 'name|version|description|readme|requires-python|license|authors|dependencies|build-backend|requires' ;;
+        *Cargo.toml)     grep -oE '^[[:space:]]*([A-Za-z0-9_-]+)[[:space:]]*=[[:space:]]*("[^"]*"|\{.*(version|path|git)[[:space:]]*=)' | sed -E 's/^[[:space:]]*([A-Za-z0-9_-]+).*/\1/' | grep -vxE 'name|version|edition|authors|description|license|readme|repository|rust-version|publish|resolver|members|default-run|homepage|documentation|keywords|categories' ;;
+        *.csproj|*.fsproj|*Directory.Packages.props) grep -oE 'Package(Reference|Version)[[:space:]]+Include="[^"]+"' | sed -E 's/.*Include="([^"]+)".*/\1/' ;;
+        *pubspec.yaml)   grep -oE '^  ([a-z0-9_]+):[[:space:]]*(\^|[0-9]|any|$|\{)' | sed -E 's/^  ([a-z0-9_]+):.*/\1/' | grep -vxE 'sdk|flutter' ;;
+        *go.mod)         grep -oE '^[[:space:]]*(require[[:space:]]+)?[a-z0-9.-]+\.[a-z]+/[^[:space:]]+[[:space:]]+v[0-9]' | sed -E 's/^[[:space:]]*(require[[:space:]]+)?([^[:space:]]+).*/\2/' ;;
+    esac
+}
+
+# Dependencies added to a manifest: names on added lines that aren't on removed lines (a version
+# bump is not a new dependency). Prints "<manifest> <name>" per line.
+added_deps() {
+    local base="$1" m
+    while IFS= read -r m; do
+        [[ -z "$m" ]] && continue
+        local diff; diff="$(git diff -U0 "$base"...HEAD -- "$m")"
+        comm -23 <(grep -E '^\+[^+]' <<<"$diff" | cut -c2- | dep_names "$m" | sort -u) \
+                 <(grep -E '^-[^-]' <<<"$diff" | cut -c2- | dep_names "$m" | sort -u) | sed "s|^|$m |"
+    done < <(git diff --name-only --diff-filter=AM "$base"...HEAD \
+               | grep -E '(^|/)(package\.json|pyproject\.toml|requirements[^/]*\.txt|Cargo\.toml|[^/]+\.(cs|fs)proj|Directory\.Packages\.props|pubspec\.yaml|go\.mod)$' \
+               | grep -vE '^(tests/(quality|security)-canary|spikes)/' || true)
+}
+
+# New dependencies are a decision: each must be named in a plan (specs/*/plan.md) or a decision
+# record, so a person saw it (and AI-invented package names get noticed). The lockfile install in CI
+# proves the package exists; deps / deps-report check vulnerabilities and known malicious packages.
+# A person can approve with the PR label 'new-dependency' (ALLOW_NEW_DEPS=1).
+new_deps() {
+    local base="${1:-$(default_base)}"
+    git rev-parse --verify -q "$base" >/dev/null || { skip "new-deps (no $base)"; return; }
+    local deps; deps="$(added_deps "$base" | sort -u)"
+    [[ -z "$deps" ]] && return 0
+    bold "── new dependencies vs $base"
+    local docs=() d m name missing=()
+    for d in $DEP_DOCS; do [[ -f "$d" ]] && docs+=("$d"); done
+    while read -r m name; do
+        [[ -z "$name" ]] && continue
+        if [[ ${#docs[@]} -gt 0 ]] && grep -qiF -- "$name" "${docs[@]}"; then echo "  $name ($m): named in a plan/decision"
+        else missing+=("$name ($m)"); fi
+    done <<<"$deps"
+    if [[ ${#missing[@]} -eq 0 ]]; then pass "new-deps"; return; fi
+    printf '  not named in a plan or decision record: %s\n' "${missing[@]}"
+    if [[ "${ALLOW_NEW_DEPS:-0}" == "1" ]]; then warn "new-deps: approved by a person (label new-dependency)"
+    else fail "new-deps"; echo "  Name each dependency (and why) in the plan's 'New dependencies' or a decision record."; fi
+}
+
+# Issue numbers are given by a person on dev; agents propose new items as <KEY>-? so two branches
+# never hand out the same number.
+todo_ids() {
+    local base="${1:-$(default_base)}" b; b="$(current_branch)"
+    [[ -f "$TODO_FILE" && "$b" =~ $AGENT_BRANCH_RE ]] || return 0
+    git rev-parse --verify -q "$base" >/dev/null || { skip "todo-ids (no $base)"; return; }
+    bold "── todo-ids ($TODO_FILE on agent branch $b)"
+    local old new_ids
+    old="$(git show "$base:$TODO_FILE" 2>/dev/null | grep -oE "\b${ISSUE_KEY}-[0-9]+\b" | sort -u)"
+    new_ids="$(grep -oE "\b${ISSUE_KEY}-[0-9]+\b" "$TODO_FILE" | sort -u | comm -13 <(printf '%s\n' "$old") - | grep . || true)"
+    if [[ -z "$new_ids" ]]; then pass "todo-ids"
+    else fail "todo-ids"; echo "  New numbered items: $(tr '\n' ' ' <<<"$new_ids")— write them as ${ISSUE_KEY}-? ; a person numbers them on dev."; fi
+}
+
+# Changed specs: the Issue matches the branch, and every FR-/SC- requirement has a proof.
+# Spec layout: "**Issue**: <KEY>-<n>" and a "## Proof" table (| ID | how it is proven | kind |).
+proof() {
+    local base="${1:-$(default_base)}" b spec specs problems=() n=0
+    b="$(current_branch)"
+    git rev-parse --verify -q "$base" >/dev/null || { skip "proof (no $base)"; return; }
+    specs="$(git diff --name-only --diff-filter=AM "$base"...HEAD -- 'specs/*/spec.md' || true)"
+    [[ -z "$specs" ]] && return 0
+    bold "── proof (changed specs vs $base)"
+    local branch_key=""
+    [[ "$b" =~ ^(feat|fix)/(${ISSUE_KEY}-[0-9]+)- ]] && branch_key="${BASH_REMATCH[2]}"
+    while IFS= read -r spec; do
+        [[ -f "$spec" ]] || continue
+        n=$((n + 1))
+        local issue; issue="$(grep -m1 -E '^\*\*Issue\*\*:' "$spec" | grep -oE "${ISSUE_KEY}-([0-9]+|\?)" | head -n1 || true)"
+        if [[ -z "$issue" ]]; then problems+=("$spec: **Issue** is empty or not ${ISSUE_KEY}-<n>")
+        elif [[ -n "$branch_key" && "$issue" != "$branch_key" ]]; then problems+=("$spec: Issue $issue does not match the branch's $branch_key")
+        elif [[ -n "$branch_key" && "$issue" == *"?"* ]]; then problems+=("$spec: Issue $issue is not numbered yet; a feat/fix branch has a number")
+        fi
+        local rows ids row_ids missing id
+        rows="$(awk '/^## Proof/ {on=1; next} on && /^## / {exit} on && /^\|/ {print}' "$spec")"
+        if [[ -z "$rows" ]]; then problems+=("$spec: no '## Proof' table"); continue; fi
+        row_ids=""
+        while IFS='|' read -r _ c_id c_how c_kind _; do
+            c_id="$(xargs <<<"$c_id")"; c_how="$(xargs <<<"$c_how")"; c_kind="$(xargs <<<"${c_kind,,}")"
+            [[ "$c_id" =~ ^(FR|SC)-[0-9]+$ ]] || continue
+            row_ids+="$c_id"$'\n'
+            if [[ -z "$c_how" || "$c_how" =~ ^\[.*\]$ || "$c_how" =~ (^|[^A-Za-z])(TODO|TBD)([^A-Za-z]|$) ]]; then
+                problems+=("$spec: $c_id has no proof ('$c_how')")
+            fi
+            [[ "$c_kind" =~ ^(test|manual|review)$ ]] || problems+=("$spec: $c_id kind must be test, manual or review (got '$c_kind')")
+        done <<<"$rows"
+        ids="$(grep -oE '\b(FR|SC)-[0-9]+\b' "$spec" | sort -u)"
+        missing="$(comm -23 <(printf '%s\n' "$ids") <(printf '%s' "$row_ids" | sort -u) | grep . || true)"
+        for id in $missing; do problems+=("$spec: $id is named but has no row in the Proof table"); done
+    done <<<"$specs"
+    if [[ ${#problems[@]} -eq 0 ]]; then pass "proof ($n specs)"
+    else printf '  %s\n' "${problems[@]}"; fail "proof"; fi
+}
+
+# WARN only: files the change touches that the plan and tasks of the touched specs don't mention.
+scope() {
+    local base="${1:-$(default_base)}"
+    git rev-parse --verify -q "$base" >/dev/null || { skip "scope (no $base)"; return; }
+    local dirs docs=() d f
+    dirs="$(git diff --name-only "$base"...HEAD | grep -E '^specs/[^/]+/' | cut -d/ -f1-2 | sort -u)"
+    for d in $dirs; do for f in plan.md tasks.md; do [[ -f "$d/$f" ]] && docs+=("$d/$f"); done; done
+    if [[ ${#docs[@]} -eq 0 ]]; then skip "scope (the change touches no spec with a plan)"; return; fi
+    bold "── scope vs ${docs[*]} (warning only)"
+    local odd=()
+    while IFS= read -r f; do
+        [[ -z "$f" ]] && continue
+        grep -qF -- "$f" "${docs[@]}" || grep -qF -- "$(dirname "$f")/" "${docs[@]}" || grep -qF -- "$(basename "$f")" "${docs[@]}" || odd+=("$f")
+    done < <(git diff --name-only --diff-filter=AMR "$base"...HEAD | grep -vE '^(specs/|docs/|\.specify/)|^(TODO|CHANGELOG)\.md$|lock(\.json|\.yaml)?$|\.lock$|go\.sum$')
+    if [[ ${#odd[@]} -eq 0 ]]; then pass "scope (every changed file is in the plan or tasks)"
+    else printf '  not mentioned in the plan or tasks: %s\n' "${odd[@]}"; warn "scope: ${#odd[@]} files outside the plan (no gate: say why in the handover, or update the plan)"; fi
+}
+
+# Markdown: relative links must resolve (no network), and markdownlint-cli2 (pinned) with .markdownlint-cli2.jsonc.
+doc_files() {
+    git ls-files --cached --others --exclude-standard -- '*.md' 2>/dev/null \
+        | grep -vE '^(\.specify|\.claude|\.opengrep|\.tools|node_modules|spikes|specs)/|^tests/[a-z-]*-canary/|^docs/handover/|(^|/)node_modules/|^CHANGELOG\.md$' | sort -u
+}
+doc_links() {
+    local f bad=() target path
+    while IFS= read -r f; do
+        [[ -f "$f" ]] || continue
+        # links outside fenced code blocks and inline code
+        while IFS= read -r target; do
+            [[ -z "$target" || "$target" =~ ^(https?:|mailto:|tel:|#|\{|\$) || "$target" == *'<'* ]] && continue
+            path="${target%%#*}"; path="${path%%\?*}"; path="${path//%20/ }"
+            [[ -z "$path" ]] && continue
+            if [[ "$path" == /* ]]; then [[ -e "$ROOT$path" ]] || bad+=("$f -> $target")
+            else [[ -e "$(dirname "$f")/$path" ]] || bad+=("$f -> $target"); fi
+        done < <(awk '/^[[:space:]]*(```|~~~)/ {fence = !fence; next} !fence' "$f" | sed -E 's/`[^`]*`//g' | grep -oE '\]\([^) ]+\)' | sed -E 's/^\]\((.*)\)$/\1/')
+    done < <(doc_files)
+    if [[ ${#bad[@]} -eq 0 ]]; then pass "docs links"; else printf '  broken link: %s\n' "${bad[@]}"; fail "docs links"; fi
+}
+markdownlint() {
+    command -v npx >/dev/null 2>&1 || { echo "npx not found: markdownlint-cli2 needs Node." >&2; return 127; }
+    npx --yes "markdownlint-cli2@${MARKDOWNLINT_VERSION}" 2>&1
+}
+
+# The writing rule (docs/process/writing.md) with Vale: Markdown prose and the comments of the
+# languages Vale reads (.vale.ini). Errors fail, warnings print. A path is read when it is not
+# skipped (VALE_SKIP: Spec Kit output, canaries, vendored rules; VALE_EXCLUDE: project content in
+# another language) and is Markdown or has a source extension of VALE_CODE_EXTS.
+vale_wanted() {
+    local f="$1"
+    [[ "$f" =~ $VALE_SKIP ]] && return 1
+    [[ -n "$VALE_EXCLUDE" && "$f" =~ $VALE_EXCLUDE ]] && return 1
+    [[ "$f" == *.md ]] && return 0
+    [[ ! "$f" =~ ^\.claude/ && "$f" =~ \.(${VALE_CODE_EXTS})$ ]]
+}
+
+# Files Vale reads, one per line. With a base branch: only the files that differ from it.
+vale_files() {
+    local base="${1:-}" f
+    {
+        if [[ -n "$base" ]] && git rev-parse --verify -q "$base" >/dev/null; then git diff --name-only --diff-filter=AMR "$base"...HEAD
+        else git ls-files --cached --others --exclude-standard; fi
+    } | while IFS= read -r f; do [[ -f "$f" ]] && vale_wanted "$f" && printf '%s\n' "$f"; done | sort -u
+}
+
+vale_run() {
+    [[ -f .vale.ini ]] || { skip "writing rule (no .vale.ini)"; return; }
+    local files=(); mapfile -t files < <(vale_files "${1:-}")
+    if [[ ${#files[@]} -eq 0 ]]; then skip "writing rule (no Markdown or source files to read)"; return; fi
+    run_tool "writing rule (Vale, ${#files[@]} files${1:+ changed against $1})" tool vale "$VALE_IMAGE" --no-wrap "${files[@]}"
+}
+
+docs() {
+    bold "── docs"
+    doc_links
+    if [[ -f .markdownlint-cli2.jsonc ]]; then run_tool "docs lint (markdownlint-cli2 ${MARKDOWNLINT_VERSION})" markdownlint
+    else skip "docs lint (no .markdownlint-cli2.jsonc)"; fi
+    vale_run "${1:-}"
+}
+
+# One file, for the PostToolUse hook: silent when the file is out of scope or Vale is not installed.
+docs_file() {
+    local f="${1:?usage: scripts/check docs-file <path>}"
+    f="${f#"$ROOT"/}"; f="${f#./}"
+    [[ -f "$f" && -f .vale.ini ]] && vale_wanted "$f" || return 0
+    command -v vale >/dev/null 2>&1 || return 0
+    vale --no-wrap "$f"
+}
+
+# The PR or MR body arrives in the environment (PR_BODY), never interpolated into a script.
+vale_stdin() { printf '%s\n' "$PR_BODY" | tr -d '\r' | tool vale "$VALE_IMAGE" --no-wrap --ext=.md; }
+pr_text() {
+    bold "── pr-text"
+    if [[ -z "${PR_BODY//[[:space:]]/}" ]]; then skip "pr-text (PR_BODY is empty)"; return; fi
+    local marks; marks="$(watermark_lines <<<"$PR_BODY")"
+    if [[ -n "$marks" ]]; then fail "pr-text"; echo "  The text carries an AI watermark (AGENTS.md rule 9):"; sed 's/^/    /' <<<"$marks"; return; fi
+    [[ -f .vale.ini ]] || { skip "pr-text (no .vale.ini)"; return; }
+    run_tool "pr-text (Vale)" vale_stdin
+}
+
+# Runs the Claude Code hooks against tests/hooks/cases.tsv (standard) and then
+# tests/hooks/project-cases.tsv (the project's own cases) in a throwaway repo:
+#   <expected exit> TAB <branch> TAB <tool: bash|edit> TAB <command or path>
+json_str() { local v="${1//\\/\\\\}"; v="${v//\"/\\\"}"; printf '%s' "$v"; }
+hooks() {
+    local cases="tests/hooks/cases.tsv"
+    [[ -f "$cases" && -d .claude/hooks ]] || return 0
+    bold "── hooks ($cases)"
+    local work; work="$(mktemp -d)"
+    git -C "$work" init -q -b dev && git -C "$work" -c user.name=t -c user.email=t@t commit -q --allow-empty -m init
+    cp .guardrails "$work/" 2>/dev/null
+    # Decoy modules in the project: the hooks must not import code from the repo (python3 -I).
+    printf 'def load(*a, **k):\n    return {}\n' > "$work/json.py"; cp "$work/json.py" "$work/sys.py"
+    # Every case runs with every input parser that is available (jq, python3, grep/sed).
+    local parsers=(sed) parser
+    command -v python3 >/dev/null 2>&1 && python3 -I -c 'import json' >/dev/null 2>&1 && parsers+=(python)
+    command -v jq >/dev/null 2>&1 && parsers+=(jq)
+    local want branch kind arg input got bad=() n=0
+    cd "$work" || return
+    for parser in "${parsers[@]}"; do
+        while IFS=$'\t' read -r want branch kind arg; do
+            [[ -z "$want" || "$want" == \#* ]] && continue
+            git -C "$work" switch -q -C "$branch" 2>/dev/null
+            if [[ "$kind" == edit ]]; then
+                input="{\"tool_name\":\"Edit\",\"tool_input\":{\"file_path\":\"$(json_str "$work/$arg")\"}}"
+                got=0; HOOK_PARSER="$parser" CLAUDE_PROJECT_DIR="$work" bash "$ROOT/.claude/hooks/protect-paths.sh" <<<"$input" >/dev/null 2>&1 || got=$?
+            else
+                input="{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"$(json_str "$arg")\"}}"
+                got=0
+                HOOK_PARSER="$parser" CLAUDE_PROJECT_DIR="$work" bash "$ROOT/.claude/hooks/protect-paths.sh" <<<"$input" >/dev/null 2>&1 || got=$?
+                [[ $got -eq 0 ]] && { HOOK_PARSER="$parser" CLAUDE_PROJECT_DIR="$work" bash "$ROOT/.claude/hooks/git-policy.sh" <<<"$input" >/dev/null 2>&1 || got=$?; }
+            fi
+            n=$((n + 1))
+            [[ "$got" == "$want" ]] || bad+=("[$parser][$branch] $arg (exit $got, want $want)")
+        done < <(cat "$ROOT/$cases" "$ROOT/tests/hooks/project-cases.tsv" 2>/dev/null)
+    done
+    cd "$ROOT" || return
+    rm -rf "$work"
+    if [[ ${#bad[@]} -eq 0 ]]; then pass "hooks ($((n / ${#parsers[@]})) cases x ${#parsers[@]} parsers: ${parsers[*]})"; else printf '  %s\n' "${bad[@]}"; fail "hooks"; fi
+}
+
+# A newer version of the standard: informs, never blocks (an update is a PR a person decides on).
+standard_version() {
+    [[ -x scripts/update-standard && -f .copier-answers.yml ]] || { skip "standard-version (no scripts/update-standard or .copier-answers.yml)"; return; }
+    bold "── standard version"
+    local out rc
+    out="$(scripts/update-standard --check 2>&1)"; rc=$?
+    printf '%s\n' "$out"
+    case $rc in
+        0) pass "standard-version" ;;
+        10) warn "standard-version: a newer dev-standard exists (notes above; scripts/update-standard <KEY-n>)" ;;
+        *) skip "standard-version (could not check: see above)" ;;
+    esac
+}
+
+case "${1:-all}" in
+    fast)            fast ;;
+    test)            test_stage ;;
+    coverage)        coverage "${2:-}" ;;
+    safety)          safety ;;
+    test-integrity)  test_integrity "${2:-}" ;;
+    build)           step "build" "$BUILD_CMD" ;;
+    secrets)         secrets ;;
+    deps)            deps ;;
+    deps-report)     deps_report ;;
+    sast)            sast ;;
+    config)          config ;;
+    canary)          canary ;;
+    quality-canary)  quality_canary ;;
+    image)           image "${2:-}" ;;
+    pr-size)         pr_size "${2:-}" ;;
+    pr-title)        pr_title "${2:-}" ;;
+    commit-msg)      commit_msg "${2:-}"; exit $? ;;
+    branch)          branch_name ;;
+    regression-test) regression_test "${2:-}" ;;
+    new-deps)        new_deps "${2:-}" ;;
+    todo-ids)        todo_ids "${2:-}" ;;
+    hooks)           hooks ;;
+    standard-version) standard_version ;;
+    research)        research ;;
+    proof)           proof "${2:-}" ;;
+    scope)           scope "${2:-}" ;;
+    docs)            docs "${2:-}" ;;
+    docs-file)       docs_file "${2:-}"; exit $? ;;
+    pr-text)         pr_text ;;
+    licenses)        licenses ;;
+    architecture)    playbook_step "architecture" "$ARCH_CMD" ;;
+    complexity)      playbook_step "complexity" "$COMPLEXITY_CMD" ;;
+    perf)            playbook_step "perf" "$PERF_CMD" ;;
+    e2e)             playbook_step "e2e" "$E2E_CMD" ;;
+    contract)        playbook_step "contract" "$CONTRACT_CMD" ;;
+    security-native) playbook_step "security-native" "$SECURITY_NATIVE_CMD" ;;
+    fuzz)            playbook_step "fuzz" "$FUZZ_CMD" ;;
+    dast)            playbook_step "dast" "$DAST_CMD" ;;
+    stack-layer)     stack_layer ;;
+    all)             fast; test_stage; coverage; safety
+                     playbook_step "architecture" "$ARCH_CMD"; playbook_step "complexity" "$COMPLEXITY_CMD"
+                     playbook_step "perf" "$PERF_CMD"; playbook_step "e2e" "$E2E_CMD"; playbook_step "contract" "$CONTRACT_CMD"
+                     playbook_step "security-native" "$SECURITY_NATIVE_CMD"; playbook_step "fuzz" "$FUZZ_CMD"; playbook_step "dast" "$DAST_CMD"
+                     stack_layer; step "build" "$BUILD_CMD"; secrets; deps; licenses; sast; config; canary; quality_canary; hooks; docs ;;
+    *)               awk 'NR >= 3 && /^#/ { print } /^$/ { exit }' "$0"; exit 2 ;;
+esac
+
+echo
+if [[ ${#failed[@]} -eq 0 ]]; then
+    bold "ALL CHECKS PASSED"
+    exit 0
+fi
+bold "FAILED: ${failed[*]}"
+exit 1

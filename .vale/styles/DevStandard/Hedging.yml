@@ -1,0 +1,20 @@
+extends: existence
+message: "'%s' hedges. State what is verified and what is not."
+link: docs/process/writing.md
+level: error
+scope: [text, comment]
+ignorecase: true
+tokens:
+  - should work
+  - should be fine
+  - should be ok
+  - might work
+  - may work
+  - seems to work
+  - hopefully
+  - probably
+  - presumably
+  - supposedly
+  - in theory
+  - ought to
+  - I believe

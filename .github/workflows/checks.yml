@@ -1,0 +1,325 @@
+# Checks: a thin wrapper around scripts/check. One stage per job, so jobs run in parallel and a
+# failure names the stage. Required status check for the branch rules: "checks / result".
+#
+# Labels a PERSON sets (agents never do; .claude/settings.json denies gh pr edit):
+#   test-change   allows a PR that deletes tests, adds skip markers or removes assertions
+#   large-change  allows an agent PR above PR_MAX_LINES, and a fix/ PR above FIX_MAX_LINES or on SENSITIVE_PATHS
+# Repository variables:
+#   ENABLE_CODEQL   true while the repository is public (free there; paid for private repos).
+#                   Its alerts block through the ruleset rule "code scanning results" (scripts/repo-settings).
+#   DOCKERFILE      path of the production Dockerfile (default: Dockerfile)
+name: checks
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, edited, labeled, unlabeled]
+  push:
+    branches: [main, dev]
+  workflow_call:
+  schedule:
+    - cron: "17 3 * * 1"   # weekly: new CVEs in unchanged code, full dependency report
+
+permissions:
+  contents: read
+
+concurrency:
+  group: checks-${{ github.event.pull_request.number || github.ref }}-${{ github.event_name }}
+  cancel-in-progress: true
+
+env:
+  BASE_REF: ${{ github.base_ref }}
+
+jobs:
+  fast:
+    name: fast (constitution, code needs gates, stack decision, spikes, format, lint, types)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup
+      - run: scripts/install-tools
+      - run: scripts/check fast
+
+  pr-rules:
+    # Commits and PR title are Conventional Commits with the issue key; the PR title becomes the
+    # squash commit, so scripts/next-version depends on it.
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: PR title
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+        run: scripts/check pr-title "$PR_TITLE"
+      - name: PR text (writing rule, no AI watermark)
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          scripts/install-tools vale
+          scripts/check pr-text
+      - name: Commits
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          bad=0
+          for c in $(git rev-list "$BASE..$HEAD"); do
+            git log -1 --format=%B "$c" > "$RUNNER_TEMP/msg"
+            scripts/check commit-msg "$RUNNER_TEMP/msg" || { echo "  in ${c:0:7}"; bad=1; }
+          done
+          exit $bad
+
+  test:
+    name: test (count, coverage, safety)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: ./.github/actions/setup
+      - run: scripts/check test
+      - run: scripts/check coverage "origin/${BASE_REF:-dev}"
+      - run: scripts/check safety
+
+  test-integrity:
+    name: test-integrity (tests, regression test, new deps, TODO ids, proof)
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      # Each waiver is a label that only a person sets (scripts/repo-settings creates them).
+      - name: Tests not weakened (label test-change)
+        env:
+          ALLOW_TEST_CHANGES: ${{ contains(github.event.pull_request.labels.*.name, 'test-change') && '1' || '0' }}
+        run: scripts/check test-integrity "origin/${BASE_REF}"
+      - name: Bug fix has a regression test (label no-regression-test)
+        env:
+          ALLOW_NO_TEST: ${{ contains(github.event.pull_request.labels.*.name, 'no-regression-test') && '1' || '0' }}
+        run: scripts/check regression-test "origin/${BASE_REF}"
+      - name: New dependencies named in a plan or decision (label new-dependency)
+        env:
+          ALLOW_NEW_DEPS: ${{ contains(github.event.pull_request.labels.*.name, 'new-dependency') && '1' || '0' }}
+        run: scripts/check new-deps "origin/${BASE_REF}"
+      - name: Agents don't number TODO items
+        run: scripts/check todo-ids "origin/${BASE_REF}"
+      - name: Changed specs have the right issue and a proof per requirement
+        run: scripts/check proof "origin/${BASE_REF}"
+      - name: Scope against the plan (warning only)
+        run: scripts/check scope "origin/${BASE_REF}"
+
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup
+      - run: scripts/check build
+
+  quality-canary:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup
+      - run: scripts/check quality-canary
+      - run: scripts/check hooks
+
+  security:
+    name: security (${{ matrix.stage }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        stage: [secrets, deps, sast, config, canary]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: ${{ matrix.stage == 'secrets' && '0' || '1' }}
+          persist-credentials: false
+      - run: scripts/install-tools
+      - run: scripts/check "${{ matrix.stage }}"
+
+  stack-layer:
+    # docs/process/stack-layer.md: every variable decided once code exists, then each command.
+    # Commands that are "none" or not set yet are skipped (day 0 stays green). The weekly run fuzzes longer.
+    name: stack layer (${{ matrix.stage }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        stage: [stack-layer, architecture, complexity, perf, e2e, contract, security-native, fuzz, dast]
+    env:
+      FUZZ_SECONDS: ${{ github.event_name == 'schedule' && '600' || '30' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: ./.github/actions/setup
+      - run: scripts/install-tools
+      - run: scripts/check "${{ matrix.stage }}"
+
+  licenses:
+    # Forbidden / restricted licences of the installed dependencies (LICENSE_SEVERITY in check.config).
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup
+      - run: scripts/install-tools
+      - run: scripts/check licenses
+
+  docs:
+    # markdownlint-cli2 (pinned in check.config), relative links (no network) and the writing rule
+    # (Vale, docs/process/writing.md). A pull request reads the changed files only; a push and the
+    # weekly run read everything.
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - run: scripts/install-tools vale
+      - run: scripts/check docs ${BASE_REF:+"origin/$BASE_REF"}
+
+  workflows:
+    # Security lint of the CI definitions themselves (template injection, risky triggers, credentials).
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: pipx run zizmor==1.33.1 --offline --min-severity medium .github/workflows/
+
+  codeql:
+    # Data-flow analysis; its alerts block via the ruleset (scripts/repo-settings), not via this job.
+    if: vars.ENABLE_CODEQL == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      security-events: write
+      actions: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: github/codeql-action/init@1fc58d04a4d4374f921bdac573c3811c240f9c26 # v4.39.2
+        with:
+          build-mode: none
+          queries: security-extended
+          config-file: ./.github/codeql/codeql-config.yml
+      - uses: github/codeql-action/analyze@1fc58d04a4d4374f921bdac573c3811c240f9c26 # v4.39.2
+
+  image:
+    # hashFiles is not available in a job-level `if`: each step after the checkout carries the condition.
+    needs: [fast, test]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - if: hashFiles('Dockerfile', 'docker/Dockerfile', '*/Dockerfile') != ''
+        run: scripts/install-tools
+      - name: Build image
+        if: hashFiles('Dockerfile', 'docker/Dockerfile', '*/Dockerfile') != ''
+        env:
+          DOCKERFILE: ${{ vars.DOCKERFILE }}
+          SHA: ${{ github.sha }}
+        run: docker build -t "check/image:$SHA" -f "${DOCKERFILE:-Dockerfile}" .
+      - if: hashFiles('Dockerfile', 'docker/Dockerfile', '*/Dockerfile') != ''
+        env:
+          SHA: ${{ github.sha }}
+        run: scripts/check image "check/image:$SHA"
+
+  pr-size:
+    # Agent PRs: agentic branches, Claude on the web / GitHub Action branches, or the label 'agent'.
+    if: >-
+      github.event_name == 'pull_request' && !contains(github.event.pull_request.labels.*.name, 'large-change') && (
+      startsWith(github.head_ref, 'fix/') || startsWith(github.head_ref, 'release/') ||
+      startsWith(github.head_ref, 'claude/') || startsWith(github.head_ref, 'ccr-') ||
+      contains(github.event.pull_request.labels.*.name, 'agent'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - run: scripts/check pr-size "origin/${BASE_REF}"
+
+  deps-report:
+    # Weekly, non-blocking: every known vulnerability incl. dev dependencies and low severities.
+    if: github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: scripts/install-tools
+      - run: scripts/check deps-report | tee -a "$GITHUB_STEP_SUMMARY"
+
+  repo-settings:
+    # Weekly: are the branch rules still in place? (scripts/repo-settings verify). Non-blocking.
+    if: github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          ENABLE_CODEQL: ${{ vars.ENABLE_CODEQL }}
+        run: scripts/repo-settings verify | tee -a "$GITHUB_STEP_SUMMARY"
+
+  standard-version:
+    # Weekly: is a newer dev-standard out? Prints its upgrade notes. Never fails; an update is a PR
+    # that scripts/update-standard prepares (docs/process/updating.md).
+    if: github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: scripts/check standard-version | tee -a "$GITHUB_STEP_SUMMARY"
+
+  # The one required status check. Skipped jobs count as passed; failed or cancelled ones don't.
+  result:
+    if: always()
+    needs: [fast, pr-rules, test, test-integrity, build, quality-canary, stack-layer, licenses, docs, security, workflows, image, pr-size]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - env:
+          RESULTS: ${{ toJSON(needs) }}
+        run: |
+          echo "$RESULTS" | jq -r 'to_entries[] | "\(.key): \(.value.result)"'
+          bad=$(echo "$RESULTS" | jq '[to_entries[] | select(.value.result != "success" and .value.result != "skipped")] | length')
+          [ "$bad" -eq 0 ] || { echo "::error::$bad job(s) failed."; exit 1; }

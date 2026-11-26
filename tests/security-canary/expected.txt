@@ -1,0 +1,17 @@
+# One "tool:rule-id" per line. scripts/check canary fails when one is not detected.
+# Generic (any stack)
+gitleaks:aws-access-token
+gitleaks:stripe-access-token
+gitleaks:url-credentials
+gitleaks:discord-webhook-url
+gitleaks:typed-secret-constant
+trivy:DS-0002
+trivy:DS-0031
+opengrep:compose-privileged-service
+opengrep:compose-docker-socket-mount
+# Python (FastAPI / Flask)
+opengrep:fastapi-input-to-dangerous-sink
+opengrep:subprocess-shell-true
+opengrep:eval-detected
+opengrep:avoid-pickle
+opengrep:insecure-hash-algorithm-md5

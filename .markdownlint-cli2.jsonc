@@ -1,0 +1,28 @@
+// markdownlint-cli2 for `scripts/check docs` (a guardrail file). Short on purpose: structure, not taste.
+{
+  "config": {
+    "default": true,
+    "MD013": false,                          // line length: prose is not wrapped by a rule
+    "MD024": { "siblings_only": true },      // the same heading under different parents is fine
+    "MD033": false,                          // inline HTML and <placeholders> in templates
+    "MD036": false,                          // **Bold line:** used as a label is fine
+    "MD041": false,                          // the first line need not be a heading (front matter, includes)
+    "MD060": false                           // table column style
+  },
+  "globs": ["**/*.md"],
+  "ignores": [
+    "**/node_modules/**",
+    ".specify/**",
+    ".claude/**",
+    ".opengrep/**",
+    ".tools/**",
+    ".venv/**",
+    "target/**",
+    "tests/*-canary/**",
+    "spikes/**",
+    "specs/**",
+    "docs/handover/**",
+    "CHANGELOG.md"
+  ],
+  "gitignore": true
+}

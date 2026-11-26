@@ -1,0 +1,1 @@
+# One term per line: project names and words the spelling check should accept.

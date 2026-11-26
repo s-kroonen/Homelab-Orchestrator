@@ -1,0 +1,89 @@
+# Claude Code hook cases, run by `scripts/check hooks` in a throwaway repo (guardrail file).
+# expected exit (0 allowed, 2 blocked) TAB branch TAB bash|edit TAB command or path
+# git-policy: plain reads
+0	dev	bash	git status
+0	dev	bash	git log --oneline -5
+0	dev	bash	git diff HEAD~1
+# git-policy: AI-assist branches leave commits to a person
+2	dev	bash	git commit -m "docs: x"
+2	chore/APP-1-x	bash	git commit -m "docs: x"
+2	dev	bash	git push origin dev
+2	dev	bash	git switch -c feat/APP-2-x
+# git-policy: agent branches may commit and push their own branch
+0	claude/x	bash	git commit -m "fix(APP-3): x"
+0	claude/x	bash	git push -u origin claude/x
+0	claude/x	bash	git commit -m "docs: merge notes and rebase plan"
+0	dev	bash	git switch -c claude/y
+# git-policy: never, on any branch
+2	claude/x	bash	git merge dev
+2	claude/x	bash	git -C . rebase dev
+2	claude/x	bash	G=git; $G merge dev
+2	claude/x	bash	git tag v1.0.0
+2	claude/x	bash	git reset --hard HEAD~1
+2	claude/x	bash	git clean -fd
+2	claude/x	bash	git commit --no-verify -m "fix(APP-3): x"
+2	claude/x	bash	git -c core.hooksPath=/dev/null commit -m x
+2	claude/x	bash	git push --force origin claude/x
+2	claude/x	bash	git push origin main
+2	claude/x	bash	git push origin :claude/x
+2	claude/x	bash	bash -c "git merge dev"
+2	claude/x	bash	python3 -c 'import subprocess; subprocess.run(["git","merge","dev"])'
+2	claude/x	bash	python3 -c "import subprocess; subprocess.run([\"git\", \"merge\", \"dev\"])"
+2	claude/x	bash	node -e 'require("child_process").execSync("git merge dev")'
+# protect-paths: guardrail files
+2	claude/x	edit	scripts/check
+2	claude/x	edit	check.config
+2	claude/x	edit	.claude/settings.json
+2	claude/x	edit	AGENTS.md
+2	claude/x	edit	.github/workflows/checks.yml
+2	claude/x	edit	tests/security-canary/expected.txt
+2	claude/x	edit	tests/quality-canary/README.md
+2	claude/x	edit	tests/hooks/cases.tsv
+0	claude/x	edit	src/app.py
+0	claude/x	edit	CONSTITUTION.md
+0	claude/x	edit	TODO.md
+0	claude/x	edit	specs/001-x/spec.md
+0	claude/x	edit	.specify/feature.json
+# protect-paths: shell writes to guardrail files, secrets, user settings
+2	claude/x	bash	echo x > check.config
+2	claude/x	bash	sed -i s/a/b/ scripts/check
+2	claude/x	bash	rm -rf .claude/hooks
+2	claude/x	bash	python3 -c "open('check.config','w')"
+0	claude/x	bash	cat check.config
+0	claude/x	bash	grep -n TEST scripts/check
+2	claude/x	bash	cat .env
+0	claude/x	bash	cat .env.example
+2	claude/x	bash	echo x >> ~/.claude/settings.json
+2	claude/x	bash	cat ./.env
+2	claude/x	bash	grep KEY .env.local
+0	claude/x	bash	cat src/env.ts
+# input parsing: escaped quotes and backslashes in the JSON reach the rules decoded (jq, python3 and sed parsers)
+2	claude/x	bash	git commit -m "feat(APP-1): say \"hi\"" && git merge dev
+0	claude/x	bash	git commit -m "docs: the word \"merge\" and a back\\slash"
+2	claude/x	bash	echo "a\\b" > check.config
+2	claude/x	bash	python3 -c "print('a\\\\b'); import subprocess; subprocess.run([\"git\", \"tag\", \"v1\"])"
+0	claude/x	bash	echo "C:\\Users\\x"
+2	claude/x	edit	scripts\check
+2	claude/x	edit	.claude\settings.json
+# protect-paths: files added by the stack-layer, research, review and MCP rules
+2	claude/x	edit	.mcp.json
+2	claude/x	edit	.markdownlint-cli2.jsonc
+2	claude/x	edit	.claude/hooks/format-file.sh
+2	claude/x	edit	.claude/hooks/parse-input.sh
+2	claude/x	edit	.claude/agents/quality-reviewer.md
+2	claude/x	edit	scripts/verify-package
+2	claude/x	bash	echo '{}' > .mcp.json
+0	claude/x	edit	docs/process/stack-layer.md
+0	claude/x	edit	docs/research/stack-timing.md
+0	claude/x	edit	docs/decisions/0002-choose-the-stack.md
+# protect-paths: the writing rule's files
+2	claude/x	edit	.vale.ini
+2	claude/x	edit	.vale/styles/DevStandard/Pronouns.yml
+2	claude/x	edit	.vale/styles/config/vocabularies/Project/accept.txt
+2	claude/x	edit	.claude/hooks/lint-file.sh
+2	claude/x	bash	echo x >> .vale.ini
+2	claude/x	bash	rm -rf .vale
+0	claude/x	bash	cat .vale.ini
+0	claude/x	edit	docs/process/writing.md
+2	claude/x	bash	rm -rf .claude
+0	claude/x	bash	ls .claudette-notes

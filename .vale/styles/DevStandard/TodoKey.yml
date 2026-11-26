@@ -1,0 +1,11 @@
+extends: existence
+message: "'%s': a TODO in code names its issue, TODO(KEY-12): text."
+link: docs/process/writing.md
+level: error
+scope: comment
+ignorecase: false
+nonword: true
+tokens:
+  - '\b(TODO|FIXME)\b($|\s|:)'
+  - '\b(TODO|FIXME)\(\)'
+  - '\b(TODO|FIXME)\([^)]*[^0-9)]\)'

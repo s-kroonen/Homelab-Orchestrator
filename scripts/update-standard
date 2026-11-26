@@ -1,0 +1,166 @@
+#!/usr/bin/env bash
+#
+# Brings a new version of dev-standard into this project: one command, one branch, one report.
+#
+#   scripts/update-standard <KEY-n> [--to vX.Y.Z]   update on chore/<KEY-n>-update-dev-standard
+#   scripts/update-standard --check                 only: is a newer version out? print its upgrade notes
+#
+# What it does (docs/process/updating.md):
+#   1. preconditions: a clean working tree, not on main; the branch is created from dev;
+#   2. reads _src_path and _commit from .copier-answers.yml; a relative or unreachable source stops
+#      with the fix (set _src_path to gh:<owner>/dev-standard);
+#   3. runs the pinned Copier (COPIER_VERSION in check.config):
+#        copier update --trust --defaults --skip-tasks --conflict inline --vcs-ref <tag>   (latest tag by default;
+#      --skip-tasks: the tasks of a template run in temporary copies on update; migrations still run)
+#      Copier replaces the standard files, merges the shared files (the project sections below their
+#      markers stay) and leaves project files alone (_skip_if_exists);
+#   4. post steps: scripts/post-update (constitution copy, vendored rule sets), the Spec Kit preset
+#      when speckit-preset/ changed, scripts/setup when a pinned tool changed;
+#   5. the report: upgrade notes, files with conflict markers, changed guardrail files, whether
+#      scripts/repo-settings apply is needed, scripts/check fast, and the commit message.
+# The script never commits. Exit code: 0 clean, 1 conflicts or a failed check (see the report),
+# 2 a precondition failed; with --check: 0 up to date, 10 a newer version exists.
+set -uo pipefail
+cd "$(git rev-parse --show-toplevel 2>/dev/null || pwd)" || exit 2
+source ./check.config 2>/dev/null
+# shellcheck source=/dev/null
+[[ -f project.config ]] && source ./project.config
+COPIER_VERSION="${COPIER_VERSION:-9.7.1}"
+ISSUE_KEY="${ISSUE_KEY:-}"
+
+die() { echo "update-standard: $*" >&2; exit 2; }
+bold() { printf '\033[1m%s\033[0m\n' "$*"; }
+answer() { sed -n "s/^$1: *//p" .copier-answers.yml 2>/dev/null | head -n1 | sed "s/^[\"']//; s/[\"']\$//"; }
+vgt() { [[ "$1" != "$2" && "$(printf '%s\n%s\n' "$1" "$2" | sort -V | tail -n1)" == "$1" ]]; }   # $1 > $2
+
+# --- arguments -----------------------------------------------------------------------------------
+issue="" to="" check_only=false
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --check) check_only=true ;;
+        --to) shift; to="${1:-}"; [[ -n "$to" ]] || die "--to needs a version, e.g. --to v0.3.0" ;;
+        --to=*) to="${1#--to=}" ;;
+        -h|--help) awk 'NR >= 3 && /^#/ { sub(/^# ?/, ""); print } /^set /{ exit }' "$0"; exit 0 ;;
+        -*) die "unknown option $1 (see --help)" ;;
+        *) issue="$1" ;;
+    esac
+    shift
+done
+if ! $check_only; then
+    [[ "$issue" =~ ^[A-Z][A-Z0-9]{1,9}-[0-9]+$ ]] || die "usage: scripts/update-standard <KEY-n> [--to vX.Y.Z]   (the issue of this update, e.g. ${ISSUE_KEY:-APP}-12)"
+    [[ -z "$ISSUE_KEY" || "$issue" == "$ISSUE_KEY"-* ]] || die "the issue key of this project is $ISSUE_KEY, got $issue"
+fi
+
+# --- the source ----------------------------------------------------------------------------------
+[[ -f .copier-answers.yml ]] || die ".copier-answers.yml is missing: this project was not generated from dev-standard (see docs/adopting.md in the standard)."
+src="$(answer _src_path)"; current="$(answer _commit)"
+[[ -n "$src" && -n "$current" ]] || die "_src_path or _commit is missing in .copier-answers.yml."
+case "$src" in
+    gh:*) url="https://github.com/${src#gh:}"; [[ "$url" == *.git ]] || url="$url.git" ;;
+    gl:*) url="https://gitlab.com/${src#gl:}"; [[ "$url" == *.git ]] || url="$url.git" ;;
+    /*|[A-Za-z]:/*|git@*|ssh://*|https://*|http://*|git+*|file://*) url="${src#git+}" ;;
+    *) die "_src_path is '$src', a relative path: Copier cannot update from it (\"Updating is only supported in git-tracked templates\").
+Fix: set _src_path in .copier-answers.yml to gh:<owner>/dev-standard (or the absolute path or URL of the template), commit it, run again." ;;
+esac
+tags="$(git ls-remote --tags --refs "$url" 'v*' 2>/dev/null | sed 's|.*refs/tags/||')" \
+    || die "cannot reach the standard at $url."
+[[ -n "$tags" ]] || die "the standard at $url is not reachable or has no v* tags (Copier updates need tags)."
+latest="$(grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' <<<"$tags" | sort -V | tail -n1)"
+target="${to:-$latest}"
+[[ -n "$target" ]] || die "no release tag (vX.Y.Z) at $url."
+grep -qxF "$target" <<<"$tags" || die "$target is not a tag of $url. Tags: $(sort -V <<<"$tags" | tr '\n' ' ')"
+from="${current%%-[0-9]*-g[0-9a-f]*}"   # _commit may be `git describe` output: v0.2.0-3-gabc123
+
+scratch="$(mktemp -d)"; trap 'rm -rf "$scratch"' EXIT
+git clone -q --no-checkout "$url" "$scratch/src" 2>/dev/null || die "cannot clone $url."
+
+# Upgrade notes of the versions in (from, target]: the "Upgrade notes" part of each CHANGELOG.md section.
+print_notes() {
+    local f="$scratch/CHANGELOG.md" cur="" in=false line v any=false
+    git -C "$scratch/src" show "$target:CHANGELOG.md" > "$f" 2>/dev/null || { echo "  (the standard has no CHANGELOG.md at $target)"; return; }
+    while IFS= read -r line; do
+        if [[ "$line" =~ ^##[[:space:]]+\[?v?([0-9]+\.[0-9]+\.[0-9]+) ]]; then
+            v="v${BASH_REMATCH[1]}"; in=false; cur=""
+            if vgt "$v" "$from" && ! vgt "$v" "$target"; then cur="$v"; fi
+        elif [[ "$line" =~ ^###[[:space:]]+Upgrade[[:space:]]+notes ]]; then
+            if [[ -n "$cur" ]]; then in=true; any=true; echo "  $cur"; fi
+        elif [[ "$line" =~ ^##+[[:space:]] ]]; then in=false
+        elif $in && [[ -n "${line//[[:space:]]/}" ]]; then echo "    $line"
+        fi
+    done < "$f"
+    $any || echo "  (no upgrade notes between $from and $target)"
+}
+
+if $check_only; then
+    if ! vgt "$latest" "$from"; then echo "dev-standard is up to date ($current; newest tag $latest)."; exit 0; fi
+    echo "A newer dev-standard exists: $latest (this project: $current). Update: scripts/update-standard ${ISSUE_KEY:-KEY}-<n>"
+    echo "Versions in between: $(grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' <<<"$tags" | sort -V | while read -r t; do vgt "$t" "$from" && ! vgt "$t" "$latest" && printf '%s ' "$t"; done)"
+    echo "Upgrade notes:"; target="$latest"; print_notes
+    exit 10
+fi
+
+vgt "$target" "$from" || { echo "dev-standard is up to date ($current); nothing newer than $from at $url."; exit 0; }
+
+# --- preconditions -------------------------------------------------------------------------------
+[[ -z "$(git status --porcelain)" ]] || die "the working tree is not clean: commit or stash first (Copier refuses to update a dirty tree)."
+branch="chore/$issue-update-dev-standard"
+here="$(git rev-parse --abbrev-ref HEAD)"
+[[ "$here" != main && "$here" != master ]] || die "on $here: updates go on a branch from dev."
+if [[ "$here" != "$branch" ]]; then
+    git rev-parse --verify -q dev >/dev/null || die "no dev branch to start from."
+    git switch -q -c "$branch" dev || die "cannot create $branch from dev."
+fi
+bold "update-standard: $current -> $target on $branch"
+
+# --- the update ----------------------------------------------------------------------------------
+pins_before="$(grep -E '^[A-Z0-9_]+_VERSION=' check.config | sort)"
+rules_before="$(grep -E '^OPENGREP_RULES_COMMIT=' check.config)"
+if command -v uvx >/dev/null 2>&1; then copier=(uvx --quiet --from "copier==$COPIER_VERSION" copier)
+elif command -v copier >/dev/null 2>&1 && [[ "$(copier --version 2>/dev/null)" == *"$COPIER_VERSION" ]]; then copier=(copier)
+else die "need uvx (https://docs.astral.sh/uv/) or Copier $COPIER_VERSION on PATH."; fi
+"${copier[@]}" update --trust --defaults --skip-tasks --conflict inline --vcs-ref "$target"; rc=$?
+[[ $rc -eq 0 ]] || { echo "update-standard: copier update failed (exit $rc). The branch $branch keeps the partial result; fix the cause and run again, or 'git switch dev && git branch -D $branch'." >&2; exit 1; }
+
+# --- post steps ----------------------------------------------------------------------------------
+chmod +x scripts/* .claude/hooks/*.sh 2>/dev/null
+notes=()
+git -C "$scratch/src" -c advice.detachedHead=false checkout -q "$target" 2>/dev/null
+if [[ "$(answer use_speckit)" == true ]] && ! git -C "$scratch/src" diff --quiet "$from" "$target" -- speckit-preset 2>/dev/null; then
+    ver="$(answer speckit_version)"
+    specify=(uvx --quiet --from "specify-cli==${ver:-1.4.4}" specify)
+    "${specify[@]}" preset remove dev-standard >/dev/null 2>&1   # an installed preset must be removed before it is added again
+    if "${specify[@]}" preset add --dev "$scratch/src/speckit-preset" >/dev/null 2>&1; then notes+=("Spec Kit preset installed again (speckit-preset/ changed).")
+    else notes+=("WARNING: the Spec Kit preset changed but could not be installed again: run  specify preset remove dev-standard  and  specify preset add --dev <standard>/speckit-preset (specify-cli ${ver:-1.4.4})"); fi
+fi
+bash scripts/post-update || notes+=("WARNING: scripts/post-update reported a problem (see above).")
+[[ "$(grep -E '^OPENGREP_RULES_COMMIT=' check.config)" == "$rules_before" ]] || notes+=("OPENGREP_RULES_COMMIT changed: the vendored rule sets were refreshed (review the diff of .opengrep/rules/open/).")
+if [[ "$(grep -E '^[A-Z0-9_]+_VERSION=' check.config | sort)" != "$pins_before" ]]; then
+    if scripts/setup >/dev/null 2>&1; then notes+=("A pinned tool changed: scripts/setup ran (new binaries in .tools/).")
+    else notes+=("WARNING: a pinned tool changed and scripts/setup failed: run scripts/setup."); fi
+fi
+
+# --- the report ----------------------------------------------------------------------------------
+echo; bold "== Report: dev-standard $current -> $target"
+echo; bold "Upgrade notes"; print_notes
+conflicts="$( { git grep -lE '^(<<<<<<< |>>>>>>> )' -- . ':!*.md' ':!tests/' 2>/dev/null; git ls-files --others --exclude-standard -- '*.rej'; git grep -lE '^(<<<<<<< .*|>>>>>>> .*)$' -- '*.md' 2>/dev/null; git ls-files -mo --exclude-standard | xargs -r grep -lE '^(<<<<<<< |>>>>>>> )' 2>/dev/null; } | sort -u)"
+echo; bold "Files with conflict markers"
+if [[ -n "$conflicts" ]]; then sed 's/^/  /' <<<"$conflicts"; echo "  Resolve them inside project sections only (below the marker); a conflict in a standard file means the project edited it: take the standard's version."
+else echo "  none"; fi
+echo; bold "Changed guardrail files (the PR needs the label guardrail-change)"
+changed="$(git status --porcelain | sed -E 's/^.{3}//; s/.* -> //')"
+patterns="$(grep -vE '^[[:space:]]*(#|$)' .guardrails 2>/dev/null)"
+guard="$(grep -E -f <(printf '%s\n' "$patterns") <<<"$changed" 2>/dev/null || true)"
+if [[ -n "$guard" ]]; then sed 's/^/  /' <<<"$guard"; else echo "  none"; fi
+echo; bold "Repository settings"
+if ! git -C "$scratch/src" diff --quiet "$from" "$target" -- template/scripts/repo-settings 2>/dev/null; then echo "  scripts/repo-settings changed (labels or required checks): after the merge a person runs  scripts/repo-settings apply"
+else echo "  no change: scripts/repo-settings apply is not needed"; fi
+if [[ ${#notes[@]} -gt 0 ]]; then echo; bold "Post steps"; printf '  %s\n' "${notes[@]}"; fi
+echo; bold "scripts/check fast"
+git add -A -n >/dev/null 2>&1
+if out="$(scripts/check fast 2>&1)"; then checks=PASS; else checks=FAIL; fi
+echo "  $checks"; [[ "$checks" == PASS ]] || sed 's/\x1b\[[0-9;]*m//g' <<<"$out" | tail -n 25 | sed 's/^/    /'
+echo; bold "Commit message"
+echo "  chore($issue): update dev-standard to $target"
+echo; echo "Review with: git status; git diff. Then commit (a person, or the agent on this branch) and open the PR."
+[[ -z "$conflicts" && "$checks" == PASS ]] || exit 1
+exit 0

@@ -45,10 +45,15 @@ dev = [
     "pytest~=8.3",
     "pytest-asyncio~=0.24",
     "ruff~=0.7",
-    "black~=24.10",
+    "pytest-cov~=6.0",
     "mypy~=1.13",
     "types-PyYAML",
 ]
+
+# uv installs the dev extra by default (uv sync / uv run, as scripts/check uses them);
+# pip users keep `pip install -e '.[dev]'`.
+[dependency-groups]
+dev = ["homelab-orchestrator[dev]"]
 
 [project.scripts]
 orchestrator = "orchestrator.main:cli"
@@ -64,15 +69,11 @@ src = ["src", "tests"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP", "SIM", "TID", "RUF"]
-ignore = ["E501"]  # black handles line length
+ignore = ["E501"]  # ruff format handles line length
 
 [tool.ruff.lint.per-file-ignores]
 "tests/*" = ["B008"]
 "alembic/versions/*" = ["E", "F", "I", "UP"]
-
-[tool.black]
-line-length = 100
-target-version = ["py312"]
 
 [tool.mypy]
 python_version = "3.12"

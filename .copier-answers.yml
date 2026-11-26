@@ -1,0 +1,21 @@
+# Changes here will be overwritten by Copier; do not edit by hand.
+_commit: v0.3.0
+_src_path: gh:s-kroonen/dev-standard
+bug_level: agentic
+description: 'Control plane for a homelab: wakes, backs up, checks and routes the
+    services on a few Proxmox nodes'
+feature_level: agentic
+github_agent: false
+issue_key: OR
+network_api: true
+owner: s-kroonen
+platform: github
+project_name: Homelab Orchestrator
+project_slug: homelab-orchestrator
+release_level: agentic
+safety_critical: false
+speckit_version: 1.4.4
+stack: python
+tracker: jira
+update_level: ai-assist
+use_speckit: true

@@ -1,0 +1,18 @@
+extends: existence
+message: "'%s': headings use sentence case (capital letter on the first word and on proper nouns only)."
+link: docs/process/writing.md
+level: warning
+scope: heading
+ignorecase: false
+exceptions:
+  - Spec Kit
+  - Claude Code
+  - Conventional Commits
+  - Copier Questions
+  - Open Source
+  - Core Principles
+  - Project Constraints
+  - Development Workflow
+tokens:
+  - '[A-Z][a-z]+ [A-Z][a-z]+'
+  - '[A-Z][a-z]+ (of|and|the|for|to|in|on|with|by|as) [A-Z][a-z]+'

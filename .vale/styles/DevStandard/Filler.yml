@@ -1,0 +1,22 @@
+extends: existence
+message: "'%s' is filler. Say the fact without it."
+link: docs/process/writing.md
+level: error
+scope: [text, comment]
+ignorecase: true
+tokens:
+  - simply
+  - just
+  - easily
+  - robust(ly)?
+  - seamless(ly)?
+  - powerful(ly)?
+  - comprehensive(ly)?
+  - leverag(e|es|ed|ing)
+  - note that
+  - it['’]?s worth noting
+  - it is worth noting
+  - needless to say
+  - of course
+  - obviously
+  - basically

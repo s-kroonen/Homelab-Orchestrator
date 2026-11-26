@@ -1,0 +1,8 @@
+extends: existence
+message: "'%s': passive with an actor. Make the actor the subject ('CI checks X')."
+link: docs/process/writing.md
+level: warning
+scope: [text, comment]
+ignorecase: true
+tokens:
+  - '(is|are|was|were|be|been|being) (\w+ed|done|made|given|taken|written|shown|chosen|known|seen|built|kept|held|found) by'

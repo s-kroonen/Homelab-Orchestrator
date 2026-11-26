@@ -1,4 +1,30 @@
 {
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "attribution": {
+    "commit": "",
+    "pr": "",
+    "sessionUrl": false
+  },
+  "permissions": {
+    "deny": [
+      "Bash(gh pr merge:*)",
+      "Bash(gh pr review:*)",
+      "Bash(gh release:*)",
+      "Bash(glab mr merge:*)",
+      "Bash(glab mr approve:*)",
+      "Bash(glab release:*)",
+      "Read(./.env)",
+      "Read(./.env.*)",
+      "Read(**/*service-account*.json)",
+      "Read(**/*.pem)",
+      "Read(**/*.key)"
+    ],
+    "ask": [
+      "WebFetch",
+      "Bash(curl:*)",
+      "Bash(wget:*)"
+    ]
+  },
   "hooks": {
     "SessionStart": [
       {
@@ -6,10 +32,103 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash \"$CLAUDE_PROJECT_DIR\"/scripts/cloud_setup.sh"
+            "command": "bash -c '[ \"${CLAUDE_CODE_REMOTE:-}\" = true ] && \"$CLAUDE_PROJECT_DIR/scripts/setup\" || true'"
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit|NotebookEdit|Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/protect-paths.sh\""
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/git-policy.sh\""
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/format-file.sh\""
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/run-checks.sh\"",
+            "timeout": 600
           }
         ]
       }
     ]
-  }
+  },
+  "sandbox": {
+    "enabled": true,
+    "failIfUnavailable": false,
+    "allowUnsandboxedCommands": false,
+    "filesystem": {
+      "denyWrite": [
+        "./.claude",
+        "./AGENTS.md",
+        "./CLAUDE.md",
+        "./scripts",
+        "./check.config",
+        "./project.config",
+        "./.guardrails",
+        "./CODEOWNERS",
+        "./lefthook.yml",
+        "./.github",
+        "./.gitlab",
+        "./.gitlab-ci.yml",
+        "./.opengrep",
+        "./.gitleaks.toml",
+        "./.trivyignore.yaml",
+        "./osv-scanner.toml",
+        "./.semgrepignore",
+        "./.markdownlint-cli2.jsonc",
+        "./.vale.ini",
+        "./.vale",
+        "./.mcp.json",
+        "./tests/security-canary",
+        "./tests/quality-canary",
+        "./tests/hooks",
+        "./docs/security-exceptions.md",
+        "./.specify/templates",
+        "./.specify/presets",
+        "./.specify/extensions",
+        "./.specify/scripts",
+        "./.copier-answers.yml",
+        "~/.claude"
+      ],
+      "denyRead": [
+        "./.env",
+        "./.env.local",
+        "./.env.production",
+        "~/.ssh",
+        "~/.aws",
+        "~/.config/gh",
+        "~/.docker/config.json"
+      ]
+    }
+  },
+  "enableAllProjectMcpServers": false,
+  "enabledMcpjsonServers": []
 }

@@ -1,0 +1,29 @@
+{
+  "schema_version": "1.0",
+  "presets": {
+    "dev-standard": {
+      "version": "0.2.0",
+      "source": "local",
+      "manifest_hash": "sha256:13a2a8f5d0468222aa53cb5aef1eac5c72091b8c61639d98c13c4235e2361fdc",
+      "enabled": true,
+      "priority": 10,
+      "registered_commands": {
+        "claude": [
+          "speckit.constitution",
+          "speckit.bug.assess",
+          "speckit.assess.intake",
+          "speckit.assess.research"
+        ]
+      },
+      "registered_skills": {
+        "claude": [
+          "speckit-constitution",
+          "speckit-bug-assess",
+          "speckit-assess-intake",
+          "speckit-assess-research"
+        ]
+      },
+      "installed_at": "2026-11-26T10:01:50.642714+00:00"
+    }
+  }
+}

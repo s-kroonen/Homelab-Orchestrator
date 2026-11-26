@@ -1,0 +1,21 @@
+extends: substitution
+message: "Use '%s' instead of '%s'."
+link: docs/process/writing.md
+level: warning
+scope: [text, comment]
+ignorecase: true
+swap:
+  utili[sz]e: use
+  in order to: to
+  so as to: to
+  a number of: several
+  prior to: before
+  subsequent to: after
+  with regards? to: about
+  due to the fact that: because
+  in the event that: if
+  whether or not: whether
+  is able to: can
+  has the ability to: can
+  make use of: use
+  at this point in time: when

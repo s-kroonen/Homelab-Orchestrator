@@ -1,0 +1,15 @@
+extends: existence
+message: "'%s' is first or second person. Name the thing ('dev-standard adds...', 'The hook blocks...'); steps use the imperative."
+link: docs/process/writing.md
+level: error
+scope: [text, comment]
+ignorecase: false
+tokens:
+  - '[Ww]e'
+  - '[Oo]ur(s|selves)?'
+  - '[Uu]s'
+  - 'I[''’](m|ll|ve|d)'
+  - 'I (am|was|have|had|will|can|think|want|need|do|did|would|should|reviewed|edited|checked)'
+  - '[Mm]y(self)?'
+  - '[Yy]ou'
+  - '[Yy]our(s|self|selves)?'
